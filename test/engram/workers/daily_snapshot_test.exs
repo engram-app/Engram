@@ -228,40 +228,45 @@ defmodule Engram.Workers.DailySnapshotTest do
   end
 
   # A retry of a job that timed out half way keeps the chunks it already
-  # wrote and does the rest, so the day is not lost to a timeout.
+  # wrote and does the rest, so the day is not lost to a timeout. The job
+  # was inserted just before a midnight and retries after it, and the day
+  # comes from inserted_at, never the wall clock, so the test holds at any
+  # hour.
   test "a retry resumes: vaults this job already wrote are not redone" do
     user = insert(:user)
     done = insert(:vault, user: user)
     todo = insert(:vault, user: user)
     insert(:note, user: user, vault: done)
-    inserted_at = DateTime.add(DateTime.utc_now(), -60, :second)
+    inserted_at = DateTime.new!(yesterday(), ~T[23:59:30.000000], "Etc/UTC")
+    day = Date.add(DateTime.to_date(inserted_at), -1)
 
     Repo.insert!(
-      %VaultDailyMetric{vault_id: done.id, user_id: user.id, date: yesterday(), notes: 99},
+      %VaultDailyMetric{vault_id: done.id, user_id: user.id, date: day, notes: 99},
       skip_tenant_check: true
     )
 
     job = build_job(DailySnapshot, %{}) |> Map.put(:inserted_at, inserted_at)
     assert :ok = perform_job(job)
 
-    assert Repo.get_by(VaultDailyMetric, vault_id: done.id, date: yesterday()).notes == 99
-    assert Repo.get_by(VaultDailyMetric, vault_id: todo.id, date: yesterday())
+    assert vault_row(done, day).notes == 99
+    assert vault_row(todo, day)
 
-    # A new job (a manual rerun) rewrites every vault.
-    assert :ok = perform_job(DailySnapshot, %{})
-    assert Repo.get_by(VaultDailyMetric, vault_id: done.id, date: yesterday()).notes == 1
+    # A new run (no `since`, as a manual rerun) rewrites every vault.
+    Engram.Insights.Snapshot.run(day: day)
+    assert vault_row(done, day).notes == 1
   end
 
   test "writes the day before the job was inserted, even when it runs later" do
     user = insert(:user)
     insert(:vault, user: user)
     inserted_at = DateTime.add(DateTime.utc_now(), -1, :day)
+    day = Date.add(DateTime.to_date(inserted_at), -1)
 
     job = build_job(DailySnapshot, %{}) |> Map.put(:inserted_at, inserted_at)
     assert :ok = perform_job(job)
 
-    assert user_row(user, days_ago(2))
-    refute user_row(user, yesterday())
+    assert user_row(user, day)
+    refute user_row(user, Date.add(day, 1))
   end
 
   test "skips users who opted out of analytics and deleted users" do
