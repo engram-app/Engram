@@ -8,8 +8,9 @@ defmodule Engram.ServiceConfig.Overrides do
   moves every node within seconds and a task booted later reads the same
   row, so there is no split brain between old and new tasks. The keys left
   are the v5 rebuild kill switch (`index_rebuild`) and the v5 step not
-  taken yet (`tenant_idf`), plus the `FileTimes` data migration's kill
-  switch (`file_times_backfill`).
+  taken yet (`tenant_idf`), plus the data migrations' kill switches
+  (`file_times_backfill`, `note_body_columns_null`): every data migration
+  added since 2026-11-06 has one (`docs/context/data-migrations-ledger.md`).
 
   ## Reads
 
@@ -56,7 +57,8 @@ defmodule Engram.ServiceConfig.Overrides do
     payload_backfill: :boolean,
     payload_backfill_points_per_min: {:integer, 1..100_000},
     rebuild_max_disk_percent: {:integer, 1..100},
-    file_times_backfill: :boolean
+    file_times_backfill: :boolean,
+    note_body_columns_null: :boolean
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})
