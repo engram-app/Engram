@@ -124,7 +124,11 @@ defmodule Engram.Folders.OpSizeCapTest do
   test "drift in another folder does not refuse a small folder", %{user: u, vault: v} do
     ServiceConfig.put_override(:folder_op_max_rows, 200)
     for i <- 1..5, do: put_note(u, v, "Small/n#{i}.md")
-    drift = for i <- 1..300, do: Ecto.UUID.dump!(put_note(u, v, "Other/d#{i}.md").id)
+    # One bulk insert (real envelopes, no folder row for Other), not 300 upserts.
+    drift =
+      u
+      |> Engram.Fixtures.insert_notes!(v, for(i <- 1..300, do: %{"path" => "Other/d#{i}.md"}))
+      |> Enum.map(&Ecto.UUID.dump!/1)
 
     %{num_rows: 300} =
       Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE id = ANY($1)", [drift])
