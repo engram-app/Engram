@@ -899,6 +899,83 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       assert n_kept?(ctx, {id, Agent.get(ctx.store, &Map.fetch!(&1.points, id))})
     end
 
+    # The `n` gates (kill switch, spent bucket) hold only the `n` write and
+    # the version stamp. The heals that queue this worker run as before:
+    # a DEK rotation (`UserDekRotation`'s hand-off NULLs every stamp and
+    # queues the user) and FileTimes v2 (`FileTimes.run_pass/1` NULLs the
+    # repaired notes' stamps and queues the user).
+    for gate <- [:switch_off, :bucket_spent] do
+      @gate gate
+      test "#{gate}: a DEK rotation's heal still rewrites the retired HMACs, with no n write",
+           ctx do
+        pre_n(ctx)
+
+        for id <- point_ids(ctx.stale),
+            do:
+              Agent.update(
+                ctx.store,
+                &update_in(&1.points[id], fn p -> Map.put(p, "y", "b2xk") end)
+              )
+
+        # What the rotation's flip does to every note of the user.
+        {2, _} =
+          Repo.update_all(
+            from(n in Note, where: n.user_id == ^ctx.user.id),
+            [set: [payload_hash: nil, keyword_version: nil]],
+            skip_tenant_check: true
+          )
+
+        close_n_gate(@gate)
+        no_embed()
+        result = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+        assert result == :ok or match?({:snooze, _}, result)
+
+        assert Agent.get(ctx.store, & &1.batches) == []
+
+        for id <- point_ids(ctx.stale),
+            do:
+              assert(Agent.get(ctx.store, &Map.fetch!(&1.points, id))["y"] == ctx.passed[id]["y"])
+
+        assert reload(ctx.stale).payload_hash && reload(ctx.healthy).payload_hash
+        assert Enum.all?(payload_versions(ctx), &is_nil/1)
+      end
+
+      test "#{gate}: a FileTimes v2 repair's payload refresh still runs, with no n write", ctx do
+        pre_n(ctx)
+        Engram.DataMigrations.FileTimes.forget()
+
+        # A millisecond `mtime` and no twin: FileTimes v2 repairs the twin and,
+        # since the payload's file date moved, NULLs the note's stamp.
+        Repo.with_tenant!(ctx.user.id, fn ->
+          {1, _} =
+            Repo.update_all(from(n in Note, where: n.id == ^ctx.stale.id),
+              set: [mtime: 1_776_072_500_928.0, mtime_at: nil]
+            )
+        end)
+
+        Stream.repeatedly(fn -> Engram.DataMigrations.FileTimes.run_pass([]) end)
+        |> Enum.take_while(&(&1 != :done))
+        |> Enum.take(20)
+
+        assert reload(ctx.stale).payload_hash == nil
+        assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
+
+        close_n_gate(@gate)
+        no_embed()
+        perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+        assert Agent.get(ctx.store, & &1.batches) == []
+        assert reload(ctx.stale).payload_hash
+        assert Enum.all?(payload_versions(ctx), &is_nil/1)
+      end
+    end
+
+    defp close_n_gate(:switch_off), do: ServiceConfig.put_override(:payload_backfill, false)
+
+    defp close_n_gate(:bucket_spent) do
+      {:allow, _} = EngramWeb.RateLimiter.hit("payload_backfill_points", 60_000, 500, :other, 500)
+    end
+
     # The hourly pass must not run an unindexed "any note behind?" EXISTS
     # per user (it reads every note when the answer is no): it walks the
     # notes primary key in fixed windows (`Engram.Backfill.IdWindows`), and

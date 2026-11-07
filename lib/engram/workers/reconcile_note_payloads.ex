@@ -123,26 +123,28 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id} = args} = job) do
-    with :ok <- pre_gate(job),
-         %User{} = user <- Repo.get(User, user_id),
+    with %User{} = user <- Repo.get(User, user_id),
          :ok <- RotationGate.check_user(user) do
       deadline = System.monotonic_time(:millisecond) + @budget_ms
-      {result, counts} = heal(user, args["after"], {deadline, job}, @zero)
+      {result, counts, n_state} = heal(user, args["after"], {deadline, job}, @zero, :open)
       report(user_id, counts)
 
-      case result do
-        :done ->
+      case {result, n_state} do
+        # The heal is done; the `n` work it held back retries after the snooze.
+        {:done, {:held, seconds}} ->
+          {:snooze, seconds}
+
+        {:done, _} ->
           :ok
 
-        {:more, after_id} ->
+        {{:more, after_id}, _} ->
           {:ok, _} = Oban.insert(new(%{"user_id" => user_id, "after" => after_id}))
           :ok
 
-        other ->
+        {other, _} ->
           other
       end
     else
-      {:snooze, _} = gated -> gated
       nil -> :ok
       {:error, :rotation_in_progress} -> locked_snooze(user_id, job)
     end
@@ -232,33 +234,38 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     )
   end
 
-  defp heal(%User{id: user_id} = user, after_id, {deadline, job} = hop, counts) do
+  # `n_state`: `:open` while the `n` path may write, `:off` (kill switch) or
+  # `{:held, seconds}` (Qdrant gate, spent bucket) once it may not this hop.
+  # Either way the heal (`heal_notes/6`: DEK rotation, FileTimes, a lost
+  # stamp race) runs exactly as it would without the `n` path; only the `n`
+  # write and the version stamp wait.
+  defp heal(%User{id: user_id} = user, after_id, {deadline, job} = hop, counts, n_state) do
     {notes, points} = batch(user_id, after_id)
 
     cond do
       notes == [] ->
-        {:done, counts}
+        {:done, counts, n_state}
 
       System.monotonic_time(:millisecond) > deadline ->
-        {{:more, after_id}, counts}
+        {{:more, after_id}, counts, n_state}
 
       true ->
         with {:ok, stored} <- read_payloads(user_id, points |> Map.values() |> List.flatten()),
              # Per batch, after the read and before any write: a rotation
              # that started since would have its fresh keys overwritten.
              :ok <- RotationGate.check(user_id),
-             {:ok, counts} <- backfill_n(notes, points, stored, job, counts),
-             {:ok, counts} <- heal_notes(user, notes, points, stored, counts) do
+             {:ok, counts, n_state, n_ok} <-
+               backfill_n(notes, points, stored, job, n_state, counts),
+             {:ok, counts} <- heal_notes(user, notes, points, stored, counts, n_ok) do
           if length(notes) < @batch_size do
-            {:done, counts}
+            {:done, counts, n_state}
           else
             Process.sleep(@pause_ms)
-            heal(user, List.last(notes).id, hop, counts)
+            heal(user, List.last(notes).id, hop, counts, n_state)
           end
         else
-          {:snooze, _} = snooze -> {snooze, counts}
-          {:error, reason, counts} -> {answer(user_id, reason), counts}
-          {:error, reason} -> {answer(user_id, reason), counts}
+          {:error, reason, counts} -> {answer(user_id, reason), counts, n_state}
+          {:error, reason} -> {answer(user_id, reason), counts, n_state}
         end
     end
   end
@@ -401,7 +408,10 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   defp same_dek(%User{id: id, dek_version: v}),
     do: from(u in User, where: u.id == ^id and u.dek_version == ^v, select: 1)
 
-  defp heal_notes(user, notes, points, stored, counts) do
+  # `n_ok`: this batch's `n` work is done (or was not needed), so the
+  # version stamp may vouch for it. Otherwise the notes keep their old
+  # version and the sweep brings them back.
+  defp heal_notes(user, notes, points, stored, counts, n_ok) do
     # A note with a stamp is selected only for an old payload version: it
     # needs a rewrite, not the drift check a NULL stamp gets.
     {stale, unstamped} = Enum.split_with(notes, & &1.payload_hash)
@@ -411,15 +421,16 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     # points were not written would vouch for a payload they do not hold.
     {legacy, stale} = Enum.split_with(stale, &legacy_points?(&1, points, stored))
 
-    with {:ok, counts} <- heal_unstamped(user, unstamped ++ legacy, points, stored, counts) do
-      refresh_stale(user, stale, points, stored, counts)
+    with {:ok, counts} <-
+           heal_unstamped(user, unstamped ++ legacy, points, stored, counts, n_ok) do
+      refresh_stale(stale, counts, n_ok)
     end
   end
 
   defp legacy_points?(note, points, stored),
     do: Enum.any?(Map.get(points, note.id, []), &(stored[&1] && not v5?(stored[&1])))
 
-  defp heal_unstamped(user, notes, points, stored, counts) do
+  defp heal_unstamped(user, notes, points, stored, counts, n_ok) do
     Enum.reduce_while(notes, {:ok, counts}, fn note, {:ok, counts} ->
       present = for id <- Map.get(points, note.id, []), Map.has_key?(stored, id), do: id
       {v5_ids, v3_ids} = Enum.split_with(present, &v5?(stored[&1]))
@@ -429,7 +440,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
         {:ok, writes, payload} ->
           # Legacy points never take the new shape: their note is not stamped
           # with a payload version, so the sweep keeps it in view.
-          heal_note(note, payload, writes, counts, v3_ids == [])
+          heal_note(note, payload, writes, counts, n_ok and v3_ids == [])
 
         :skip ->
           mark_undecryptable(note, user)
@@ -446,8 +457,8 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   # so it is only stamped. No decrypt, no drift check. Only while the row
   # still holds the hash read: a previous-release node that re-upserted the
   # note since (without `n`) changed or NULLed it, and must not be vouched for.
-  defp refresh_stale(_user, notes, _points, _stored, counts) do
-    Enum.each(notes, &stamp_version(&1, hash: &1.payload_hash))
+  defp refresh_stale(notes, counts, n_ok) do
+    if n_ok, do: Enum.each(notes, &stamp_version(&1, hash: &1.payload_hash))
     {:ok, Enum.reduce(notes, counts, fn _note, acc -> bump(acc, :checked) end)}
   end
 
@@ -477,10 +488,30 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   # Every v5 point of the batch's notes the read shows without `n` gets it,
   # merged, in paced pages. A point missing from the read is not written: a
   # note whose points are gone is re-created by its next index.
-  defp backfill_n(notes, points, stored, job, counts) do
-    if PayloadV6.version() >= @n_version,
-      do: write_n(n_pairs(notes, points, stored), job, counts),
-      else: {:ok, counts}
+  # `{:ok, counts, n_state, n_ok}`. Gated here, per batch, and nowhere else:
+  # the kill switch, then the Qdrant gate, then the bucket (`write_n/2`).
+  defp backfill_n(notes, points, stored, job, n_state, counts) do
+    cond do
+      PayloadV6.version() < @n_version -> {:ok, counts, n_state, true}
+      n_state != :open -> {:ok, counts, n_state, false}
+      true -> open_and_write(n_pairs(notes, points, stored), job, counts)
+    end
+  end
+
+  defp open_and_write(pairs, job, counts) do
+    with {:switch, true} <- {:switch, backfill_enabled?()},
+         :ok <- Rebuild.qdrant_pace(job) do
+      case write_n(pairs, counts) do
+        {:ok, counts} -> {:ok, counts, :open, true}
+        {:denied, counts} -> {:ok, counts, {:held, edge_snooze()}, false}
+        {:error, _reason, _counts} = error -> error
+      end
+    else
+      # Off: no retry; the ledger is paused too, and requeues once it is on.
+      {:switch, false} -> {:ok, counts, :off, false}
+      # The disk or optimizer gate (`Rebuild.gate_snooze/1`, growing).
+      {:snooze, seconds} -> {:ok, counts, {:held, seconds}, false}
+    end
   end
 
   defp n_pairs(notes, points, stored) do
@@ -491,18 +522,27 @@ defmodule Engram.Workers.ReconcileNotePayloads do
         do: {id, %{@n_key => FilterId.uuid(to_string(note.id))}}
   end
 
-  defp write_n(pairs, job, counts) do
-    pairs
-    |> Enum.chunk_every(n_page())
-    |> Enum.reduce_while({:ok, counts}, fn page, {:ok, counts} ->
-      with :ok <- n_gate(job, length(page)),
-           :ok <- Qdrant.set_payloads(Qdrant.collection_name(), page, caller: :reconcile) do
-        {:cont, {:ok, Map.update!(counts, :n_points, &(&1 + length(page)))}}
-      else
-        {:snooze, _} = snooze -> {:halt, snooze}
-        {:error, reason} -> {:halt, {:error, reason, counts}}
-      end
-    end)
+  # Page by page, each page capped at what the bucket has left this window
+  # (a free peek), then spent with exactly that many points right before its
+  # write. So a window's whole budget goes through (256 + 244 at 500/min),
+  # and a job with nothing to write spends nothing. `{:denied, counts}` once
+  # the window is spent (or a racing job took it first).
+  defp write_n([], counts), do: {:ok, counts}
+
+  defp write_n(pairs, counts) do
+    cap = min(n_page(), RateLimiter.peek(@n_bucket, @n_window_ms, n_per_min()))
+    {page, rest} = Enum.split(pairs, cap)
+    size = length(page)
+
+    with true <- size > 0,
+         {:allow, _} <- RateLimiter.hit(@n_bucket, @n_window_ms, n_per_min(), :other, size),
+         :ok <- Qdrant.set_payloads(Qdrant.collection_name(), page, caller: :reconcile) do
+      write_n(rest, Map.update!(counts, :n_points, &(&1 + size)))
+    else
+      false -> {:denied, counts}
+      {:deny, _ms} -> {:denied, counts}
+      {:error, reason} -> {:error, reason, counts}
+    end
   end
 
   @doc "The payload version from which every v5 point carries `n`."
@@ -518,50 +558,22 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   # A page never exceeds the bucket, or it could never be let through.
   defp n_page, do: min(@refresh_page, n_per_min())
 
-  # Kill switch, then the Qdrant gate, then the points-per-minute bucket.
-  # Every denial snoozes the way every gated Qdrant writer does
-  # (`Rebuild.gate_snooze/1`: 30 s, doubling per snooze to 600 s, jittered
-  # from the second), so a queue of denied jobs neither churns nor wakes in
-  # lockstep. Hammer counts a denied hit too, so the window stays shut until
-  # it rolls.
+  # A spent bucket snoozes to the window's edge plus up to 10 s of jitter, so
+  # the job writes again in the very next window (a growing backoff would
+  # leave windows idle), and jobs denied together do not wake in lockstep.
   # ponytail: a fixed window lets up to 2x the rate through across a window
   # boundary (a full bucket at the end of one, another at the start of the
   # next). Accepted: the disk and optimizer gate (`Rebuild.qdrant_pace/1`) is
   # the real guard; a sliding window is the upgrade if 2x bursts ever show.
-  defp n_gate(job, count) do
-    with :ok <- n_open(job) do
-      case RateLimiter.hit(@n_bucket, @n_window_ms, n_per_min(), :other, count) do
-        {:allow, _} -> :ok
-        {:deny, _ms} -> gated(job)
-      end
-    end
-  end
+  @edge_jitter_s 10
 
-  # The kill switch, then the Qdrant gate: no bucket points spent.
-  defp n_open(job) do
-    with :ok <- if(backfill_enabled?(), do: :ok, else: gated(job)),
-         do: Rebuild.qdrant_pace(job)
-  end
-
-  defp gated(%Oban.Job{meta: meta}),
-    do: {:snooze, Rebuild.gate_snooze(Map.get(meta || %{}, "snoozed", 0))}
-
-  # Before the job's first read: the kill switch, the Qdrant gate, then a
-  # FREE peek of the bucket (`RateLimiter.peek/3`, nothing spent). A job
-  # snoozes before it reads anything from Postgres or Qdrant unless a whole
-  # page could go through now. The bucket is spent only right before each
-  # write, with the page's actual point count (`write_n/3`), so a job with
-  # nothing to write spends nothing.
-  defp pre_gate(job) do
-    if PayloadV6.version() >= @n_version do
-      with :ok <- n_open(job) do
-        if RateLimiter.peek(@n_bucket, @n_window_ms, n_per_min()) >= n_page(),
-          do: :ok,
-          else: gated(job)
-      end
-    else
-      :ok
-    end
+  @doc false
+  # Seconds to the end of the bucket's current window (Hammer's fix_window:
+  # `div(now, scale)`), plus jitter. Pure in `now_ms` for the rate test.
+  @spec edge_snooze(integer()) :: pos_integer()
+  def edge_snooze(now_ms \\ System.system_time(:millisecond)) do
+    to_edge_ms = @n_window_ms - rem(now_ms, @n_window_ms)
+    div(to_edge_ms + 999, 1000) + :rand.uniform(@edge_jitter_s) - 1
   end
 
   @doc """

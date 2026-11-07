@@ -156,6 +156,28 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
 
   defp sweep(ctx), do: perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
 
+  defp versions(ctx) do
+    Repo.all(
+      from(s in NoteIndexState, where: s.user_id == ^ctx.user.id, select: s.payload_version),
+      skip_tenant_check: true
+    )
+  end
+
+  # Points of the note that carry `n` now.
+  defp written(ctx),
+    do: Agent.get(ctx.points, &Enum.count(&1, fn {_id, p} -> Map.has_key?(p, "n") end))
+
+  # `count` more v5 points without `n` on the note (chunk rows + the fake's payloads).
+  defp more_points(ctx, count) do
+    u = Engram.Vector.FilterId.uuid(ctx.user.id)
+
+    for i <- 1..count do
+      point = Ecto.UUID.generate()
+      Engram.Fixtures.insert_chunk!(ctx.user, ctx.note, point, position: 1000 + i)
+      Agent.update(ctx.points, &Map.put(&1, point, %{"u" => u}))
+    end
+  end
+
   defp all_n?(ctx), do: Enum.all?(Agent.get(ctx.points, &Map.values/1), &Map.has_key?(&1, "n"))
 
   test "disk at the gate snoozes before any write", ctx do
@@ -173,24 +195,27 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     refute_received :rewrite
   end
 
-  # Pulled because Qdrant is struggling: the job must not even read it.
-  # Every gate runs before the job's first Postgres or Qdrant read.
-  test "with the kill switch off, the job makes no Repo and no Qdrant call", ctx do
+  # The switch gates only the `n` write and the version stamp: the job
+  # still heals (a DEK rotation or FileTimes may have queued it), writes no
+  # `n`, stamps no version, and ends rather than retrying while off.
+  test "with the kill switch off, the job writes no n, stamps nothing, and ends", ctx do
     ServiceConfig.put_override(:payload_backfill, false)
-    # A Qdrant with no routes: any request fails the test.
-    silent = Bypass.open()
-    ServiceConfig.put_override(:qdrant_url, "http://localhost:#{silent.port}")
-    job = build_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
 
-    {result, queries} = Engram.QueryRecorder.record(fn -> ReconcileNotePayloads.perform(job) end)
+    assert :ok = sweep(ctx)
+    refute_received :rewrite
+    refute all_n?(ctx)
+    assert versions(ctx) |> Enum.all?(&is_nil/1)
 
-    assert {:snooze, s} = result
-    assert s == Engram.Rebuild.gate_snooze(0)
-    assert Enum.filter(queries, &(&1.pid == self())) == []
+    ServiceConfig.put_override(:payload_backfill, true)
+    assert :ok = sweep(ctx)
+    assert_received :rewrite
+    assert all_n?(ctx)
   end
 
-  test "a gated job's snooze grows and is jittered (Rebuild.gate_snooze/1)", ctx do
-    ServiceConfig.put_override(:payload_backfill, false)
+  # The disk and optimizer gate keeps `Rebuild.gate_snooze/1`'s growing,
+  # jittered backoff (it is temporary; the bucket's edge snooze is not this).
+  test "a disk-gated job's snooze grows and is jittered (Rebuild.gate_snooze/1)", ctx do
+    Agent.update(ctx.health, fn _ -> {@green, 0, 76} end)
     job = build_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
 
     snoozes =
@@ -200,44 +225,58 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     assert length(Enum.uniq(snoozes)) > 1
   end
 
-  # The hourly ledger pass stops with the switch too: no notes walk, no
-  # job inserts, no Qdrant scroll or unstamp.
-  test "with the kill switch off, the ledger pass makes no Repo and no Qdrant call", _ctx do
+  # The runner pauses the ledger on the switch (`enabled?/0`, as FileTimes):
+  # no pass, so no notes walk, no jobs, no Qdrant scroll, and no stuck alert.
+  test "with the kill switch off, the runner runs no ledger pass", _ctx do
+    alias Engram.DataMigrations.NotePayloadStamps
+
     ServiceConfig.put_override(:payload_backfill, false)
     silent = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{silent.port}")
 
-    {result, queries} =
-      Engram.QueryRecorder.record(fn -> Engram.DataMigrations.NotePayloadStamps.run_pass() end)
-
-    assert result == :more
-    assert Enum.filter(queries, &(&1.pid == self())) == []
-  end
-
-  test "the kill switch snoozes it, and it resumes once back on", ctx do
-    ServiceConfig.put_override(:payload_backfill, false)
-
-    assert {:snooze, 30} = sweep(ctx)
-    refute_received :rewrite
+    refute NotePayloadStamps.enabled?()
+    assert Engram.Workers.DataMigrationsRunner.run(NotePayloadStamps) == :skipped
+    refute_enqueued(worker: ReconcileNotePayloads)
 
     ServiceConfig.put_override(:payload_backfill, true)
-    assert :ok = sweep(ctx)
-    assert_received :rewrite
-    assert all_n?(ctx)
+    assert NotePayloadStamps.enabled?()
   end
 
-  # The pre-read gate peeks the bucket for free: with less than a page
-  # left, the job snoozes before any Repo query or point read (only the
-  # cached Qdrant health gate runs before the peek).
-  test "an exhausted bucket snoozes before any Repo query or point read", ctx do
+  # A spent bucket: the job still heals, writes no `n`, and snoozes to the
+  # window's edge (plus jitter), not into a growing backoff.
+  test "an exhausted bucket holds the n write and snoozes to the window edge", ctx do
     {:allow, _} =
       EngramWeb.RateLimiter.hit("payload_backfill_points", 60_000, 500, :other, 500)
 
-    {result, queries} = Engram.QueryRecorder.record(fn -> sweep(ctx) end)
-    assert {:snooze, 30} = result
-    assert Enum.filter(queries, &(&1.pid == self())) == []
-    refute_received :read
+    assert {:snooze, s} = sweep(ctx)
+    assert s in 1..70
     refute_received :rewrite
+    assert versions(ctx) |> Enum.all?(&is_nil/1)
+  end
+
+  # Each page is capped at what the window has left, so the whole budget
+  # goes through: 256 + 244 at 500/min, then the job waits for the edge.
+  test "at 500/min a window lets 500 points through, then the job snoozes to its edge", ctx do
+    more_points(ctx, 600)
+
+    assert {:snooze, s} = sweep(ctx)
+    assert s in 1..70
+    assert written(ctx) == 500
+    assert EngramWeb.RateLimiter.peek("payload_backfill_points", 60_000, 500) == 0
+  end
+
+  # The sustained rate, on a fake clock: every edge snooze lands in the next
+  # window (never skips one), so one job writes every window: 500/min at
+  # 500, 1,000/min at 1,000. A growing backoff after a denial would not.
+  test "the edge snooze always wakes in the next window, never later" do
+    for now <- [0, 1, 30_000, 59_000, 59_999, 60_000, 61_234, 119_999] do
+      for _ <- 1..20 do
+        s = ReconcileNotePayloads.edge_snooze(now)
+        wake = now + s * 1_000
+        assert div(wake, 60_000) == div(now, 60_000) + 1, "now=#{now} s=#{s}"
+        assert s >= 1
+      end
+    end
   end
 
   # Waking jobs with nothing to write spend no budget: the peek is free and
