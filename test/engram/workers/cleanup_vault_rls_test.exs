@@ -41,7 +41,6 @@ defmodule Engram.Workers.CleanupVaultRlsTest do
   alias Engram.Accounts.ApiKey
   alias Engram.Attachments.Attachment
   alias Engram.Notes.Chunk
-  alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vaults.Vault
   alias Engram.Workers.CleanupVault

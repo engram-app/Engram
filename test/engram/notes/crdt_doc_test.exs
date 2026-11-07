@@ -2,7 +2,7 @@ defmodule Engram.Notes.CrdtDocTest do
   use Engram.DataCase, async: false
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog}
 
   setup do
     user = insert(:user)

@@ -2,7 +2,6 @@ defmodule Engram.NotesOkfWriteTest do
   use Engram.DataCase, async: true
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.Note
 
   @content """
   ---

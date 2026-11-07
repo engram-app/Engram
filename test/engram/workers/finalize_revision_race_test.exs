@@ -13,7 +13,7 @@ defmodule Engram.Workers.FinalizeRevisionRaceTest do
 
   alias Engram.{CheckpointInterleave, Crypto, Notes, Repo, Storage}
   alias Engram.Crypto.Envelope
-  alias Engram.Notes.{Note, Revision, Revisions}
+  alias Engram.Notes.{Revision, Revisions}
   alias Engram.Workers.FinalizeRevision
 
   setup do

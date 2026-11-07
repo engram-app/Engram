@@ -7,7 +7,6 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
   import Mox
 
   alias Engram.Crypto
-  alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.ServiceConfig
   alias Engram.UsageMeters

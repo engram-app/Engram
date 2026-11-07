@@ -10,7 +10,6 @@ defmodule Engram.NotesContentWritePathTest do
   use Engram.DataCase, async: true
 
   alias Engram.Notes
-  alias Engram.Notes.Note
   alias Engram.QueryRecorder
 
   setup do

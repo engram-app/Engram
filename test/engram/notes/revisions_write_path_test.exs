@@ -5,7 +5,7 @@ defmodule Engram.Notes.RevisionsWritePathTest do
   import Ecto.Query
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, Note, Revision, Revisions}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, Revision, Revisions}
   alias Engram.Workers.FinalizeRevision
 
   setup do

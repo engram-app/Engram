@@ -22,7 +22,7 @@ defmodule Engram.Workers.BackfillCrdtStateLockTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.{Notes, Repo, Vaults}
-  alias Engram.Notes.{Note, NoteBody}
+  alias Engram.Notes.NoteBody
   alias Engram.Workers.BackfillCrdtState
 
   setup do

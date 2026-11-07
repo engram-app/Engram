@@ -8,7 +8,6 @@ defmodule Engram.Workers.EmbedNoteTxnCountTest do
   import Mox
 
   alias Engram.Notes
-  alias Engram.Repo
   alias Engram.TenantQueryCounter
   alias Engram.Workers.EmbedNote
 

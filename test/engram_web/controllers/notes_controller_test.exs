@@ -807,8 +807,6 @@ defmodule EngramWeb.NotesControllerTest do
   # a genuine row shape rather than a corrupted one (a NULL ciphertext would
   # decrypt to nil and exercise a different branch).
   defp blank_facade_content!(user, note_id) do
-    import Ecto.Query, only: [from: 2]
-
     {:ok, enc} = Engram.Crypto.encrypt_note_fields(%{content: "", title: "stale"}, user, note_id)
 
     Engram.Fixtures.write_note_body!(note_id,

@@ -14,11 +14,9 @@ defmodule Engram.Notes.ContentOutboxTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
-  import Ecto.Query, only: [from: 2]
-
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Crypto.Envelope
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog, Note, NoteBody}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog, NoteBody}
   alias Engram.Workers.{EmbedNote, NoteCommitted}
 
   setup do

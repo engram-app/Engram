@@ -2,11 +2,8 @@ defmodule Engram.DataMigrations.CrdtStateSeedTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
-  import Ecto.Query
-
   alias Engram.{Crypto, Notes, Vaults}
   alias Engram.DataMigrations.CrdtStateSeed
-  alias Engram.Notes.Note
   alias Engram.Workers.{BackfillCrdtState, DataMigrationsRunner}
 
   setup do

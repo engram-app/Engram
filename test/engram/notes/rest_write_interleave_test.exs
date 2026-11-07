@@ -31,14 +31,12 @@ defmodule Engram.Notes.RestWriteInterleaveTest do
   """
   use ExUnit.Case, async: false
 
-  import Ecto.Query, only: [from: 2]
   import Engram.Factory
 
   alias Engram.CheckpointInterleave
   alias Engram.Crypto
   alias Engram.Notes
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note}
-  alias Engram.Repo
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint}
 
   setup do
     CheckpointInterleave.checkout_real!()

@@ -4,7 +4,7 @@ defmodule Engram.Notes.CrdtMergePathTest do
   use Engram.DataCase, async: false
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, CrdtUpdateLog}
 
   setup do
     user = insert(:user)

@@ -17,7 +17,7 @@ defmodule Engram.Notes.RevisionsInterleaveTest do
   import Engram.Factory
 
   alias Engram.{CheckpointInterleave, Crypto, Notes, Repo}
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note, Revision, Revisions}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Revision, Revisions}
 
   setup do
     CheckpointInterleave.checkout_real!()

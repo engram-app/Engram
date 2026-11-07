@@ -5,7 +5,7 @@ defmodule Engram.Workers.FinalizeRevisionSweepTest do
   import Ecto.Query
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{Note, Revision, Revisions}
+  alias Engram.Notes.{Revision, Revisions}
   alias Engram.Workers.{FinalizeRevision, FinalizeRevisionSweep}
 
   setup do

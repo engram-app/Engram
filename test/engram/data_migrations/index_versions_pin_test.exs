@@ -17,7 +17,6 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
   alias Engram.Crypto
   alias Engram.DataMigrations
   alias Engram.DataMigrations.IndexVersions
-  alias Engram.Notes.Note
   alias Engram.Rebuild
   alias Engram.ServiceConfig
   alias Engram.Workers.{EmbedNote, RebuildStaleNote, ReconcileEmbeddings, RefreshKeywordVectors}

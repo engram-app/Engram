@@ -10,7 +10,7 @@ defmodule Engram.Notes.CrdtEmbedCoalescingTest do
   use Oban.Testing, repo: Engram.Repo
 
   alias Engram.{Crypto, Notes, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence}
   alias Engram.Workers.EmbedNote
 
   setup do

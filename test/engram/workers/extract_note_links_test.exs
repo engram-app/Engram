@@ -5,7 +5,7 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
   import Ecto.Query
 
   alias Engram.{Crypto, Links, Notes, Repo}
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint}
   alias Engram.Workers.{ExtractNoteLinks, RewriteNoteLinks}
 
   setup do

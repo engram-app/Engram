@@ -7,7 +7,6 @@ defmodule Engram.DataMigrations.EnvelopeFormatTest do
   alias Engram.DataMigrations
   alias Engram.DataMigrations.EnvelopeFormat
   alias Engram.Notes
-  alias Engram.Notes.Note
   alias Engram.Workers.{DataMigrationsRunner, ReencodeEnvelopes}
 
   @big String.duplicate("a compressible line of note text\n", 40)

@@ -10,7 +10,7 @@ defmodule Engram.Links.RewriterTest do
   alias Engram.Links
   alias Engram.Links.{Parser, Rewriter}
   alias Engram.Notes
-  alias Engram.Notes.{CrdtBridge, CrdtRegistry, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry}
   alias Yex.Sync.SharedDoc
 
   setup do

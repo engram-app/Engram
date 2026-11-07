@@ -14,12 +14,10 @@ defmodule Engram.NotesContentForReadTest do
   """
   use Engram.DataCase, async: true
 
-  import Ecto.Query, only: [from: 2]
-
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Notes
-  alias Engram.Notes.{CrdtUpdateLog, Note}
+  alias Engram.Notes.CrdtUpdateLog
   alias Engram.Repo
 
   setup do

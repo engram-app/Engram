@@ -7,7 +7,7 @@ defmodule Engram.Notes.LineageAuditTest do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Notes
-  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtTransport, CrdtUpdateLog, LineageAudit, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtTransport, CrdtUpdateLog, LineageAudit}
   alias Engram.Repo
   alias Engram.Test.LogCapture
 
@@ -24,7 +24,7 @@ defmodule Engram.Notes.LineageAuditTest do
     {user, vault}
   end
 
-  defp set_note(user, note_id, fields) do
+  defp set_note(_user, note_id, fields) do
     Engram.Fixtures.write_note_body!(note_id, fields)
   end
 

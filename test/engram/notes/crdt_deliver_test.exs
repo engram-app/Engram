@@ -6,7 +6,6 @@ defmodule Engram.Notes.CrdtDeliverTest do
   # unbind; a no-op room avoids it).
   use Engram.DataCase, async: false
 
-  import Ecto.Query
   import ExUnit.CaptureLog
 
   alias Engram.{Notes, Repo}

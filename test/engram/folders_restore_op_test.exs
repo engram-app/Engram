@@ -11,7 +11,7 @@ defmodule Engram.FoldersRestoreOpTest do
 
   alias Engram.{Attachments, Folders, Notes, Repo, Storage}
   alias Engram.Attachments.Attachment
-  alias Engram.Notes.{Note, NoteBody}
+  alias Engram.Notes.Note
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()

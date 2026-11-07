@@ -2,8 +2,6 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
-  import Ecto.Query
-
   alias Engram.Notes
   alias Engram.Notes.CrdtTransport
   alias Engram.Workers.BackfillCrdtHead

@@ -8,7 +8,7 @@ defmodule Engram.Notes.CrdtCheckpointBackpressureTest do
   import Ecto.Query
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CheckpointGate, CrdtBridge, CrdtPersistence, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CheckpointGate, CrdtBridge, CrdtPersistence, CrdtUpdateLog}
   alias Engram.Workers.CheckpointNote
 
   setup do

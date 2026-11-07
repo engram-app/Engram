@@ -4,7 +4,7 @@ defmodule Engram.IndexingFlagRebuildTest do
   use Engram.DataCase, async: false
 
   alias Engram.Indexing
-  alias Engram.Notes.{Chunk, Note}
+  alias Engram.Notes.Chunk
   alias Engram.Repo
 
   test "flag_notes_for_rebuild/2 clears embed_hash and chunk context_hmac, keeps dense_indexed_hash" do

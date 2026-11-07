@@ -21,14 +21,13 @@ defmodule Engram.Notes.FeedInterleaveTest do
   """
   use ExUnit.Case, async: false
 
-  import Ecto.Query, only: [from: 2]
   import Engram.Factory
 
   alias Engram.CheckpointInterleave
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Notes
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog}
   alias Engram.Repo
 
   setup do

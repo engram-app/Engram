@@ -1,8 +1,6 @@
 defmodule Engram.Notes.Utf8BackfillTest do
   use Engram.DataCase, async: true
 
-  import Ecto.Query, only: [from: 2]
-
   alias Engram.Crypto
   alias Engram.Notes
   alias Engram.Notes.Note

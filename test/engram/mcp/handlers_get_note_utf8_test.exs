@@ -9,12 +9,9 @@ defmodule Engram.MCP.HandlersGetNoteUtf8Test do
   # after the bad byte is never dropped again.
   use Engram.DataCase, async: true
 
-  import Ecto.Query, only: [from: 2]
-
   alias Engram.Crypto
   alias Engram.MCP.Handlers
   alias Engram.Notes
-  alias Engram.Notes.Note
   alias Engram.Repo
 
   setup do

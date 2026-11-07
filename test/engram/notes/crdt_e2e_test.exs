@@ -23,7 +23,7 @@ defmodule Engram.Notes.CrdtE2ETest do
   use EngramWeb.ChannelCase, async: false
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtPersistence, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtPersistence}
 
   # ---------------------------------------------------------------------------
   # Setup: one user, one vault, one note, one channel socket (client A)

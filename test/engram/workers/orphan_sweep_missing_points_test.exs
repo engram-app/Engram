@@ -10,7 +10,6 @@ defmodule Engram.Workers.OrphanSweepMissingPointsTest do
   use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Notes.Chunk
-  alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Workers.OrphanSweep
 

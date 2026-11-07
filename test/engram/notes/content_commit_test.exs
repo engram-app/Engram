@@ -10,7 +10,7 @@ defmodule Engram.Notes.ContentCommitTest do
   use Oban.Testing, repo: Engram.Repo
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{ContentCommit, CrdtBridge, CrdtCheckpoint, Note}
+  alias Engram.Notes.{ContentCommit, CrdtBridge, CrdtCheckpoint}
   alias Engram.Workers.{EmbedNote, ExtractNoteLinks, FinalizeRevision, NoteCommitted}
 
   setup do

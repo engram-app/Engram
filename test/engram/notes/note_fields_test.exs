@@ -14,7 +14,6 @@ defmodule Engram.Notes.NoteFieldsTest do
   alias Engram.Notes
   alias Engram.Notes.FrontmatterKey
   alias Engram.Notes.FrontmatterKeys
-  alias Engram.Notes.Note
   alias Engram.Notes.NoteAttr
   alias Engram.Repo
   alias Engram.Vector.FilterId

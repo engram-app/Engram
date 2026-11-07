@@ -28,7 +28,7 @@ defmodule Engram.Notes.CrdtCheckpointRotationFenceTest do
   alias Engram.Accounts.User
   alias Engram.Crypto
   alias Engram.Crypto.DekCache
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog}
   alias Engram.Repo
 
   setup do

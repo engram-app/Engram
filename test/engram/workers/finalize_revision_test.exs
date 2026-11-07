@@ -37,7 +37,7 @@ defmodule Engram.Workers.FinalizeRevisionTest do
 
   alias Engram.{Crypto, Notes, Repo, Storage, Vaults}
   alias Engram.Crypto.Envelope
-  alias Engram.Notes.{Note, Revision, Revisions}
+  alias Engram.Notes.{Revision, Revisions}
   alias Engram.Workers.FinalizeRevision
 
   setup do

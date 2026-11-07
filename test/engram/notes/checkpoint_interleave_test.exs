@@ -27,7 +27,7 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
   alias Engram.CheckpointInterleave
   alias Engram.Crypto
   alias Engram.Notes
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog}
   alias Engram.Repo
 
   setup do
