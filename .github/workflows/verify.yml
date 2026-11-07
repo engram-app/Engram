@@ -3356,8 +3356,7 @@ jobs:
         #
         # Uses RUNNER_TEMP, not /tmp: /tmp is shared by every runner on the
         # VM, so a parallel lint job on another PR can clobber this file
-        # mid-comparison. (Leave the pre-existing openapi gate's /tmp path
-        # alone — out of scope here.)
+        # mid-comparison.
         run: |
           mix engram.mcp.tools_json "$RUNNER_TEMP/mcp-tools.generated.json"
           python3 - <<PY

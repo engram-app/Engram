@@ -182,8 +182,10 @@ set once via `$GITHUB_ENV` (`runner.temp` is not available in a job-level
 
 **Left as is.** `/tmp/.X*-lock` (Xvfb owns those paths), the
 `*_PREFIX`/`PREV_DIR` paths (already run-scoped), and
-`/tmp/obsidian-stderr-<name>-<pid>.log` (pid-unique, written by
-`e2e/helpers/obsidian.py`).
+`/tmp/obsidian-stderr-<name>-<pid>.log` and
+`/tmp/xvfb-stderr-<display>-<pid>.log` (pid-unique, written by
+`e2e/helpers/obsidian.py`), and the `find /tmp -name '.ff*.node' -mmin +60
+-delete` sweeps (host-wide cleanup of stale files, not a write-then-read).
 
 **How found.** Comparing the lint job logs of both runners in the same window:
 runner-2 logged `stdout bytes: 35`, then the decode error, while runner-1's
