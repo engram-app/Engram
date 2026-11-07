@@ -61,14 +61,24 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
     end
   end
 
-  # With the backfill's kill switch off or the Qdrant gate shut, the pass
-  # reads nothing (no notes walk, no jobs, no Qdrant scroll or unstamp):
-  # pulling the switch stops the ledger's traffic too. Checked in that order,
-  # so with the switch off not even the cached Qdrant gate is asked.
-  defp paused? do
-    PayloadV6.version() >= ReconcileNotePayloads.n_version() and
-      (not ReconcileNotePayloads.backfill_enabled?() or not Engram.Rebuild.qdrant_open?())
-  end
+  @doc """
+  Kill switch: the `payload_backfill` service override (default on), as
+  `FileTimes.enabled?/0`. Off, the runner runs no pass (no notes walk, no
+  jobs, no Qdrant scroll or unstamp) and the ledger stays open without
+  counting as stuck. Below the `n` payload version it is always on.
+  """
+  @impl true
+  def enabled?,
+    do:
+      PayloadV6.version() < ReconcileNotePayloads.n_version() or
+        ReconcileNotePayloads.backfill_enabled?()
+
+  # With the Qdrant gate shut the pass reads nothing (no notes walk, no
+  # jobs, no Qdrant scroll or unstamp).
+  defp paused?,
+    do:
+      PayloadV6.version() >= ReconcileNotePayloads.n_version() and
+        not Engram.Rebuild.qdrant_open?()
 
   # Not proven done, so `:more`; but a done ledger (the in-memory cache only,
   # no read) stays done rather than reopening on a paused re-verify.
