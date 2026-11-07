@@ -1,7 +1,11 @@
-# Regenerates chunker_golden.json.gz, which pins Markdown.parse/2's output
-# (test/engram/native/chunker_test.exs). Run it only together with a
+# Regenerates chunker_golden_path_free.json.gz, which pins Markdown.parse/2's
+# output (test/engram/native/chunker_test.exs). Run it only together with a
 # @chunker_version bump (#1620): changed output without a bump means notes
 # nobody edits keep chunks the new code would not produce.
+#
+# chunker_golden.json.gz, the same notes before R3c, is frozen: it pins the
+# `legacy: true` output and is never regenerated (it goes with the R3c
+# contract).
 #
 #   MIX_ENV=test mix run --no-start test/support/fixtures/chunker_golden.gen.exs
 :rand.seed(:exsss, {3, 14, 2026})
@@ -100,7 +104,7 @@ json =
   end)
 
 File.write!(
-  "test/support/fixtures/chunker_golden.json.gz",
+  "test/support/fixtures/chunker_golden_path_free.json.gz",
   json |> Jason.encode!() |> :zlib.gzip()
 )
 
