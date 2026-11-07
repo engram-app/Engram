@@ -201,11 +201,14 @@ impl<'a> Job<'a> {
             .filter(|l| !l.is_empty())
             .map(|l| cut(l, MAX_LEAD).to_string());
         let aka = aka(aliases);
+        // The whole line, aliases too, stays in MAX_LEAD (R3c review): the
+        // first chunk's prefix never passes what it could hold before.
         let lead = match lead {
             _ if legacy || aka.is_empty() => lead,
             Some(l) => Some(format!("{l} (aka {aka})")),
             None => Some(format!("(aka {aka})")),
-        };
+        }
+        .map(|l| cut(&l, MAX_LEAD).to_string());
         let limit = if body.len() >= COUNT_FROM {
             budget(body.len())
         } else {
@@ -371,7 +374,7 @@ struct Note {
     head: String,
 }
 
-/// Most bytes of the lead line (`Type: description`).
+/// Most bytes of the lead line (`Type: description (aka A, B)`).
 const MAX_LEAD: usize = 256;
 
 /// Most chars of the alias part (validation W8: uncapped, a long list
@@ -2740,13 +2743,36 @@ mod tests {
     }
 
     #[test]
-    fn the_alias_lead_is_cut_at_200_chars() {
-        let many: Vec<String> = (0..100).map(|i| format!("é{i:03}")).collect();
+    fn the_lead_alias_part_is_cut_at_200_chars() {
+        let many: Vec<String> = (0..60).map(|i| format!("a{i:01}")).collect();
         let many: Vec<&str> = many.iter().map(String::as_str).collect();
         let cs = fresh("body", "T", &many, None);
         let lead = cs[0].2.lines().nth(1).unwrap();
         let part = &lead["(aka ".len()..lead.len() - 1];
         assert_eq!(part.chars().count(), 200);
+    }
+
+    // R3c review: the joined line (description and aliases) is cut at
+    // MAX_LEAD, on a char boundary, so chunk 0's prefix stays within the
+    // legacy maximum (MAX_PREFIX, a line break, MAX_LEAD).
+    #[test]
+    fn the_whole_lead_line_stays_in_max_lead() {
+        let many: Vec<String> = (0..100).map(|i| format!("é{i:03}")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        let desc = "Playbook: ".to_string() + &"long description ".repeat(10);
+        let note = format!("# {}\n\nbody", "h".repeat(600));
+        for lead in [None, Some(desc.as_str())] {
+            let cs = fresh(&note, &"t".repeat(600), &many, lead);
+            let line = cs[0].2.lines().nth(1).unwrap();
+            assert!(line.len() <= MAX_LEAD, "{}", line.len());
+            assert!(line.contains("(aka "), "{line}");
+            let prefix = before(&cs[0].2, &cs[0]);
+            assert!(
+                prefix.len() <= MAX_PREFIX + 1 + MAX_LEAD + 2,
+                "{}",
+                prefix.len()
+            );
+        }
     }
 
     #[test]
