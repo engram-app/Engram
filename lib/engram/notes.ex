@@ -8569,7 +8569,7 @@ defmodule Engram.Notes do
     dynamic([n], n.id in ^ids and is_nil(n.folder_ref_id) and n.folder_nonce in ^nonces)
   end
 
-  # `folder_hmac` is NOT NULL on a marker (`notes_kind_shape_v2_check`), so
+  # `folder_hmac` is NOT NULL on a marker (`notes_kind_shape_v3_check`), so
   # the list never holds a nil that would drop a row from the match set.
   defp marker_arm([]), do: nil
 
@@ -9318,7 +9318,9 @@ defmodule Engram.Notes do
   @doc """
   Drops the freshly encrypted path and folder from a content write's
   attributes when the row already stores the same path and folder, AAD-bound:
-  equal hmacs under the current filter key mean equal plaintext. Re-encrypting
+  equal path hmacs under the current filter key mean equal plaintext (the
+  folder is the path's, so it is equal too; never the folder hash, which a
+  note may not carry, R9). Re-encrypting
   them only swapped the nonces, and `path_nonce`/`link_keys_stamp` sit in
   index keys and predicates, so no content write could be a HOT update. A
   rename, a legacy (pre-AAD) row or a filter-key change keeps the new fields.
@@ -9327,7 +9329,7 @@ defmodule Engram.Notes do
   def keep_stored_path(attrs, %Note{} = stored) do
     if stored.dek_version == Crypto.row_version_aad_bound() and
          is_binary(stored.path_ciphertext) and is_binary(stored.folder_ciphertext) and
-         attrs[:path_hmac] == stored.path_hmac and attrs[:folder_hmac] == stored.folder_hmac,
+         attrs[:path_hmac] == stored.path_hmac,
        do: Map.drop(attrs, @path_folder_fields),
        else: attrs
   end

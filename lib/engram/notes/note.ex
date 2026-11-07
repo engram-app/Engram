@@ -345,7 +345,8 @@ defmodule Engram.Notes.Note do
       :path_hmac,
       :path_ciphertext,
       :path_nonce,
-      :folder_hmac,
+      # Not `:folder_hmac`: a note's folder is its `folder_ref_id`, and a
+      # later release stops writing the hash (R9). A marker still needs it.
       :folder_ciphertext,
       :folder_nonce,
       :content_ciphertext,
