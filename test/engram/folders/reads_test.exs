@@ -18,9 +18,9 @@ defmodule Engram.Folders.ReadsTest do
     Repo
   }
 
-  alias Engram.Search.NoteFilter
   alias Engram.DataMigrations.FolderTable
   alias Engram.FolderRows
+  alias Engram.Search.NoteFilter
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
