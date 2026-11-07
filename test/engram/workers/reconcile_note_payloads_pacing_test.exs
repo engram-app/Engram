@@ -836,6 +836,33 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
       assert [_] = users_written(ctx, [{ctx.user.id, Map.keys(Agent.get(ctx.points, & &1))}])
     end
 
+    # The ledger's check sees no executing job, then the pending one starts
+    # before the insert: the insert conflicts and no job is pending, but the
+    # fleet job is running, so nothing is lost and nothing is logged.
+    test "a ledger pass that races the fleet job into executing logs no lost re-queue", _ctx do
+      Application.put_env(:engram, :reconcile_n_insert_fun, fn changeset ->
+        {:ok, job} = Oban.insert(changeset)
+
+        {1, _} =
+          Repo.update_all(from(j in Oban.Job, where: j.id == ^job.id), set: [state: "executing"])
+
+        {:ok, %{job | conflict?: true}}
+      end)
+
+      on_exit(fn -> Application.delete_env(:engram, :reconcile_n_insert_fun) end)
+
+      log = ExUnit.CaptureLog.capture_log(fn -> assert {:more, _} = ledger() end)
+
+      refute log =~ "fleet re-queue lost"
+
+      assert [_] =
+               Repo.all(
+                 from(j in Oban.Job,
+                   where: fragment("?->>'mode' = ?", j.args, "n_fleet")
+                 )
+               )
+    end
+
     # This process's log events from one fleet run, `msg` rendered.
     defp fleet_log_lines do
       me = self()

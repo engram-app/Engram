@@ -271,20 +271,29 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   state).
   """
   @spec ensure_fleet() :: :ok
-  def ensure_fleet, do: if(fleet_job?(["executing"]), do: :ok, else: insert_fleet([]))
+  # An insert that conflicts with the pending job just as it starts
+  # executing finds no pending one; the running job counts as present here.
+  def ensure_fleet,
+    do:
+      if(fleet_job?(["executing"]),
+        do: :ok,
+        else: insert_fleet([], ["executing" | Jobs.pending_states()])
+      )
 
   # The self re-queue. Oban's unique insert answers a conflict WITHOUT
   # inserting when another insert holds its advisory lock, so a conflict is
   # checked: a fleet job must be pending. If none is, the chain is lost until
   # the next hourly ledger pass re-adds it; logged so that shows.
+  # Pending states only: the executing fleet job is the caller itself.
   defp requeue_fleet(wait, gated) do
-    insert_fleet(schedule_in: wait, meta: %{"gated" => gated})
+    insert_fleet([schedule_in: wait, meta: %{"gated" => gated}], Jobs.pending_states())
   end
 
-  defp insert_fleet(opts) do
+  # On a conflict, a fleet job must be in one of `present` states.
+  defp insert_fleet(opts, present) do
     {:ok, job} = insert_fun().(new(%{"mode" => @fleet_mode}, opts))
 
-    if job.conflict? and not fleet_job?(Jobs.pending_states()) do
+    if job.conflict? and not fleet_job?(present) do
       Logger.warning(
         "note payload reconcile: fleet re-queue lost to a unique-insert race, the ledger re-adds it",
         Metadata.with_category(:warning, :oban, [])
