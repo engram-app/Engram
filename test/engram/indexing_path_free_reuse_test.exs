@@ -209,9 +209,18 @@ defmodule Engram.IndexingPathFreeReuseTest do
       assert_one_chunk_edit(ctx, ctx.titled, "# Titled\n\n" <> body("Beta Edited"))
     end
 
+    # The file name was this note's title, so a case-only rename moved every
+    # chunk before R3c.
     test "case-only note rename", ctx do
-      assert {:ok, _} = Notes.rename_note(ctx.user, ctx.vault, "A/Titled.md", "A/titled.md")
-      assert_one_chunk_edit(ctx, ctx.titled, "# Titled\n\n" <> body("Beta Edited"))
+      assert {:ok, _} =
+               Notes.rename_note(
+                 ctx.user,
+                 ctx.vault,
+                 "A/Sub/Plain Name.md",
+                 "A/Sub/plain name.md"
+               )
+
+      assert_one_chunk_edit(ctx, ctx.plain, body("Beta Edited"))
     end
 
     test "folder move (into another folder)", ctx do
