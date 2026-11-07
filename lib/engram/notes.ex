@@ -4340,7 +4340,7 @@ defmodule Engram.Notes do
   # because the only live path index is the partial
   # `notes_user_vault_path_v2 ... WHERE deleted_at IS NULL AND kind = 'note'`
   # and Postgres uses it only when the query states both conditions (it does not
-  # read `notes_kind_shape_v2_check`). Folder markers have `path_hmac IS NULL` by
+  # read `notes_kind_shape_v4_check`). Folder markers have `path_hmac IS NULL` by
   # that CHECK, so the kind filter drops nothing a path lookup could match.
   # NotesPathIndexPlanTest pins the plans.
   defp live_notes(user, vault, ids?) do
@@ -8590,7 +8590,7 @@ defmodule Engram.Notes do
     dynamic([n], n.id in ^ids and n.folder_nonce in ^nonces)
   end
 
-  # `folder_hmac` is NOT NULL on a marker (`notes_kind_shape_v3_check`), so
+  # `folder_hmac` is NOT NULL on a marker (`notes_kind_shape_v4_check`), so
   # the list never holds a nil that would drop a row from the match set.
   defp marker_arm([]), do: nil
 

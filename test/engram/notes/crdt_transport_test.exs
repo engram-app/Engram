@@ -652,7 +652,7 @@ defmodule Engram.Notes.CrdtTransportTest do
       assert is_nil(reloaded.crdt_head), "a stale-watermark store must leave the column NULL"
     end
 
-    test "any crdt_state_ciphertext write invalidates a warmed crdt_head (invalidation trigger)",
+    test "any CRDT state write (a new nonce) invalidates a warmed crdt_head (invalidation trigger)",
          %{user: user, vault: vault} do
       {:ok, note} =
         Notes.upsert_note(user, vault, %{path: "MH/TRG.md", content: "# T", mtime: 1_000.0},
@@ -663,17 +663,15 @@ defmodule Engram.Notes.CrdtTransportTest do
       {:ok, warmed} = Notes.get_note_by_id(user, vault, note.id)
       refute is_nil(warmed.crdt_head)
 
-      # Rewrite crdt_state_ciphertext directly, exactly as checkpoint compaction
-      # does — the BEFORE UPDATE OF crdt_state_ciphertext trigger must NULL
-      # crdt_head, structurally covering the checkpoint snapshot writer (and any
-      # future one), not just the REST maybe_merge_crdt path the round-trip test
-      # exercises.
+      # Rewrite the CRDT state's nonce directly, as every state writer does
+      # (a fresh nonce per encryption): the BEFORE UPDATE OF crdt_state_nonce
+      # trigger must NULL crdt_head, structurally covering the checkpoint
+      # snapshot writer (and any future one), not just the REST
+      # maybe_merge_crdt path the round-trip test exercises.
       {:ok, {1, nil}} =
         Repo.with_tenant(user.id, fn ->
-          # Schemaless: the ciphertext is virtual on `Note` (R8(b2)); the
-          # column and its trigger are still there.
-          from(n in "notes", where: n.id == type(^note.id, Ecto.UUID))
-          |> Repo.update_all(set: [crdt_state_ciphertext: <<9, 9, 9>>])
+          from(n in Note, where: n.id == ^note.id)
+          |> Repo.update_all(set: [crdt_state_nonce: <<1>> <> :crypto.strong_rand_bytes(12)])
         end)
 
       Engram.Fixtures.mirror_body!(note.id)
@@ -697,7 +695,7 @@ defmodule Engram.Notes.CrdtTransportTest do
       refute is_nil(head)
 
       # Writing ONLY crdt_head (as update_v1/store_head do) must not re-trip the
-      # BEFORE UPDATE OF crdt_state_ciphertext trigger and null it back out.
+      # BEFORE UPDATE OF crdt_state_nonce trigger and null it back out.
       {:ok, {1, nil}} =
         Repo.with_tenant(user.id, fn ->
           from(n in Note, where: n.id == ^note.id)

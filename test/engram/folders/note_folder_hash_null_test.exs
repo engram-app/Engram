@@ -47,7 +47,7 @@ defmodule Engram.Folders.NoteFolderHashNullTest do
 
       {:ok, marker} = Notes.create_folder_marker(u, v, "M")
 
-      assert_raise Postgrex.Error, ~r/notes_kind_shape_v3_check/, fn ->
+      assert_raise Postgrex.Error, ~r/notes_kind_shape_v4_check/, fn ->
         Repo.query!("UPDATE notes SET folder_hmac = NULL WHERE id = $1", [dump(marker.id)])
       end
     end
