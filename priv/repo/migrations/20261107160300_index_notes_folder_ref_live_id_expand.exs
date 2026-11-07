@@ -26,7 +26,8 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderRefLiveIdExpand do
 
   `folders_live_parent_id`: a folder's live children in id order, so the
   leg's descendant walk takes the newest-created subfolders first, at most
-  200 read per parent. `id` and `parent_id` change only on create and move.
+  200 read per parent. `id` and `parent_id` change only on create and move;
+  `user_id` is included so the walk is index-only.
 
   Additive: the previous release ignores them. Dropped by name first, so a
   retry after a failed CONCURRENTLY build rebuilds an INVALID index.
@@ -37,7 +38,7 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderRefLiveIdExpand do
 
     execute """
     CREATE INDEX CONCURRENTLY folders_live_parent_id
-    ON folders (vault_id, parent_id, id) WHERE deleted_at IS NULL
+    ON folders (vault_id, parent_id, id) INCLUDE (user_id) WHERE deleted_at IS NULL
     """
 
     execute "DROP INDEX CONCURRENTLY IF EXISTS notes_folder_ref_live_id"

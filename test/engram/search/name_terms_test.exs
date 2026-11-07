@@ -17,7 +17,6 @@ defmodule Engram.Search.NameTermsTest do
   alias Engram.DataMigrations.NameTerms, as: Ledger
   alias Engram.Folders.Folder
   alias Engram.Notes
-  alias Engram.Notes.Note
   alias Engram.QueryPlan
   alias Engram.QueryRecorder
   alias Engram.Repo
@@ -207,6 +206,65 @@ defmodule Engram.Search.NameTermsTest do
     end
   end
 
+  describe "match gate: a name must hold every non-stopword query word" do
+    # Shapes from the R10.1 eval (reports/2026-10-18-qdrant-eval/r10-name-queries.jsonl).
+    test "a stopword-heavy query does not lift a name that shares only stopwords", ctx do
+      indexed!(ctx.user, write!(ctx.user, ctx.vault, "To Do.md"))
+      content = write!(ctx.user, ctx.vault, "Travel/itinerary.md", "how we plan the trip")
+      point = indexed!(ctx.user, content)
+      Agent.update(ctx.answer, fn _ -> [%{"id" => point, "score" => 9.0}] end)
+
+      assert Enum.map(keyword(ctx.user, ctx.vault, "how to plan the trip"), & &1.qdrant_id) ==
+               [point]
+    end
+
+    test "a query of only stopwords gets nothing from the leg", ctx do
+      indexed!(ctx.user, write!(ctx.user, ctx.vault, "To Do.md"))
+      assert NameTerms.recall(ctx.user, {:vault, ctx.vault}, "to do") == []
+    end
+
+    test "a partial-word overlap returns nothing", ctx do
+      indexed!(ctx.user, write!(ctx.user, ctx.vault, "Sync encryption.md"))
+      indexed!(ctx.user, write!(ctx.user, ctx.vault, "Regions/notes.md"))
+      assert NameTerms.recall(ctx.user, {:vault, ctx.vault}, "sync regions") == []
+    end
+
+    test "a name holding every word is recalled, stopwords in the query ignored", ctx do
+      point =
+        indexed!(ctx.user, write!(ctx.user, ctx.vault, "Files/Symbolic links and junctions.md"))
+
+      _partial = indexed!(ctx.user, write!(ctx.user, ctx.vault, "Symbolic links.md"))
+
+      assert [%{qdrant_id: ^point, via: :name}] =
+               NameTerms.recall(ctx.user, {:vault, ctx.vault}, "junctions and the symbolic links")
+
+      assert Enum.map(
+               keyword(ctx.user, ctx.vault, "symbolic links and junctions"),
+               & &1.qdrant_id
+             )
+             |> hd() == point
+    end
+
+    test "an exact filename gets the top slot", ctx do
+      exact = indexed!(ctx.user, write!(ctx.user, ctx.vault, "Refund policy.md"))
+      other = indexed!(ctx.user, write!(ctx.user, ctx.vault, "Billing/terms.md", "refund policy"))
+
+      Agent.update(ctx.answer, fn _ ->
+        [%{"id" => other, "score" => 9.0}, %{"id" => exact, "score" => 5.0}]
+      end)
+
+      assert hd(keyword(ctx.user, ctx.vault, "refund policy")).qdrant_id == exact
+    end
+
+    test "a folder must hold every word too", ctx do
+      indexed!(ctx.user, write!(ctx.user, ctx.vault, "Sync/a.md"))
+      inside = indexed!(ctx.user, write!(ctx.user, ctx.vault, "Sync regions/b.md"))
+
+      assert [%{qdrant_id: ^inside, via: :folder}] =
+               NameTerms.recall(ctx.user, {:vault, ctx.vault}, "sync regions")
+    end
+  end
+
   describe "dead refs" do
     test "a trashed note never surfaces, and its delete hook drops its rows", ctx do
       note = write!(ctx.user, ctx.vault, "Ferritin.md")
@@ -244,7 +302,7 @@ defmodule Engram.Search.NameTermsTest do
       assert [%{qdrant_id: ^point}] = NameTerms.recall(ctx.user, {:vault, ctx.vault}, "common")
       # Through the postings, not only the exact-filename probe.
       nid = note.id
-      assert [{^nid, 1}] = tenant(ctx.user, fn -> NameTerms.hits([ctx.vault.id], [dim], 0) end)
+      assert [^nid] = tenant(ctx.user, fn -> NameTerms.hits([ctx.vault.id], [dim], 0) end)
     end
 
     test "3,000 dead rows: the scan stops at its cap, counts it, and the sweep restores recall",
@@ -282,8 +340,7 @@ defmodule Engram.Search.NameTermsTest do
       end
 
       sweep.(sweep, nil)
-      assert [{id, 1}] = tenant(ctx.user, fn -> NameTerms.hits([ctx.vault.id], [dim], 0) end)
-      assert id == note.id
+      assert tenant(ctx.user, fn -> NameTerms.hits([ctx.vault.id], [dim], 0) end) == [note.id]
     end
   end
 
@@ -299,41 +356,40 @@ defmodule Engram.Search.NameTermsTest do
 
     test "a query reads at most 16 terms", ctx do
       words = for c <- ?a..?t, do: "q" <> <<c>>
-      late = write!(ctx.user, ctx.vault, "#{List.last(words)}.md")
-      early = write!(ctx.user, ctx.vault, "#{hd(words)}.md")
-      indexed!(ctx.user, late)
-      pe = indexed!(ctx.user, early)
+      # Holds the first 16 words only: the 17th to 20th are past the cap.
+      first16 = write!(ctx.user, ctx.vault, Enum.join(Enum.take(words, 16), " ") <> ".md")
+      first15 = write!(ctx.user, ctx.vault, Enum.join(Enum.take(words, 15), " ") <> ".md")
+      p16 = indexed!(ctx.user, first16)
+      indexed!(ctx.user, first15)
 
       {:ok, fk} = Crypto.dek_filter_key(ctx.user)
       assert length(NameTerms.dims([Enum.join(words, " ")], fk, 16)) == 16
 
-      # The 20th word is past the cap: only the first word's note is read.
-      assert [%{qdrant_id: ^pe}] =
+      assert [%{qdrant_id: ^p16}] =
                NameTerms.recall(ctx.user, {:vault, ctx.vault}, Enum.join(words, " "))
     end
 
-    test "a term with more than 500 live postings reads 500", ctx do
+    test "a term with more than 500 live postings reads 500; a rarer word drives the match",
+         ctx do
       {:ok, fk} = Crypto.dek_filter_key(ctx.user)
-      [alpha, _] = a_dims = NameTerms.dims(["alpha zebra"], fk)
-      [beta, _] = b_dims = NameTerms.dims(["beta yak"], fk)
+      [beta] = NameTerms.dims(["beta"], fk)
+      b_dims = NameTerms.dims(["beta yak"], fk)
 
-      # Live fillers posted on `alpha` (499) and `beta` (501) only, then the
-      # targets: UUIDv7 ids, so every filler precedes them in posting order.
-      postings!(ctx.user, ctx.vault, alpha, 499)
+      # 501 live fillers on `beta`, then the target (UUIDv7: every filler
+      # precedes it in posting order).
       postings!(ctx.user, ctx.vault, beta, 501)
-      a = write!(ctx.user, ctx.vault, "alpha zebra.md")
       b = write!(ctx.user, ctx.vault, "beta yak.md")
-      for n <- [a, b], do: :ok = NameTerms.on_note_written(ctx.user, n)
+      :ok = NameTerms.on_note_written(ctx.user, b)
       hits = &tenant(ctx.user, fn -> NameTerms.hits([ctx.vault.id], &1, 0) end)
-      {aid, bid} = {a.id, b.id}
 
-      # 499 + the target = 500 `alpha` postings: both terms read, it ranks first.
-      assert [{^aid, 2} | _] = hits.(a_dims)
+      # `beta` alone: its 500 live postings stop before the target.
+      beta_hits = hits.([beta])
+      refute b.id in beta_hits
+      assert length(beta_hits) == 50
 
-      # 501 fillers: `beta`'s 500 stop before the target; only `yak` counts.
-      b_hits = hits.(b_dims)
-      refute Enum.any?(b_hits, &match?({^bid, 2}, &1))
-      assert length(b_hits) == 50
+      # `beta yak`: the rarest word (`yak`, one posting) drives, `beta` is
+      # checked on the target's own key, so the 501 fillers never count.
+      assert hits.(b_dims) == [b.id]
     end
 
     test "folder postings have their own budget", ctx do
@@ -410,10 +466,20 @@ defmodule Engram.Search.NameTermsTest do
       :ok
     end
 
-    test "postings read the primary key and probe each ref by its key", ctx do
+    test "the rarest term is picked by bounded counts on the primary key", ctx do
+      for kind <- [0, 1] do
+        plan = plan(NameTerms.rarest_query([ctx.vault.id], [1, 2], kind), ["name_terms"])
+        assert plan =~ "using name_terms_pkey on", plan
+        assert plan =~ "Limit", plan
+        refute plan =~ "Seq Scan", plan
+      end
+    end
+
+    test "postings of the rarest term: each ref probed by its key, every other term by name_terms_pkey",
+         ctx do
       for {kind, ref_pkey} <- [{0, "notes_pkey"}, {1, "folders_pkey"}] do
         plan =
-          plan(NameTerms.hits_query([ctx.vault.id], [1, 2], kind), [
+          plan(NameTerms.hits_query([ctx.vault.id], 1, [1, 2], kind), [
             "name_terms",
             "notes",
             "folders"
@@ -422,6 +488,7 @@ defmodule Engram.Search.NameTermsTest do
         assert plan =~ "name_terms_pkey", plan
         assert plan =~ ref_pkey, plan
         assert plan =~ "Limit", plan
+        refute plan =~ "Seq Scan", plan
       end
     end
 
@@ -582,11 +649,33 @@ defmodule Engram.Search.NameTermsTest do
       assert :done = Ledger.run_pass()
     end
 
-    test "a complete walk that fixed nothing does not start another walk", ctx do
-      _note = write!(ctx.user, ctx.vault, "Stuck.md")
+    test "a complete walk that fixed nothing closes the ledger, the drain takes the rest",
+         ctx do
+      note = write!(ctx.user, ctx.vault, "Stuck.md")
       :ok = Ledger.walked(0)
-      assert {:more, stuck: 1} = Ledger.run_pass()
+      assert :done = Ledger.run_pass()
       assert all_enqueued(worker: BackfillNameTerms) == []
+
+      :ok = DataMigrations.mark_done(Ledger.name(), Ledger.version())
+      assert %{name_terms: 1} = Drain.run()
+      assert rows(note.id) != []
+    end
+
+    test "a user whose DEK fails to load for any other reason is skipped and stamped", ctx do
+      note = write!(ctx.user, ctx.vault, "Corrupt.md")
+
+      # A wrapped key that does not unwrap: not :no_dek, an unexpected error.
+      Repo.query!("UPDATE users SET encrypted_dek = $2 WHERE id = $1", [
+        Ecto.UUID.dump!(ctx.user.id),
+        :crypto.strong_rand_bytes(60)
+      ])
+
+      Engram.Crypto.DekCache.invalidate(ctx.user.id)
+
+      run_chain!()
+
+      assert <<0, _::binary>> = stamp(note.id)
+      assert :done = Ledger.run_pass()
     end
 
     test "the kill switch stops a running chain at its next window", ctx do
@@ -643,8 +732,7 @@ defmodule Engram.Search.NameTermsTest do
         end)
       end
 
-      assert {:returned, [{id, _}]} = read.(ctx.user.id)
-      assert id == ctx.note.id
+      assert read.(ctx.user.id) == {:returned, [ctx.note.id]}
       assert read.(other.id) == {:returned, []}
     end
   end

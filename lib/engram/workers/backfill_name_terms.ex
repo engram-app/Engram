@@ -58,7 +58,7 @@ defmodule Engram.Workers.BackfillNameTerms do
     # The kill switch is read per window, so it stops a running chain.
     step = fn ids, ctx, {_status, _at, n} ->
       if Ledger.enabled?() do
-        {f, _left} = NameTerms.heal_window(@tables[table], ids, ctx)
+        f = NameTerms.heal_window(@tables[table], ids, ctx)
         at = {ctx.user_id, List.last(ids)}
 
         if System.monotonic_time(:millisecond) > deadline do

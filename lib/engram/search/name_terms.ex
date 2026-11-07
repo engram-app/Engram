@@ -58,7 +58,14 @@ defmodule Engram.Search.NameTerms do
   `leg/6` is the seam `Engram.Search` gathers its legs through (keyword and
   hybrid; `:vector` never gets it). On unless the `name_terms_search`
   override is false, from the first rename after deploy: not gated on the
-  backfill, since a ref without terms is simply not found by this leg. Its
+  backfill, since a ref without terms is simply not found by this leg.
+
+  Match gate: the query's stopwords are dropped (`Engram.KeywordIndex.Stopwords`)
+  and a note or folder counts only when its own name terms hold EVERY
+  remaining query term (dims, stems included). A query of only stopwords
+  gets nothing from the leg. Ranking names by how many query words they
+  share instead let a name that shares "to" and "the" tie the best content
+  hit (the R10.1 eval: NDCG@10 0.84 of baseline; gated, 0.997). Its
   notes are narrowed to the search's filters first (`Search.in_scope/3`),
   then fused into the Qdrant candidates by weighted RRF (`Engram.Search.Fusion`,
   k = 2) as two lists. The NAME list (exact-filename notes first,
@@ -82,12 +89,14 @@ defmodule Engram.Search.NameTerms do
     * note or folder delete: delete at most 32 rows, one stamp write.
     * index pass: the read; writes only when the title's terms changed.
     * search, constant in vault size and in notes per folder:
-      - at most #{16} query terms x 2 kinds x #{2_000} postings scanned
-        (index order), each one primary-key probe of its ref, of which at
-        most #{500} live ones count (notes and folders have separate budgets;
-        dead rows never fill the live budget; past #{2_000} dead rows on one
-        term a live ref can be missed, counted as `scan_capped`, until the
-        delete hooks or the orphan sweep remove them);
+      - per kind (notes, folders: separate budgets), the rarest of at most
+        #{16} query terms by bounded counts (at most #{16} x #{2_000} index
+        entries), then at most #{2_000} of its postings scanned (index
+        order), each one primary-key probe of its ref plus at most #{16}
+        `name_terms_pkey` probes for the other terms, stopping at #{500}
+        matches (dead rows never fill the budget; past #{2_000} dead rows on
+        the rarest term a live ref can be missed, counted as `scan_capped`,
+        until the delete hooks or the orphan sweep remove them);
       - one exact-name probe;
       - folders: at most #{200} descendant folders, at most #{32} levels, one
         query per level; then at most #{50} notes per folder, cut to #{50};
@@ -110,6 +119,7 @@ defmodule Engram.Search.NameTerms do
   alias Engram.Folders.Folder
   alias Engram.Folders.Rows
   alias Engram.KeywordIndex.QdrantSparse
+  alias Engram.KeywordIndex.Stopwords
   alias Engram.KeywordIndex.Tokenizer
   alias Engram.Links
   alias Engram.Logger.Metadata
@@ -476,19 +486,20 @@ defmodule Engram.Search.NameTerms do
   @doc """
   One id window of `Note` or `Folder` (`Engram.Backfill.IdWindows`): rewrites
   the terms of every stale live ref in it (the stale-index predicate), each
-  under its owner's current key. `{fixed, left?}`; `left?` when a user's key
-  could not be loaded. `ctx.repo` is the scope's (maintenance on the fleet).
+  under its owner's current key. Every stale row is handled: a row whose
+  owner's key does not load, for any reason, is skipped and stamped, so a
+  walk always empties the stale index. Returns the rows handled. `ctx.repo`
+  is the scope's (maintenance on the fleet).
   """
-  @spec heal_window(module(), [Ecto.UUID.t()], map()) :: {non_neg_integer(), boolean()}
+  @spec heal_window(module(), [Ecto.UUID.t()], map()) :: non_neg_integer()
   def heal_window(schema, ids, %{repo: repo}) do
     schema
     |> stale_rows(repo, ids)
     |> Enum.group_by(& &1.user_id)
-    |> Enum.reduce({0, false}, fn {user_id, rows}, {fixed, left?} ->
+    |> Enum.reduce(0, fn {user_id, rows}, fixed ->
       case user_keys(repo, user_id) do
-        {:ok, dek, fk} -> {fixed + rewrite(repo, schema, user_id, dek, fk, rows), left?}
-        :no_dek -> {fixed + skip(repo, schema, user_id, rows, :no_dek), left?}
-        :error -> {fixed, true}
+        {:ok, dek, fk} -> fixed + rewrite(repo, schema, user_id, dek, fk, rows)
+        {:skip, reason} -> fixed + skip(repo, schema, user_id, rows, reason)
       end
     end)
   end
@@ -505,7 +516,7 @@ defmodule Engram.Search.NameTerms do
           from(r in stale_query(schema), where: r.user_id == ^user_id, limit: 1_000, select: r.id)
           |> Repo.all()
 
-        if ids == [], do: 0, else: ids |> then(&heal_window(schema, &1, %{repo: Repo})) |> elem(0)
+        if ids == [], do: 0, else: heal_window(schema, ids, %{repo: Repo})
       end)
 
     fixed
@@ -595,14 +606,16 @@ defmodule Engram.Search.NameTerms do
     )
   end
 
+  # One skip path: any failure to load the key (no user, no DEK, a corrupt
+  # wrapped key) skips that user's rows, so the walk never leaves them stale.
   defp user_keys(repo, user_id) do
     with %{} = user <- repo.get(Engram.Accounts.User, user_id),
          {:ok, dek} <- Crypto.get_dek(user) do
       {:ok, dek, Crypto.dek_filter_key_from_bytes(dek)}
     else
-      {:error, :no_dek} -> :no_dek
-      nil -> :no_dek
-      _ -> :error
+      {:error, :no_dek} -> {:skip, :no_dek}
+      nil -> {:skip, :no_dek}
+      _ -> {:skip, :dek_error}
     end
   end
 
@@ -636,7 +649,7 @@ defmodule Engram.Search.NameTerms do
   end
 
   # Rows that can never be processed (a name that does not decrypt, a user
-  # with no DEK) are stamped `<<0>> <> hmac`: out of the stale index, so the
+  # whose key does not load) are stamped `<<0>> <> hmac`: out of the stale index, so the
   # ledger can close, until a writer renames them. Logged and counted
   # (`[:engram, :name_terms, :skipped]`).
   defp skip(_repo, _schema, _user_id, [], _reason), do: 0
@@ -769,7 +782,7 @@ defmodule Engram.Search.NameTerms do
   @spec recall(map(), term(), String.t(), ([Ecto.UUID.t()] -> [Ecto.UUID.t()])) :: [map()]
   def recall(user, scope, query, keep \\ & &1) do
     with {:ok, fk} <- Crypto.dek_filter_key(user),
-         [_ | _] = dims <- dims([query], fk, @max_query_terms),
+         [_ | _] = dims <- dims([Stopwords.drop(query)], fk, @max_query_terms),
          [_ | _] = vault_ids <- vault_ids(user, scope),
          {:ok, {named, foldered}} <-
            Repo.with_tenant(user.id, fn -> ranked(vault_ids, dims, fk, query) end),
@@ -812,62 +825,77 @@ defmodule Engram.Search.NameTerms do
         )
       )
 
-    titled = for {id, _n} <- hits(vault_ids, dims, @note), do: id
-    folders = for {id, _n} <- hits(vault_ids, dims, @folder), do: id
+    titled = hits(vault_ids, dims, @note)
+    folders = hits(vault_ids, dims, @folder)
 
     {Enum.uniq(exact ++ titled), under_folders(vault_ids, folders)}
   end
 
   @doc """
-  The top #{50} live refs of `kind` (0 notes, 1 folders) for `dims` in
-  `vault_ids`, `{ref_id, matched terms}` best first. Per dim at most #{2_000}
-  postings of that kind are SCANNED (index order), each probed for liveness
-  by its ref's primary key, and at most #{500} live ones count: notes and
-  folders have separate budgets, and dead rows can never fill the live
-  budget. A dim whose scan hits #{2_000} before #{500} live postings is
-  counted in `[:engram, :search, :name_terms, :scan_capped]`: past that
-  many dead rows a live ref may be missed until the delete hooks or the
-  drain's orphan sweep remove them. Runs in the caller's tenant.
+  The live refs of `kind` (0 notes, 1 folders) in `vault_ids` whose own
+  terms hold EVERY one of `dims`, at most #{50}, in id order. Two queries,
+  no per-candidate round trip: `rarest_query/3` picks the dim with the
+  fewest postings (each counted up to #{2_000}), then `hits_query/4` scans
+  at most #{2_000} of that dim's postings (index order), probes each ref's
+  liveness by its primary key and every other dim by `name_terms_pkey`,
+  and stops at the #{500}th match. Notes and folders have separate budgets,
+  and dead rows never fill the live budget. When the rarest dim's scan hits
+  #{2_000} before #{500} matches it counts in
+  `[:engram, :search, :name_terms, :scan_capped]`: past that many dead rows
+  a live ref may be missed until the delete hooks or the drain's orphan
+  sweep remove them. Runs in the caller's tenant.
   """
-  @spec hits([Ecto.UUID.t()], [integer()], 0 | 1) :: [{Ecto.UUID.t(), pos_integer()}]
+  @spec hits([Ecto.UUID.t()], [integer()], 0 | 1) :: [Ecto.UUID.t()]
   def hits(vault_ids, dims, kind) do
-    per_dim = vault_ids |> hits_query(dims, kind) |> Repo.all()
-    # A dim with no live posting has no row here: every dim under 500 live.
-    short = dims -- for({dim, live} <- per_dim, length(live) >= @postings, do: dim)
-    capped = capped(vault_ids, short, kind)
+    case vault_ids |> rarest_query(dims, kind) |> Repo.one() do
+      nil ->
+        []
 
-    if capped > 0,
-      do:
-        :telemetry.execute([:engram, :search, :name_terms, :scan_capped], %{count: capped}, %{
-          kind: kind
-        })
+      {_dim, 0} ->
+        []
 
-    per_dim
-    |> Enum.flat_map(fn {_dim, live} -> live end)
-    |> Enum.frequencies()
-    |> Enum.sort_by(fn {id, n} -> {-n, id} end)
-    |> Enum.take(@k)
+      {dim, scanned} ->
+        live = vault_ids |> hits_query(dim, dims, kind) |> Repo.all()
+
+        if scanned == @scan_cap and length(live) < @postings,
+          do:
+            :telemetry.execute([:engram, :search, :name_terms, :scan_capped], %{count: 1}, %{
+              kind: kind
+            })
+
+        live |> Enum.sort() |> Enum.take(@k)
+    end
   end
 
   @doc false
-  # Per dim: `{dim, live ref ids}`, at most #{500} live out of at most
-  # #{2_000} scanned, stopping at the 500th live one (the query `hits/3`
-  # runs; its plan test reads it).
-  def hits_query(vault_ids, dims, kind) do
-    from(q in fragment("SELECT unnest(?::int4[]) AS dim", ^dims),
+  # `{dim, postings}` of the dim with the fewest postings of `kind`, each
+  # counted up to #{2_000}, first in query order on a tie.
+  def rarest_query(vault_ids, dims, kind) do
+    from(q in fragment("SELECT * FROM unnest(?::int4[]) WITH ORDINALITY AS q(dim, ord)", ^dims),
       as: :q,
-      inner_lateral_join: t in subquery(live_postings(vault_ids, kind)),
+      inner_lateral_join: c in subquery(scanned(vault_ids, kind)),
       on: true,
-      group_by: field(q, :dim),
-      select:
-        {type(field(q, :dim), :integer),
-         type(fragment("array_agg(?)", t.ref_id), {:array, Ecto.UUID})}
+      order_by: [asc: c.n, asc: field(q, :ord)],
+      limit: 1,
+      select: {type(field(q, :dim), :integer), c.n}
     )
   end
 
-  # One dim's live postings: the bounded scan joined to its live refs,
-  # LIMIT 500 on the join (it stops as soon as 500 are live).
-  defp live_postings(vault_ids, kind) do
+  # One dim's scanned posting count, at most #{2_000}.
+  defp scanned(vault_ids, kind) do
+    from(d in fragment("SELECT ?::int4 AS dim", field(parent_as(:q), :dim)),
+      as: :d,
+      inner_lateral_join: x in subquery(scan(vault_ids, kind)),
+      on: true,
+      select: %{n: count(x.ref_id)}
+    )
+  end
+
+  @doc false
+  # The live refs of `kind` among the first #{2_000} postings of `dim` that
+  # also hold every one of `dims`, stopping at the #{500}th (the query
+  # `hits/3` runs; its plan test reads it).
+  def hits_query(vault_ids, dim, dims, kind) do
     {schema, on} =
       if kind == @note,
         do:
@@ -875,7 +903,7 @@ defmodule Engram.Search.NameTerms do
            dynamic([x: x, n: n], n.id == x.ref_id and n.kind == "note" and is_nil(n.deleted_at))},
         else: {Folder, dynamic([x: x, n: n], n.id == x.ref_id and is_nil(n.deleted_at))}
 
-    from(d in fragment("SELECT ?::int4 AS dim", field(parent_as(:q), :dim)),
+    from(d in fragment("SELECT ?::int4 AS dim", ^dim),
       as: :d,
       inner_lateral_join: x in subquery(scan(vault_ids, kind)),
       as: :x,
@@ -883,8 +911,16 @@ defmodule Engram.Search.NameTerms do
       join: n in ^schema,
       as: :n,
       on: ^on,
+      where:
+        fragment(
+          "NOT EXISTS (SELECT 1 FROM unnest(?::int4[]) AS w(dim) WHERE NOT EXISTS (SELECT 1 FROM name_terms t WHERE t.vault_id = ? AND t.dim = w.dim AND t.ref_kind = ? AND t.ref_id = ?))",
+          type(^dims, {:array, :integer}),
+          x.vault_id,
+          type(^kind, :integer),
+          x.ref_id
+        ),
       limit: ^@postings,
-      select: %{ref_id: x.ref_id}
+      select: x.ref_id
     )
   end
 
@@ -894,31 +930,8 @@ defmodule Engram.Search.NameTerms do
         r.vault_id in ^vault_ids and r.ref_kind == ^kind and
           r.dim == field(parent_as(:d), :dim),
       limit: ^@scan_cap,
-      select: %{ref_id: r.ref_id}
+      select: %{ref_id: r.ref_id, vault_id: r.vault_id}
     )
-  end
-
-  # How many of `dims` (those under 500 live) scanned the full 2,000: a
-  # count of the same bounded scan, only for the short dims.
-  defp capped(_vault_ids, [], _kind), do: 0
-
-  defp capped(vault_ids, dims, kind) do
-    scanned =
-      from(d in fragment("SELECT ?::int4 AS dim", field(parent_as(:q), :dim)),
-        as: :d,
-        inner_lateral_join: x in subquery(scan(vault_ids, kind)),
-        on: true,
-        select: %{n: count(x.ref_id)}
-      )
-
-    from(q in fragment("SELECT unnest(?::int4[]) AS dim", ^dims),
-      as: :q,
-      inner_lateral_join: c in subquery(scanned),
-      on: true,
-      where: c.n == ^@scan_cap,
-      select: count()
-    )
-    |> Repo.one()
   end
 
   @doc """

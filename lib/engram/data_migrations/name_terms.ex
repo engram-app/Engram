@@ -74,7 +74,7 @@ defmodule Engram.DataMigrations.NameTerms do
         :done
 
       fruitless_walk?() ->
-        {:more, stuck: 1}
+        :done
 
       true ->
         {:ok, _} = Oban.insert(BackfillNameTerms.start())
@@ -91,9 +91,10 @@ defmodule Engram.DataMigrations.NameTerms do
     Cursor.put(@last_walk, %{"fixed" => fixed, "at" => DateTime.to_iso8601(DateTime.utc_now())})
   end
 
-  # The last complete walk fixed nothing and is under a day old: what is
-  # still stale needs a writer (a transient key error), not another walk of
-  # every row. The ledger stays open, so the stuck alert still reports it.
+  # The last complete walk fixed nothing and is under a day old: a walk
+  # handles every stale row it reads (healed or skipped), so what is still
+  # stale was written after it. Close the ledger and leave that to the
+  # drain, which only runs once the ledger is done.
   defp fruitless_walk? do
     with %{"fixed" => 0, "at" => at} <- Cursor.get(@last_walk),
          {:ok, at, _} <- DateTime.from_iso8601(at) do
