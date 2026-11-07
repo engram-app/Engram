@@ -801,6 +801,84 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
       assert length(users_written(ctx, users)) == 50
     end
 
+    # A note still holding v3 points never gets `n` and is never stamped, so
+    # it holds the ledger (and R3) open. The hop line and the run's summary
+    # say how many, in prod Loki (`loki_ship`), so no Qdrant query is needed.
+    test "notes left alone for their legacy v3 points are counted on the hop and summary lines",
+         ctx do
+      user_id = ctx.user.id
+
+      Agent.update(ctx.points, fn held ->
+        Map.new(held, fn {id, p} ->
+          {id, p |> Map.drop(["u", "n"]) |> Map.put("user_id", user_id)}
+        end)
+      end)
+
+      v3_points = map_size(Agent.get(ctx.points, & &1))
+
+      {:ok, events} = fleet_log_lines()
+      hop = Enum.find(events, &(&1.msg == "note payload reconcile hop"))
+      summary = Enum.find(events, &(&1.msg == "note payload n fleet run"))
+
+      assert %{user_id: ^user_id, legacy_v3: 1, legacy_v3_points: ^v3_points} = hop.meta
+      assert %{legacy_v3: 1, legacy_v3_points: ^v3_points, loki_ship: true} = summary.meta
+    end
+
+    test "v5-only notes report 0 legacy v3 notes on the hop and summary lines", ctx do
+      {:ok, events} = fleet_log_lines()
+      hop = Enum.find(events, &(&1.msg == "note payload reconcile hop"))
+      summary = Enum.find(events, &(&1.msg == "note payload n fleet run"))
+
+      assert %{legacy_v3: 0, legacy_v3_points: 0} = hop.meta
+      assert hop.meta.n_points > 0
+      assert %{legacy_v3: 0, legacy_v3_points: 0, loki_ship: true} = summary.meta
+      assert summary.meta.n_points == hop.meta.n_points
+      assert [_] = users_written(ctx, [{ctx.user.id, Map.keys(Agent.get(ctx.points, & &1))}])
+    end
+
+    # The ledger's check sees no executing job, then the pending one starts
+    # before the insert: the insert conflicts and no job is pending, but the
+    # fleet job is running, so nothing is lost and nothing is logged.
+    test "a ledger pass that races the fleet job into executing logs no lost re-queue", _ctx do
+      Application.put_env(:engram, :reconcile_n_insert_fun, fn changeset ->
+        {:ok, job} = Oban.insert(changeset)
+
+        {1, _} =
+          Repo.update_all(from(j in Oban.Job, where: j.id == ^job.id), set: [state: "executing"])
+
+        {:ok, %{job | conflict?: true}}
+      end)
+
+      on_exit(fn -> Application.delete_env(:engram, :reconcile_n_insert_fun) end)
+
+      log = ExUnit.CaptureLog.capture_log(fn -> assert {:more, _} = ledger() end)
+
+      refute log =~ "fleet re-queue lost"
+
+      assert [_] =
+               Repo.all(
+                 from(j in Oban.Job,
+                   where: fragment("?->>'mode' = ?", j.args, "n_fleet")
+                 )
+               )
+    end
+
+    # This process's log events from one fleet run, `msg` rendered.
+    defp fleet_log_lines do
+      me = self()
+      # Info lines: the test config is :warning (async: false here).
+      previous_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous_level) end)
+      {result, events} = Engram.Test.LogCapture.with_events(fn -> fleet() end)
+
+      lines =
+        for %{meta: %{pid: ^me} = meta, msg: {:string, s}} <- events,
+            do: %{msg: IO.iodata_to_binary(s), meta: meta}
+
+      {result, lines}
+    end
+
     # The bucket is Hammer's real 60 s fix window: start each fake window
     # with 3 s ahead of the real edge, so one run (well under 1 s) never
     # spans two.

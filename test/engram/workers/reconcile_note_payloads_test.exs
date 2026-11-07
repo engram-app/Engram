@@ -183,16 +183,25 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
     assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
 
-    # One event per outcome, all five (`n_points`: points the `n` backfill wrote).
+    # One event per outcome, all seven (`n_points`: points the `n` backfill
+    # wrote; `legacy_v3`/`legacy_v3_points`: notes it left for their v3 points).
     counts =
-      for _ <- 1..5, into: %{} do
+      for _ <- 1..7, into: %{} do
         assert_receive {[:engram, :indexing, :payload_reconcile], ^ref, %{count: n},
                         %{outcome: o}}
 
         {o, n}
       end
 
-    assert counts == %{checked: 2, drifted: 1, rewritten: 1, skipped_v5: 0, n_points: 0}
+    assert counts == %{
+             checked: 2,
+             drifted: 1,
+             rewritten: 1,
+             skipped_v5: 0,
+             n_points: 0,
+             legacy_v3: 0,
+             legacy_v3_points: 0
+           }
   end
 
   # #2087's short-key layout. Healed with the v5 payload, REPLACED (a v3

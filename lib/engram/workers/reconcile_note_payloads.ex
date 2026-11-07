@@ -116,7 +116,15 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   @refresh_page 256
   @event [:engram, :indexing, :payload_reconcile]
   @cancelled_event [:engram, :indexing, :payload_reconcile_cancelled]
-  @zero %{checked: 0, drifted: 0, rewritten: 0, skipped_v5: 0, n_points: 0}
+  @zero %{
+    checked: 0,
+    drifted: 0,
+    rewritten: 0,
+    skipped_v5: 0,
+    n_points: 0,
+    legacy_v3: 0,
+    legacy_v3_points: 0
+  }
   @budget_ms 30_000
   # Between batches, so a large vault never saturates Qdrant.
   @pause_ms 200
@@ -263,20 +271,29 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   state).
   """
   @spec ensure_fleet() :: :ok
-  def ensure_fleet, do: if(fleet_job?(["executing"]), do: :ok, else: insert_fleet([]))
+  # An insert that conflicts with the pending job just as it starts
+  # executing finds no pending one; the running job counts as present here.
+  def ensure_fleet,
+    do:
+      if(fleet_job?(["executing"]),
+        do: :ok,
+        else: insert_fleet([], ["executing" | Jobs.pending_states()])
+      )
 
   # The self re-queue. Oban's unique insert answers a conflict WITHOUT
   # inserting when another insert holds its advisory lock, so a conflict is
   # checked: a fleet job must be pending. If none is, the chain is lost until
   # the next hourly ledger pass re-adds it; logged so that shows.
+  # Pending states only: the executing fleet job is the caller itself.
   defp requeue_fleet(wait, gated) do
-    insert_fleet(schedule_in: wait, meta: %{"gated" => gated})
+    insert_fleet([schedule_in: wait, meta: %{"gated" => gated}], Jobs.pending_states())
   end
 
-  defp insert_fleet(opts) do
+  # On a conflict, a fleet job must be in one of `present` states.
+  defp insert_fleet(opts, present) do
     {:ok, job} = insert_fun().(new(%{"mode" => @fleet_mode}, opts))
 
-    if job.conflict? and not fleet_job?(Jobs.pending_states()) do
+    if job.conflict? and not fleet_job?(present) do
       Logger.warning(
         "note payload reconcile: fleet re-queue lost to a unique-insert race, the ledger re-adds it",
         Metadata.with_category(:warning, :oban, [])
@@ -515,8 +532,9 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   defp same_dek(%User{id: id, dek_version: v}),
     do: from(u in User, where: u.id == ^id and u.dek_version == ^v, select: 1)
 
-  defp legacy_points?(note, points, stored),
-    do: Enum.any?(Map.get(points, note.id, []), &(stored[&1] && not v5?(stored[&1])))
+  # How many of the note's points are legacy v3 (0: none).
+  defp v3_points(note, points, stored),
+    do: Enum.count(Map.get(points, note.id, []), &(stored[&1] && not v5?(stored[&1])))
 
   defp heal_unstamped(user, notes, points, stored, counts) do
     Enum.reduce_while(notes, {:ok, counts}, fn note, {:ok, counts} ->
@@ -619,15 +637,16 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   defp n_fleet do
     deadline = System.monotonic_time(:millisecond) + @budget_ms
 
-    {result, locked} = fleet_walk(Cursor.get(@fleet_cursor), deadline, 0)
+    {result, tally} = fleet_walk(Cursor.get(@fleet_cursor), deadline, fleet_zero())
 
-    # Skipped users keep the ledger open; this line says why a lap repeats.
-    if locked > 0 do
-      Logger.info(
-        "note payload reconcile: skipped rotation-locked users",
-        Metadata.with_category(:info, :oban, count: locked)
-      )
-    end
+    # One line per run with its totals (prod Loki, `loki_ship`). Skipped
+    # users (`locked`) and notes left alone for their legacy v3 points
+    # (`legacy_v3`, never given `n` nor stamped) keep the ledger open, so
+    # this line says why a lap repeats and what holds R3.
+    Logger.info(
+      "note payload n fleet run",
+      Metadata.with_category(:info, :oban, Map.to_list(tally))
+    )
 
     case result do
       :lap ->
@@ -647,19 +666,22 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   # Cursor shapes: nil (the lap's start), `%{"user" => id, "after" => note}`
   # (resume that user after that note), `%{"past" => id}` (the next user).
-  # With how many rotation-locked users it passed over.
-  defp fleet_walk(cursor, deadline, locked) do
+  # With the run's tally: the walked users' counts summed, and `locked`, how
+  # many rotation-locked users it passed over.
+  defp fleet_walk(cursor, deadline, tally) do
     case next_users(cursor) do
       [] ->
-        {:lap, locked}
+        {:lap, tally}
 
       users ->
-        case Enum.reduce_while(users, {cursor, locked}, &fleet_user(&1, &2, deadline)) do
-          {:stop, stop, at, locked} -> {{stop, at}, locked}
-          {cursor, locked} -> fleet_walk(cursor, deadline, locked)
+        case Enum.reduce_while(users, {cursor, tally}, &fleet_user(&1, &2, deadline)) do
+          {:stop, stop, at, tally} -> {{stop, at}, tally}
+          {cursor, tally} -> fleet_walk(cursor, deadline, tally)
         end
     end
   end
+
+  defp fleet_zero, do: Map.put(@zero, :locked, 0)
 
   defp next_users(cursor) do
     query = from(u in User, order_by: u.id, limit: @user_page)
@@ -677,26 +699,26 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   # once by `answer/2` (the `payload_reconcile_cancelled` alert), and the
   # walk carries on with the next user, so one user's refusal never holds
   # the fleet.
-  defp fleet_user(%User{id: id} = user, {cursor, locked}, deadline) do
+  defp fleet_user(%User{id: id} = user, {cursor, tally}, deadline) do
     after_id = if match?(%{"user" => ^id}, cursor), do: cursor["after"]
     past = %{"past" => id}
 
     cond do
       # A user with no notes reads no window, so the budget is checked here too.
       System.monotonic_time(:millisecond) > deadline ->
-        {:halt, {:stop, :budget, %{"user" => id, "after" => after_id}, locked}}
+        {:halt, {:stop, :budget, %{"user" => id, "after" => after_id}, tally}}
 
       RotationGate.check_user(user) != :ok ->
-        {:cont, {past, locked + 1}}
+        {:cont, {past, bump(tally, :locked)}}
 
       # A done user costs this one probe, not a walk of its notes.
       not n_behind?(id) ->
-        {:cont, {past, locked}}
+        {:cont, {past, tally}}
 
       true ->
         case walk_user(user, after_id, deadline) do
-          :next -> {:cont, {past, locked}}
-          {stop, at} -> {:halt, {:stop, stop, at, locked}}
+          {:next, counts} -> {:cont, {past, add(tally, counts)}}
+          {stop, at, counts} -> {:halt, {:stop, stop, at, add(tally, counts)}}
         end
     end
   end
@@ -715,16 +737,16 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     any
   end
 
-  # `:next` (the user is done, gone or refused with a 4xx), or `{stop,
-  # cursor}` to resume it from.
+  # `{:next, counts}` (the user is done, gone or refused with a 4xx), or
+  # `{stop, cursor, counts}` to resume it from.
   defp walk_user(%User{id: id} = user, after_id, deadline) do
     {stop, done, counts} = n_walk(user, after_id, deadline)
     if counts != @zero, do: report(id, counts)
 
     case stop do
-      stop when stop in [:done, :ok] -> :next
-      {:cancel, _} -> :next
-      stop -> {stop, %{"user" => id, "after" => done}}
+      stop when stop in [:done, :ok] -> {:next, counts}
+      {:cancel, _} -> {:next, counts}
+      stop -> {stop, %{"user" => id, "after" => done}, counts}
     end
   end
 
@@ -771,8 +793,9 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   end
 
   # One window: its notes behind the version, their points' payloads, `n`
-  # merged onto those without it (paced per page), then the notes stamped
-  # (not one holding legacy v3 points: those never get `n`).
+  # merged onto those without it (paced per page), then the notes stamped,
+  # not one holding legacy v3 points (those never get `n`): each of those is
+  # counted (`legacy_v3`, with its v3 points in `legacy_v3_points`).
   defp n_window(user, ids, counts) do
     {notes, points} = n_batch(user.id, ids)
 
@@ -781,11 +804,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
          :ok <- RotationGate.check(user.id) do
       case write_n(n_pairs(notes, points, stored), counts) do
         {:ok, counts} ->
-          for note <- notes,
-              not legacy_points?(note, points, stored),
-              do: stamp_version(note, hash: note.payload_hash)
-
-          {:ok, Enum.reduce(notes, counts, fn _, acc -> bump(acc, :checked) end)}
+          {:ok, Enum.reduce(notes, counts, &stamp_or_count(&1, points, stored, &2))}
 
         {:denied, counts} ->
           {:held, counts}
@@ -796,6 +815,19 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     else
       [] -> {:ok, counts}
       {:error, reason} -> {:error, reason, counts}
+    end
+  end
+
+  defp stamp_or_count(note, points, stored, counts) do
+    counts = bump(counts, :checked)
+
+    case v3_points(note, points, stored) do
+      0 ->
+        stamp_version(note, hash: note.payload_hash)
+        counts
+
+      v3 ->
+        counts |> bump(:legacy_v3) |> Map.update!(:legacy_v3_points, &(&1 + v3))
     end
   end
 
@@ -1138,6 +1170,12 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   defp holds?(point, want), do: Enum.all?(want, fn {k, v} -> Map.get(point, k) == v end)
 
   defp bump(counts, key), do: Map.update!(counts, key, &(&1 + 1))
+
+  defp add(tally, counts), do: Map.merge(tally, counts, fn _, a, b -> a + b end)
+
+  @doc "Every `outcome` tag `[:engram, :indexing, :payload_reconcile]` carries."
+  @spec outcomes() :: [atom()]
+  def outcomes, do: Map.keys(@zero)
 
   # One line per hop, and a counter per outcome, so a deploy can tell a heal
   # that verifies from one that rewrites the collection.
