@@ -343,18 +343,34 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     Engram.DataMigrations.EffectiveDates
   ]
 
-  test "every data migration newer than the kill-switch rule defines enabled?/0" do
-    missing =
-      for mod <- DataMigrationsRunner.migrations() -- @before_kill_switch_rule,
-          Code.ensure_loaded!(mod),
-          not function_exported?(mod, :enabled?, 0) or
-            not (mod.module_info(:compile)[:source]
-                 |> File.read!()
-                 |> String.contains?("ServiceConfig.get(")),
-          do: mod
+  test "every data migration newer than the kill-switch rule has a working kill switch" do
+    alias Engram.ServiceConfig.Overrides
 
-    assert missing == [],
-           "add enabled?/0 backed by a ServiceConfig override: #{inspect(missing)}"
+    # The runtime-override path, as prod runs it (OverridesTest's setup).
+    Engram.ServiceConfig.put_override(:service_overrides_enabled, true)
+    Engram.Cache.clear_local(:service_overrides)
+    Engram.Cache.clear_local(:service_overrides_last_good)
+    on_exit(fn -> Engram.Cache.clear_local(:service_overrides) end)
+
+    for mod <- DataMigrationsRunner.migrations() -- @before_kill_switch_rule do
+      Code.ensure_loaded!(mod)
+      assert function_exported?(mod, :enabled?, 0), "#{inspect(mod)}: add enabled?/0"
+
+      source = File.read!(mod.module_info(:compile)[:source])
+
+      assert [_, key] = Regex.run(~r/ServiceConfig\.get\(:(\w+)/, source),
+             "#{inspect(mod)}: back enabled?/0 with ServiceConfig.get(:key, true)"
+
+      key = String.to_existing_atom(key)
+      # A key missing here silently falls back to env: no runtime switch.
+      assert key in Overrides.keys(), "#{inspect(mod)}: add #{key} to ServiceConfig.Overrides"
+
+      assert mod.enabled?(), "#{inspect(mod)}: default on"
+      assert :ok = Overrides.put(key, false, by: "test")
+      refute mod.enabled?(), "#{inspect(mod)}: the override must switch it off"
+      assert :ok = Overrides.delete(key, by: "test")
+      assert mod.enabled?()
+    end
   end
 
   # Rows written while the gate was blocked in a deploy reopen the migration
