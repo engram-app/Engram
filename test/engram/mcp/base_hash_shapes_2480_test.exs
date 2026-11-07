@@ -224,6 +224,23 @@ defmodule Engram.MCP.BaseHashShapes2480Test do
     |> json_response(200)
   end
 
+  # The guard for the "two views" class (round 5): every reader gets the one
+  # canonical view, so GET and get_notes agree on text and hash for every
+  # shape, with or without a checkpoint folding the tail in first.
+  for {name, path} <- @shapes, checkpointed <- [false, true] do
+    test "#{name}#{if checkpointed, do: " after a checkpoint", else: ""}: GET and get_notes serve one view",
+         %{conn: conn, user: u, vault: v} do
+      shape(unquote(name), u, v, unquote(path))
+
+      if unquote(checkpointed) and unquote(name) not in [:md_live_room],
+        do: checkpoint!(u, v, unquote(path))
+
+      got = conn |> get("/api/notes/#{URI.encode(unquote(path))}") |> json_response(200)
+      note = read_note(conn, unquote(path))
+      assert {got["content"], got["content_hash"]} == {note["content"], note["content_hash"]}
+    end
+  end
+
   for {name, path} <- @shapes do
     test "#{name}: REST GET hash writes", %{conn: conn, user: u, vault: v} do
       shape(unquote(name), u, v, unquote(path))
@@ -551,5 +568,74 @@ defmodule Engram.MCP.BaseHashShapes2480Test do
     Engram.Repo.with_tenant!(user.id, fn ->
       Engram.Repo.all(from(l in Engram.Notes.CrdtUpdateLog, where: l.note_id == ^note_id))
     end)
+  end
+
+  # Round 5 finding 1: a non-.md note after a structural checkpoint, no tail
+  # left. get_notes served the stale row while GET served the doc, so its
+  # hash never wrote and hid the live edit.
+  test "txt after a structural checkpoint: the get_notes hash writes and keeps LIVE", ctx do
+    %{conn: conn, user: u, vault: v} = ctx
+    shape(:txt_tail, u, v, "c.txt")
+    checkpoint!(u, v, "c.txt")
+    note = read_note(conn, "c.txt")
+    assert note["content"] =~ "LIVE"
+    ok = mcp_write(conn, "c.txt", note["content"] <> "AGENT\n", note["content_hash"])
+    refute ok["result"]["isError"], inspect(ok)
+    t = text_of(u, v, "c.txt")
+    assert count(t, "LIVE") == 1 and t =~ "AGENT", inspect(t)
+  end
+
+  # Round 5 finding 2: a non-.md note whose doc cannot be read whole after a
+  # structural checkpoint moved its snapshot off the row. No base can write it
+  # safely, and no re-read changes that, so the answer is a distinct,
+  # non-retryable error, not a 409 loop. A re-save from Obsidian clears it.
+  test "unreadable live state: a distinct non-retryable error, cleared by a plugin re-save",
+       ctx do
+    %{conn: conn, user: u, vault: v} = ctx
+    shape(:txt_tail, u, v, "c.txt")
+    checkpoint!(u, v, "c.txt")
+    bad_tail_row(u, v, note_id(u, v, "c.txt"))
+    got = conn |> get("/api/notes/c.txt") |> json_response(200)
+
+    rest =
+      post(conn, "/api/notes", %{
+        path: "c.txt",
+        content: got["content"] <> "S\n",
+        mtime: 2.0,
+        base_hash: got["content_hash"]
+      })
+
+    assert json_response(rest, 422) == %{"error" => "note_unwritable"}
+
+    note = read_note(conn, "c.txt")
+    r = mcp_write(conn, "c.txt", note["content"] <> "A\n", note["content_hash"])
+    assert r["result"]["isError"]
+    assert r["result"]["_meta"]["engram.page/error_code"] == "note_unwritable"
+
+    conn
+    |> put_req_header("x-plugin-version", "9.9.9")
+    |> post("/api/notes", %{path: "c.txt", content: "plain text\nLIVE\nSAVED\n", mtime: 3.0})
+    |> json_response(200)
+
+    note = read_note(conn, "c.txt")
+    ok = mcp_write(conn, "c.txt", note["content"] <> "AGENT\n", note["content_hash"])
+    refute ok["result"]["isError"], inspect(ok)
+  end
+
+  # Round 5: get_notes of a .canvas with no tail projected an empty doc (its
+  # state was never loaded) and logged a distrust warning on every read.
+  test "get_notes of a .canvas with no tail logs no distrust warning", %{
+    conn: conn,
+    user: u,
+    vault: v
+  } do
+    shape(:canvas_no_tail, u, v, "b.canvas")
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert read_note(conn, "b.canvas")["content"] == ~s({"nodes":[],"edges":[]})
+      end)
+
+    refute log =~ "empty over a non-empty facade"
   end
 end

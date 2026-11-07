@@ -2818,6 +2818,9 @@ defmodule Engram.Notes do
           :noop ->
             idempotent_repush(existing, base_attrs)
 
+          :unwritable ->
+            {:error, :note_unwritable}
+
           {:ok, merge} ->
             rewrite(existing, base_attrs, user, sanitized_path, folder, merge ++ opts)
         end
@@ -2861,6 +2864,7 @@ defmodule Engram.Notes do
     note = decrypt_or_raise!(row, user)
 
     case base_check(user, note, tail, base_hash) do
+      :unwritable -> :unwritable
       {:match, _view, merge} -> {:ok, merge}
       # The writer's own retry: the note already holds what it sends.
       {:stale, view} when view.content == incoming.content -> :noop
@@ -2898,7 +2902,7 @@ defmodule Engram.Notes do
 
       true ->
         case base_merge(user, note, tail, view.content, authority) do
-          :unwritable -> {:stale, view}
+          :unwritable -> unwritable(user, note)
           merge -> {:match, view, merge}
         end
     end
@@ -2911,6 +2915,26 @@ defmodule Engram.Notes do
     else
       _ -> if snapshot_text(user, note) == {:ok, seen}, do: [], else: :unwritable
     end
+  end
+
+  # Not a conflict, so not a 409 with a hash: no re-read can make this base
+  # write, because the state cannot change by itself. Reached only when a
+  # non-markdown note's doc cannot be read whole (an undecryptable tail row,
+  # or a tail that empties it) AND a structural checkpoint already moved its
+  # snapshot off the row. A structural checkpoint never rewrites the row on
+  # purpose: a `.canvas` keeps its board in Y.Maps, so projecting its text
+  # would clobber `content` with "" (`CrdtCheckpoint.do_structural_checkpoint/6`).
+  defp unwritable(user, note) do
+    Logger.error(
+      "note_base_write_unreadable_state",
+      Metadata.with_category(:error, :sync,
+        user_id: user.id,
+        vault_id: note.vault_id,
+        note_id: note.id
+      )
+    )
+
+    :unwritable
   end
 
   defp snapshot_text(user, note) do
@@ -3498,10 +3522,31 @@ defmodule Engram.Notes do
   # IS its doc (every markdown write and checkpoint keeps them equal), so it
   # is served as is. Any other path is projected from its doc too: a
   # structural checkpoint rewrites the doc and leaves the row's text stale.
+  #
+  # It is also the one loader of its inputs. A batch read (`get_notes`) skips
+  # the CRDT state when a note has no tail, which is right for markdown and
+  # wrong for anything else, so a non-markdown row that arrives without its
+  # state reads it here. Callers pass whatever row and tail they hold, and
+  # every reader gets the same view.
   defp current_note(user, note, tail) do
-    if tail == [] and CrdtBridge.markdown_path?(note.path),
-      do: note,
-      else: rebuilt_note(user, note, tail)
+    cond do
+      tail == [] and CrdtBridge.markdown_path?(note.path) -> note
+      is_nil(note.crdt_state_ciphertext) -> rebuilt_note(user, with_crdt_state(user, note), tail)
+      true -> rebuilt_note(user, note, tail)
+    end
+  end
+
+  # A legacy row has no state at all; it comes back unchanged.
+  defp with_crdt_state(user, %Note{id: id} = note) do
+    query = from(n in Note, where: n.id == ^id) |> NoteBody.select_note(@note_crdt_fields)
+
+    case Repo.with_tenant!(user.id, fn -> Repo.one(query) end) do
+      %Note{crdt_state_ciphertext: ct, crdt_state_nonce: nonce} ->
+        %{note | crdt_state_ciphertext: ct, crdt_state_nonce: nonce}
+
+      nil ->
+        note
+    end
   end
 
   defp rebuilt_note(user, note, tail) do
@@ -3757,6 +3802,9 @@ defmodule Engram.Notes do
 
       {:match, view, merge} ->
         {rebuild.(view.content), [current_text: view.content] ++ merge}
+
+      :unwritable ->
+        {{:error, :note_unwritable}, []}
 
       {:stale, _view} ->
         {:ok, current, _doc} = authority
