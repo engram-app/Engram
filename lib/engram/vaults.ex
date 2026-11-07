@@ -127,15 +127,7 @@ defmodule Engram.Vaults do
   Touches no table: call it in any transaction.
   """
   @spec lock_folder_writes!(Ecto.UUID.t()) :: :ok
-  def lock_folder_writes!(vault_id) do
-    _ =
-      Repo.query!(
-        "SELECT pg_advisory_xact_lock(hashtextextended('folder_writes:' || $1::text, 0))",
-        [vault_id]
-      )
-
-    :ok
-  end
+  def lock_folder_writes!(vault_id), do: Repo.advisory_lock!(folder_writes_key(vault_id))
 
   @doc """
   Tries `lock_folder_writes!/1`'s lock on every vault of `user_id`, inside the
@@ -145,15 +137,10 @@ defmodule Engram.Vaults do
   """
   @spec try_folder_write_locks!(module(), Ecto.UUID.t()) :: :ok
   def try_folder_write_locks!(repo, user_id) do
-    %{rows: [[free?]]} =
-      repo.query!(
-        "SELECT coalesce(bool_and(pg_try_advisory_xact_lock(" <>
-          "hashtextextended('folder_writes:' || id::text, 0))), true) " <>
-          "FROM vaults WHERE user_id = $1",
-        [Ecto.UUID.dump!(user_id)]
-      )
+    %{rows: rows} =
+      repo.query!("SELECT id::text FROM vaults WHERE user_id = $1", [Ecto.UUID.dump!(user_id)])
 
-    if free?,
+    if folder_write_locks_free?(repo, List.flatten(rows)),
       do: :ok,
       else:
         raise(Postgrex.Error,
@@ -161,6 +148,17 @@ defmodule Engram.Vaults do
           postgres: %{code: "55P03", message: "a folder write holds the vault"}
         )
   end
+
+  @doc """
+  True when no folder write holds any of `vault_ids` (and the caller now
+  holds their folder-write locks to the end of its transaction on `repo`).
+  """
+  @spec folder_write_locks_free?(module(), [Ecto.UUID.t()]) :: boolean()
+  def folder_write_locks_free?(repo, vault_ids),
+    do: Repo.try_advisory_locks(repo, Enum.map(vault_ids, &folder_writes_key/1))
+
+  # The ONE key of a vault's folder-write lock, for both sides.
+  defp folder_writes_key(vault_id), do: "folder_writes:" <> vault_id
 
   @doc """
   Takes `FOR KEY SHARE NOWAIT` on every vault row of `user_id`, in id order, or

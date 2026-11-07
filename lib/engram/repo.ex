@@ -91,8 +91,10 @@ defmodule Engram.Repo do
   UNRELATED ids are tolerable (an unrelated write waits, a latency cost, not
   a correctness issue).
 
-  Current caller: `Engram.Links.lock_source_note!/1`, serializing concurrent
-  link-extraction writes for the same source note. The CRDT genesis-seed lock
+  Current callers: `Engram.Links.lock_source_note!/1`, serializing concurrent
+  link-extraction writes for the same source note, and
+  `Engram.Vaults.lock_folder_writes!/1` (its `try` side is
+  `try_advisory_locks/2`). The CRDT genesis-seed lock
   this was originally added for (#1409) was removed in round 4 — a
   post-commit room eviction replaced it, so genesis seeding no longer takes
   this lock.
@@ -101,6 +103,24 @@ defmodule Engram.Repo do
   def advisory_lock!(id) when is_binary(id) do
     _ = query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [id])
     :ok
+  end
+
+  @doc """
+  `advisory_lock!/1`'s lock on every one of `ids`, without waiting, on `repo`
+  (this one, or a maintenance repo) in the caller's transaction: true when
+  all were free (and are now held to the end of the transaction). The same
+  key formula as `advisory_lock!/1`, so a `try` and a `lock` on one id meet.
+  """
+  @spec try_advisory_locks(module(), [String.t()]) :: boolean()
+  def try_advisory_locks(repo, ids) when is_list(ids) do
+    %{rows: [[free?]]} =
+      repo.query!(
+        "SELECT coalesce(bool_and(pg_try_advisory_xact_lock(hashtextextended(k, 0))), true) " <>
+          "FROM unnest($1::text[]) AS k",
+        [ids]
+      )
+
+    free?
   end
 
   @doc """

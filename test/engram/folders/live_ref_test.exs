@@ -240,4 +240,81 @@ defmodule Engram.Folders.LiveRefTest do
       assert result == {:ok, :ok}
     end
   end
+
+  # r4 review LOW-B: a rename and a batch move must hold their vault's
+  # folder-write lock while they scan. Checked from a second, real
+  # connection at the write's scan (`scan_with_drift`), inside its transaction.
+  describe "a folder write holds the folder-write lock while it scans" do
+    # (No "free after" control: in the sandbox the write's commit is a
+    # savepoint release, so its transaction-scoped lock lives to the test's
+    # end. "Free while nobody holds it" is the lock tests' control above.)
+    defp lock_free_from_elsewhere?(vault_id) do
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          {:ok, free?} =
+            Repo.transaction(fn -> Vaults.folder_write_locks_free?(Repo, [vault_id]) end)
+
+          free?
+        end)
+      end)
+      |> Task.await(10_000)
+    end
+
+    defp probe_during(frame, vault_id, fun) do
+      pid = self()
+      id = "probe-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        id,
+        [:engram, :repo, :query],
+        fn _, _, meta, _ ->
+          if self() == pid and meta[:source] == "notes" and
+               not Process.get(:probed, false) and in_frame?(frame) do
+            Process.put(:probed, true)
+            Process.put(:free_during, lock_free_from_elsewhere?(vault_id))
+          end
+        end,
+        nil
+      )
+
+      try do
+        fun.()
+        assert Process.get(:probed), "no notes statement inside #{frame}"
+        Process.get(:free_during)
+      after
+        :telemetry.detach(id)
+        Process.delete(:probed)
+        Process.delete(:free_during)
+      end
+    end
+
+    defp in_frame?(frame) do
+      {:current_stacktrace, stack} = Process.info(self(), :current_stacktrace)
+      Enum.any?(stack, fn {_mod, fun, _, _} -> String.contains?(Atom.to_string(fun), frame) end)
+    end
+
+    test "rename", %{user: u, vault: v} do
+      put_note(u, v, "R/n.md")
+
+      free? =
+        probe_during("scan_with_drift", v.id, fn ->
+          assert {:ok, _} = Engram.Folders.rename(u, v, "R", "S")
+        end)
+
+      assert free? == false
+    end
+
+    test "batch move", %{user: u, vault: v} do
+      put_note(u, v, "Box/n.md")
+      {:ok, %{folders: [%{id: marker}]}} = Notes.create_folder_markers(u, v, ["Box"])
+      put_note(u, v, "Shelf/x.md")
+
+      free? =
+        probe_during("scan_with_drift", v.id, fn ->
+          assert {:ok, _} = Engram.Folders.batch_move(u, v, [marker], {:path, "Shelf"})
+        end)
+
+      assert free? == false
+    end
+  end
 end
