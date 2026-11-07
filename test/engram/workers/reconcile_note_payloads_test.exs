@@ -442,7 +442,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert NotePayloadStamps.version() == v1 + 1
 
     assert Engram.Workers.DataMigrationsRunner.run(NotePayloadStamps) == :more
-    assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
+    assert_enqueued(worker: ReconcileNotePayloads, args: %{"mode" => "n_fleet"})
   end
 
   test "a rotation that starts mid-job snoozes it before any write", ctx do
@@ -889,7 +889,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       assert DataMigrationsRunner.run(NotePayloadStamps, true) == :more
       refute DataMigrations.done?(NotePayloadStamps.name(), NotePayloadStamps.version())
       assert nil in payload_versions(ctx)
-      assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
+      assert_enqueued(worker: ReconcileNotePayloads, args: %{"mode" => "n_fleet"})
 
       assert :ok = sweep(ctx)
       assert n_kept?(ctx, {id, Agent.get(ctx.store, &Map.fetch!(&1.points, id))})
@@ -918,7 +918,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     # inserted after a minute's worth of `n` wakes still goes first.
     test "an n job has a lower priority than a heal" do
       heal = ReconcileNotePayloads.new(%{"user_id" => Ecto.UUID.generate()})
-      n = ReconcileNotePayloads.new(%{"user_id" => Ecto.UUID.generate(), "mode" => "n"})
+      n = ReconcileNotePayloads.new(%{"mode" => "n_fleet"})
 
       assert Ecto.Changeset.get_field(n, :priority) > Ecto.Changeset.get_field(heal, :priority)
     end
@@ -1001,7 +1001,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       stale = for q <- queries, q.pid == self(), q.sql =~ "payload_version", do: q.sql
       assert stale != []
       assert Enum.all?(stale, &(&1 =~ "unnest"))
-      assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
+      assert_enqueued(worker: ReconcileNotePayloads, args: %{"mode" => "n_fleet"})
     end
 
     # A just-booted node in a rolling deploy, not yet joined to the old ones:
@@ -1088,7 +1088,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   end
 
   # What the ledger queues for a user: the heal (no mode) and the `n`
-  # backfill (`mode: "n"`), each its own job. The heal's result is returned
+  # backfill (the fleet job), each its own job. The heal's result is returned
   # when it fails, else the backfill's.
   defp sweep(ctx) do
     case perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id}) do
@@ -1097,8 +1097,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     end
   end
 
-  defp n_job(ctx),
-    do: perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id, "mode" => "n"})
+  # The fleet `n` job walks every user, the context's among them.
+  defp n_job(_ctx), do: perform_job(ReconcileNotePayloads, %{"mode" => "n_fleet"})
 
   defp reload(note),
     do: Engram.Fixtures.raw_note!(note.id)
