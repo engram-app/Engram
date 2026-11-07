@@ -6632,7 +6632,6 @@ defmodule Engram.Notes do
       Repo.all(union_all(envelope.(drift_query(user, vault), 1), ^envelope.(markers, 0)))
 
     root = root - Enum.count(envelopes, &(&1.count == 1))
-    root = root - length(drift)
 
     by_ref ++
       if(by_ref == [], do: [], else: Enum.reverse(folder_rows)) ++
