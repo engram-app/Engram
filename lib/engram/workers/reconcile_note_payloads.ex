@@ -505,6 +505,10 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     end)
   end
 
+  @doc "The payload version from which every v5 point carries `n`."
+  @spec n_version() :: 6
+  def n_version, do: @n_version
+
   @doc "False while the `:payload_backfill` kill switch is off."
   @spec backfill_enabled?() :: boolean()
   def backfill_enabled?, do: ServiceConfig.get(:payload_backfill, true) != false

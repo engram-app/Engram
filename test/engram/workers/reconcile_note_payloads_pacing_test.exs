@@ -199,6 +199,20 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     assert length(Enum.uniq(snoozes)) > 1
   end
 
+  # The hourly ledger pass stops with the switch too: no notes walk, no
+  # job inserts, no Qdrant scroll or unstamp.
+  test "with the kill switch off, the ledger pass makes no Repo and no Qdrant call", _ctx do
+    ServiceConfig.put_override(:payload_backfill, false)
+    silent = Bypass.open()
+    ServiceConfig.put_override(:qdrant_url, "http://localhost:#{silent.port}")
+
+    {result, queries} =
+      Engram.QueryRecorder.record(fn -> Engram.DataMigrations.NotePayloadStamps.run_pass() end)
+
+    assert result == :more
+    assert Enum.filter(queries, &(&1.pid == self())) == []
+  end
+
   test "the kill switch snoozes it, and it resumes once back on", ctx do
     ServiceConfig.put_override(:payload_backfill, false)
 

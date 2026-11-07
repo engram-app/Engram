@@ -54,7 +54,26 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   @doc "`run_pass/0` with the cluster probe's options (tests: `:peers`, `:multicall`)."
   @spec run_pass(keyword()) :: :done | :more | {:more, keyword()}
   def run_pass(opts) do
-    if Engram.DataMigrations.done?(name(), version()), do: reverify(opts), else: pass(opts)
+    cond do
+      paused?() -> paused()
+      Engram.DataMigrations.done?(name(), version()) -> reverify(opts)
+      true -> pass(opts)
+    end
+  end
+
+  # With the backfill's kill switch off or the Qdrant gate shut, the pass
+  # reads nothing (no notes walk, no jobs, no Qdrant scroll or unstamp):
+  # pulling the switch stops the ledger's traffic too. Checked in that order,
+  # so with the switch off not even the cached Qdrant gate is asked.
+  defp paused? do
+    PayloadV6.version() >= ReconcileNotePayloads.n_version() and
+      (not ReconcileNotePayloads.backfill_enabled?() or not Engram.Rebuild.qdrant_open?())
+  end
+
+  # Not proven done, so `:more`; but a done ledger (the in-memory cache only,
+  # no read) stays done rather than reopening on a paused re-verify.
+  defp paused do
+    if Engram.DataMigrations.cached_done?(name(), version()), do: :done, else: :more
   end
 
   # Re-verified daily (`reverify?/0`), so a rollback heals itself: an older
