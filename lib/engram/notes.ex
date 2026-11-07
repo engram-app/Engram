@@ -6553,7 +6553,7 @@ defmodule Engram.Notes do
     #    references (a folder's name is one segment, so a path is assembled
     #    from its ancestors);
     #  * `%{id:, dv:, ct:, nonce:, count:}`: one per drift note
-    #    (`drift_query/2`, count 1), placed by its own folder envelope (0 rows
+    #    (`drift_query/1`, count 1), placed by its own folder envelope (0 rows
     #    in steady state), and one per folder marker (count 0), so an empty
     #    explicit folder is listed.
     #
@@ -6621,6 +6621,7 @@ defmodule Engram.Notes do
           dv: n.dek_version,
           ct: n.folder_ciphertext,
           nonce: n.folder_nonce,
+          vault_id: n.vault_id,
           count: fragment("?::int", ^count)
         }
       )
@@ -6629,7 +6630,9 @@ defmodule Engram.Notes do
     markers = from(n in scoped_live(user, vault), where: n.kind == "folder")
 
     envelopes =
-      Repo.all(union_all(envelope.(drift_query(user, vault), 1), ^envelope.(markers, 0)))
+      union_all(envelope.(drift_query(user), 1), ^envelope.(markers, 0))
+      |> Repo.all()
+      |> Enum.filter(&(&1.vault_id == vault.id))
 
     root = root - Enum.count(envelopes, &(&1.count == 1))
 
@@ -7058,22 +7061,27 @@ defmodule Engram.Notes do
   `notes_unresolved_folder` partial index: 0 rows in steady state, O(drift)
   until the drain heals them. Every folder reader merges these by their
   decrypted folder, so a note never leaves a listing during that window.
-  A query with no `select`. MUST run inside the caller's tenant block.
+
+  Scoped to the USER, as the index is, not the vault: with `vault_id` in the
+  WHERE the planner prefers `notes_user_vault_live` and filters the vault's
+  NULL-reference rows (every root note), since it cannot see that the
+  `octet_length` test empties the partial index. Callers keep their vault's
+  rows (`vault_id` is in every select). A query with no `select`. MUST run
+  inside the caller's tenant block.
   """
-  @spec drift_query(map(), map()) :: Ecto.Query.t()
-  def drift_query(user, vault) do
+  @spec drift_query(map()) :: Ecto.Query.t()
+  def drift_query(user) do
     # ponytail: unbounded by design (a note must never be hidden); the ceiling
-    # is the drift itself, which the drain keeps at 0.
+    # is the user's drift, which the drain keeps at 0.
     from(n in Note,
       where:
-        n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
-          is_nil(n.deleted_at) and is_nil(n.folder_ref_id) and
-          fragment("octet_length(?) > 16", n.folder_ciphertext)
+        n.user_id == ^user.id and n.kind == "note" and is_nil(n.deleted_at) and
+          is_nil(n.folder_ref_id) and fragment("octet_length(?) > 16", n.folder_ciphertext)
     )
   end
 
   @doc """
-  `drift_query/2`'s notes with their decrypted folder:
+  `drift_query/1`'s notes in `vault`, with their decrypted folder:
   `{[{id, folder}], undecryptable}`. A row whose envelope will not open is
   counted (and logged), not placed. MUST run inside the caller's tenant block.
   """
@@ -7082,13 +7090,14 @@ defmodule Engram.Notes do
   def drift_note_folders(user, vault, dek) do
     rows =
       Repo.all(
-        from(n in drift_query(user, vault),
-          select: {n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
+        from(n in drift_query(user),
+          select: {n.id, n.vault_id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
         )
       )
 
     {placed, bad} =
-      Enum.reduce(rows, {[], 0}, fn {id, dv, ct, nonce}, {placed, bad} ->
+      for({id, vid, dv, ct, nonce} <- rows, vid == vault.id, do: {id, dv, ct, nonce})
+      |> Enum.reduce({[], 0}, fn {id, dv, ct, nonce}, {placed, bad} ->
         case Envelope.decrypt(ct, nonce, dek, row_aad(:notes, :folder, id, dv)) do
           {:ok, folder} -> {[{id, folder} | placed], bad}
           :error -> {placed, bad + 1}

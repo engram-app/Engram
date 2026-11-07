@@ -161,9 +161,10 @@ defmodule Engram.NotesWholeVaultPlanTest do
         ~r/GROUP BY n0\."folder_ref_id"/
       )
 
-    # A whole-vault aggregate either way: the live vault index, or the covering
-    # reference index once the heap is all-visible (reads_test.exs pins that).
-    assert_index(plans, ~r/notes_user_vault_live|notes_folder_ref_live/)
+    # A whole-vault aggregate whichever vault-scoped index serves it (the
+    # covering reference index once the heap is all-visible: reads_test.exs
+    # pins that); never a scan of the table.
+    assert_index(plans, ~r/Index Cond: .*vault_id = (\$2|')/)
   end
 
   test "tag counts read notes_user_vault_live", %{user: u, vault: v} do

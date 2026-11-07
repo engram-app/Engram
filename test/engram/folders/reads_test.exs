@@ -641,14 +641,14 @@ defmodule Engram.Folders.ReadsTest do
                  where: n.vault_id == ^v.id and n.kind == "note" and n.folder_ref_id in ^ids,
                  select: n.id
                )
-             ), Repo.all(from(n in Notes.drift_query(u, v), select: n.id))}
+             ), Repo.all(from(n in Notes.drift_query(u), select: n.id))}
           end)
         end)
 
       assert {by_ref, drift} == {[], []}
       # And the superuser does see them: the fixture is not empty.
       assert Repo.with_tenant!(u.id, fn ->
-               Repo.all(from(n in Notes.drift_query(u, v), select: n.id))
+               Repo.all(from(n in Notes.drift_query(u), select: n.id))
              end) == [d.id]
     end
   end
