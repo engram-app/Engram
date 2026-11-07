@@ -325,6 +325,38 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     end
   end
 
+  # Owner rule (2026-11-06): every data migration ships with a kill switch,
+  # `enabled?/0` backed by a ServiceConfig service override, so a bad pass
+  # stops fleet-wide in seconds without a deploy. These predate the rule.
+  @before_kill_switch_rule [
+    Engram.DataMigrations.IndexVersions,
+    Engram.DataMigrations.CrdtStateSeed,
+    Engram.DataMigrations.EnvelopeFormat,
+    Engram.DataMigrations.LinkResolutionKeys,
+    Engram.DataMigrations.NotePayloadStamps,
+    Engram.DataMigrations.NoteSplit,
+    Engram.DataMigrations.NoteIndexState,
+    Engram.DataMigrations.NoteSizes,
+    Engram.DataMigrations.FolderTable,
+    Engram.DataMigrations.KeyAliases,
+    Engram.DataMigrations.PersonOriginBackfill,
+    Engram.DataMigrations.EffectiveDates
+  ]
+
+  test "every data migration newer than the kill-switch rule defines enabled?/0" do
+    missing =
+      for mod <- DataMigrationsRunner.migrations() -- @before_kill_switch_rule,
+          Code.ensure_loaded!(mod),
+          not function_exported?(mod, :enabled?, 0) or
+            not (mod.module_info(:compile)[:source]
+                 |> File.read!()
+                 |> String.contains?("ServiceConfig.get(")),
+          do: mod
+
+    assert missing == [],
+           "add enabled?/0 backed by a ServiceConfig override: #{inspect(missing)}"
+  end
+
   # Rows written while the gate was blocked in a deploy reopen the migration
   # most days; at :warning that routine line drowns a real regression.
   test "a routine re-verify reopen logs at :info with what it found" do
