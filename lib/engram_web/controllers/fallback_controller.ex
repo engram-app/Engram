@@ -24,7 +24,6 @@ defmodule EngramWeb.FallbackController do
   | `{:error, {:conflict, id}}`    | 409    | `%{error: "conflict", item_id: id}`      |
   | `{:error, :last_admin}`        | 409    | `%{error: "last_admin"}`                 |
   | `{:error, :batch_too_large}`   | 422    | `%{error: "batch_too_large", max: n}`    |
-  | `{:error, {:folder_too_large, max}}` | 422 | `%{error: "folder_too_large", limit: max, over_limit: true}` |
   | `{:error, transient DEK}`      | 503    | `%{error: "dek_unavailable"}`            |
   | `{:error, _}` (terminal)       | 500    | `%{error: "internal"}`                   |
 
@@ -66,13 +65,6 @@ defmodule EngramWeb.FallbackController do
     conn
     |> put_status(422)
     |> json(%{error: "batch_too_large", max: Engram.Batch.batch_request_max()})
-  end
-
-  # A folder rename or move over `:folder_op_max_rows` (`Engram.Folders`,
-  # #2492): folder rename and folder batch-move.
-  # The count is bounded at the limit, so the body says "over", not how many.
-  def call(conn, {:error, {:folder_too_large, limit}}) do
-    conn |> put_status(422) |> json(%{error: "folder_too_large", limit: limit, over_limit: true})
   end
 
   def call(conn, {:error, :last_admin}) do

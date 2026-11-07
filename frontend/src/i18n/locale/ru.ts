@@ -5,8 +5,6 @@ export default {
 		"Вы достигли лимита заметок — обновите подписку, чтобы добавить больше.",
 	"Changes can't be saved: your account can't sync right now.":
 		"Изменения не могут быть сохранены: в данный момент ваша учётная запись не может синхронизироваться.",
-	"Folder too large to rename here (more than {limit} items). Rename it in Obsidian.":
-		"Папка слишком большая для переименования здесь (более {limit} элементов). Переименуйте её в Obsidian.",
 	"A note with that name already exists.": "Заметка с таким именем уже существует.",
 	"A folder with that name already exists.": "Папка с таким именем уже существует.",
 	"A file with that name already exists.": "Файл с таким именем уже существует.",

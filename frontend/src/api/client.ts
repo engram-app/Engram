@@ -310,7 +310,6 @@ async function authFetch(
 			response.status,
 			body.error ?? firstValidationError(body.errors) ?? response.statusText,
 			parseRetryAfter(response),
-			body,
 		);
 		if (safeToResend && error.retryAfterS !== undefined && response.status === 429) {
 			busyRetried.add(error);
@@ -393,8 +392,6 @@ export class ApiError extends Error {
 		public status: number,
 		message: string,
 		public retryAfterS?: number,
-		/** The parsed JSON error body, for codes that carry fields (e.g. `limit`, `over_limit`). */
-		public body: Record<string, unknown> = {},
 	) {
 		super(message);
 		this.name = "ApiError";

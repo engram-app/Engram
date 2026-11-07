@@ -5,8 +5,6 @@ export default {
 		"Dosařili jste limit poznámek – upgradujte pro přidání dalších.",
 	"Changes can't be saved: your account can't sync right now.":
 		"Změny nelze uložit: váš účet nemůže být synchronizován.",
-	"Folder too large to rename here (more than {limit} items). Rename it in Obsidian.":
-		"Složka je příliš velká pro přejmenování zde (více než {limit} položek). Přejmenujte ji v Obsidian.",
 	"A note with that name already exists.": "Poznámka s tímto názvem již existuje.",
 	"A folder with that name already exists.": "Složka s tímto názvem již existuje.",
 	"A file with that name already exists.": "Soubor s tímto názvem již existuje.",
