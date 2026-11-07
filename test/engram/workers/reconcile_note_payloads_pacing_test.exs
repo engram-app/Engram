@@ -487,7 +487,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     end
 
     # One INSERT per 1,000 rows of factory-built structs (unset columns take
-    # their database default): 1,250 users in seconds, not 40.
+    # their database default): many users in one statement, not one each.
     defp bulk_insert!(schema, structs) do
       fields = schema.__schema__(:fields)
 
@@ -673,43 +673,40 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
       {1, _} = Repo.update_all(from(j in Oban.Job, where: j.id == ^job.id), set: [state: state])
     end
 
-    # ~1,250 users at the 500 setting, ten windows on a fake clock (the
-    # bucket reset is the window edge): every window delivers the setting,
-    # spread over the users in cursor order, through ONE job.
-    @tag timeout: 300_000
-    test "the sustained rate is the setting across 1,250 users over ten windows", ctx do
-      users = stale_users(ctx, 1_250, 4)
+    # 50 users x 100 points at the 500 setting, ten windows on a fake clock
+    # (the bucket reset is the window edge): every window delivers exactly
+    # the setting through ONE job, about five users a window in cursor
+    # order, and the ten windows reach every user. Few users, so a window
+    # runs in well under a second.
+    test "the sustained rate is the setting across 50 users over ten windows", ctx do
+      users = stale_users(ctx, 50, 100)
       clear_jobs()
-      before = written(ctx)
 
-      totals =
-        for _window <- 1..10, reduce: [] do
-          acc ->
-            fresh_window()
-            clear_jobs()
-            assert :ok = fleet()
-            assert [next] = fleet_jobs()
-            assert DateTime.diff(next.scheduled_at, DateTime.utc_now(), :second) in 0..70
-            [written(ctx) - before | acc]
+      per_window =
+        for _window <- 1..10 do
+          before = written(ctx)
+          touched = users_written(ctx, users)
+          fresh_window()
+          clear_jobs()
+          assert :ok = fleet()
+          assert [next] = fleet_jobs()
+          assert DateTime.diff(next.scheduled_at, DateTime.utc_now(), :second) in 0..70
+          {written(ctx) - before, length(users_written(ctx, users) -- touched)}
         end
 
-      deltas =
-        totals
-        |> Enum.reverse()
-        |> then(&Enum.zip([0 | &1], &1))
-        |> Enum.map(fn {a, b} -> b - a end)
-
-      assert deltas == List.duplicate(500, 10)
-      # 5,000 points, 4 a user (the setup's user holds a few too).
-      assert length(users_written(ctx, users)) >= 1_240
+      assert Enum.map(per_window, &elem(&1, 0)) == List.duplicate(500, 10)
+      # About five new users a window (one may straddle two windows).
+      assert Enum.all?(per_window, fn {_, new} -> new >= 4 end)
+      assert length(users_written(ctx, users)) == 50
     end
 
     # The bucket is Hammer's real 60 s fix window: start each fake window
-    # with 10 s ahead of the real edge, so one run (~1-8 s) never spans two.
+    # with 3 s ahead of the real edge, so one run (well under 1 s) never
+    # spans two.
     defp fresh_window do
       EngramWeb.RateLimiter.clear_buckets!()
       left = 60_000 - rem(System.system_time(:millisecond), 60_000)
-      if left < 10_000, do: Process.sleep(left + 1)
+      if left < 3_000, do: Process.sleep(left + 1)
     end
 
     # The insert_unique advisory-lock race: the self re-queue reports a
