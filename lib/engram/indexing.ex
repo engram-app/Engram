@@ -1252,9 +1252,17 @@ defmodule Engram.Indexing do
   end
 
   # One event per outcome per committed pass: `point_kinds` holds the points
-  # this commit built, `reused_point_ids` the ones kept in place.
-  defp emit_chunks(%{point_kinds: kinds, reused_point_ids: reused}) do
-    for {outcome, count} <- [embedded: length(kinds), reused: length(reused)], count > 0 do
+  # this commit built, `reused_point_ids` the ones kept in place, of which
+  # `legacy_reused` matched only their pre-R3c inputs (`legacy_reuse/6`).
+  defp emit_chunks(%{point_kinds: kinds, reused_point_ids: reused} = prepared) do
+    legacy = Map.get(prepared, :legacy_reused, 0)
+
+    for {outcome, count} <- [
+          embedded: length(kinds),
+          reused: length(reused) - legacy,
+          legacy: legacy
+        ],
+        count > 0 do
       :telemetry.execute([:engram, :indexing, :chunks], %{count: count}, %{outcome: outcome})
     end
 
@@ -1849,13 +1857,14 @@ defmodule Engram.Indexing do
     if Keyword.get(opts, :rebuild, false),
       do:
         {dense?,
-         chunks |> plan_chunks(rows, content_key, dense?) |> Map.put(:rebuild, {rows, chunks}),
-         nil},
+         chunks
+         |> plan_chunks(rows, content_key, dense?, note)
+         |> Map.put(:rebuild, {rows, chunks}), nil},
       else: budget_plan(note, rows, chunks, content_key, dense?, opts)
   end
 
-  defp budget_plan(_note, rows, chunks, content_key, false, _opts),
-    do: {false, plan_chunks(chunks, rows, content_key, false), nil}
+  defp budget_plan(note, rows, chunks, content_key, false, _opts),
+    do: {false, plan_chunks(chunks, rows, content_key, false, note), nil}
 
   #
   # The user is charged for the chunks whose content changed, not for how we
@@ -1863,7 +1872,15 @@ defmodule Engram.Indexing do
   # members whose own fingerprint no stored row or member has. The rest of
   # what Voyage is sent is our maintenance, `[:engram, :embed, :maintenance]`.
   defp budget_plan(note, rows, chunks, content_key, true, opts),
-    do: price(note, rows, chunks, content_key, plan_chunks(chunks, rows, content_key, true), opts)
+    do:
+      price(
+        note,
+        rows,
+        chunks,
+        content_key,
+        plan_chunks(chunks, rows, content_key, true, note),
+        opts
+      )
 
   defp price(note, rows, chunks, content_key, plan, opts) do
     texts = embed_texts(plan)
@@ -1872,7 +1889,7 @@ defmodule Engram.Indexing do
     case retained(note, texts) do
       {:ok, vectors} ->
         if <<>> in vectors,
-          do: partial_from_retained(rows, chunks, content_key, plan, vectors),
+          do: partial_from_retained(note, rows, chunks, content_key, plan, vectors),
           else: {true, plan, vectors}
 
       :miss ->
@@ -1889,7 +1906,7 @@ defmodule Engram.Indexing do
             {false, {:refused, plan}, nil}
 
           true ->
-            partial_plan(rows, chunks, content_key, plan, opts)
+            partial_plan(note, rows, chunks, content_key, plan, opts)
         end
     end
   end
@@ -1925,7 +1942,7 @@ defmodule Engram.Indexing do
   # them dense. `deferred_tokens` is what they still need, for the park. A
   # refused reservation for what fits (a race for the bucket) defers every
   # sent text.
-  defp partial_plan(rows, chunks, content_key, plan, opts) do
+  defp partial_plan(note, rows, chunks, content_key, plan, opts) do
     available = Keyword.get(opts, :budget_available, fn -> 0 end).()
     reserve = Keyword.get(opts, :reserve_tokens, fn _tokens -> true end)
     costs = text_charges(plan, rows)
@@ -1939,13 +1956,13 @@ defmodule Engram.Indexing do
       end)
 
     {partial, charged, total} =
-      with_charge(flag_partial(rows, chunks, content_key, plan, fit, costs), rows, opts)
+      with_charge(flag_partial(note, rows, chunks, content_key, plan, fit, costs), rows, opts)
 
     if charged == 0 or reserve.(charged) do
       maintenance_tokens(total - charged)
       {true, partial, nil}
     else
-      none = flag_partial(rows, chunks, content_key, plan, MapSet.new(), costs)
+      none = flag_partial(note, rows, chunks, content_key, plan, MapSet.new(), costs)
       {true, none, nil}
     end
   end
@@ -1953,7 +1970,7 @@ defmodule Engram.Indexing do
   # A retry of a partial pass: the retained vectors (full plan order, `<<>>`
   # for a deferred chunk) say which chunks it embedded. Already paid for, so
   # no reservation and no embed.
-  defp partial_from_retained(rows, chunks, content_key, plan, retained) do
+  defp partial_from_retained(note, rows, chunks, content_key, plan, retained) do
     fit =
       plan
       |> sent_entry_indexes()
@@ -1961,13 +1978,13 @@ defmodule Engram.Indexing do
       |> Enum.reject(fn {_i, vector} -> vector == <<>> end)
       |> MapSet.new(&elem(&1, 0))
 
-    {true, flag_partial(rows, chunks, content_key, plan, fit, text_charges(plan, rows)),
+    {true, flag_partial(note, rows, chunks, content_key, plan, fit, text_charges(plan, rows)),
      Enum.reject(retained, &(&1 == <<>>))}
   end
 
   # `plan`'s sent texts outside `fit` are re-planned sparse-only (`chunks` and
   # `plan.entries` are 1:1, in order).
-  defp flag_partial(rows, chunks, content_key, plan, fit, costs) do
+  defp flag_partial(note, rows, chunks, content_key, plan, fit, costs) do
     sent = sent_entry_indexes(plan)
     deferred = for {i, cost} <- Enum.zip(sent, costs), not MapSet.member?(fit, i), do: {i, cost}
     skip = MapSet.new(deferred, &elem(&1, 0))
@@ -1977,7 +1994,7 @@ defmodule Engram.Indexing do
     |> Enum.map(fn {chunk, i} ->
       if MapSet.member?(skip, i), do: Map.put(chunk, :sparse_only, true), else: chunk
     end)
-    |> plan_chunks(rows, content_key, true)
+    |> plan_chunks(rows, content_key, true, note)
     |> Map.merge(%{
       partial?: deferred != [],
       deferred_tokens: deferred |> Enum.map(&elem(&1, 1)) |> Enum.sum(),
@@ -2103,7 +2120,7 @@ defmodule Engram.Indexing do
             if MapSet.member?(skip, i), do: Map.put(c, :sparse_only, true), else: c
           end)
 
-        replan = kept |> plan_chunks(rows, ck, true) |> Map.put(:rebuild, {rows, kept})
+        replan = kept |> plan_chunks(rows, ck, true, note) |> Map.put(:rebuild, {rows, kept})
 
         with {:ok, dense?, plan, retained} <- rebuild_sources(note, true, replan, nil, ck, opts) do
           {:ok, dense?,
@@ -2608,9 +2625,10 @@ defmodule Engram.Indexing do
 
   # Decides, per chunk, whether it can keep the point it already has (#1592).
   #
-  # The fingerprint is over `context_text` ("folder > title > heading\n\ntext",
-  # the keyword input) and `embed_text` (the dense input), NOT the bare chunk
-  # text. That distinction is the whole correctness argument: an equal pair
+  # The fingerprint is over `context_text` ("title > heading\n\ntext", the
+  # keyword input) and `embed_text` (the dense input), NOT the bare chunk
+  # text. Neither holds the path since R3c, so a rename or a move keeps every
+  # fingerprint. That distinction is the whole correctness argument: an equal pair
   # means the dense vector, the sparse vector, `token_count`, and all three
   # encrypted payload fields (`text`, `title`, `heading_path`, all of which are
   # inside it) are reusable verbatim. Hashing the bare text instead would
@@ -2627,7 +2645,9 @@ defmodule Engram.Indexing do
   # A chunk with no match under the pass model's fingerprint may keep a point
   # made by a higher-tier model (`reuse_models/0`): its `context_hmac` then
   # names THAT model, so the row stays truthful about the vector it holds.
-  defp plan_chunks(chunks, rows, content_key, dense?) do
+  # Last, a point indexed before R3c may match the chunk's pre-R3c inputs
+  # (`legacy_reuse/6`). `note` is decrypted: the source of `chunks`.
+  defp plan_chunks(chunks, rows, content_key, dense?, note) do
     alts =
       reuse_models()
       |> Enum.map(&plan_fingerprints(content_key, chunks, dense?, &1))
@@ -2658,20 +2678,18 @@ defmodule Engram.Indexing do
 
     models = [nil | reuse_models()]
 
-    {entries, _left} =
+    {entries, left} =
       Enum.map_reduce(Enum.zip(chunks, alts), by_hmac, fn {chunk, others}, acc ->
         candidates = Enum.zip([chunk.context_hmac | others], models)
 
         case Enum.find(candidates, fn {hmac, _} -> match?([_ | _], Map.get(acc, hmac)) end) do
-          nil ->
-            {{:embed, chunk}, acc}
-
-          {hmac, model} ->
-            [{point_id, tokens} | rest] = Map.fetch!(acc, hmac)
-            chunk = if model, do: Map.put(chunk, :vector_model, model), else: chunk
-            {{:reuse, %{chunk | context_hmac: hmac}, point_id, tokens}, Map.put(acc, hmac, rest)}
+          nil -> {{:embed, chunk}, acc}
+          {hmac, model} -> reuse_row(chunk, acc, hmac, hmac, model)
         end
       end)
+
+    {entries, legacy} =
+      legacy_reuse(entries, alts, left, {note, length(existing)}, content_key, dense?)
 
     reused = for {:reuse, _chunk, point_id, _tokens} <- entries, do: point_id
 
@@ -2679,8 +2697,132 @@ defmodule Engram.Indexing do
       entries: entries,
       dense?: dense?,
       reused_point_ids: reused,
+      legacy_reused: legacy,
       stale_point_ids: Enum.map(existing, fn {_h, id, _t} -> id end) -- reused
     }
+  end
+
+  # Takes one of the rows stored under `stored` for `chunk`, which writes
+  # `hmac` (the stored fingerprint itself, or its R3c successor): a reuse
+  # entry and the rows left. `model`: the higher-tier model the point's
+  # vector is from, nil for the pass model.
+  defp reuse_row(chunk, rows, stored, hmac, model) do
+    [{point_id, tokens} | rest] = Map.fetch!(rows, stored)
+    chunk = if model, do: Map.put(chunk, :vector_model, model), else: chunk
+    {{:reuse, %{chunk | context_hmac: hmac}, point_id, tokens}, Map.put(rows, stored, rest)}
+  end
+
+  # R3c expand: a point indexed before R3c is fingerprinted under the old
+  # inputs (the folder, the file-name title, aliases in every prefix), so
+  # every chunk of an unrenamed note misses above, and R3c alone would
+  # re-embed the fleet on its next edits. Each chunk still unmatched tries
+  # its `legacy_twins/2` fingerprints (under each model, as above) against
+  # the rows still unmatched; a hit keeps the point, 0 Voyage and 0 Qdrant,
+  # and writes the chunk's NEW fingerprint, so the note is rename-free from
+  # this pass on. The twin is built at the note's CURRENT path: a note
+  # renamed before R3c and not edited since misses and re-embeds once.
+  #
+  # Lazy: only when a chunk missed while rows are left over, so an edit
+  # after the migration pays one extra parse when it has a new chunk.
+  # ponytail: that parse is the cost until the contract, which deletes
+  # this and `Markdown.parse/3`'s `:legacy` once `outcome="legacy"` of
+  # `[:engram, :indexing, :chunks]` reads 0 for 30 days.
+  defp legacy_reuse(entries, alts, left, {note, stored}, content_key, dense?) do
+    missed = for {{:embed, _chunk}, i} <- Enum.with_index(entries), do: i
+
+    if missed == [] or Enum.all?(left, &(elem(&1, 1) == [])) do
+      {entries, 0}
+    else
+      twins =
+        entries |> Enum.map(&entry_chunk/1) |> legacy_twins(note, stored) |> List.to_tuple()
+
+      alts = List.to_tuple(alts)
+      chunks = List.to_tuple(entries)
+
+      tried =
+        for i <- missed,
+            twin = elem(twins, i),
+            twin != nil,
+            do: {i, twin, [entry_chunk(elem(chunks, i)).context_hmac | elem(alts, i)]}
+
+      models = [nil | reuse_models()]
+      twin_list = Enum.map(tried, &elem(&1, 1))
+
+      olds =
+        models
+        |> Enum.map(&plan_fingerprints(content_key, twin_list, dense?, &1))
+        |> transpose(length(tried))
+
+      pairs =
+        Map.new(Enum.zip(tried, olds), fn {{i, _twin, news}, olds} ->
+          {i, Enum.zip([olds, news, models])}
+        end)
+
+      {entries, {_left, hits}} =
+        entries
+        |> Enum.with_index()
+        |> Enum.map_reduce({left, 0}, fn {entry, i}, {acc, hits} ->
+          with {:embed, chunk} <- entry,
+               {:ok, cands} <- Map.fetch(pairs, i),
+               {old, new, model} <-
+                 Enum.find(cands, fn {old, _, _} -> match?([_ | _], Map.get(acc, old)) end) do
+            {reused, acc} = reuse_row(chunk, acc, old, new, model)
+            {reused, {acc, hits + 1}}
+          else
+            _ -> {entry, {acc, hits}}
+          end
+        end)
+
+      {entries, hits}
+    end
+  end
+
+  # Per chunk, its twin with the pre-R3c inputs (`Markdown.parse/3`
+  # `legacy: true`) at the note's current path, or nil: a chunk the legacy
+  # plan has no counterpart for, or one whose inputs did not move (a root
+  # note with an H1 and no aliases: its fingerprint is the same already).
+  #
+  # A merged note (the largest ones, over the per-note cap) is regrouped the
+  # way its `stored` points were built (`merged_like/2`, from the row count,
+  # as `resparse_note/2` does), so a merged group pairs with the legacy
+  # group over the same sections. When the grouping moved since (another
+  # cap, another size) that group misses, as it would today.
+  #
+  # Paired in document order by span: a merged group by its offsets and
+  # member count (its crumbs may differ by prefix room), a plain chunk by
+  # offsets and text. The twin is the new chunk with the legacy inputs (a
+  # merged one: the legacy group, keeping the new chunk's `sparse_only`).
+  defp legacy_twins(chunks, note, stored) do
+    old = Markdown.parse(note.content || "", note.path, legacy: true)
+
+    old =
+      if Enum.any?(chunks, &Map.get(&1, :merged, false)),
+        do: merged_like(old, stored) || [],
+        else: old
+
+    {twins, _left} =
+      Enum.map_reduce(chunks, Enum.group_by(old, &span/1), fn chunk, by_span ->
+        case Map.get(by_span, span(chunk), []) do
+          [] -> {nil, by_span}
+          [twin | rest] -> {twin_of(chunk, twin), Map.put(by_span, span(chunk), rest)}
+        end
+      end)
+
+    twins
+  end
+
+  defp span(chunk), do: {chunk.char_start, chunk.char_end, Map.get(chunk, :merged, false)}
+
+  # A planned group holds `member_bytes`, not its members (`drop_members/1`).
+  defp twin_of(%{merged: true} = chunk, twin) do
+    if length(chunk[:members] || chunk[:member_bytes] || []) == length(twin.members),
+      do: Map.put(twin, :sparse_only, Map.get(chunk, :sparse_only, false))
+  end
+
+  defp twin_of(chunk, twin) do
+    if twin.text == chunk.text and
+         {twin.context_text, twin.embed_text} != {chunk.context_text, chunk.embed_text},
+       do: %{chunk | context_text: twin.context_text, embed_text: twin.embed_text}
   end
 
   # Tenant-scoped: unscoped this read is filtered to [], so reuse never
@@ -2964,7 +3106,7 @@ defmodule Engram.Indexing do
 
     # As `prepare_index/4` plans it: dense unless the opts say otherwise.
     dense? = Keyword.get(version_rebuild_opts(note), :dense, true)
-    plan = plan_chunks(capped, rows, content_key, dense?)
+    plan = plan_chunks(capped, rows, content_key, dense?, note)
 
     # C13 averages each member's OWN stored vector: a fingerprint that lives
     # only as a member of a merged point has none, so it is not counted, and
@@ -3155,7 +3297,7 @@ defmodule Engram.Indexing do
         (length(rows) < length(chunks) and merged_like(chunks, length(rows))) ||
           chunks
 
-      case match_stored_points(rows, chunks, content_key) do
+      case match_stored_points(rows, chunks, content_key, note) do
         {[], unmatched} ->
           {:ok, 0, unmatched}
 
@@ -3240,7 +3382,7 @@ defmodule Engram.Indexing do
     rows
   end
 
-  defp match_stored_points(rows, chunks, content_key) do
+  defp match_stored_points(rows, chunks, content_key, note) do
     by_hmac =
       for({hmac, id, _, _} <- rows, hmac != nil, do: {hmac, id})
       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
@@ -3254,6 +3396,11 @@ defmodule Engram.Indexing do
     # Dense candidates: one per plan model (`fingerprint_models/0`). This runs
     # outside an index pass, so a lone `fingerprints/4` would name the build's
     # model and miss every point a Free pass fingerprinted with lite.
+    #
+    # Then the same over the chunks' pre-R3c inputs (`legacy_twins/2`; a
+    # chunk without a twin repeats its own), for points indexed before R3c.
+    twins = Enum.zip_with(chunks, legacy_twins(chunks, note, length(rows)), &(&2 || &1))
+
     candidates =
       Enum.map(fingerprint_models(), &fingerprints(content_key, chunks, true, &1)) ++
         [
@@ -3263,7 +3410,9 @@ defmodule Engram.Indexing do
             "",
             Enum.map(chunks, &IO.iodata_to_binary(&1.context_text))
           )
-        ]
+        ] ++
+        Enum.map(fingerprint_models(), &fingerprints(content_key, twins, true, &1)) ++
+        [fingerprints(content_key, twins, false)]
 
     keyed = Enum.zip(chunks, Enum.zip_with(candidates, & &1))
 
@@ -3473,6 +3622,7 @@ defmodule Engram.Indexing do
        # apart, and the drift is silent: an id in one list but not the other
        # is either a stray or a row pointing at nothing.
        reused_point_ids: plan.reused_point_ids,
+       legacy_reused: Map.get(plan, :legacy_reused, 0),
        stale_point_ids: unrewritten(plan.stale_point_ids, qdrant_points),
        payload_hash: payload_hash(note_payload),
        rebuild?: rebuild?,
@@ -3657,10 +3807,19 @@ defmodule Engram.Indexing do
         %{}
 
       chunks ->
-        for model <- fingerprint_models(), dense? <- [true, false], reduce: %{} do
+        # And the chunks' pre-R3c twins (`legacy_twins/2`): a row not yet
+        # moved to its R3c fingerprint keeps its old-input one, rekeyed, or
+        # the next index could no longer match it and would re-embed.
+        twins = chunks |> legacy_twins(note, 0) |> Enum.reject(&is_nil/1)
+
+        for set <- [chunks, twins],
+            set != [],
+            model <- fingerprint_models(),
+            dense? <- [true, false],
+            reduce: %{} do
           acc ->
-            fingerprints(old_key, chunks, dense?, model)
-            |> Enum.zip(fingerprints(new_key, chunks, dense?, model))
+            fingerprints(old_key, set, dense?, model)
+            |> Enum.zip(fingerprints(new_key, set, dense?, model))
             |> Map.new()
             |> Map.merge(acc)
         end
