@@ -8563,12 +8563,14 @@ defmodule Engram.Notes do
     ids = Enum.map(rows, & &1.id)
     refs = rows |> Enum.map(& &1.folder_ref_id) |> Enum.uniq()
     paths = for %{folder_row_hmac: h} when is_binary(h) <- rows, uniq: true, do: h
+    # One scan, one vault: bounds the subquery on `folders_full_path`.
+    vault_id = hd(rows).vault_id
 
     live_row =
       from(f in Engram.Folders.Folder,
         where:
-          f.id == parent_as(:n).folder_ref_id and f.full_path_hmac in ^paths and
-            is_nil(f.deleted_at),
+          f.id == parent_as(:n).folder_ref_id and f.vault_id == ^vault_id and
+            f.full_path_hmac in ^paths and is_nil(f.deleted_at),
         select: 1
       )
 
