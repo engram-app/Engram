@@ -174,7 +174,8 @@ defmodule Engram.IndexingKeywordTest do
     assert QdrantSparse.dim(key, "alpha") in indices
     refute Enum.any?(indices, &(&1 == "alpha"))
 
-    # "n" (the title, from the context prefix) + three body words (#1615).
-    assert hd(prepared.chunk_rows).token_count == 4
+    # The three body words. No title: `n.md` has no H1, and the file name is
+    # no longer one (R3c; it was the 4th token, #1615).
+    assert hd(prepared.chunk_rows).token_count == 3
   end
 end
