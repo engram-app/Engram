@@ -1,8 +1,3 @@
-# Reviewed exception: DROP NOT NULL on notes.folder_hmac is intentional. This
-# release and the previous one write the hash on every note, so no NULL exists
-# until release D (the first that writes NULL); markers keep it NOT NULL through
-# notes_kind_shape_v3_check below.
-# squawk-ignore: ban-drop-not-null
 defmodule Engram.Repo.Migrations.NoteFolderHashNullablePrepExpand do
   use Ecto.Migration
 
@@ -15,8 +10,9 @@ defmodule Engram.Repo.Migrations.NoteFolderHashNullablePrepExpand do
   release from this one on keeps working. Markers keep theirs: it is their
   path identity.
 
-    * The column's NOT NULL is dropped (catalog only, a brief ACCESS
-      EXCLUSIVE, no scan). A marker still needs the hash, by the check below.
+    * The column's NOT NULL is dropped by the migration before this one
+      (20261107095000, kept alone so its squawk exemption covers one
+      statement). A marker still needs the hash, by the check below.
     * `notes_kind_shape_v2_check` required `folder_hmac` on a note. It is
       replaced by `notes_kind_shape_v3_check`, identical but for that clause
       on notes. Added NOT VALID, then VALIDATE (SHARE UPDATE EXCLUSIVE: reads
@@ -111,7 +107,6 @@ defmodule Engram.Repo.Migrations.NoteFolderHashNullablePrepExpand do
 
   def up do
     with_lock_timeout([
-      "ALTER TABLE notes ALTER COLUMN folder_hmac DROP NOT NULL",
       "ALTER TABLE notes DROP CONSTRAINT IF EXISTS notes_kind_shape_v3_check",
       @shape_v3,
       "ALTER TABLE notes VALIDATE CONSTRAINT notes_kind_shape_v3_check",
@@ -121,8 +116,7 @@ defmodule Engram.Repo.Migrations.NoteFolderHashNullablePrepExpand do
   end
 
   # Back to the v2 check (NOT VALID: a note a later release wrote without a
-  # hash stays readable) and the original function. The column stays
-  # nullable for the same reason (SET NOT NULL would fail on such a row).
+  # hash stays readable) and the original function.
   def down do
     with_lock_timeout([
       "ALTER TABLE notes DROP CONSTRAINT IF EXISTS notes_kind_shape_v2_check",
