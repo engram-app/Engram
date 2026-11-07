@@ -593,6 +593,67 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     assert count(text_of(user, vault, "a.md"), "LIVEEDIT") == 1
   end
 
+  # #2480 review round 2: GET serves the ROW, not the tail projection, for a
+  # non-markdown path and for a projection current_note/3 distrusts (a tail
+  # that empties a non-empty note). The base check hashed the projection, so
+  # the GET hash never matched and re-read-and-retry 409ed forever.
+  defp put_canvas(user, vault) do
+    {:ok, _} =
+      Engram.Notes.upsert_note(
+        user,
+        vault,
+        %{"path" => "b.canvas", "content" => ~s({"nodes":[],"edges":[]}), "mtime" => 1.0},
+        actor: "api"
+      )
+  end
+
+  for {name, path, setup} <- [
+        {"a tail that empties the note", "a.md", :empty},
+        {"a .canvas with a tail row", "b.canvas", :canvas}
+      ] do
+    test "REST POST with the GET hash writes over #{name}", ctx do
+      %{conn: conn, user: user, vault: vault} = ctx
+      path = unquote(path)
+      if unquote(setup) == :canvas, do: put_canvas(user, vault)
+      {id, doc} = base_doc(user, vault, path)
+      land_tail(user, vault, id, doc, fn _ -> "" end)
+
+      got = conn |> get("/api/notes/#{path}") |> json_response(200)
+
+      conn
+      |> post("/api/notes", %{
+        path: path,
+        content: "replaced by script",
+        mtime: 2.0,
+        base_hash: got["content_hash"]
+      })
+      |> json_response(200)
+    end
+
+    test "MCP write_note with the get_notes hash writes over #{name}", ctx do
+      %{conn: conn, user: user, vault: vault} = ctx
+      path = unquote(path)
+      if unquote(setup) == :canvas, do: put_canvas(user, vault)
+      {id, doc} = base_doc(user, vault, path)
+      land_tail(user, vault, id, doc, fn _ -> "" end)
+
+      [note] =
+        conn
+        |> call_tool("get_notes", %{"paths" => [path]})
+        |> tool_ok!()
+        |> json_response(200)
+        |> get_in(["result", "structuredContent", "notes"])
+
+      conn
+      |> call_tool("write_note", %{
+        "path" => path,
+        "content" => "replaced by agent",
+        "base_hash" => note["content_hash"]
+      })
+      |> tool_ok!()
+    end
+  end
+
   test "write_note with a fresh base_hash writes across a checkpoint of the same text", ctx do
     %{conn: conn, user: user, vault: vault} = ctx
     {id, doc} = base_doc(user, vault)

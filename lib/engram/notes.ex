@@ -2835,6 +2835,74 @@ defmodule Engram.Notes do
     )
   end
 
+  # #2480: the base a writer declares is checked against the hash a reader is
+  # SERVED, from the one function every read path uses (`current_note/3`), so the
+  # read, the check and the 409 body can never disagree. Against the stored
+  # row, a writer whose read included an un-checkpointed edit got a false
+  # conflict; against the raw tail projection, a note GET serves from the row
+  # (a non-markdown path, or a projection `current_note/3` distrusts) could
+  # never match, so the re-read-and-retry loop never ended.
+  #
+  # A matching base whose served text IS the tail-inclusive projection merges
+  # two-way into that replayed doc (`merge_doc:`, as a read-modify-write
+  # does): the default three-way merge against the snapshot would re-insert
+  # the tail edit the writer already holds. When the row was served instead,
+  # the default merge runs, as it did before #2480.
+  #
+  # The tail is read in its own statement, not with the row. A checkpoint
+  # landing in between rewrites the row's snapshot, so the write loses its
+  # snapshot fence and `lookup_and_write/2` retries from the lookup, which
+  # re-runs this check: the worst case is a spurious 409, never a bad write.
+  defp served_base(user, %Note{} = row, base_hash, incoming_hash) do
+    case CrdtPersistence.tail_rows(row.id, row.vault_id) do
+      [] ->
+        if stale_base?(row.content_hash, base_hash, incoming_hash), do: :stale, else: {:ok, []}
+
+      tail ->
+        note = decrypt_or_raise!(row, user)
+
+        {text, doc} =
+          case authority(user, note, tail) do
+            {:ok, text, doc} -> {text, doc}
+            {:error, _} -> {nil, nil}
+          end
+
+        case base_seen(user, note, tail, text, base_hash) do
+          :projection ->
+            {:ok, [merge_doc: doc || :empty_tail]}
+
+          :served ->
+            {:ok, []}
+
+          # The writer's own retry: the note already holds what it sends.
+          :stale ->
+            if base_seen(user, note, tail, text, incoming_hash) == :stale,
+              do: :stale,
+              else: {:ok, []}
+        end
+    end
+  end
+
+  # Which text a declared base names, for a note with a non-empty tail:
+  # `:projection` (the tail-inclusive text a read-modify-write rebuilds
+  # from), `:served` (what `current_note/3` hands a reader, when that is the
+  # row instead), or `:stale`. The projection is hashed first, so the common
+  # case never rebuilds the served view; `projected` nil skips it.
+  defp base_seen(user, note, tail, projected, base_hash) do
+    cond do
+      is_binary(projected) and content_hash(user, projected) == {:ok, base_hash} -> :projection
+      current_note(user, note, tail).content_hash == base_hash -> :served
+      true -> :stale
+    end
+  end
+
+  # The note a conflict hands back: what a GET returns now, so its
+  # content_hash is a base the writer can retry with.
+  defp served_note(user, %Note{} = row) do
+    tail = Repo.with_tenant!(user.id, fn -> CrdtPersistence.tail_rows(row.id, row.vault_id) end)
+    current_note(user, decrypt_or_raise!(row, user), tail)
+  end
+
   # Idempotent re-push (plugin retry, offline-queue replay, MCP re-write):
   # the incoming content hashes identically to the stored merged content,
   # so the CRDT diff is a provable no-op. Skip the whole pipeline — CRDT
@@ -2853,40 +2921,6 @@ defmodule Engram.Notes do
   # in do_update_note), so callers thread the same digest fields either way.
   # Checked BEFORE the stale-base gate: a hash-equal push is a no-op whatever
   # base the writer declared.
-  # #2480: the base check compares against the hash a reader was SERVED
-  # (`get_note/3`: tail included), not the stored row's. Against the row, a
-  # writer whose read included an un-checkpointed edit got a false conflict,
-  # and the conflict body's row hash, which never saw that edit, passed.
-  #
-  # A base that matches proves the writer derived its text from the
-  # tail-inclusive authority, so the write merges two-way into that replayed
-  # doc (`merge_doc:`, as a read-modify-write does). The default three-way
-  # merge against the snapshot would re-insert the tail edit the writer
-  # already holds, doubling it. An empty tail (the common case) costs only the
-  # tail read and changes nothing about the merge.
-  defp served_base(user, %Note{} = row, base_hash, incoming_hash) do
-    case CrdtPersistence.tail_rows(row.id, row.vault_id) do
-      [] ->
-        if stale_base?(row.content_hash, base_hash, incoming_hash), do: :stale, else: {:ok, []}
-
-      tail ->
-        with {:ok, text, doc} <- authority(user, decrypt_or_raise!(row, user), tail),
-             {:ok, served} <- content_hash(user, text),
-             false <- stale_base?(served, base_hash, incoming_hash) do
-          {:ok, [merge_doc: doc || :empty_tail]}
-        else
-          _ -> :stale
-        end
-    end
-  end
-
-  # The note a conflict hands back: what a GET returns now, so its
-  # content_hash is a base the writer can retry with.
-  defp served_note(user, %Note{} = row) do
-    tail = Repo.with_tenant!(user.id, fn -> CrdtPersistence.tail_rows(row.id, row.vault_id) end)
-    current_note(user, decrypt_or_raise!(row, user), tail)
-  end
-
   defp idempotent_repush(existing, base_attrs) do
     {:ok, {existing.content_hash, existing, base_attrs.content, existing.content_hash}}
   end
@@ -3588,17 +3622,15 @@ defmodule Engram.Notes do
 
   `opts` are `upsert_note/4`'s; `mtime:` defaults to the note's own.
   `base_hash:` (the `content_hash` the caller read) refuses the write with
-  `{:error, :stale_base}` unless the current authority text still hashes to
-  it, or the rebuild leaves the text as it is (a retry that already landed).
+  `{:error, :stale_base}` unless it still names the current text (the
+  authority, or what `get_note/3` serves when that is the row), or the
+  rebuild leaves the text as it is (a retry that already landed).
   """
   @spec rmw_note(map(), map(), String.t(), (String.t() -> term()), keyword()) ::
           {term(), term()}
   def rmw_note(user, vault, path, rebuild, opts) do
     key = {:rmw_rebuild, make_ref()}
-    {base_hash, opts} = Keyword.pop(opts, :base_hash)
-    # Fenced OUTSIDE the memo: a `rebuilt:` seed skips the memoized rebuild,
-    # and must not skip the base check with it.
-    rebuild = rebuild |> memo_rebuild(key) |> fence_base(user, base_hash)
+    rebuild = memo_rebuild(rebuild, key)
     # `rebuilt:` (rmw_prepare/4's result, computed before the caller opened
     # its transaction) seeds the memo, so an unchanged note is not re-parsed.
     # Its note and tail are the optimistic snapshot, so the note is read once.
@@ -3670,27 +3702,25 @@ defmodule Engram.Notes do
   end
 
   # rmw_prepare/4 already replayed this snapshot; :read reads the tail now.
-  defp attempt_authority(_user, _note, {:replayed, _tail, authority}), do: authority
+  defp attempt_authority(_user, _note, {:replayed, _tail, authority}, _rows), do: authority
+  defp attempt_authority(user, note, _tail, rows), do: authority(user, note, rows)
 
-  defp attempt_authority(user, note, :read),
-    do: authority(user, note, CrdtPersistence.tail_rows(note.id, note.vault_id))
+  defp attempt_tail(note, :read), do: CrdtPersistence.tail_rows(note.id, note.vault_id)
+  defp attempt_tail(_note, {:replayed, tail, _authority}), do: tail
+  defp attempt_tail(_note, tail), do: tail
 
-  defp attempt_authority(user, note, tail), do: authority(user, note, tail)
+  # #2480: compare-and-swap. The base must name the text the rebuild runs on
+  # or, where a read serves the row instead (`current_note/3`), what the reader
+  # was served; an edit made after the caller's read refuses instead of being
+  # rebuilt over. Checked here, outside the memoized rebuild, so a `rebuilt:`
+  # seed cannot skip it. A rebuild that changes nothing is the caller's own
+  # retry, as in `stale_base?/3`.
+  defp fenced(_user, _note, _tail, current, rebuild, nil), do: rebuild.(current)
 
-  # #2480: compare-and-swap on the text the rebuild runs against (the
-  # authority, tail included), so an edit made after the caller's read refuses
-  # instead of being rebuilt over. A rebuild that changes nothing is the
-  # caller's own retry, as in `stale_base?/3`.
-  defp fence_base(rebuild, _user, nil), do: rebuild
-
-  defp fence_base(rebuild, user, base_hash) do
-    fn current ->
-      case content_hash(user, current) do
-        {:ok, ^base_hash} -> rebuild.(current)
-        {:ok, _moved} -> unchanged_or_stale(rebuild.(current), current)
-        {:error, _} = err -> err
-      end
-    end
+  defp fenced(user, note, tail, current, rebuild, base_hash) do
+    if base_seen(user, note, tail, current, base_hash) == :stale,
+      do: unchanged_or_stale(rebuild.(current), current),
+      else: rebuild.(current)
   end
 
   defp unchanged_or_stale(rebuilt, current) do
@@ -3738,14 +3768,17 @@ defmodule Engram.Notes do
   end
 
   defp rmw_attempt(user, vault, path, {note, tail}, rebuild, opts) do
-    case attempt_authority(user, note, tail) do
+    {base_hash, opts} = Keyword.pop(opts, :base_hash)
+    rows = attempt_tail(note, tail)
+
+    case attempt_authority(user, note, tail, rows) do
       {:ok, current, doc} ->
         rmw_write(
           user,
           vault,
           path,
           note,
-          rebuild.(current),
+          fenced(user, note, rows, current, rebuild, base_hash),
           # No doc means a legacy row whose tail was empty at this read.
           opts ++ [merge_doc: doc || :empty_tail, current_text: current]
         )
