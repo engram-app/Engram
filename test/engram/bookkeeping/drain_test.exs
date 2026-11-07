@@ -282,6 +282,25 @@ defmodule Engram.Bookkeeping.DrainTest do
     end
   end
 
+  # The fleet `n` walk's per-user probe (`ReconcileNotePayloads`) reads
+  # `note_index_state` through its own partial index, so a done user costs a
+  # few index pages, not a walk of its notes. The `coalesce(..., 5) < 6` text
+  # is the index predicate's literal: red if either side changes alone.
+  test "the n backfill's per-user probe is served by note_index_state_n_behind", %{
+    user: u,
+    vault: v
+  } do
+    for i <- 1..100, do: write!(u, v, "Clean#{rem(i, 5)}/n#{i}.md")
+
+    {sql, _params} =
+      Repo.to_sql(:all, Engram.Workers.ReconcileNotePayloads.n_behind_probe(u.id))
+
+    assert sql =~ "coalesce("
+    plan = QueryPlan.generic_plan(sql, analyze: ["note_index_state"], fresh: true)
+    assert plan =~ "note_index_state_n_behind", plan
+    refute plan =~ "Seq Scan on note_index_state", plan
+  end
+
   # The folder probe competes with other partial indexes on live notes. With
   # realistic statistics (many resolved live notes, one unresolved) the planner
   # must pick the drift index, not walk live notes. Red on c0c603cb9's test,
