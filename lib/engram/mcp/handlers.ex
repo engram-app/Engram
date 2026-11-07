@@ -1413,7 +1413,6 @@ defmodule Engram.MCP.Handlers do
 
     case Notes.rmw_note(user, vault, path, rebuild, opts ++ @write_opts) do
       {{:error, :stale_base}, _} -> {{:error, stale_base_error(path)}, nil}
-      {{:error, :note_unwritable}, _} -> {{:error, unwritable_error(path)}, nil}
       done -> done
     end
   end
@@ -1463,14 +1462,6 @@ defmodule Engram.MCP.Handlers do
         "A note already exists at #{stored}. Use get_notes to read it, or write_note " <>
           "to replace it, or pick a different title."
       )
-
-  # Not retryable: see `Notes.base_check/5`. Re-reading gives the same hash.
-  defp unwritable_error(path) do
-    {:note_unwritable,
-     "#{Notes.PathSanitizer.sanitize(path)} cannot be replaced right now: part of its live " <>
-       "state is unreadable, so a write could not keep edits you never saw. Nothing was " <>
-       "written. Retrying will not help; ask the user to re-save the note in Obsidian."}
-  end
 
   defp base_required_error(path) do
     {:version_conflict,

@@ -72,6 +72,9 @@ defmodule Engram.QueryBudgetTest do
     "mcp get_notes" => 4,
     # Three paths, the same four: the notes come in one statement.
     "mcp get_notes 3 paths" => 4,
+    # 20 non-markdown paths cost what 20 markdown ones do: the batch reads no
+    # per-note CRDT state (#2486 round 6 removed a per-note state read).
+    "mcp get_notes 20 canvas paths" => 4,
     # begin, enter, the page (rows + budget), commit; one resolve chunk:
     # begin, enter, tail rows, commit.
     "catch-up page" => 8,
@@ -278,6 +281,24 @@ defmodule Engram.QueryBudgetTest do
     test "mcp get_notes", %{conn: conn} do
       measure("mcp get_notes", true, fn ->
         conn |> call_tool("get_notes", %{"paths" => ["Work/Existing.md"]}) |> tool_ok!()
+      end)
+    end
+
+    test "mcp get_notes 20 canvas paths", %{conn: conn, user: user, vault: vault} do
+      paths = for i <- 1..20, do: "Boards/b#{i}.canvas"
+
+      for p <- paths do
+        {:ok, _} =
+          Engram.Notes.upsert_note(
+            user,
+            vault,
+            %{"path" => p, "content" => ~s({"nodes":[],"edges":[]}), "mtime" => 1_000.0},
+            actor: "api"
+          )
+      end
+
+      measure("mcp get_notes 20 canvas paths", true, fn ->
+        conn |> call_tool("get_notes", %{"paths" => paths}) |> tool_ok!()
       end)
     end
 

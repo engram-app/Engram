@@ -146,6 +146,12 @@ defmodule Engram.MCP.BaseHashShapes2480Test do
     txt_tail: "c.txt"
   ]
 
+  # #2480 covers markdown notes only (`CrdtBridge.markdown_path?/1`, which is
+  # case-sensitive, so `A.MD` is not markdown). The rest keep main's
+  # behaviour; #2497 tracks them.
+  @md_shapes Enum.filter(@shapes, fn {_, path} -> CrdtBridge.markdown_path?(path) end)
+  @plain_shapes @shapes -- @md_shapes
+
   defp shape(:md_no_tail, u, v, p), do: put!(u, v, p, @body)
 
   defp shape(:md_tail_edit, u, v, p) do
@@ -288,7 +294,9 @@ defmodule Engram.MCP.BaseHashShapes2480Test do
 
       assert resp.status == 200, inspect(resp.resp_body)
     end
+  end
 
+  for {name, path} <- @md_shapes do
     test "#{name}: MCP get_notes hash writes, stale refuses then re-read writes", %{
       conn: conn,
       user: u,
@@ -362,7 +370,7 @@ defmodule Engram.MCP.BaseHashShapes2480Test do
   # canonical view projects .canvas and .txt docs too) and one it hid (a
   # partial replay serves the row; the write then merges relative to the
   # snapshot, which still projects to that row).
-  for {name, path} <- [canvas_tail: "b.canvas", md_partial_replay: "a.md", txt_tail: "c.txt"] do
+  for {name, path} <- [md_partial_replay: "a.md", md_tail_edit: "a.md"] do
     test "#{name}: a REST write derived from the GET keeps the live edit once", ctx do
       %{conn: conn, user: u, vault: v} = ctx
       shape(unquote(name), u, v, unquote(path))
@@ -399,11 +407,9 @@ defmodule Engram.MCP.BaseHashShapes2480Test do
   # edit_note and append_to_note with the get_notes hash, on every shape
   # whose doc and row could disagree.
   for {name, path, find} <- [
-        {:canvas_tail, "b.canvas", "nodes"},
-        {:txt_tail, "c.txt", "plain text"},
         {:md_partial_replay, "a.md", "body text"},
         {:md_tail_empties, "a.md", "body text"},
-        {:md_uppercase_ext_tail, "A.MD", "body text"}
+        {:md_tail_edit, "a.md", "body text"}
       ] do
     test "#{name}: edit_note with the read's base keeps the live edit", ctx do
       %{conn: conn, user: u, vault: v} = ctx
@@ -466,23 +472,8 @@ defmodule Engram.MCP.BaseHashShapes2480Test do
     assert count(text_of(u, v, "a.md"), "LIVE") == 1
   end
 
-  test "REST stale base with content equal to a .txt's current text writes nothing", ctx do
-    %{conn: conn, user: u, vault: v} = ctx
-    shape(:txt_tail, u, v, "c.txt")
-
-    post(conn, "/api/notes", %{
-      path: "c.txt",
-      content: "plain text\nLIVE\n",
-      mtime: 2.0,
-      base_hash: "deadbeef"
-    })
-    |> json_response(200)
-
-    assert count(text_of(u, v, "c.txt"), "LIVE") == 1
-  end
-
   # A tail edit that lands during the (locked) rebuild is kept.
-  for {name, path} <- [txt_tail: "c.txt", canvas_tail: "b.canvas"] do
+  for {name, path} <- [md_tail_edit: "a.md", md_live_room: "a.md"] do
     test "#{name}: a tail edit during the rebuild is kept", ctx do
       %{conn: conn, user: u, vault: v} = ctx
       shape(unquote(name), u, v, unquote(path))
@@ -508,22 +499,10 @@ defmodule Engram.MCP.BaseHashShapes2480Test do
     end
   end
 
-  test "canvas live room: an MCP write derived from get_notes keeps the room edit", ctx do
-    %{conn: conn, user: u, vault: v} = ctx
-    put!(u, v, "b.canvas", ~s({"nodes":[],"edges":[]}))
-    type_into_room(u, v, "b.canvas", &(&1 <> "LIVE"))
-    note = read_note(conn, "b.canvas")
-    ok = mcp_write(conn, "b.canvas", note["content"] <> "AGENT\n", note["content_hash"])
-    refute ok["result"]["isError"]
-    t = text_of(u, v, "b.canvas")
-    assert count(t, "LIVE") == 1 and t =~ "AGENT", inspect(t)
-  end
-
-  # Round-4 finding 2: after a structural checkpoint folded live edits into
-  # the snapshot, a base from a read before it deleted them. The canonical
-  # view now projects every file type, so the read saw those edits; a write
-  # derived from it keeps them, and a read older than a later edit refuses.
-  for {name, path} <- [txt_tail: "c.txt", md_uppercase_ext_tail: "A.MD"] do
+  # Round-4 finding 2, for markdown: a checkpoint between the read and the
+  # write. A write derived from the read keeps the live edit, and a read
+  # older than a later edit refuses, before or after the checkpoint.
+  for {name, path} <- [md_tail_edit: "a.md"] do
     test "#{name}: a write from a read before a checkpoint keeps the live edit", ctx do
       %{conn: conn, user: u, vault: v} = ctx
       shape(unquote(name), u, v, unquote(path))
@@ -570,58 +549,6 @@ defmodule Engram.MCP.BaseHashShapes2480Test do
     end)
   end
 
-  # Round 5 finding 1: a non-.md note after a structural checkpoint, no tail
-  # left. get_notes served the stale row while GET served the doc, so its
-  # hash never wrote and hid the live edit.
-  test "txt after a structural checkpoint: the get_notes hash writes and keeps LIVE", ctx do
-    %{conn: conn, user: u, vault: v} = ctx
-    shape(:txt_tail, u, v, "c.txt")
-    checkpoint!(u, v, "c.txt")
-    note = read_note(conn, "c.txt")
-    assert note["content"] =~ "LIVE"
-    ok = mcp_write(conn, "c.txt", note["content"] <> "AGENT\n", note["content_hash"])
-    refute ok["result"]["isError"], inspect(ok)
-    t = text_of(u, v, "c.txt")
-    assert count(t, "LIVE") == 1 and t =~ "AGENT", inspect(t)
-  end
-
-  # Round 5 finding 2: a non-.md note whose doc cannot be read whole after a
-  # structural checkpoint moved its snapshot off the row. No base can write it
-  # safely, and no re-read changes that, so the answer is a distinct,
-  # non-retryable error, not a 409 loop. A re-save from Obsidian clears it.
-  test "unreadable live state: a distinct non-retryable error, cleared by a plugin re-save",
-       ctx do
-    %{conn: conn, user: u, vault: v} = ctx
-    shape(:txt_tail, u, v, "c.txt")
-    checkpoint!(u, v, "c.txt")
-    bad_tail_row(u, v, note_id(u, v, "c.txt"))
-    got = conn |> get("/api/notes/c.txt") |> json_response(200)
-
-    rest =
-      post(conn, "/api/notes", %{
-        path: "c.txt",
-        content: got["content"] <> "S\n",
-        mtime: 2.0,
-        base_hash: got["content_hash"]
-      })
-
-    assert json_response(rest, 422) == %{"error" => "note_unwritable"}
-
-    note = read_note(conn, "c.txt")
-    r = mcp_write(conn, "c.txt", note["content"] <> "A\n", note["content_hash"])
-    assert r["result"]["isError"]
-    assert r["result"]["_meta"]["engram.page/error_code"] == "note_unwritable"
-
-    conn
-    |> put_req_header("x-plugin-version", "9.9.9")
-    |> post("/api/notes", %{path: "c.txt", content: "plain text\nLIVE\nSAVED\n", mtime: 3.0})
-    |> json_response(200)
-
-    note = read_note(conn, "c.txt")
-    ok = mcp_write(conn, "c.txt", note["content"] <> "AGENT\n", note["content_hash"])
-    refute ok["result"]["isError"], inspect(ok)
-  end
-
   # Round 5: get_notes of a .canvas with no tail projected an empty doc (its
   # state was never loaded) and logged a distrust warning on every read.
   test "get_notes of a .canvas with no tail logs no distrust warning", %{
@@ -637,5 +564,27 @@ defmodule Engram.MCP.BaseHashShapes2480Test do
       end)
 
     refute log =~ "empty over a non-empty facade"
+  end
+
+  # Non-markdown notes keep main's behaviour (#2497): reads serve the row, and
+  # MCP and API-key writes may still replace them without a base_hash.
+  for {name, path} <- @plain_shapes do
+    test "#{name}: non-markdown keeps main's read and blind-write behaviour", %{
+      conn: conn,
+      user: u,
+      vault: v
+    } do
+      shape(unquote(name), u, v, unquote(path))
+      {:ok, row} = Engram.Notes.get_note_row_by_id(u, v, note_id(u, v, unquote(path)))
+      got = conn |> get("/api/notes/#{URI.encode(unquote(path))}") |> json_response(200)
+      assert {got["content"], got["content_hash"]} == {row.content, row.content_hash}
+
+      conn
+      |> post("/api/notes", %{path: unquote(path), content: "rest blind\n", mtime: 2.0})
+      |> json_response(200)
+
+      ok = conn |> call_tool("write_note", %{"path" => unquote(path), "content" => "mcp blind\n"})
+      refute json_response(ok, 200)["result"]["isError"]
+    end
   end
 end

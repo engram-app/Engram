@@ -30,9 +30,7 @@ defmodule EngramWeb.NotesController do
         "since that read, the write returns 409 with the current server note instead of " <>
         "merging. With an API key, replacing an existing note REQUIRES `base_hash`: without " <>
         "one the write returns the same 409 and changes nothing (creating a new note needs " <>
-        "none). `422 note_unwritable` means part of the note's live state is unreadable, so no " <>
-        "base can replace it safely; re-reading will not help, re-saving it in Obsidian clears " <>
-        "it. Notes over 10MB are rejected with 413, and exceeding the plan's note cap " <>
+        "none). Notes over 10MB are rejected with 413, and exceeding the plan's note cap " <>
         "returns 402.",
     tags: ["Notes"],
     request_body:
@@ -118,12 +116,6 @@ defmodule EngramWeb.NotesController do
         # instead of dropping a note that is genuinely gone.
         {:error, :note_deleted} ->
           conn |> put_status(404) |> json(%{error: "not_found"})
-
-        # #2480: the note's live state is partly unreadable, so no base can
-        # write it safely. Not a 409: re-reading gives the same hash, and a
-        # retry loop would never end. Re-saving from Obsidian clears it.
-        {:error, :note_unwritable} ->
-          conn |> put_status(422) |> json(%{error: "note_unwritable"})
 
         # Under the byte check above, but invalid UTF-8 scrubbed to U+FFFD
         # (3 bytes each) can grow past the cap inside upsert_note.

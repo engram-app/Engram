@@ -623,24 +623,11 @@ defmodule Engram.MCP.HandlersSingleReadTest do
   # non-markdown path and for a projection current_note/3 distrusts (a tail
   # that empties a non-empty note). The base check hashed the projection, so
   # the GET hash never matched and re-read-and-retry 409ed forever.
-  defp put_canvas(user, vault) do
-    {:ok, _} =
-      Engram.Notes.upsert_note(
-        user,
-        vault,
-        %{"path" => "b.canvas", "content" => ~s({"nodes":[],"edges":[]}), "mtime" => 1.0},
-        actor: "api"
-      )
-  end
-
-  for {name, path, setup} <- [
-        {"a tail that empties the note", "a.md", :empty},
-        {"a .canvas with a tail row", "b.canvas", :canvas}
-      ] do
+  # (A .canvas is not markdown, so it keeps main's behaviour: #2497.)
+  for {name, path} <- [{"a tail that empties the note", "a.md"}] do
     test "REST POST with the GET hash writes over #{name}", ctx do
       %{conn: conn, user: user, vault: vault} = ctx
       path = unquote(path)
-      if unquote(setup) == :canvas, do: put_canvas(user, vault)
       {id, doc} = base_doc(user, vault, path)
       land_tail(user, vault, id, doc, fn _ -> "" end)
 
@@ -659,7 +646,6 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     test "MCP write_note with the get_notes hash writes over #{name}", ctx do
       %{conn: conn, user: user, vault: vault} = ctx
       path = unquote(path)
-      if unquote(setup) == :canvas, do: put_canvas(user, vault)
       {id, doc} = base_doc(user, vault, path)
       land_tail(user, vault, id, doc, fn _ -> "" end)
 
