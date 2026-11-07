@@ -10,7 +10,9 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   Qdrant call may sit before the rotation's flip). A rotation before this
   worker existed left the points on the old key for good.
 
-  Two jobs, each its own unique slot (`Engram.Jobs`, keys `[:user_id, :mode]`):
+  Two kinds of job, each its own unique slot (`Engram.Jobs`, keys
+  `[:user_id, :mode]`; the fleet job carries no `user_id`, so its slot is
+  its mode alone):
 
     * the HEAL (`mode: "heal"`, the default of `new/2`): main's path and
       selection, a note whose `payload_hash` is NULL (below). Queued by a
@@ -18,24 +20,31 @@ defmodule Engram.Workers.ReconcileNotePayloads do
       gate, reads nothing for `n`, writes no `n` on its own and never stamps
       the payload version, so nothing about the backfill can hold, fail or
       merge into it;
-    * the `n` BACKFILL (`mode: "n"`): payload version 6 means "every v5
-      point carries `n`, its note row id" (immutable chunk index,
-      Engram#2263). Queued by the ledger. Every gate runs FIRST, before any
-      read: the kill switch `:payload_backfill`, `Engram.Rebuild.qdrant_pace/1`
-      (disk at the 75% gate, optimizer and queue backlog; a growing snooze),
-      then a free peek of the fleet-wide bucket
-      `:payload_backfill_points_per_min` (default 500; a spent window
-      snoozes to its edge). A paused job snoozes having read nothing. It
-      walks the user's notes in fixed id windows, selecting only stamped
-      notes behind the version; each v5 point without `n` gets
-      `%{"n" => note}` MERGED (never a key deleted), in pages capped at what
-      the window has left and charged with their real size. No DEK, no
-      decrypt, no upsert, no embedder call. Then the notes are stamped with
-      the version (compare-and-set on the hash), not one holding legacy v3
-      points (they never get `n`, and have no `u` for an `n` search). A held
-      window is queued again as a fresh job at the window's edge, its cursor
-      exact. A snoozed or re-queued job resumes without rewriting anything:
-      stamped notes are not selected again, written points are skipped.
+    * the `n` BACKFILL, ONE job for the whole fleet (`mode: "n_fleet"`,
+      one unique slot: its args carry no `user_id`): payload version 6
+      means "every v5 point carries `n`, its note row id" (immutable chunk
+      index, Engram#2263). Queued by the ledger whenever a pass finds a
+      user behind. Every gate runs FIRST, before any read: the kill switch
+      `:payload_backfill` (off: `{:cancel, :paused}`, no snooze; the ledger
+      re-adds it once the switch is back on), `Engram.Rebuild.qdrant_pace/1`
+      (disk at the 75% gate, optimizer and queue backlog; a growing backoff
+      on its own count, meta `"gated"`), then a free peek of the fleet-wide
+      bucket `:payload_backfill_points_per_min` (default 500; a spent window
+      re-queues to its edge). It walks the users in id order from a
+      persisted cursor (`Engram.Maintenance.Cursor`), each user's notes in
+      fixed id windows, selecting only stamped notes behind the version;
+      each v5 point without `n` gets `%{"n" => note}` MERGED (never a key
+      deleted), in pages capped at what the window has left and charged
+      with their real size. No DEK, no decrypt, no upsert, no embedder call.
+      Then the notes are stamped with the version (compare-and-set on the
+      hash), not one holding legacy v3 points (they never get `n`, and have
+      no `u` for an `n` search). A held window stores the cursor and the job
+      queues itself again at the window's edge: one wake a window for the
+      fleet, never one per user. A lap that reaches the last user ends the
+      job; the hourly ledger queues it again while anyone is behind. A
+      re-run rewrites nothing: stamped notes are not selected again,
+      written points are skipped. A per-user `mode: "n"` job (0.77.0)
+      cancels itself on wake and queues the fleet job.
 
   A note is checked while its `payload_hash` is NULL. Its points are READ
   (payload keys only); if every one already holds the expected payload the
@@ -123,6 +132,11 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   @n_priority 5
   # Where `requeue_unbackfilled/0`'s walk resumes.
   @requeue_cursor "payload_n_requeue"
+  # The fleet `n` job: its mode, and where its users walk resumes.
+  @fleet_mode "n_fleet"
+  @fleet_cursor "payload_n_fleet"
+  # Users read per page of the fleet walk (`users` is not a tenant table).
+  @user_page 100
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
@@ -139,32 +153,33 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     args = Map.put_new(args, "mode", "heal")
 
     # `n` jobs sort behind heals on the one `crdt_backfill` lane, so a heal
-    # is never queued behind a minute's worth of `n` wakes.
-    opts = if args["mode"] == "n", do: Keyword.put_new(opts, :priority, @n_priority), else: opts
+    # is never queued behind an `n` wake.
+    opts =
+      if args["mode"] in ["n", @fleet_mode],
+        do: Keyword.put_new(opts, :priority, @n_priority),
+        else: opts
+
     super(args, opts)
   end
 
   @impl Oban.Worker
-  # The `n` backfill: a job of its own (`mode: "n"`, its own unique slot),
-  # never mixed with a heal.
-  def perform(%Oban.Job{args: %{"user_id" => user_id, "mode" => "n"} = args} = job) do
-    with :ok <- n_gates(job),
-         %User{} = user <- Repo.get(User, user_id),
-         :ok <- RotationGate.check_user(user) do
-      deadline = System.monotonic_time(:millisecond) + @budget_ms
-      {result, counts} = n_walk(user, args["after"], deadline, job)
-      report(user_id, counts)
-
-      case result do
-        :done -> :ok
-        {:next, after_id, opts} -> n_next(user_id, after_id, opts)
-        other -> other
-      end
-    else
-      {:snooze, _} = paused -> paused
-      nil -> :ok
-      {:error, :rotation_in_progress} -> locked_snooze(user_id, job)
+  # The `n` backfill: one job for the fleet (`mode: "n_fleet"`, its own
+  # unique slot), never mixed with a heal.
+  def perform(%Oban.Job{args: %{"mode" => @fleet_mode}} = job) do
+    case n_gates(job) do
+      :ok -> n_fleet()
+      :paused -> {:cancel, :paused}
+      :yield -> yield(job)
+      {:snooze, wait} -> requeue_fleet(wait, gated(job) + 1)
+      :spent -> requeue_fleet(edge_snooze(), 0)
     end
+  end
+
+  # A per-user `n` job queued by 0.77.0: the fleet job owns its work now.
+  # The cancel comes first: with the switch off it reads nothing.
+  def perform(%Oban.Job{args: %{"mode" => "n"}}) do
+    if backfill_enabled?(), do: :ok = ensure_fleet()
+    {:cancel, :superseded}
   end
 
   # The heal (a NULL `payload_hash`: DEK rotation, FileTimes, a lost stamp
@@ -212,8 +227,8 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   @doc """
   One id window of the ledger's walk (`IdWindows.heal_pass/4`,
   `NotePayloadStamps`): queues a heal for the users whose notes in `ids`
-  are unstamped, and an `n` backfill for those whose stamped notes are
-  behind the version. Returns `{users queued, false}`; any queued makes the
+  are unstamped, and the one fleet `n` job (`enqueue_n/1`) when any user's
+  stamped notes are behind the version. Returns `{users queued, false}`; any queued makes the
   walk dirty.
   """
   def queue_window(ids, %{repo: repo}) do
@@ -229,18 +244,60 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     {healed + enqueue_n(users.(n_behind())), false}
   end
 
-  @doc "Queues an `n` backfill chain (`mode: \"n\"`) per user. Returns how many."
+  @doc """
+  The ledger's enqueue for users behind the version: the one fleet job
+  (`ensure_fleet/0`) when any are, never a job per user. Returns how many
+  users were behind.
+  """
   @spec enqueue_n([Ecto.UUID.t()]) :: non_neg_integer()
+  def enqueue_n([]), do: 0
+
   def enqueue_n(user_ids) do
-    executing = TenantScan.executing_user_ids(__MODULE__, "n")
-
-    # One insert per user: Oban's Basic engine ignores `unique` in insert_all.
-    for uid <- user_ids,
-        not MapSet.member?(executing, uid),
-        do: {:ok, _} = Oban.insert(new(%{"user_id" => uid, "mode" => "n"}))
-
+    :ok = ensure_fleet()
     length(user_ids)
   end
+
+  @doc """
+  Queues the fleet `n` job unless one is pending (its unique slot) or
+  executing (it queues its own successor, so `executing` cannot be a unique
+  state).
+  """
+  @spec ensure_fleet() :: :ok
+  def ensure_fleet, do: if(fleet_job?(["executing"]), do: :ok, else: insert_fleet([]))
+
+  # The self re-queue. Oban's unique insert answers a conflict WITHOUT
+  # inserting when another insert holds its advisory lock, so a conflict is
+  # checked: a fleet job must be pending. If none is, the chain is lost until
+  # the next hourly ledger pass re-adds it; logged so that shows.
+  defp requeue_fleet(wait, gated) do
+    insert_fleet(schedule_in: wait, meta: %{"gated" => gated})
+  end
+
+  defp insert_fleet(opts) do
+    {:ok, job} = insert_fun().(new(%{"mode" => @fleet_mode}, opts))
+
+    if job.conflict? and not fleet_job?(Jobs.pending_states()) do
+      Logger.warning(
+        "note payload reconcile: fleet re-queue lost to a unique-insert race, the ledger re-adds it",
+        Metadata.with_category(:warning, :oban, [])
+      )
+    end
+
+    :ok
+  end
+
+  # A fleet job in `states` (narrowed by `scope`, a query function).
+  defp fleet_job?(states, scope \\ & &1) do
+    from(j in Oban.Job,
+      where: j.worker == ^inspect(__MODULE__) and j.state in ^states,
+      where: fragment("?->>'mode' = ?", j.args, ^@fleet_mode)
+    )
+    |> scope.()
+    |> Repo.exists?()
+  end
+
+  # Tests stand in for Oban's busy-lock conflict here.
+  defp insert_fun, do: Application.get_env(:engram, :reconcile_n_insert_fun, &Oban.insert/1)
 
   @doc "True while the user has an unstamped indexed note (the worker's own selection predicate)."
   @spec unstamped_rows?(Ecto.UUID.t()) :: boolean()
@@ -516,34 +573,176 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   # merged, in paced pages. A point missing from the read is not written: a
   # note whose points are gone is re-created by its next index.
   # Every gate, before any read: the kill switch, the Qdrant gate (cached),
-  # then a free peek of the bucket. A paused job snoozes having read nothing
-  # from Postgres or Qdrant.
+  # then a free peek of the bucket. A gated job reads nothing from Postgres
+  # or Qdrant. The Qdrant gate backs off on its own count (meta `"gated"`),
+  # not on Oban's `"snoozed"`, so edge waits never push it to the ceiling.
+  # A second fleet job (the unique race, a budget re-queue fetched on
+  # another node before its parent acked) never runs beside the first: the
+  # higher id yields to a lower-id one executing, by SNOOZING, so it stays
+  # the pending chain if the other dies (a job orphaned in `executing`
+  # until Lifeline rescues it). Never a cancel: two that each saw the other
+  # executing would both drop out. Two pending ones need no check: they
+  # run one after the other, and the first one's re-queue conflicts with
+  # the second, so one stays pending.
   defp n_gates(job) do
     cond do
-      not backfill_enabled?() -> gated(job)
-      (pace = Rebuild.qdrant_pace(job)) != :ok -> pace
-      RateLimiter.peek(@n_bucket, @n_window_ms, n_per_min()) == 0 -> {:snooze, edge_snooze()}
+      not backfill_enabled?() -> :paused
+      lower_fleet_executing?(job) -> :yield
+      (pace = Rebuild.qdrant_pace(%{job | meta: %{"snoozed" => gated(job)}})) != :ok -> pace
+      RateLimiter.peek(@n_bucket, @n_window_ms, n_per_min()) == 0 -> :spent
       true -> :ok
     end
   end
 
-  defp gated(%Oban.Job{meta: meta}),
-    do: {:snooze, Rebuild.gate_snooze(Map.get(meta || %{}, "snoozed", 0))}
+  defp gated(%Oban.Job{meta: meta}), do: Map.get(meta || %{}, "gated", 0)
+
+  @yield_s 60
+
+  defp yield(%Oban.Job{id: id}) do
+    Logger.debug(
+      "note payload reconcile: fleet job yields to a lower-id one executing",
+      Metadata.with_category(:debug, :oban, job_id: id)
+    )
+
+    {:snooze, @yield_s}
+  end
+
+  defp lower_fleet_executing?(%Oban.Job{id: nil}), do: fleet_job?(["executing"])
+
+  defp lower_fleet_executing?(%Oban.Job{id: id}),
+    do: fleet_job?(["executing"], &where(&1, [j], j.id < ^id))
+
+  # One run of the fleet job: users in id order from the stored cursor, each
+  # walked (`n_walk/3`) until the bucket, the budget or the switch stops it.
+  # The cursor is stored where it stopped; a lap that reached the last user
+  # resets it and ends the job.
+  defp n_fleet do
+    deadline = System.monotonic_time(:millisecond) + @budget_ms
+
+    {result, locked} = fleet_walk(Cursor.get(@fleet_cursor), deadline, 0)
+
+    # Skipped users keep the ledger open; this line says why a lap repeats.
+    if locked > 0 do
+      Logger.info(
+        "note payload reconcile: skipped rotation-locked users",
+        Metadata.with_category(:info, :oban, count: locked)
+      )
+    end
+
+    case result do
+      :lap ->
+        Cursor.reset(@fleet_cursor)
+
+      {stop, cursor} ->
+        :ok = Cursor.put(@fleet_cursor, cursor)
+        fleet_answer(stop)
+    end
+  end
+
+  defp fleet_answer(:budget), do: requeue_fleet(0, 0)
+  defp fleet_answer(:held), do: requeue_fleet(edge_snooze(), 0)
+  defp fleet_answer(:paused), do: {:cancel, :paused}
+  defp fleet_answer({:snooze, wait}), do: requeue_fleet(wait, 0)
+  defp fleet_answer(other), do: other
+
+  # Cursor shapes: nil (the lap's start), `%{"user" => id, "after" => note}`
+  # (resume that user after that note), `%{"past" => id}` (the next user).
+  # With how many rotation-locked users it passed over.
+  defp fleet_walk(cursor, deadline, locked) do
+    case next_users(cursor) do
+      [] ->
+        {:lap, locked}
+
+      users ->
+        case Enum.reduce_while(users, {cursor, locked}, &fleet_user(&1, &2, deadline)) do
+          {:stop, stop, at, locked} -> {{stop, at}, locked}
+          {cursor, locked} -> fleet_walk(cursor, deadline, locked)
+        end
+    end
+  end
+
+  defp next_users(cursor) do
+    query = from(u in User, order_by: u.id, limit: @user_page)
+
+    case cursor do
+      %{"user" => id} -> where(query, [u], u.id >= ^id)
+      %{"past" => id} -> where(query, [u], u.id > ^id)
+      _ -> query
+    end
+    |> Repo.all()
+  end
+
+  # A user under a rotation lock is passed over: the ledger finds it behind
+  # again, and the next lap writes it. A 4xx refusal is logged and counted
+  # once by `answer/2` (the `payload_reconcile_cancelled` alert), and the
+  # walk carries on with the next user, so one user's refusal never holds
+  # the fleet.
+  defp fleet_user(%User{id: id} = user, {cursor, locked}, deadline) do
+    after_id = if match?(%{"user" => ^id}, cursor), do: cursor["after"]
+    past = %{"past" => id}
+
+    cond do
+      # A user with no notes reads no window, so the budget is checked here too.
+      System.monotonic_time(:millisecond) > deadline ->
+        {:halt, {:stop, :budget, %{"user" => id, "after" => after_id}, locked}}
+
+      RotationGate.check_user(user) != :ok ->
+        {:cont, {past, locked + 1}}
+
+      # A done user costs this one probe, not a walk of its notes.
+      not n_behind?(id) ->
+        {:cont, {past, locked}}
+
+      true ->
+        case walk_user(user, after_id, deadline) do
+          :next -> {:cont, {past, locked}}
+          {stop, at} -> {:halt, {:stop, stop, at, locked}}
+        end
+    end
+  end
+
+  # One EXISTS over the user's notes (`n_behind/0`, the walk's own
+  # selection), on the notes user index; it stops at the first note behind.
+  # ponytail: a done user's probe still reads its index entries once; a
+  # partial index on `note_index_state` (user_id) WHERE behind is the upgrade
+  # if done users with large vaults ever dominate a lap.
+  defp n_behind?(user_id) do
+    {:ok, any} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.exists?(where(n_behind(), [note: n], n.user_id == ^user_id))
+      end)
+
+    any
+  end
+
+  # `:next` (the user is done, gone or refused with a 4xx), or `{stop,
+  # cursor}` to resume it from.
+  defp walk_user(%User{id: id} = user, after_id, deadline) do
+    {stop, done, counts} = n_walk(user, after_id, deadline)
+    if counts != @zero, do: report(id, counts)
+
+    case stop do
+      stop when stop in [:done, :ok] -> :next
+      {:cancel, _} -> :next
+      stop -> {stop, %{"user" => id, "after" => done}}
+    end
+  end
 
   # The user's notes in fixed id windows (`IdWindows.reduce/5`), the
   # selection (`n_behind/0`) applied only inside each window: bounded rows
   # READ per statement. The accumulator carries the last id of the last
   # FINISHED window (`done`): a stop resumes after it, so a held window is
-  # read again from its start. `{:next, done, opts}`: continue now (budget)
-  # or after `opts[:schedule_in]` (the switch, a spent bucket).
-  defp n_walk(user, after_id, deadline, job) do
-    step = fn ids, _ctx, %{counts: counts, done: done} = acc ->
+  # read again from its start. `{stop, done, counts}`, `stop` one of `:done`,
+  # `:budget`, `:paused` (the switch), `:held` (a spent bucket) or an Oban
+  # answer (`answer/2`).
+  defp n_walk(user, after_id, deadline) do
+    step = fn ids, _ctx, %{counts: counts} = acc ->
       cond do
         System.monotonic_time(:millisecond) > deadline ->
-          {:halt, %{acc | stop: {:next, done, []}}}
+          {:halt, %{acc | stop: :budget}}
 
         not backfill_enabled?() ->
-          {:halt, %{acc | stop: {:next, done, schedule_in: elem(gated(job), 1)}}}
+          {:halt, %{acc | stop: :paused}}
 
         true ->
           case n_window(user, ids, counts) do
@@ -551,7 +750,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
               {:cont, %{acc | counts: counts, done: List.last(ids)}}
 
             {:held, counts} ->
-              {:halt, %{acc | counts: counts, stop: {:next, done, schedule_in: edge_snooze()}}}
+              {:halt, %{acc | counts: counts, stop: :held}}
 
             {:error, reason, counts} ->
               {:halt, %{acc | counts: counts, stop: answer(user.id, reason)}}
@@ -566,8 +765,8 @@ defmodule Engram.Workers.ReconcileNotePayloads do
            batch_size: @batch_size,
            fun_in_tenant: false
          ) do
-      {:ok, %{stop: stop, counts: counts}} -> {stop, counts}
-      {:error, reason} -> {answer(user.id, reason), @zero}
+      {:ok, %{stop: stop, done: done, counts: counts}} -> {stop, done, counts}
+      {:error, reason} -> {answer(user.id, reason), after_id, @zero}
     end
   end
 
@@ -609,30 +808,24 @@ defmodule Engram.Workers.ReconcileNotePayloads do
           |> IdWindows.by_id(ids)
           |> Repo.all()
 
-        note_ids = Enum.map(notes, & &1.id)
-
-        points =
-          from(c in Chunk,
-            where: c.note_id in ^note_ids and not is_nil(c.qdrant_point_id),
-            select: {c.note_id, c.qdrant_point_id}
-          )
-          |> Repo.all()
-          |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-
-        {notes, points}
+        {notes, n_points(notes)}
       end)
 
     result
   end
 
-  # The next hop, or the held window again after the snooze: a fresh job
-  # (this one is executing, outside the unique states), so the cursor is
-  # exact.
-  defp n_next(user_id, after_id, opts) do
-    args = %{"user_id" => user_id, "mode" => "n"}
-    args = if after_id, do: Map.put(args, "after", after_id), else: args
-    {:ok, _} = Oban.insert(new(args, opts))
-    :ok
+  # A window with no note behind reads no chunk.
+  defp n_points([]), do: %{}
+
+  defp n_points(notes) do
+    note_ids = Enum.map(notes, & &1.id)
+
+    from(c in Chunk,
+      where: c.note_id in ^note_ids and not is_nil(c.qdrant_point_id),
+      select: {c.note_id, c.qdrant_point_id}
+    )
+    |> Repo.all()
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
   end
 
   defp n_pairs(notes, points, stored) do
@@ -679,9 +872,9 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   # A page never exceeds the bucket, or it could never be let through.
   defp n_page, do: min(@refresh_page, n_per_min())
 
-  # A spent bucket snoozes to the window's edge plus up to 10 s of jitter, so
-  # the job writes again in the very next window (a growing backoff would
-  # leave windows idle), and jobs denied together do not wake in lockstep.
+  # A spent bucket re-queues to the window's edge plus up to 10 s of jitter,
+  # so the job writes again in the very next window (a growing backoff would
+  # leave windows idle).
   # ponytail: a fixed window lets up to 2x the rate through across a window
   # boundary (a full bucket at the end of one, another at the start of the
   # next). Accepted: the disk and optimizer gate (`Rebuild.qdrant_pace/1`) is
