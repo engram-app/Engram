@@ -154,8 +154,8 @@ defmodule Engram.NotesTest do
       assert {:ok, 1} = Notes.set_client_ctimes(user, vault, entries)
       assert {:ok, 0} = Notes.set_client_ctimes(user, vault, entries)
 
-      a2 = Engram.Repo.get!(Engram.Notes.Note, a.id, skip_tenant_check: true)
-      b2 = Engram.Repo.get!(Engram.Notes.Note, b.id, skip_tenant_check: true)
+      a2 = Engram.Fixtures.raw_note!(a.id)
+      b2 = Engram.Fixtures.raw_note!(b.id)
       assert a2.ctime == 11.0
       assert b2.ctime == 7.0
       assert {a2.version, a2.seq, a2.updated_at} == {a.version, a.seq, a.updated_at}
@@ -505,7 +505,7 @@ defmodule Engram.NotesTest do
         )
 
       {:ok, raw} =
-        Engram.Repo.with_tenant(user.id, fn -> Engram.Repo.get!(Engram.Notes.Note, note.id) end)
+        Engram.Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
 
       {:ok, dec} = Engram.Crypto.decrypt_note_fields_unscrubbed(raw, user)
 
@@ -567,15 +567,13 @@ defmodule Engram.NotesTest do
       {:ok, enc} =
         Engram.Crypto.encrypt_note_fields(%{content: bad, title: "Title"}, user, note.id)
 
-      {:ok, {1, _}} =
+      {:ok, :ok} =
         Engram.Repo.with_tenant(user.id, fn ->
-          from(n in Engram.Notes.Note, where: n.id == ^note.id)
-          |> Engram.Repo.update_all(
-            set: [content_ciphertext: enc.content_ciphertext, content_nonce: enc.content_nonce]
+          Engram.Fixtures.write_note_body!(note.id,
+            content_ciphertext: enc.content_ciphertext,
+            content_nonce: enc.content_nonce
           )
         end)
-
-      Engram.Fixtures.mirror_body!(note.id)
 
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
@@ -2569,7 +2567,7 @@ defmodule Engram.NotesTest do
 
       {:ok, after_row} =
         Repo.with_tenant(user.id, fn ->
-          Repo.one(from(n in Engram.Notes.Note, where: n.id == ^before.id))
+          Engram.Fixtures.raw_note(before.id)
         end)
 
       {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
@@ -2639,7 +2637,7 @@ defmodule Engram.NotesTest do
 
       {:ok, after_row} =
         Repo.with_tenant(user.id, fn ->
-          Repo.one(from(n in Engram.Notes.Note, where: n.id == ^before.id))
+          Engram.Fixtures.raw_note(before.id)
         end)
 
       {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
@@ -2929,7 +2927,7 @@ defmodule Engram.NotesTest do
       assert_enqueued(worker: Engram.Workers.RepathNoteIndex, args: %{note_id: note.id})
       refute_enqueued(worker: Engram.Workers.EmbedNote)
 
-      reloaded = Engram.Repo.get!(Engram.Notes.Note, note.id, skip_tenant_check: true)
+      reloaded = Engram.Fixtures.raw_note!(note.id)
       assert reloaded.embed_hash == note.content_hash
     end
 
@@ -2948,7 +2946,7 @@ defmodule Engram.NotesTest do
       assert_enqueued(worker: Engram.Workers.RepathNoteIndex, args: %{note_id: note.id})
       refute_enqueued(worker: Engram.Workers.EmbedNote)
 
-      reloaded = Engram.Repo.get!(Engram.Notes.Note, note.id, skip_tenant_check: true)
+      reloaded = Engram.Fixtures.raw_note!(note.id)
       assert reloaded.embed_hash == note.content_hash
     end
 

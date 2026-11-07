@@ -332,7 +332,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       # The note it skipped was not stamped, so it is still eligible.
       [queued] = all_enqueued(worker: RefreshKeywordVectors)
       skipped = if queued.args["note_id"] == a.id, do: b, else: a
-      assert Repo.get!(Note, skipped.id, skip_tenant_check: true).embed_retry_after == nil
+      assert Engram.Fixtures.raw_note!(skipped.id).embed_retry_after == nil
     end
 
     # The kill switch: off, the sweep queues nothing and stamps nothing, so
@@ -343,7 +343,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       assert all_enqueued(worker: RefreshKeywordVectors) == []
-      assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_retry_after == nil
+      assert Engram.Fixtures.raw_note!(note.id).embed_retry_after == nil
 
       Engram.ServiceConfig.put_override(:keyword_refresh, true)
       assert :ok = perform_job(ReconcileEmbeddings, %{})
@@ -423,7 +423,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       note = current_note(user, keyword_version: nil)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
-      assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_retry_after
+      assert Engram.Fixtures.raw_note!(note.id).embed_retry_after
 
       # The job is gone (discarded after its attempts), not pending.
       Repo.delete_all(Oban.Job)
@@ -445,7 +445,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
         )
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
-      refute Repo.get!(Note, note.id, skip_tenant_check: true).embed_budget_parked
+      refute Engram.Fixtures.raw_note!(note.id).embed_budget_parked
     end
 
     # At or below `now` the stamp would not drop a note from the next page,
@@ -463,7 +463,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       note = note_for(insert(:user), embed_hash: nil)
       assert :ok = perform_job(ReconcileEmbeddings, %{})
 
-      stamped = Repo.get!(Note, note.id, skip_tenant_check: true).embed_retry_after
+      stamped = Engram.Fixtures.raw_note!(note.id).embed_retry_after
       assert DateTime.diff(stamped, DateTime.utc_now()) > 300
     end
 
@@ -609,7 +609,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       # The reconcile backoff replaces the park, so a crash mid-embed cannot
       # re-select it every tick.
       assert %Note{embed_budget_parked: nil} =
-               Engram.Repo.get!(Note, parked.id, skip_tenant_check: true)
+               Engram.Fixtures.raw_note!(parked.id)
     end
 
     test "a tier:free row, whose status defaults to entitled, does not skip a budget park" do
@@ -905,7 +905,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
 
-      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+      reloaded = Engram.Fixtures.raw_note!(note.id)
 
       refute is_nil(reloaded.embed_retry_after),
              "reconcile must stamp embed_retry_after so an OOM'd embed can't re-enqueue next tick"
@@ -929,7 +929,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => fresh.id})
 
-      assert is_nil(Repo.get!(Note, fresh.id, skip_tenant_check: true).embed_retry_after)
+      assert is_nil(Engram.Fixtures.raw_note!(fresh.id).embed_retry_after)
     end
 
     test "the stamped cooldown makes a poison note skip the next reconcile tick" do
@@ -940,13 +940,13 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       note = note_for(user, embed_hash: nil, embed_retry_after: nil)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
-      stamped = Repo.get!(Note, note.id, skip_tenant_check: true).embed_retry_after
+      stamped = Engram.Fixtures.raw_note!(note.id).embed_retry_after
       refute is_nil(stamped)
 
       # Second tick, no embed ran. Note is inside its fresh cooldown → not
       # selected. (Its stamp is unchanged — we didn't re-stamp a skipped note.)
       assert :ok = perform_job(ReconcileEmbeddings, %{})
-      assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_retry_after == stamped
+      assert Engram.Fixtures.raw_note!(note.id).embed_retry_after == stamped
     end
   end
 

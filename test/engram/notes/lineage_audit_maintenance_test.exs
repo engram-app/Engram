@@ -65,12 +65,11 @@ defmodule Engram.Notes.LineageAuditMaintenanceTest do
     {:ok, dek} = Engram.Crypto.get_dek(user)
     {ct, nonce} = Envelope.encrypt(state, dek, <<>>)
 
-    {1, _} =
-      Repo.update_all(
-        from(n in Note, where: n.id == ^note.id),
-        [set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce, dek_version: 1]],
-        skip_tenant_check: true
-      )
+    Engram.Fixtures.write_note_body!(note.id,
+      crdt_state_ciphertext: ct,
+      crdt_state_nonce: nonce,
+      dek_version: 1
+    )
 
     # Where every read takes the state from: nothing copies a raw notes write.
     Fixtures.mirror_body!(note.id)

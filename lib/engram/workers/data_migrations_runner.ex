@@ -12,6 +12,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
     max_attempts: 3,
     unique: Engram.Jobs.unique(__MODULE__)
 
+  alias Engram.DataMigration
   alias Engram.DataMigrations
   alias Engram.Logger.Metadata
 
@@ -35,6 +36,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.LinkResolutionKeys,
     Engram.DataMigrations.NotePayloadStamps,
     Engram.DataMigrations.NoteSplit,
+    Engram.DataMigrations.NoteBodyColumnsNull,
     Engram.DataMigrations.NoteIndexState,
     Engram.DataMigrations.NoteSizes,
     Engram.DataMigrations.FolderTable,
@@ -69,6 +71,13 @@ defmodule Engram.Workers.DataMigrationsRunner do
   # pass runs, and `:more` reopens it (note_open/2 clears completed_at).
   @spec run(module(), boolean()) :: :skipped | :done | :more | :error
   def run(mod, reverify \\ false) do
+    _ = DataMigration.take_stats()
+    result = run_one(mod, reverify)
+    summarize(mod, result)
+    result
+  end
+
+  defp run_one(mod, reverify) do
     {name, version} = {mod.name(), mod.version()}
 
     cond do
@@ -144,8 +153,70 @@ defmodule Engram.Workers.DataMigrationsRunner do
     case mod.run_pass() do
       :done -> :done
       :more -> {:more, []}
-      {:more, found} when is_list(found) -> {:more, found}
+      {:more, found} when is_list(found) -> {:more, tap(found, &DataMigration.report(found: &1))}
     end
+  end
+
+  # At most ONE line per migration per run, and only for a run that did work
+  # or changed state (not `:skipped`, not a `:more` pass that fixed and left
+  # nothing), shipped to Loki
+  # (`DataMigration.progress_metadata/1`): name, version, result (`:blocked`
+  # when a pass walked nothing behind a guard), the totals and per-walk
+  # counts `IdWindows.heal_pass/4` recorded, and what the migration reported
+  # (`FileTimes`' open and clean tables). Counts and names only.
+  defp summarize(mod, result) do
+    stats = DataMigration.take_stats()
+    walks = stats |> Map.get(:walks, []) |> Enum.reverse()
+    blocked = Enum.find([stats[:blocked], get_in(stats, [:found, :blocked])], &blocked?/1)
+    result = if result == :more and blocked, do: :blocked, else: result
+    fixed = walks |> Enum.map(& &1.fixed) |> Enum.sum()
+    left = Enum.any?(walks, & &1.left)
+
+    if result != :skipped and (result != :more or fixed > 0 or left),
+      do: log_summary(mod, result, stats, walks, blocked, fixed, left)
+  rescue
+    # Logging only, but a broken summary must not vanish unseen.
+    e ->
+      Logger.warning(
+        "data migration summary failed",
+        Metadata.with_category(:warning, :oban,
+          migration: ledger_name(mod),
+          reason: Metadata.safe_reason(e)
+        )
+      )
+  end
+
+  # A count of 0 (FolderTable's `blocked: 0`), false or nil is not blocked.
+  defp blocked?(v), do: v not in [nil, false, 0]
+
+  defp log_summary(mod, result, stats, walks, blocked, fixed, left) do
+    fields =
+      [
+        migration: ledger_name(mod),
+        version: ledger_version(mod),
+        result: result,
+        fixed: fixed,
+        left: left,
+        hit_budget: Enum.any?(walks, & &1.hit_budget),
+        walks:
+          Enum.map_join(walks, "; ", fn w ->
+            "#{w.walk} fixed=#{w.fixed} left=#{w.left} budget=#{w.hit_budget}"
+          end),
+        blocked: blocked && to_string(blocked),
+        peer: stats[:peer],
+        stale: stats[:stale],
+        open: stats[:open],
+        clean: stats[:clean]
+      ]
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+
+    Logger.info("data migration pass", DataMigration.progress_metadata(fields))
+  end
+
+  defp ledger_version(mod) do
+    mod.version()
+  catch
+    _kind, _reason -> nil
   end
 
   defp describe([]), do: ""

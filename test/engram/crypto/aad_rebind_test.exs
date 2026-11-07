@@ -78,13 +78,13 @@ defmodule Engram.Crypto.AadRebindTest do
             :dek_version
           ]
         )
-        |> Repo.insert!(skip_tenant_check: true)
+        |> Engram.Fixtures.insert_note_row!()
 
       assert legacy_note.dek_version == 1
 
       assert :ok = AadRebind.rebind_user(user.id)
 
-      reloaded = Repo.reload!(legacy_note, skip_tenant_check: true)
+      reloaded = Engram.Fixtures.raw_note!(legacy_note)
       assert reloaded.dek_version == Crypto.row_version_aad_bound()
 
       # The rewritten ciphertext must decrypt under the bind AAD and FAIL

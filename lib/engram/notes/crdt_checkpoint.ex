@@ -481,7 +481,6 @@ defmodule Engram.Notes.CrdtCheckpoint do
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(raw_state, user, note_id) do
       case Repo.update_all(snapshot_fence(note_id, note),
              set: [
-               crdt_state_ciphertext: ct,
                crdt_state_nonce: nonce,
                dek_version: Crypto.row_version_aad_bound()
              ]
@@ -546,7 +545,6 @@ defmodule Engram.Notes.CrdtCheckpoint do
         # version/seq/content — legacy /changes pullers must not see phantom edits.
         case Repo.update_all(snapshot_fence(note_id, note),
                set: [
-                 crdt_state_ciphertext: ct,
                  crdt_state_nonce: nonce,
                  dek_version: Crypto.row_version_aad_bound()
                ]
@@ -630,7 +628,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
         # /api/notes/changes timestamp feed this originally guarded is retired.)
         set = changeset.changes |> Map.put(:updated_at, DateTime.utc_now()) |> Map.to_list()
 
-        case Repo.update_all(fenced_query, set: set) do
+        case Repo.update_all(fenced_query, set: NoteBody.notes_row(set)) do
           {1, _} ->
             _ = NoteBody.put!({note_id, set})
             pruned = prune_tail(note_id, vault_id, prune)

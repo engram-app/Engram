@@ -124,7 +124,7 @@ defmodule Engram.Crypto.UserDekRotationRlsTest do
   # inside would filter them too, and the test would pass while seeing nothing
   # — the same silent-empty failure it is meant to detect.
   defp reload_note(id),
-    do: Repo.one!(from(n in Note, where: n.id == ^id), skip_tenant_check: true)
+    do: Engram.Fixtures.raw_note!(id)
 
   defp reload_user(id),
     do: Repo.one!(from(u in User, where: u.id == ^id), skip_tenant_check: true)

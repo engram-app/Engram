@@ -27,7 +27,7 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
   alias Engram.CheckpointInterleave
   alias Engram.Crypto
   alias Engram.Notes
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog}
   alias Engram.Repo
 
   setup do
@@ -54,7 +54,7 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
     # makes the checkpoint's union idempotent — a doc built fresh with the same
     # text is a different Yjs lineage, and unioning it duplicates the body
     # ("BODYBODY") instead of taking the compaction branch.
-    seed = Repo.one!(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
+    seed = Engram.Fixtures.raw_note!(note.id)
     {:ok, seed_state} = Crypto.decrypt_crdt_state(seed, user)
 
     on_exit(CheckpointInterleave.arm(:after_row_read))
@@ -89,7 +89,7 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
     # task finished. The assertions below are on stored state for that reason.
     assert :ok = Task.await(checkpointer, 15_000)
 
-    raw = Repo.one!(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
+    raw = Engram.Fixtures.raw_note!(note.id)
     {:ok, fresh} = Crypto.maybe_decrypt_note_fields(raw, user)
 
     # The façade keeps the REST text either way — the compaction branch never
@@ -118,7 +118,7 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
     {:ok, note} =
       Notes.upsert_note(user, vault, %{"path" => "cp2.md", "content" => "BODY"}, actor: "api")
 
-    seed = Repo.one!(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
+    seed = Engram.Fixtures.raw_note!(note.id)
     {:ok, seed_state} = Crypto.decrypt_crdt_state(seed, user)
 
     on_exit(CheckpointInterleave.arm(:after_row_read))
@@ -139,17 +139,15 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
     # crdt_state half of the fence deleted; this one would not.
     {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(seed_state, user, note.id)
 
-    {1, _} =
-      Repo.update_all(
-        from(n in Note, where: n.id == ^note.id),
-        [set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]],
-        skip_tenant_check: true
-      )
+    Engram.Fixtures.write_note_body!(note.id,
+      crdt_state_ciphertext: ct,
+      crdt_state_nonce: nonce
+    )
 
     CheckpointInterleave.release(:after_row_read, parked)
     assert :ok = Task.await(checkpointer, 15_000)
 
-    raw = Repo.one!(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
+    raw = Engram.Fixtures.raw_note!(note.id)
 
     assert raw.crdt_state_nonce == nonce,
            """

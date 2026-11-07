@@ -7,7 +7,6 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
   import Mox
 
   alias Engram.Crypto
-  alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.ServiceConfig
   alias Engram.UsageMeters
@@ -88,7 +87,7 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
     end)
   end
 
-  defp reloaded(note), do: Repo.get!(Note, note.id, skip_tenant_check: true)
+  defp reloaded(note), do: Engram.Fixtures.raw_note!(note.id)
 
   test "preflight over 80% disk snoozes before the embedder or the meter", %{
     bypass: bypass,

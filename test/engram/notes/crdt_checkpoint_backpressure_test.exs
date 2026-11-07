@@ -8,7 +8,7 @@ defmodule Engram.Notes.CrdtCheckpointBackpressureTest do
   import Ecto.Query
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CheckpointGate, CrdtBridge, CrdtPersistence, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CheckpointGate, CrdtBridge, CrdtPersistence, CrdtUpdateLog}
   alias Engram.Workers.CheckpointNote
 
   setup do
@@ -30,7 +30,7 @@ defmodule Engram.Notes.CrdtCheckpointBackpressureTest do
 
   # Build a doc whose body has been edited to `text`, and return it.
   defp edited_doc(user, note, text) do
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), text)
@@ -217,8 +217,10 @@ defmodule Engram.Notes.CrdtCheckpointBackpressureTest do
       # Strip the note's CRDT state so the doc would rebuild EMPTY. The worker
       # must skip rather than checkpoint an empty doc over notes.content.
       Repo.with_tenant(user.id, fn ->
-        from(n in Note, where: n.id == ^note.id)
-        |> Repo.update_all(set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil])
+        Engram.Fixtures.write_note_body!(note.id,
+          crdt_state_ciphertext: nil,
+          crdt_state_nonce: nil
+        )
       end)
 
       # CRDT state is read from `note_bodies`; app writers keep it in step.

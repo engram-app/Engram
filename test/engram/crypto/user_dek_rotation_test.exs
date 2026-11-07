@@ -21,6 +21,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
   alias Engram.Notes.FrontmatterKey
   alias Engram.Notes.FrontmatterKeys
   alias Engram.Notes.NoteAttr
+  alias Engram.Notes.NoteBody
   alias Engram.Repo
   alias Engram.Test.LogCapture
   alias Engram.Vector.FilterId
@@ -479,10 +480,10 @@ defmodule Engram.Crypto.UserDekRotationTest do
         )
 
       reloaded_a =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^a.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(a.id)
 
       reloaded_b =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^b.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(b.id)
 
       assert reloaded_a.dek_version == 2
       assert reloaded_b.dek_version == 2
@@ -499,7 +500,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^a.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(a.id)
 
       refute reloaded.content_ciphertext == old_ct
     end
@@ -670,7 +671,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         )
 
       reloaded_note =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       {:ok, new_dek} = Crypto.get_dek(reloaded_user)
       new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek)
@@ -688,7 +689,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         )
 
       reloaded_note =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       {:ok, new_dek} = Crypto.get_dek(reloaded_user)
       new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek)
@@ -706,7 +707,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         )
 
       reloaded_note =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       {:ok, new_dek} = Crypto.get_dek(reloaded_user)
       new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek)
@@ -725,7 +726,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         )
 
       reloaded_note =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       assert {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(reloaded_note, reloaded_user)
       assert decrypted.tags == ["red", "blue"]
@@ -772,7 +773,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         )
 
       reloaded_note =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       {:ok, new_dek} = Crypto.get_dek(reloaded_user)
       new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek)
@@ -862,7 +863,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         Repo.with_tenant(user.id, fn ->
           %Engram.Notes.Note{}
           |> Ecto.Changeset.cast(attrs, Map.keys(attrs))
-          |> Repo.insert!()
+          |> Engram.Fixtures.insert_note_row!()
         end)
 
       note
@@ -887,13 +888,10 @@ defmodule Engram.Crypto.UserDekRotationTest do
       {:ok, state} = Yex.encode_state_as_update(doc)
       {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(state, user, note.id)
 
-      Repo.update_all(
-        from(n in Engram.Notes.Note, where: n.id == ^note.id),
-        [set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]],
-        skip_tenant_check: true
+      Engram.Fixtures.write_note_body!(note.id,
+        crdt_state_ciphertext: ct,
+        crdt_state_nonce: nonce
       )
-
-      Engram.Fixtures.mirror_body!(note.id)
 
       assert :ok = UserDekRotation.rotate_user(user.id)
 
@@ -903,7 +901,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         )
 
       raw =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       assert {:ok, ^state} = Crypto.decrypt_crdt_state(raw, reloaded_user),
              """
@@ -972,20 +970,17 @@ defmodule Engram.Crypto.UserDekRotationTest do
       junk_ct = :crypto.strong_rand_bytes(64)
       junk_nonce = :crypto.strong_rand_bytes(12)
 
-      Repo.update_all(
-        from(n in Engram.Notes.Note, where: n.id == ^note.id),
-        [set: [crdt_state_ciphertext: junk_ct, crdt_state_nonce: junk_nonce]],
-        skip_tenant_check: true
+      Engram.Fixtures.write_note_body!(note.id,
+        crdt_state_ciphertext: junk_ct,
+        crdt_state_nonce: junk_nonce
       )
-
-      Engram.Fixtures.mirror_body!(note.id)
 
       # Must NOT raise: base_columns' both-DEKs-failed arm aborts the sweep after
       # earlier batches have committed under a DEK final_flip has not persisted.
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       raw =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       # Must NOT be nulled: the note's tail log survives and has just been
       # rewrapped, so an empty snapshot means the next bind replays base-less
@@ -1044,13 +1039,10 @@ defmodule Engram.Crypto.UserDekRotationTest do
       {:ok, state} = Yex.encode_state_as_update(doc)
       {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(state, user, note.id)
 
-      Repo.update_all(
-        from(n in Engram.Notes.Note, where: n.id == ^note.id),
-        [set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]],
-        skip_tenant_check: true
+      Engram.Fixtures.write_note_body!(note.id,
+        crdt_state_ciphertext: ct,
+        crdt_state_nonce: nonce
       )
-
-      Engram.Fixtures.mirror_body!(note.id)
 
       assert :ok = UserDekRotation.rotate_user(user.id)
 
@@ -1060,7 +1052,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         )
 
       raw =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       assert {:ok, ^state} = Crypto.decrypt_crdt_state(raw, reloaded_user)
 
@@ -1093,7 +1085,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         )
 
       raw =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       assert {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(raw, reloaded_user)
       assert decrypted.type == "Playbook"
@@ -1169,7 +1161,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
       new_flat = FlatFields.extract(content, new_fk)
       id_by_name = Map.new(flat.names, fn {hmac, name} -> {name, ids[hmac]} end)
       new_ids = Map.new(new_flat.names, fn {hmac, name} -> {hmac, id_by_name[name]} end)
-      raw = Repo.get!(Engram.Notes.Note, note.id, skip_tenant_check: true)
+      raw = Engram.Fixtures.raw_note!(note.id)
 
       want =
         new_flat
@@ -1278,7 +1270,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
       {:ok, new_fk} = Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))
 
       raw =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       assert_received {:set,
                        %{
@@ -1713,12 +1705,11 @@ defmodule Engram.Crypto.UserDekRotationTest do
       path_hmac = Crypto.hmac_field(filter_key, "regression/alpha.md")
 
       raw =
-        Repo.one!(
-          from(n in Engram.Notes.Note,
-            where: n.user_id == ^user.id and n.path_hmac == ^path_hmac
-          ),
-          skip_tenant_check: true
+        from(n in Engram.Notes.Note,
+          where: n.user_id == ^user.id and n.path_hmac == ^path_hmac
         )
+        |> NoteBody.select_note()
+        |> Repo.one!(skip_tenant_check: true)
 
       assert raw.dek_version == 2,
              "Expected upsert_note to stamp dek_version=2, got #{raw.dek_version}"
@@ -1737,12 +1728,11 @@ defmodule Engram.Crypto.UserDekRotationTest do
       new_path_hmac = Crypto.hmac_field(new_filter_key, "regression/alpha.md")
 
       reloaded_note =
-        Repo.one!(
-          from(n in Engram.Notes.Note,
-            where: n.user_id == ^user.id and n.path_hmac == ^new_path_hmac
-          ),
-          skip_tenant_check: true
+        from(n in Engram.Notes.Note,
+          where: n.user_id == ^user.id and n.path_hmac == ^new_path_hmac
         )
+        |> NoteBody.select_note()
+        |> Repo.one!(skip_tenant_check: true)
 
       # If rotation skipped the row, decrypt would fail under the new DEK.
       {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(reloaded_note, reloaded_user)
@@ -1847,9 +1837,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
       new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek)
 
       reloaded_target =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^target.id),
-          skip_tenant_check: true
-        )
+        Engram.Fixtures.raw_note!(target.id)
 
       expected_note_basename =
         Crypto.hmac_field(new_filter_key, Engram.Links.basename_key("Target.md"))
@@ -2009,7 +1997,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
                        %{table: :qdrant, status: :after_flip}}
 
       raw =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       # Version-stale, not content-stale: EmbedNote's unmetered maintenance path.
       assert raw.chunker_version == nil
@@ -2040,7 +2028,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert_received {:deleted, %{"points" => [^bad]}}
 
       raw =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       assert raw.chunker_version == 1, "an orphan costs no rebuild"
       refute_enqueued(worker: Engram.Workers.EmbedNote)
@@ -2062,7 +2050,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert_received {:deleted, %{"points" => [^bad]}}
 
       raw =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       assert raw.chunker_version == 1, "a trashed note gets no rebuild"
       refute_enqueued(worker: Engram.Workers.EmbedNote)
@@ -2558,23 +2546,16 @@ defmodule Engram.Crypto.UserDekRotationTest do
       path_hmac = Crypto.hmac_field(filter_key, "corrupt.md")
 
       note =
-        Repo.one!(
-          from(n in Engram.Notes.Note,
-            where: n.user_id == ^user.id and n.path_hmac == ^path_hmac
-          ),
-          skip_tenant_check: true
+        from(n in Engram.Notes.Note,
+          where: n.user_id == ^user.id and n.path_hmac == ^path_hmac
         )
+        |> NoteBody.select_note()
+        |> Repo.one!(skip_tenant_check: true)
 
       # Overwrite content_ciphertext with 16 bytes of zeroes. AES-GCM auth-tag
       # verification will fail under both old and new DEK — this triggers the
       # "both fail → raise" path in rewrap_note_columns/5.
-      Repo.update_all(
-        from(n in Engram.Notes.Note, where: n.id == ^note.id),
-        [set: [content_ciphertext: <<0::128>>]],
-        skip_tenant_check: true
-      )
-
-      Engram.Fixtures.mirror_body!(note.id)
+      Engram.Fixtures.write_note_body!(note.id, content_ciphertext: <<0::128>>)
 
       assert_raise RuntimeError,
                    ~r/T3\.7 sweep_notes: decrypt failed under both old and new DEK/,
@@ -2794,21 +2775,14 @@ defmodule Engram.Crypto.UserDekRotationTest do
       path_hmac = Crypto.hmac_field(filter_key, "corrupt.md")
 
       note =
-        Repo.one!(
-          from(n in Engram.Notes.Note,
-            where: n.user_id == ^user.id and n.path_hmac == ^path_hmac
-          ),
-          skip_tenant_check: true
+        from(n in Engram.Notes.Note,
+          where: n.user_id == ^user.id and n.path_hmac == ^path_hmac
         )
+        |> NoteBody.select_note()
+        |> Repo.one!(skip_tenant_check: true)
 
       # Corrupt the note to trigger the "decrypt failed under both DEKs" raise.
-      Repo.update_all(
-        from(n in Engram.Notes.Note, where: n.id == ^note.id),
-        [set: [content_ciphertext: <<0::128>>]],
-        skip_tenant_check: true
-      )
-
-      Engram.Fixtures.mirror_body!(note.id)
+      Engram.Fixtures.write_note_body!(note.id, content_ciphertext: <<0::128>>)
 
       # Attach a telemetry handler to capture the event.
       handler_id = "test-b5-rescue-#{:erlang.unique_integer([:positive])}"
@@ -3052,7 +3026,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert :ok = UserDekRotation.rotate_user(user.id)
 
       reloaded_note =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       assert reloaded_note.dek_version == 2
 
@@ -3067,7 +3041,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         )
 
       reloaded_note2 =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+        Engram.Fixtures.raw_note!(note.id)
 
       assert reloaded_note2.dek_version == 3
 

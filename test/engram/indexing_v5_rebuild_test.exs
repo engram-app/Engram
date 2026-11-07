@@ -153,7 +153,7 @@ defmodule Engram.IndexingV5RebuildTest do
       end)
 
   defp reload(note),
-    do: tenant(%{id: note.user_id}, fn -> Repo.get!(Note, note.id) end)
+    do: tenant(%{id: note.user_id}, fn -> Engram.Fixtures.raw_note!(note.id) end)
 
   defp dense_by_position(note, store) do
     pts = points(store)

@@ -21,7 +21,7 @@ defmodule Engram.Notes.RevisionsTest do
     raw(user, note.id)
   end
 
-  defp raw(user, id), do: tenant(user, fn -> Repo.get!(Note, id) end)
+  defp raw(user, id), do: tenant(user, fn -> Engram.Fixtures.raw_note!(id) end)
 
   defp record(user, existing, actor, now),
     do:

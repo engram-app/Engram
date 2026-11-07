@@ -28,7 +28,7 @@ defmodule Engram.Notes.CrdtCheckpointRotationFenceTest do
   alias Engram.Accounts.User
   alias Engram.Crypto
   alias Engram.Crypto.DekCache
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog}
   alias Engram.Repo
 
   setup do
@@ -140,18 +140,10 @@ defmodule Engram.Notes.CrdtCheckpointRotationFenceTest do
 
     # Now corrupt the snapshot. This is what a half-finished rotation leaves
     # behind: the tail is readable, the snapshot is not.
-    Repo.update_all(
-      from(n in Note, where: n.id == ^note.id),
-      [
-        set: [
-          crdt_state_ciphertext: :crypto.strong_rand_bytes(64),
-          crdt_state_nonce: :crypto.strong_rand_bytes(12)
-        ]
-      ],
-      skip_tenant_check: true
+    Engram.Fixtures.write_note_body!(note.id,
+      crdt_state_ciphertext: :crypto.strong_rand_bytes(64),
+      crdt_state_nonce: :crypto.strong_rand_bytes(12)
     )
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     before = reload(user, note.id)
 
@@ -209,7 +201,7 @@ defmodule Engram.Notes.CrdtCheckpointRotationFenceTest do
   end
 
   defp reload(user, note_id) do
-    {:ok, note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note_id) end)
+    {:ok, note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note_id) end)
     note
   end
 

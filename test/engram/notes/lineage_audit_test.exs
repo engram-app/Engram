@@ -7,7 +7,7 @@ defmodule Engram.Notes.LineageAuditTest do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Notes
-  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtTransport, CrdtUpdateLog, LineageAudit, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtTransport, CrdtUpdateLog, LineageAudit}
   alias Engram.Repo
   alias Engram.Test.LogCapture
 
@@ -24,19 +24,14 @@ defmodule Engram.Notes.LineageAuditTest do
     {user, vault}
   end
 
-  defp set_note(user, note_id, fields) do
-    {:ok, _} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.update_all(from(n in Note, where: n.id == ^note_id), set: fields)
-      end)
-
-    Engram.Fixtures.mirror_body!(note_id)
+  defp set_note(_user, note_id, fields) do
+    Engram.Fixtures.write_note_body!(note_id, fields)
   end
 
   # Moves the whole snapshot into one update-log row: a never-checkpointed note.
   # The row is stamped with `vault` (pass a foreign one for the #1318 shape).
   defp log_only!(user, vault, note_id) do
-    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note_id) end)
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note_id) end)
     {:ok, state} = Crypto.decrypt_crdt_state(raw, user)
     {:ok, dek} = Crypto.get_dek(user)
     {ct, nonce} = Envelope.encrypt(state, dek, Crypto.aad_for_row(:notes, :crdt_state, note_id))
@@ -277,12 +272,8 @@ defmodule Engram.Notes.LineageAuditTest do
     {:ok, state} =
       Repo.with_tenant(user.id, fn ->
         row =
-          Repo.one!(
-            from(n in Note,
-              where: n.id == ^note_id,
-              select: {n.updated_at, n.crdt_head, n.crdt_state_ciphertext, n.crdt_state_nonce}
-            )
-          )
+          Engram.Fixtures.raw_note!(note_id)
+          |> then(&{&1.updated_at, &1.crdt_head, &1.crdt_state_ciphertext, &1.crdt_state_nonce})
 
         log = Repo.aggregate(from(l in CrdtUpdateLog, where: l.note_id == ^note_id), :count)
         {row, log}

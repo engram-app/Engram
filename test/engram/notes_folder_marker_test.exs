@@ -53,7 +53,7 @@ defmodule Engram.NotesFolderMarkerTest do
 
       {:ok, refreshed} =
         Engram.Repo.with_tenant(user.id, fn ->
-          Engram.Repo.get!(Engram.Notes.Note, marker.id)
+          Engram.Fixtures.raw_note!(marker.id)
         end)
 
       refute is_nil(refreshed.deleted_at)

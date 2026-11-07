@@ -83,7 +83,7 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
     )
   end
 
-  defp reload(note), do: Repo.get!(Note, note.id, skip_tenant_check: true)
+  defp reload(note), do: Engram.Fixtures.raw_note!(note.id)
 
   defp park!(note, at, need, next \\ nil) do
     Repo.update_all(

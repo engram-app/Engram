@@ -113,7 +113,7 @@ defmodule Engram.IndexingChunkReuseTest do
   defp fresh(note, user) do
     {:ok, note} =
       note
-      |> Repo.reload!(skip_tenant_check: true)
+      |> Engram.Fixtures.raw_note!()
       |> Engram.Crypto.maybe_decrypt_note_fields(Repo.reload!(user, skip_tenant_check: true))
 
     note

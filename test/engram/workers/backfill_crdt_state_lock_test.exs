@@ -22,7 +22,7 @@ defmodule Engram.Workers.BackfillCrdtStateLockTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.{Notes, Repo, Vaults}
-  alias Engram.Notes.{Note, NoteBody}
+  alias Engram.Notes.NoteBody
   alias Engram.Workers.BackfillCrdtState
 
   setup do
@@ -37,8 +37,9 @@ defmodule Engram.Workers.BackfillCrdtStateLockTest do
       # A seedable note: no CRDT state in either copy, no tail.
       {:ok, _} =
         Repo.with_tenant(user.id, fn ->
-          Repo.update_all(from(n in Note, where: n.id == ^note.id),
-            set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+          Engram.Fixtures.write_note_body!(note.id,
+            crdt_state_ciphertext: nil,
+            crdt_state_nonce: nil
           )
 
           Repo.delete_all(from(l in Engram.Notes.CrdtUpdateLog, where: l.note_id == ^note.id))

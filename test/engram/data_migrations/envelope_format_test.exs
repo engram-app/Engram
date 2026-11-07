@@ -7,7 +7,6 @@ defmodule Engram.DataMigrations.EnvelopeFormatTest do
   alias Engram.DataMigrations
   alias Engram.DataMigrations.EnvelopeFormat
   alias Engram.Notes
-  alias Engram.Notes.Note
   alias Engram.Workers.{DataMigrationsRunner, ReencodeEnvelopes}
 
   @big String.duplicate("a compressible line of note text\n", 40)
@@ -101,13 +100,12 @@ defmodule Engram.DataMigrations.EnvelopeFormatTest do
 
     {:ok, _} =
       Repo.with_tenant(u.id, fn ->
-        Repo.update_all(from(n in Note, where: n.id == ^note.id),
-          set: [content_ciphertext: :crypto.strong_rand_bytes(200)]
+        Engram.Fixtures.write_note_body!(note.id,
+          content_ciphertext: :crypto.strong_rand_bytes(200)
         )
       end)
 
     # The app's writers keep `note_bodies` in step (`NoteBody.sync!/3`).
-    Engram.Fixtures.mirror_body!(note.id)
 
     assert :ok = perform_job(ReencodeEnvelopes, %{"user_id" => u.id})
     Repo.delete_all(Oban.Job)

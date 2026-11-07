@@ -128,13 +128,14 @@ defmodule Engram.DataMigrations.FileTimes do
   # of the walk that closes the ledger ran with no older node left.
   defp wait_for_fleet({reason, node}) do
     forget()
+    :ok = Engram.DataMigration.report(blocked: reason)
 
     for {schema, _} <- @tables,
         do: IdWindows.reset_walk("#{name()}:#{schema.__schema__(:source)}")
 
     Logger.info(
       "file times waiting for the fleet",
-      Metadata.with_category(:info, :data, reason: reason, peer: inspect(node))
+      Engram.DataMigration.progress_metadata(reason: reason, peer: inspect(node))
     )
 
     {:more, rows: 0}
@@ -149,6 +150,12 @@ defmodule Engram.DataMigrations.FileTimes do
           not MapSet.member?(clean, table),
           {:more, rows} <- [walk(schema, table, pairs, opts)],
           do: {table, rows}
+
+    :ok =
+      Engram.DataMigration.report(
+        open: Enum.map_join(open, ",", &elem(&1, 0)),
+        clean: clean |> MapSet.to_list() |> Enum.sort() |> Enum.join(",")
+      )
 
     cond do
       open != [] ->
@@ -210,7 +217,7 @@ defmodule Engram.DataMigrations.FileTimes do
       do:
         Logger.info(
           "file times repaired",
-          Metadata.with_category(:info, :data, table: table, total_count: fixed)
+          Engram.DataMigration.progress_metadata(table: table, total_count: fixed)
         )
 
     if oor > 0,

@@ -105,7 +105,9 @@ self-hoster upgrades by pulling an image and restarting, and may skip releases.
 4. **Backfills self-heal**: in the migration or as an `Engram.DataMigration`
    ledger entry (`docs/context/data-migrations-ledger.md`). Index changes bump a
    version stamp (`docs/context/index-version-self-heal.md`). Destructive
-   migrations assert their precondition and raise.
+   migrations assert their precondition and raise. Every new `DataMigration`
+   ships a kill switch: `enabled?/0` backed by a `ServiceConfig` service
+   override, default on, plus a test that off runs no pass.
 5. **FORCE RLS trap:** raw DML on a tenant table in a migration touches zero rows
    in prod. Wrap in `NO FORCE ROW LEVEL SECURITY` / re-`FORCE` with a rowcount
    assertion (`docs/context/migrations-force-rls-data-dml.md`).

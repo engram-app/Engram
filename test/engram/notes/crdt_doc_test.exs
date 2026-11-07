@@ -2,7 +2,7 @@ defmodule Engram.Notes.CrdtDocTest do
   use Engram.DataCase, async: false
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog}
 
   setup do
     user = insert(:user)
@@ -48,7 +48,7 @@ defmodule Engram.Notes.CrdtDocTest do
 
     {:ok, {:ok, updated}} =
       Repo.with_tenant(user.id, fn ->
-        Crypto.maybe_decrypt_note_fields(Repo.get!(Note, note.id), user)
+        Crypto.maybe_decrypt_note_fields(Engram.Fixtures.raw_note!(note.id), user)
       end)
 
     assert updated.content =~ "SHUTDOWN EDIT"

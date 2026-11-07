@@ -5,7 +5,7 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
   import Ecto.Query
 
   alias Engram.{Crypto, Links, Notes, Repo}
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint}
   alias Engram.Workers.{ExtractNoteLinks, RewriteNoteLinks}
 
   setup do
@@ -118,7 +118,7 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       dispatch()
       Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.ExtractNoteLinks"))
 
-      {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+      {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
       {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
       {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
 

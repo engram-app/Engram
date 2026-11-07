@@ -91,7 +91,7 @@ defmodule Engram.Adv1760Test do
 
     assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-    after_edit = Repo.get!(Note, note.id, skip_tenant_check: true)
+    after_edit = Engram.Fixtures.raw_note!(note.id)
 
     assert after_edit.dense_indexed_hash == after_edit.content_hash,
            "one-section edit went sparse-only and dropped every dense vector"
@@ -110,9 +110,7 @@ defmodule Engram.Adv1760Test do
     b = Engram.Fixtures.insert_note!(user, vault, %{path: "B.md", content: content})
 
     per_note =
-      UsageMeters.estimate_tokens(
-        Repo.get!(Note, a.id, skip_tenant_check: true).content_ciphertext
-      )
+      UsageMeters.estimate_tokens(Engram.Fixtures.raw_note!(a.id).content_ciphertext)
 
     # Room for one note (x1.5 slack for chunk-prefix overhead), not two.
     UsageMeters.bucket_take(user.id, 6_000_000 - div(per_note * 3, 2), 6_000_000)
@@ -169,7 +167,7 @@ defmodule Engram.Adv1760Test do
 
     # Parks it (no Voyage, no Qdrant).
     assert :ok = perform_job(EmbedNote, %{note_id: note.id})
-    parked = Repo.get!(Note, note.id, skip_tenant_check: true)
+    parked = Engram.Fixtures.raw_note!(note.id)
     assert DateTime.compare(parked.embed_retry_after, DateTime.utc_now()) == :gt
 
     insert(:subscription, user: user, tier: "pro", status: "active")

@@ -14,7 +14,6 @@ defmodule Engram.Notes.NoteFieldsTest do
   alias Engram.Notes
   alias Engram.Notes.FrontmatterKey
   alias Engram.Notes.FrontmatterKeys
-  alias Engram.Notes.Note
   alias Engram.Notes.NoteAttr
   alias Engram.Repo
   alias Engram.Vector.FilterId
@@ -88,7 +87,7 @@ defmodule Engram.Notes.NoteFieldsTest do
 
     {:ok, prepared} = Indexing.prepare_index(note, vault, user)
     {:ok, _} = Indexing.commit_index(prepared)
-    {Repo.get!(Note, note.id, skip_tenant_check: true), user}
+    {Engram.Fixtures.raw_note!(note.id), user}
   end
 
   defp attrs(note_id) do
@@ -265,7 +264,7 @@ defmodule Engram.Notes.NoteFieldsTest do
 
       {:error, :dek_load_timeout} ->
         assert attrs(note.id) == []
-        assert is_nil(Repo.get!(Note, note.id, skip_tenant_check: true).payload_hash)
+        assert is_nil(Engram.Fixtures.raw_note!(note.id).payload_hash)
     end
   end
 

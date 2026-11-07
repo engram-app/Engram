@@ -23,7 +23,7 @@ defmodule Engram.Notes.CrdtE2ETest do
   use EngramWeb.ChannelCase, async: false
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtPersistence, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtPersistence}
 
   # ---------------------------------------------------------------------------
   # Setup: one user, one vault, one note, one channel socket (client A)
@@ -116,7 +116,7 @@ defmodule Engram.Notes.CrdtE2ETest do
     # must return the Note directly (not {:ok, Note}) to avoid double-wrapping.
     {:ok, raw} =
       Repo.with_tenant(user.id, fn ->
-        Repo.get!(Note, note.id)
+        Engram.Fixtures.raw_note!(note.id)
       end)
 
     refute raw.crdt_state_ciphertext == nil,
@@ -223,7 +223,7 @@ defmodule Engram.Notes.CrdtE2ETest do
     # in {:ok, result}, so the inner fn returns the Note directly (not {:ok, Note}).
     {:ok, raw} =
       Repo.with_tenant(user.id, fn ->
-        Repo.get!(Note, note.id)
+        Engram.Fixtures.raw_note!(note.id)
       end)
 
     refute raw.crdt_state_ciphertext == nil

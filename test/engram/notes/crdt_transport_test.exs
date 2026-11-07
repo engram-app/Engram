@@ -123,12 +123,11 @@ defmodule Engram.Notes.CrdtTransportTest do
       {:ok, {ct, nonce}} = Engram.Crypto.encrypt_crdt_state(flat, user, note.id)
 
       Repo.with_tenant!(user.id, fn ->
-        Repo.update_all(from(n in Note, where: n.id == ^note.id),
-          set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+        Engram.Fixtures.write_note_body!(note.id,
+          crdt_state_ciphertext: ct,
+          crdt_state_nonce: nonce
         )
       end)
-
-      Engram.Fixtures.mirror_body!(note.id)
     end
 
     test "a diff against a state vector from another lineage is refused, and nothing of it is kept",
@@ -425,7 +424,7 @@ defmodule Engram.Notes.CrdtTransportTest do
       upd = edit(user, vault, note.id, "o edit")
 
       :ok = Notes.delete_note(user, vault, "T/Open.md")
-      seq = Repo.with_tenant!(user.id, fn -> Repo.get!(Note, note.id).seq end)
+      seq = Repo.with_tenant!(user.id, fn -> Engram.Fixtures.raw_note!(note.id).seq end)
       Repo.delete_all(Oban.Job)
 
       result =
@@ -437,7 +436,7 @@ defmodule Engram.Notes.CrdtTransportTest do
       assert_receive {:DOWN, ^ref, :process, _, _}, 5_000
 
       assert result == {:error, :not_found}
-      assert Repo.with_tenant!(user.id, fn -> Repo.get!(Note, note.id).seq end) == seq
+      assert Repo.with_tenant!(user.id, fn -> Engram.Fixtures.raw_note!(note.id).seq end) == seq
       assert Repo.all(Oban.Job) == []
     end
 
@@ -671,7 +670,9 @@ defmodule Engram.Notes.CrdtTransportTest do
       # exercises.
       {:ok, {1, nil}} =
         Repo.with_tenant(user.id, fn ->
-          from(n in Note, where: n.id == ^note.id)
+          # Schemaless: the ciphertext is virtual on `Note` (R8(b2)); the
+          # column and its trigger are still there.
+          from(n in "notes", where: n.id == type(^note.id, Ecto.UUID))
           |> Repo.update_all(set: [crdt_state_ciphertext: <<9, 9, 9>>])
         end)
 

@@ -3404,7 +3404,7 @@ defmodule Engram.Notes do
   # checkpoint committing in between (it rewrites crdt_state AND prunes the
   # rows it folded) gives the old snapshot with no tail: edits vanish. Three
   # array subqueries, aligned by the same total order.
-  defp with_tail(query), do: NoteBody.select_map(query, Note.__schema__(:fields), tail_columns())
+  defp with_tail(query), do: NoteBody.select_map(query, NoteBody.note_fields(), tail_columns())
 
   defp batch_tail_columns, do: Map.merge(tail_columns(), tail_state_columns())
 
@@ -4646,7 +4646,7 @@ defmodule Engram.Notes do
             updated_at: now,
             seq: seq,
             folder_ref_id: folder_ref
-          ] ++ full_kw
+          ] ++ NoteBody.notes_row(full_kw)
       )
 
     if count == 1 do
@@ -4690,8 +4690,13 @@ defmodule Engram.Notes do
       # unique path index, so a conflict is structurally impossible today. Log
       # if that ever stops holding (e.g. an index-semantics change), since a
       # dropped tombstone silently reopens the offline-resurrection gap.
-      {inserted, _} = Repo.insert_all(Note, [tombstone], on_conflict: :nothing)
-      _ = NoteBody.put!([{note.id, full_kw}, {tomb_id, tomb_kw}])
+      {inserted, _} =
+        Repo.insert_all(Note, [NoteBody.notes_row(tombstone)], on_conflict: :nothing)
+
+      # The tombstone's body only when this insert made its row (a no-op
+      # insert names a row that is not ours).
+      _ =
+        NoteBody.put!([{note.id, full_kw} | if(inserted == 1, do: [{tomb_id, tomb_kw}], else: [])])
 
       if inserted == 0 do
         require Logger
@@ -7183,9 +7188,10 @@ defmodule Engram.Notes do
     :folder_nonce,
     :folder_hmac
   ]
+  # No `content_ciphertext` (R8(b2)): the content goes to `note_bodies`
+  # only (`BulkRename` puts the class's kw, which still carries it).
   @v1_rename_cols [
     :folder_ref_id,
-    :content_ciphertext,
     :content_nonce,
     :title_ciphertext,
     :title_nonce,
@@ -7445,8 +7451,16 @@ defmodule Engram.Notes do
                 |> Enum.map(&Map.put(&1, :seq, seq))
                 |> Enum.chunk_every(@tombstone_insert_chunk)
                 |> Enum.each(fn rows ->
-                  _ = Repo.insert_all(Note, rows, on_conflict: :nothing)
-                  NoteBody.put!(Enum.map(rows, &{&1.id, &1}))
+                  # Bodies only for the rows this insert made (`returning`
+                  # skips a conflicting row, which is not ours).
+                  {_, made} =
+                    Repo.insert_all(Note, Enum.map(rows, &NoteBody.notes_row/1),
+                      on_conflict: :nothing,
+                      returning: [:id]
+                    )
+
+                  made = MapSet.new(made, & &1.id)
+                  NoteBody.put!(for r <- rows, r.id in made, do: {r.id, r})
                 end)
 
                 # The reindex + link-rewrite fan-out commits with the rows it

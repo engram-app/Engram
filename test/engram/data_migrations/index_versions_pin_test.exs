@@ -17,7 +17,6 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
   alias Engram.Crypto
   alias Engram.DataMigrations
   alias Engram.DataMigrations.IndexVersions
-  alias Engram.Notes.Note
   alias Engram.Rebuild
   alias Engram.ServiceConfig
   alias Engram.Workers.{EmbedNote, RebuildStaleNote, ReconcileEmbeddings, RefreshKeywordVectors}
@@ -208,7 +207,7 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
 
         assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-        reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+        reloaded = Engram.Fixtures.raw_note!(note.id)
         assert reloaded.embed_hash == reloaded.content_hash
         assert {reloaded.chunker_version, reloaded.keyword_version} == {3, 2}
       end
@@ -220,7 +219,7 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+      reloaded = Engram.Fixtures.raw_note!(note.id)
       assert reloaded.embed_hash == reloaded.content_hash
       assert {reloaded.chunker_version, reloaded.keyword_version} == {5, 5}
     end

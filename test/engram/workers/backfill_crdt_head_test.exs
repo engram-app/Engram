@@ -2,8 +2,6 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
-  import Ecto.Query
-
   alias Engram.Notes
   alias Engram.Notes.CrdtTransport
   alias Engram.Workers.BackfillCrdtHead
@@ -151,16 +149,11 @@ defmodule Engram.Workers.BackfillCrdtHeadTest do
 
       {:ok, _} =
         Engram.Repo.with_tenant(user.id, fn ->
-          Engram.Repo.update_all(
-            from(n in Engram.Notes.Note, where: n.id == ^bad.id),
-            set: [
-              crdt_state_ciphertext: :crypto.strong_rand_bytes(48),
-              crdt_state_nonce: :crypto.strong_rand_bytes(12)
-            ]
+          Engram.Fixtures.write_note_body!(bad.id,
+            crdt_state_ciphertext: :crypto.strong_rand_bytes(48),
+            crdt_state_nonce: :crypto.strong_rand_bytes(12)
           )
         end)
-
-      Engram.Fixtures.mirror_body!(bad.id)
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->

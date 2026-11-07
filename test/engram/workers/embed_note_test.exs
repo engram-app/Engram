@@ -144,7 +144,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id, user_id: user.id})
 
-      stamped = Repo.get!(Note, note.id, skip_tenant_check: true)
+      stamped = Engram.Fixtures.raw_note!(note.id)
       assert is_nil(stamped.content_hash)
       assert {:ok, stamped.embed_hash} == Notes.content_hash(user, "")
 
@@ -173,7 +173,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      updated = Engram.Fixtures.raw_note!(note.id)
       assert updated.embed_hash == updated.content_hash
     end
 
@@ -233,7 +233,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+      reloaded = Engram.Fixtures.raw_note!(note.id)
       assert reloaded.dense_indexed_hash == note.content_hash
       assert reloaded.chunker_version == Markdown.chunker_version()
       assert Engram.UsageMeters.lifetime_embed_tokens(note.user_id) == used
@@ -273,7 +273,7 @@ defmodule Engram.Workers.EmbedNoteTest do
                  user_id: note.user_id
                })
 
-      reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
+      reloaded = Engram.Fixtures.raw_note!(note.id)
       assert reloaded.chunker_version == Markdown.chunker_version()
       assert reloaded.dense_indexed_hash == note.content_hash
       assert Engram.UsageMeters.lifetime_embed_tokens(note.user_id) == used
@@ -316,7 +316,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_model ==
+      assert Engram.Fixtures.raw_note!(note.id).embed_model ==
                Engram.Indexing.embed_model()
     end
 
@@ -346,7 +346,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      assert Repo.get!(Note, note.id, skip_tenant_check: true).chunker_version ==
+      assert Engram.Fixtures.raw_note!(note.id).chunker_version ==
                Markdown.chunker_version()
     end
 
@@ -360,7 +360,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      assert Repo.get!(Note, note.id, skip_tenant_check: true).chunker_version ==
+      assert Engram.Fixtures.raw_note!(note.id).chunker_version ==
                Markdown.chunker_version()
     end
 
@@ -374,7 +374,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      assert Repo.get!(Note, note.id, skip_tenant_check: true).keyword_version ==
+      assert Engram.Fixtures.raw_note!(note.id).keyword_version ==
                Engram.KeywordIndex.version()
     end
 
@@ -395,7 +395,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       sent = index_counting(ctx.bypass, note)
       assert sent != [] and length(sent) < 3, "the pass must reuse the unchanged sections"
 
-      row = Repo.get!(Note, note.id, skip_tenant_check: true)
+      row = Engram.Fixtures.raw_note!(note.id)
       assert row.embed_hash == row.content_hash
       assert {row.chunker_version, row.keyword_version} == {chunker, 2}
 
@@ -407,7 +407,7 @@ defmodule Engram.Workers.EmbedNoteTest do
                  user_id: ctx.user.id
                })
 
-      assert Repo.get!(Note, note.id, skip_tenant_check: true).keyword_version == keyword
+      assert Engram.Fixtures.raw_note!(note.id).keyword_version == keyword
     end
 
     # #2216 L1: a heal request (a NULL-clear by payload drift, a cluster
@@ -435,7 +435,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       stub_qdrant_optional(ctx.bypass)
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      row = Repo.get!(Note, note.id, skip_tenant_check: true)
+      row = Engram.Fixtures.raw_note!(note.id)
       assert row.embed_hash == row.content_hash
       assert {row.chunker_version, row.keyword_version} == {nil, nil}
       assert row.payload_hash == nil
@@ -450,7 +450,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       sent = index_counting(ctx.bypass, note)
       assert sent != [] and length(sent) < 3, "the pass must reuse the unchanged sections"
 
-      row = Repo.get!(Note, note.id, skip_tenant_check: true)
+      row = Engram.Fixtures.raw_note!(note.id)
       assert {row.chunker_version, row.keyword_version} == target
     end
 
@@ -478,7 +478,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      assert Repo.get!(Note, note.id, skip_tenant_check: true).dense_indexed_hash ==
+      assert Engram.Fixtures.raw_note!(note.id).dense_indexed_hash ==
                note.content_hash
     end
 
@@ -524,7 +524,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       # No mock expectations and no Qdrant stub: any embed or index fails the test.
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      parked = Repo.get!(Note, note.id, skip_tenant_check: true)
+      parked = Engram.Fixtures.raw_note!(note.id)
       assert DateTime.compare(parked.embed_retry_after, DateTime.utc_now()) == :gt
       assert is_nil(parked.dense_indexed_hash)
     end
@@ -565,7 +565,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      updated = Engram.Fixtures.raw_note!(note.id)
       assert is_nil(updated.chunker_version)
     end
 
@@ -590,7 +590,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      updated = Engram.Fixtures.raw_note!(note.id)
       assert updated.chunker_version == Markdown.chunker_version()
       # Still sparse-only: the rebuild must not invent dense vectors.
       assert is_nil(updated.dense_indexed_hash)
@@ -617,7 +617,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      updated = Engram.Fixtures.raw_note!(note.id)
       # embed_hash should NOT have been set (content_hash changed)
       assert is_nil(updated.embed_hash)
     end
@@ -720,7 +720,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert :ok = perform_job(EmbedNote, %{note_id: note.id}, attempt: 1, max_attempts: 5)
       assert Agent.get(counter, & &1) == 1
 
-      parked = Repo.get!(Note, note.id, skip_tenant_check: true)
+      parked = Engram.Fixtures.raw_note!(note.id)
       # Keyword-indexed: the content is stamped indexed, with no dense leg.
       assert parked.embed_hash == parked.content_hash
       assert parked.dense_indexed_hash == nil
@@ -850,7 +850,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       end)
 
       # embed_hash should be stamped, confirming the job ran to completion
-      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      updated = Engram.Fixtures.raw_note!(note.id)
       assert updated.embed_hash == updated.content_hash
     end
   end
@@ -1000,7 +1000,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert {:error, {500, _}} =
                perform_job(EmbedNote, %{note_id: note.id}, attempt: 5, max_attempts: 5)
 
-      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      updated = Engram.Fixtures.raw_note!(note.id)
       assert updated.embed_retry_after != nil
       assert DateTime.compare(updated.embed_retry_after, DateTime.utc_now()) == :gt
     end
@@ -1017,7 +1017,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert {:error, {500, _}} =
                perform_job(EmbedNote, %{note_id: note.id}, attempt: 5, max_attempts: 5)
 
-      parked = Repo.get!(Note, note.id, skip_tenant_check: true)
+      parked = Engram.Fixtures.raw_note!(note.id)
       assert [retry] = all_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
       assert retry.priority == EmbedNote.backfill_priority()
       assert abs(DateTime.diff(retry.scheduled_at, parked.embed_retry_after)) <= 1
@@ -1038,7 +1038,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert {:error, %Req.TransportError{}} =
                perform_job(EmbedNote, %{note_id: note.id}, attempt: 5, max_attempts: 5)
 
-      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      updated = Engram.Fixtures.raw_note!(note.id)
       cooldown = DateTime.diff(updated.embed_retry_after, DateTime.utc_now())
 
       assert 60 <= cooldown and cooldown <= 900,
@@ -1057,7 +1057,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert {:error, {400, _}} =
                perform_job(EmbedNote, %{note_id: note.id}, attempt: 5, max_attempts: 5)
 
-      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      updated = Engram.Fixtures.raw_note!(note.id)
       cooldown = DateTime.diff(updated.embed_retry_after, DateTime.utc_now())
       assert cooldown > 20_000, "persistent cooldown was #{cooldown}s, expected ~21600s (6h)"
     end
@@ -1077,7 +1077,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert {:error, {500, _}} =
                perform_job(EmbedNote, %{note_id: note.id}, attempt: 5, max_attempts: 5)
 
-      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      updated = Engram.Fixtures.raw_note!(note.id)
       assert updated.embed_retry_after != nil
     end
 
@@ -1090,7 +1090,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert {:error, {500, _}} =
                perform_job(EmbedNote, %{note_id: note.id}, attempt: 1, max_attempts: 5)
 
-      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      updated = Engram.Fixtures.raw_note!(note.id)
       assert is_nil(updated.embed_retry_after)
     end
 
@@ -1141,7 +1141,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      updated = Engram.Fixtures.raw_note!(note.id)
       assert is_nil(updated.embed_retry_after)
     end
   end
@@ -1267,7 +1267,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       stub_qdrant(bypass)
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
-      assert %Note{dense_indexed_hash: dense} = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert %Note{dense_indexed_hash: dense} = Engram.Fixtures.raw_note!(note.id)
       refute is_nil(dense)
 
       # Exhaust the budget, then edit. The re-index rebuilds the note's points
@@ -1292,7 +1292,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       # Leaving the old hash would make ReconcileEmbeddings' dense backfill
       # (which selects on `is_nil(dense_indexed_hash)`) skip this note forever.
-      assert %Note{dense_indexed_hash: nil} = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert %Note{dense_indexed_hash: nil} = Engram.Fixtures.raw_note!(note.id)
     end
   end
 
@@ -1342,7 +1342,7 @@ defmodule Engram.Workers.EmbedNoteTest do
                skip_tenant_check: true
              )
 
-      indexed = Repo.get!(Note, note.id, skip_tenant_check: true)
+      indexed = Engram.Fixtures.raw_note!(note.id)
       assert indexed.dense_indexed_hash == indexed.content_hash
     end
 
@@ -1443,7 +1443,7 @@ defmodule Engram.Workers.EmbedNoteTest do
                skip_tenant_check: true
              )
 
-      indexed = Repo.get!(Note, note.id, skip_tenant_check: true)
+      indexed = Engram.Fixtures.raw_note!(note.id)
       assert indexed.embed_hash == indexed.content_hash
       assert is_nil(indexed.dense_indexed_hash)
       # Parked, so ReconcileEmbeddings' dense backfill does not re-run it every tick.
@@ -1650,7 +1650,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       # Empty bucket: keyword-only, parked, and no Voyage (no Mox expectation).
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
-      parked = Repo.get!(Note, note.id, skip_tenant_check: true)
+      parked = Engram.Fixtures.raw_note!(note.id)
       assert is_nil(parked.dense_indexed_hash)
       assert parked.embed_budget_parked == true
 
@@ -1673,7 +1673,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      dense = Repo.get!(Note, note.id, skip_tenant_check: true)
+      dense = Engram.Fixtures.raw_note!(note.id)
       assert dense.dense_indexed_hash == dense.content_hash
       assert dense.embed_budget_parked == nil
     end
@@ -1689,7 +1689,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       stub_qdrant(bypass)
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
-      indexed = Repo.get!(Note, note.id, skip_tenant_check: true)
+      indexed = Engram.Fixtures.raw_note!(note.id)
       assert indexed.dense_indexed_hash == indexed.content_hash
     end
 
@@ -1704,7 +1704,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       stub_qdrant(bypass)
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
-      indexed = Repo.get!(Note, note.id, skip_tenant_check: true)
+      indexed = Engram.Fixtures.raw_note!(note.id)
       assert indexed.dense_indexed_hash == indexed.content_hash
     end
 
@@ -1752,7 +1752,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id, user_id: user.id})
 
-      updated = Repo.get!(Note, note.id, skip_tenant_check: true)
+      updated = Engram.Fixtures.raw_note!(note.id)
       assert updated.embed_hash == updated.content_hash
       assert updated.dense_indexed_hash == updated.content_hash
     end
@@ -1779,7 +1779,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       |> Repo.update_all([set: Keyword.merge(defaults, attrs)], skip_tenant_check: true)
     end
 
-    defp reload(note), do: Repo.get!(Note, note.id, skip_tenant_check: true)
+    defp reload(note), do: Engram.Fixtures.raw_note!(note.id)
     defp args(note), do: %{note_id: note.id, user_id: note.user_id}
 
     defp ok_embedder,
@@ -2058,7 +2058,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
         assert :ok = perform_job(EmbedNote, %{note_id: note.id})
         assert_received {:model, unquote(model)}
-        assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_model == unquote(model)
+        assert Engram.Fixtures.raw_note!(note.id).embed_model == unquote(model)
       end
     end
 
@@ -2112,21 +2112,21 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert sent == 0
       assert after_ids == before
-      refute EmbedNote.version_stale?(Repo.get!(Note, ctx.note.id, skip_tenant_check: true))
+      refute EmbedNote.version_stale?(Engram.Fixtures.raw_note!(ctx.note.id))
     end
 
     # `notes.embed_model` names the CHEAPEST model the note's vectors hold:
     # kept large vectors stamp large, so a later upgrade re-embeds nothing.
     test "a downgraded note that kept every large vector stays stamped large", ctx do
       {_before, _after, 0} = replan_and_rebuild(ctx, "pro", nil)
-      note = Repo.get!(Note, ctx.note.id, skip_tenant_check: true)
+      note = Engram.Fixtures.raw_note!(ctx.note.id)
       assert note.embed_model == "voyage-4-large"
       refute EmbedNote.version_stale?(note, true)
     end
 
     test "a Free note whose vectors are lite stays stamped lite", ctx do
       {_before, _after, _sent} = replan_and_rebuild(ctx, nil, nil)
-      assert Repo.get!(Note, ctx.note.id, skip_tenant_check: true).embed_model == "voyage-4-lite"
+      assert Engram.Fixtures.raw_note!(ctx.note.id).embed_model == "voyage-4-lite"
     end
 
     test "a downgraded note's dry-run estimate costs 0 tokens", %{user: user, note: note} = ctx do
@@ -2134,7 +2134,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       user = Engram.Accounts.get_user_with_subscription!(user.id)
 
       {:ok, dec} =
-        Crypto.maybe_decrypt_note_fields(Repo.get!(Note, note.id, skip_tenant_check: true), user)
+        Crypto.maybe_decrypt_note_fields(Engram.Fixtures.raw_note!(note.id), user)
 
       assert {:ok, %{est_tokens: 0, reused_points: reused}} =
                Engram.Indexing.rebuild_estimate(dec, user)

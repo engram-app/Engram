@@ -406,7 +406,7 @@ defmodule Engram.FoldersTest do
       assert {:ok, %{notes: 2}} = Folders.delete(user, vault, "Derived", recursive: true)
 
       for n <- notes do
-        row = Engram.Repo.get!(Engram.Notes.Note, n.id, skip_tenant_check: true)
+        row = Engram.Fixtures.raw_note!(n.id)
         assert row.deleted_at
         assert row.seq > before
       end

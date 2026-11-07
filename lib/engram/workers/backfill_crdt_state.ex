@@ -382,7 +382,7 @@ defmodule Engram.Workers.BackfillCrdtState do
         from(n in live_without_tail(),
           where: n.id == ^note_id and is_nil(n.crdt_state_nonce)
         ),
-        set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+        set: [crdt_state_nonce: nonce]
       )
 
     _ =

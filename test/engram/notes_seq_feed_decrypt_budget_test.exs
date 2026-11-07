@@ -9,7 +9,7 @@ defmodule Engram.NotesSeqFeedDecryptBudgetTest do
   """
   use Engram.DataCase, async: false
 
-  import Ecto.Query, only: [from: 2]
+  import Ecto.Query, only: [select: 2]
 
   alias Engram.{Notes, Vaults}
   alias Engram.Notes.Note
@@ -42,9 +42,10 @@ defmodule Engram.NotesSeqFeedDecryptBudgetTest do
 
     {:ok, stored} =
       Engram.Repo.with_tenant(user.id, fn ->
-        Engram.Repo.all(
-          from(n in Note, select: fragment("octet_length(?)", n.content_ciphertext))
-        )
+        Note
+        |> Engram.Notes.NoteBody.join()
+        |> select(^Engram.Notes.NoteBody.byte_length(:content))
+        |> Engram.Repo.all()
       end)
 
     assert Enum.all?(stored, &(&1 < 100_000)), "fixture must be stored tiny: #{inspect(stored)}"

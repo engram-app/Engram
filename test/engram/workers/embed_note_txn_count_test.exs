@@ -8,7 +8,6 @@ defmodule Engram.Workers.EmbedNoteTxnCountTest do
   import Mox
 
   alias Engram.Notes
-  alias Engram.Repo
   alias Engram.TenantQueryCounter
   alias Engram.Workers.EmbedNote
 
@@ -63,7 +62,7 @@ defmodule Engram.Workers.EmbedNoteTxnCountTest do
     assert length(enters) <= 5,
            "EmbedNote opened #{length(enters)} tenant transactions, budget is 5"
 
-    note = Repo.reload!(note, skip_tenant_check: true)
+    note = Engram.Fixtures.raw_note!(note)
     assert note.embed_hash == note.content_hash
     assert is_nil(note.embed_started_at), "the success path must clear the crash-guard stamp"
   end
@@ -89,7 +88,7 @@ defmodule Engram.Workers.EmbedNoteTxnCountTest do
     assert length(enters) <= 4,
            "EmbedNote opened #{length(enters)} tenant transactions, budget is 4"
 
-    note = Repo.reload!(note, skip_tenant_check: true)
+    note = Engram.Fixtures.raw_note!(note)
     assert note.embed_hash == note.content_hash
     assert is_nil(note.embed_started_at)
   end

@@ -325,6 +325,54 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     end
   end
 
+  # Owner rule (2026-11-06): every data migration ships with a kill switch,
+  # `enabled?/0` backed by a ServiceConfig service override, so a bad pass
+  # stops fleet-wide in seconds without a deploy. These predate the rule.
+  @before_kill_switch_rule [
+    Engram.DataMigrations.IndexVersions,
+    Engram.DataMigrations.CrdtStateSeed,
+    Engram.DataMigrations.EnvelopeFormat,
+    Engram.DataMigrations.LinkResolutionKeys,
+    Engram.DataMigrations.NotePayloadStamps,
+    Engram.DataMigrations.NoteSplit,
+    Engram.DataMigrations.NoteIndexState,
+    Engram.DataMigrations.NoteSizes,
+    Engram.DataMigrations.FolderTable,
+    Engram.DataMigrations.KeyAliases,
+    Engram.DataMigrations.PersonOriginBackfill,
+    Engram.DataMigrations.EffectiveDates
+  ]
+
+  test "every data migration newer than the kill-switch rule has a working kill switch" do
+    alias Engram.ServiceConfig.Overrides
+
+    # The runtime-override path, as prod runs it (OverridesTest's setup).
+    Engram.ServiceConfig.put_override(:service_overrides_enabled, true)
+    Engram.Cache.clear_local(:service_overrides)
+    Engram.Cache.clear_local(:service_overrides_last_good)
+    on_exit(fn -> Engram.Cache.clear_local(:service_overrides) end)
+
+    for mod <- DataMigrationsRunner.migrations() -- @before_kill_switch_rule do
+      Code.ensure_loaded!(mod)
+      assert function_exported?(mod, :enabled?, 0), "#{inspect(mod)}: add enabled?/0"
+
+      source = File.read!(mod.module_info(:compile)[:source])
+
+      assert [_, key] = Regex.run(~r/ServiceConfig\.get\(:(\w+)/, source),
+             "#{inspect(mod)}: back enabled?/0 with ServiceConfig.get(:key, true)"
+
+      key = String.to_existing_atom(key)
+      # A key missing here silently falls back to env: no runtime switch.
+      assert key in Overrides.keys(), "#{inspect(mod)}: add #{key} to ServiceConfig.Overrides"
+
+      assert mod.enabled?(), "#{inspect(mod)}: default on"
+      assert :ok = Overrides.put(key, false, by: "test")
+      refute mod.enabled?(), "#{inspect(mod)}: the override must switch it off"
+      assert :ok = Overrides.delete(key, by: "test")
+      assert mod.enabled?()
+    end
+  end
+
   # Rows written while the gate was blocked in a deploy reopen the migration
   # most days; at :warning that routine line drowns a real regression.
   test "a routine re-verify reopen logs at :info with what it found" do

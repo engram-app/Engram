@@ -5,7 +5,7 @@ defmodule Engram.Notes.RevisionsWritePathTest do
   import Ecto.Query
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, Note, Revision, Revisions}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, Revision, Revisions}
   alias Engram.Workers.FinalizeRevision
 
   setup do
@@ -29,7 +29,7 @@ defmodule Engram.Notes.RevisionsWritePathTest do
   def text_of(user, rev), do: elem(Revisions.decrypt_pending(rev, user), 1)
 
   def checkpoint_text(user, vault, note_id, text) do
-    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note_id) end)
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note_id) end)
     {:ok, state} = Crypto.decrypt_crdt_state(raw, user)
     {:ok, doc} = CrdtBridge.doc_from_state(state)
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), text)
@@ -144,7 +144,7 @@ defmodule Engram.Notes.RevisionsWritePathTest do
 
   # An uncheckpointed CRDT edit: the tail holds `text`, the note row does not.
   def tail_edit(user, vault, note_id, text) do
-    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note_id) end)
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note_id) end)
     {:ok, state} = Crypto.decrypt_crdt_state(raw, user)
     {:ok, doc} = CrdtBridge.doc_from_state(state)
     {:ok, sv} = Yex.encode_state_vector(doc)

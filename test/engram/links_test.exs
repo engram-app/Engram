@@ -704,7 +704,9 @@ defmodule Engram.LinksTest do
 
       {:ok, [live]} =
         Repo.with_tenant(user.id, fn ->
-          Repo.all(from(n in Engram.Notes.Note, where: is_nil(n.deleted_at)))
+          from(n in Engram.Notes.Note, where: is_nil(n.deleted_at))
+          |> Engram.Notes.NoteBody.select_note()
+          |> Repo.all()
         end)
 
       assert live.basename_hmac == expected

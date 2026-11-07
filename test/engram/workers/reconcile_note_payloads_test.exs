@@ -353,14 +353,9 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     for id <- point_ids(ctx.stale),
         do: Agent.update(ctx.store, &put_in(&1.points[id], retired_v5(ctx)))
 
-    {1, _} =
-      Repo.update_all(
-        from(n in Note, where: n.id == ^ctx.stale.id),
-        [set: [content_ciphertext: :crypto.strong_rand_bytes(48)]],
-        skip_tenant_check: true
-      )
-
-    Engram.Fixtures.mirror_body!(ctx.stale.id)
+    Engram.Fixtures.write_note_body!(ctx.stale.id,
+      content_ciphertext: :crypto.strong_rand_bytes(48)
+    )
 
     assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
     assert reload(ctx.stale).payload_hash == ReconcileNotePayloads.undecryptable_stamp()
@@ -373,14 +368,9 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     for id <- point_ids(ctx.stale),
         do: Agent.update(ctx.store, &put_in(&1.points[id], retired_v5(ctx)))
 
-    {1, _} =
-      Repo.update_all(
-        from(n in Note, where: n.id == ^ctx.stale.id),
-        [set: [content_ciphertext: :crypto.strong_rand_bytes(48)]],
-        skip_tenant_check: true
-      )
-
-    Engram.Fixtures.mirror_body!(ctx.stale.id)
+    Engram.Fixtures.write_note_body!(ctx.stale.id,
+      content_ciphertext: :crypto.strong_rand_bytes(48)
+    )
 
     ref =
       :telemetry_test.attach_event_handlers(self(), [[:engram, :indexing, :payload_reconcile]])
@@ -1111,7 +1101,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     do: perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id, "mode" => "n"})
 
   defp reload(note),
-    do: Repo.one!(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
+    do: Engram.Fixtures.raw_note!(note.id)
 
   defp point_ids(note) do
     Repo.all(from(c in Chunk, where: c.note_id == ^note.id, select: c.qdrant_point_id),

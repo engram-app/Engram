@@ -61,7 +61,7 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
   end
 
   defp authoritative!(user, note_id) do
-    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get(Engram.Notes.Note, note_id) end)
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note(note_id) end)
     {:ok, text} = Notes.authoritative_content(user, raw)
     text
   end
@@ -296,11 +296,11 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
     # Corrupt the bad source's CRDT snapshot so decrypt fails.
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        from(n in Engram.Notes.Note, where: n.id == ^bad.id)
-        |> Repo.update_all(set: [crdt_state_ciphertext: <<1, 2, 3>>, crdt_state_nonce: <<0>>])
+        Engram.Fixtures.write_note_body!(bad.id,
+          crdt_state_ciphertext: <<1, 2, 3>>,
+          crdt_state_nonce: <<0>>
+        )
       end)
-
-    Engram.Fixtures.mirror_body!(bad.id)
 
     ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :links, :rewrite, :failed]])
     on_exit(fn -> :telemetry.detach(ref) end)

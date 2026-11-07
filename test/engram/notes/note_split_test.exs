@@ -50,6 +50,14 @@ defmodule Engram.Notes.NoteSplitTest do
   defp merged(<<_::binary-13>> = nonce, ct), do: nonce <> ct
   defp merged(nonce, ct), do: <<0>> <> nonce <> ct
 
+  # The body holds the envelope the notes row names: whole while the notes
+  # ciphertext is set (an older release's row), by its nonce field once
+  # writers stop writing it (R8(b2)).
+  defp in_step?(body, nonce, nil),
+    do: is_binary(body) and binary_part(body, 0, 13) == binary_part(merged(nonce, ""), 0, 13)
+
+  defp in_step?(body, nonce, ct), do: body == merged(nonce, ct)
+
   test "a note write fills the core keys and its body", %{user: u, vault: v} do
     note = write!(u, v, "Dir/Some Note.md", "---\ntype: idea\ntags: [a, b]\n---\n# T\n\nbody")
     r = row(note.id)
@@ -67,8 +75,8 @@ defmodule Engram.Notes.NoteSplitTest do
     assert r["content_digest"] == Base.decode16!(r["content_hash"], case: :lower)
 
     assert r["has_body"]
-    assert r["b_content"] == merged(r["content_nonce"], r["content_ciphertext"])
-    assert r["b_crdt"] == merged(r["crdt_state_nonce"], r["crdt_state_ciphertext"])
+    assert in_step?(r["b_content"], r["content_nonce"], r["content_ciphertext"])
+    assert in_step?(r["b_crdt"], r["crdt_state_nonce"], r["crdt_state_ciphertext"])
     assert r["b_key"] == r["dek_version"]
   end
 
@@ -90,7 +98,7 @@ defmodule Engram.Notes.NoteSplitTest do
 
     write!(u, v, "edit.md", "two")
     edited = row(note.id)
-    assert edited["b_content"] == merged(edited["content_nonce"], edited["content_ciphertext"])
+    assert in_step?(edited["b_content"], edited["content_nonce"], edited["content_ciphertext"])
     refute edited["b_content"] == before["b_content"]
 
     %{num_rows: 1} =

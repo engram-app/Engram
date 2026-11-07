@@ -119,7 +119,7 @@ defmodule Engram.DataMigrations.EffectiveDatesTest do
     user = Repo.get!(Engram.Accounts.User, ctx.user.id)
 
     {:ok, note} =
-      Repo.with_tenant!(user.id, fn -> Repo.get!(Note, note.id) end)
+      Repo.with_tenant!(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
       |> Engram.Crypto.maybe_decrypt_note_fields(user)
 
     {:ok, prepared} = Engram.Indexing.prepare_index(note, ctx.vault, user)

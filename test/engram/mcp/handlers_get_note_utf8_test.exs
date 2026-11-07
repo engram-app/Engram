@@ -9,12 +9,9 @@ defmodule Engram.MCP.HandlersGetNoteUtf8Test do
   # after the bad byte is never dropped again.
   use Engram.DataCase, async: true
 
-  import Ecto.Query, only: [from: 2]
-
   alias Engram.Crypto
   alias Engram.MCP.Handlers
   alias Engram.Notes
-  alias Engram.Notes.Note
   alias Engram.Repo
 
   setup do
@@ -43,15 +40,13 @@ defmodule Engram.MCP.HandlersGetNoteUtf8Test do
 
     {:ok, enc} = Crypto.encrypt_note_fields(%{content: bad, title: "Title"}, user, note.id)
 
-    {:ok, {1, _}} =
+    {:ok, :ok} =
       Repo.with_tenant(user.id, fn ->
-        from(n in Note, where: n.id == ^note.id)
-        |> Repo.update_all(
-          set: [content_ciphertext: enc.content_ciphertext, content_nonce: enc.content_nonce]
+        Engram.Fixtures.write_note_body!(note.id,
+          content_ciphertext: enc.content_ciphertext,
+          content_nonce: enc.content_nonce
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     note
   end

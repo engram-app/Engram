@@ -31,14 +31,12 @@ defmodule Engram.Notes.RestWriteInterleaveTest do
   """
   use ExUnit.Case, async: false
 
-  import Ecto.Query, only: [from: 2]
   import Engram.Factory
 
   alias Engram.CheckpointInterleave
   alias Engram.Crypto
   alias Engram.Notes
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note}
-  alias Engram.Repo
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint}
 
   setup do
     CheckpointInterleave.checkout_real!()
@@ -97,13 +95,13 @@ defmodule Engram.Notes.RestWriteInterleaveTest do
 
     # The snapshot the checkpoint just committed, captured while the writer is
     # still parked. This is the state the write must not lose.
-    cp_raw = Repo.one!(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
+    cp_raw = Engram.Fixtures.raw_note!(note.id)
     {:ok, cp_state} = Crypto.decrypt_crdt_state(cp_raw, user)
 
     CheckpointInterleave.release(:after_note_read, parked)
     assert {:ok, _} = Task.await(writer, 15_000)
 
-    raw = Repo.one!(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
+    raw = Engram.Fixtures.raw_note!(note.id)
     {:ok, fresh} = Crypto.maybe_decrypt_note_fields(raw, user)
 
     assert fresh.content =~ "REST",

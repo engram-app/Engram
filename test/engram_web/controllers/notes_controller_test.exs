@@ -807,19 +807,14 @@ defmodule EngramWeb.NotesControllerTest do
   # a genuine row shape rather than a corrupted one (a NULL ciphertext would
   # decrypt to nil and exercise a different branch).
   defp blank_facade_content!(user, note_id) do
-    import Ecto.Query, only: [from: 2]
-
     {:ok, enc} = Engram.Crypto.encrypt_note_fields(%{content: "", title: "stale"}, user, note_id)
 
-    {1, _} =
-      Engram.Repo.update_all(
-        from(n in Engram.Notes.Note, where: n.id == ^note_id),
-        [set: [content_ciphertext: enc.content_ciphertext, content_nonce: enc.content_nonce]],
-        skip_tenant_check: true
-      )
+    Engram.Fixtures.write_note_body!(note_id,
+      content_ciphertext: enc.content_ciphertext,
+      content_nonce: enc.content_nonce
+    )
 
     # Content is read from `note_bodies`; app writers keep it in step.
-    Engram.Fixtures.mirror_body!(note_id)
     :ok
   end
 end

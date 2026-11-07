@@ -41,7 +41,6 @@ defmodule Engram.Workers.CleanupVaultRlsTest do
   alias Engram.Accounts.ApiKey
   alias Engram.Attachments.Attachment
   alias Engram.Notes.Chunk
-  alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vaults.Vault
   alias Engram.Workers.CleanupVault
@@ -116,7 +115,7 @@ defmodule Engram.Workers.CleanupVaultRlsTest do
 
       # Read back as the superuser — reading inside the dropped role would be
       # filtered too, and every assertion would pass while the rows survived.
-      refute Repo.get(Note, note.id, skip_tenant_check: true)
+      refute Engram.Fixtures.raw_note(note.id)
       refute Repo.get(Attachment, attachment.id, skip_tenant_check: true)
       refute Repo.get(Vault, vault.id, skip_tenant_check: true)
 

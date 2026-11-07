@@ -104,7 +104,8 @@ defmodule Engram.RebuildLedgerWiringTest do
   defp rebuild(note),
     do: perform_job(RebuildStaleNote, %{"note_id" => note.id, "user_id" => note.user_id})
 
-  defp reload(note), do: Repo.with_tenant!(note.user_id, fn -> Repo.get!(Note, note.id) end)
+  defp reload(note),
+    do: Repo.with_tenant!(note.user_id, fn -> Engram.Fixtures.raw_note!(note.id) end)
 
   test "the ledger is debited exactly what Voyage reported", %{note: note} do
     Rebuild.set_budget(10_000)

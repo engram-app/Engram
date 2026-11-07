@@ -127,7 +127,7 @@ defmodule Engram.Notes.EffectiveDatesParityTest do
           actor: "api"
         )
 
-      row = Repo.with_tenant!(ctx.user.id, fn -> Repo.get!(Note, saved.id) end)
+      row = Repo.with_tenant!(ctx.user.id, fn -> Engram.Fixtures.raw_note!(saved.id) end)
       assert row.eff_updated == 1_793_442_859
       assert EffectiveDates.updated(row, nil) == {1_793_442_859, 1}
     end
@@ -143,7 +143,7 @@ defmodule Engram.Notes.EffectiveDatesParityTest do
           actor: "api"
         )
 
-      row = Repo.with_tenant!(ctx.user.id, fn -> Repo.get!(Note, saved.id) end)
+      row = Repo.with_tenant!(ctx.user.id, fn -> Engram.Fixtures.raw_note!(saved.id) end)
       assert row.eff_updated == nil
       assert elem(EffectiveDates.updated(row, nil), 1) == 2
     end

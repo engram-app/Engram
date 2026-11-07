@@ -14,12 +14,10 @@ defmodule Engram.NotesContentForReadTest do
   """
   use Engram.DataCase, async: true
 
-  import Ecto.Query, only: [from: 2]
-
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Notes
-  alias Engram.Notes.{CrdtUpdateLog, Note}
+  alias Engram.Notes.CrdtUpdateLog
   alias Engram.Repo
 
   setup do
@@ -53,13 +51,12 @@ defmodule Engram.NotesContentForReadTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note_id),
-          set: [content_ciphertext: ct, content_nonce: nonce, content_hash: nil]
+        Engram.Fixtures.write_note_body!(note_id,
+          content_ciphertext: ct,
+          content_nonce: nonce,
+          content_hash: nil
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note_id)
 
     :ok
   end
@@ -104,7 +101,7 @@ defmodule Engram.NotesContentForReadTest do
 
     # Move the whole body into the tail and drop the snapshot + facade, which is
     # the state between a genesis insert and its first checkpoint.
-    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, state} = Crypto.decrypt_crdt_state(raw, user)
 
     {ct, nonce} =
@@ -121,13 +118,12 @@ defmodule Engram.NotesContentForReadTest do
           inserted_at: DateTime.utc_now()
         })
 
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        Engram.Fixtures.write_note_body!(note.id,
+          crdt_state_ciphertext: nil,
+          crdt_state_nonce: nil
         )
       end)
 
-    Engram.Fixtures.mirror_body!(note.id)
     :ok = blank_facade!(user, note.id)
 
     {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0)
@@ -169,7 +165,7 @@ defmodule Engram.NotesContentForReadTest do
     {:ok, note} =
       Notes.upsert_note(user, vault, %{"path" => "e.md", "content" => "HASH ME"}, actor: "api")
 
-    {:ok, before} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, before} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     :ok = append_tail!(user, vault, note.id)
 
     {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0)
@@ -226,20 +222,17 @@ defmodule Engram.NotesContentForReadTest do
 
     # Corrupt the snapshot only: AES-GCM auth fails, the row's other columns
     # still decrypt fine.
-    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     ct = raw.crdt_state_ciphertext
     last = byte_size(ct) - 1
     <<head::binary-size(last), b>> = ct
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note.id),
-          set: [crdt_state_ciphertext: <<head::binary, Bitwise.bxor(b, 0xFF)>>]
+        Engram.Fixtures.write_note_body!(note.id,
+          crdt_state_ciphertext: <<head::binary, Bitwise.bxor(b, 0xFF)>>
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0)
     change = Enum.find(changes, &(&1.path == "h.md"))
@@ -306,13 +299,11 @@ defmodule Engram.NotesContentForReadTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note.id),
-          set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+        Engram.Fixtures.write_note_body!(note.id,
+          crdt_state_ciphertext: ct,
+          crdt_state_nonce: nonce
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     :ok = append_tail!(user, vault, note.id)
 

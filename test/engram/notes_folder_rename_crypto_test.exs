@@ -77,7 +77,7 @@ defmodule Engram.NotesFolderRenameCryptoTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.insert!(%Notes.Note{
+        Engram.Fixtures.insert_note_row!(%Notes.Note{
           id: Ecto.UUID.generate(),
           version: 1,
           seq: Engram.Vaults.next_seq!(vault.id),
@@ -153,7 +153,7 @@ defmodule Engram.NotesFolderRenameCryptoTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.insert!(%Notes.Note{
+        Engram.Fixtures.insert_note_row!(%Notes.Note{
           id: legacy_id,
           version: 1,
           seq: Engram.Vaults.next_seq!(vault.id),

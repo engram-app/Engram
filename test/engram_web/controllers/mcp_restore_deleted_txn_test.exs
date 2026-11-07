@@ -65,20 +65,16 @@ defmodule EngramWeb.McpRestoreDeletedTxnTest do
   end
 
   defp corrupt_content!(id) do
-    row = Repo.get!(Note, id, skip_tenant_check: true)
+    row = Engram.Fixtures.raw_note!(id)
     last = byte_size(row.content_ciphertext) - 1
     <<head::binary-size(last), byte>> = row.content_ciphertext
 
-    {1, _} =
-      Repo.update_all(
-        from(n in Note, where: n.id == ^id),
-        [set: [content_ciphertext: <<head::binary, Bitwise.bxor(byte, 0xFF)>>]],
-        skip_tenant_check: true
-      )
+    Engram.Fixtures.write_note_body!(id,
+      content_ciphertext: <<head::binary, Bitwise.bxor(byte, 0xFF)>>
+    )
 
     # Restore reads the body from `note_bodies`: put the damaged bytes there,
     # as the app's writers keep it in step (`NoteBody.sync!/3`).
-    Engram.Fixtures.mirror_body!(id)
   end
 
   defp call(tool_name, user, vault, args) do
@@ -160,9 +156,9 @@ defmodule EngramWeb.McpRestoreDeletedTxnTest do
       assert_received {:seen_elsewhere, nil}, "chunk 1 was not committed while chunk 2 ran"
       assert :counters.get(in_txn_claims, 1) == 0, "the index claim ran inside a transaction"
 
-      assert is_nil(Repo.get!(Note, a.id, skip_tenant_check: true).deleted_at)
-      assert Repo.get!(Note, b.id, skip_tenant_check: true).deleted_at
-      assert is_nil(Repo.get!(Note, c.id, skip_tenant_check: true).deleted_at)
+      assert is_nil(Engram.Fixtures.raw_note!(a.id).deleted_at)
+      assert Engram.Fixtures.raw_note!(b.id).deleted_at
+      assert is_nil(Engram.Fixtures.raw_note!(c.id).deleted_at)
     end)
   end
 end

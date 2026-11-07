@@ -17,7 +17,7 @@ defmodule Engram.Notes.RevisionsInterleaveTest do
   import Engram.Factory
 
   alias Engram.{CheckpointInterleave, Crypto, Notes, Repo}
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note, Revision, Revisions}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Revision, Revisions}
 
   setup do
     CheckpointInterleave.checkout_real!()
@@ -37,7 +37,7 @@ defmodule Engram.Notes.RevisionsInterleaveTest do
     {:ok, note} =
       Notes.upsert_note(user, vault, %{"path" => "race.md", "content" => "BODY"}, actor: "api")
 
-    {:ok, raw} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, state} = Crypto.decrypt_crdt_state(raw, user)
     {:ok, live} = CrdtBridge.doc_from_state(state)
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(live, CrdtBridge.text_name()), "BODY LIVE")

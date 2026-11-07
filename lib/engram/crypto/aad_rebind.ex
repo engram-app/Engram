@@ -263,7 +263,6 @@ defmodule Engram.Crypto.AadRebind do
         from(n in Note, where: n.id == ^id and n.dek_version == ^legacy_version)
         |> Repo.update_all(
           set: [
-            content_ciphertext: content_ct,
             content_nonce: content_n,
             title_ciphertext: title_ct,
             title_nonce: title_n,

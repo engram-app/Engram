@@ -11,7 +11,7 @@ defmodule Engram.FoldersRestoreOpTest do
 
   alias Engram.{Attachments, Folders, Notes, Repo, Storage}
   alias Engram.Attachments.Attachment
-  alias Engram.Notes.{Note, NoteBody}
+  alias Engram.Notes.Note
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
@@ -36,23 +36,26 @@ defmodule Engram.FoldersRestoreOpTest do
     Repo.get!(Attachment, att.id, skip_tenant_check: true)
   end
 
-  defp note_row(id), do: Repo.get!(Note, id, skip_tenant_check: true)
+  defp note_row(id), do: Engram.Fixtures.raw_note!(id)
 
   defp corrupt!(schema, id, field) do
-    ct = Map.fetch!(Repo.get!(schema, id, skip_tenant_check: true), field)
+    row =
+      if schema == Note, do: note_row(id), else: Repo.get!(schema, id, skip_tenant_check: true)
+
+    ct = Map.fetch!(row, field)
     last = byte_size(ct) - 1
     <<head::binary-size(last), byte>> = ct
+    flipped = <<head::binary, Bitwise.bxor(byte, 0xFF)>>
 
-    {1, _} =
-      Repo.update_all(
-        from(r in schema, where: r.id == ^id),
-        [set: [{field, <<head::binary, Bitwise.bxor(byte, 0xFF)>>}]],
-        skip_tenant_check: true
-      )
-
-    # A body column is read from `note_bodies`; the app's writers keep it in
-    # step (`NoteBody.sync!/3`).
-    if schema == Note and field in NoteBody.body_fields(), do: Engram.Fixtures.mirror_body!(id)
+    if schema == Note do
+      # A body ciphertext lives in `note_bodies` (virtual on `Note`).
+      Engram.Fixtures.write_note_body!(id, [{field, flipped}])
+    else
+      {1, _} =
+        Repo.update_all(from(r in schema, where: r.id == ^id), [set: [{field, flipped}]],
+          skip_tenant_check: true
+        )
+    end
   end
 
   # Runs the queued index releases, the delete's and the restore's.
@@ -364,7 +367,9 @@ defmodule Engram.FoldersRestoreOpTest do
     test "control: the dropped role with no tenant sees zero note rows", %{note: note} do
       assert {:returned, []} =
                as_prod_role(fn ->
-                 Repo.all(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
+                 from(n in Note, where: n.id == ^note.id)
+                 |> Engram.Notes.NoteBody.select_note()
+                 |> Repo.all(skip_tenant_check: true)
                end)
     end
 

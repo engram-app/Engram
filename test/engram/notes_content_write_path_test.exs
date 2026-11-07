@@ -10,7 +10,6 @@ defmodule Engram.NotesContentWritePathTest do
   use Engram.DataCase, async: true
 
   alias Engram.Notes
-  alias Engram.Notes.Note
   alias Engram.QueryRecorder
 
   setup do
@@ -25,7 +24,7 @@ defmodule Engram.NotesContentWritePathTest do
     %{user: user, vault: vault, note: note}
   end
 
-  defp row(note), do: Repo.get!(Note, note.id, skip_tenant_check: true)
+  defp row(note), do: Engram.Fixtures.raw_note!(note.id)
 
   test "a REST content update keeps the stored path and folder ciphertext", ctx do
     %{user: u, vault: v, note: n} = ctx

@@ -10,7 +10,7 @@ defmodule Engram.Notes.CrdtEmbedCoalescingTest do
   use Oban.Testing, repo: Engram.Repo
 
   alias Engram.{Crypto, Notes, Vaults}
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, Note}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence}
   alias Engram.Workers.EmbedNote
 
   setup do
@@ -64,7 +64,7 @@ defmodule Engram.Notes.CrdtEmbedCoalescingTest do
 
     # Checkpoint with changed content. Load the note's actual CRDT state so the
     # doc reflects the real persisted snapshot, then apply the new text on top.
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "checkpointed")
@@ -83,7 +83,7 @@ defmodule Engram.Notes.CrdtEmbedCoalescingTest do
     baseline = length(all_enqueued(worker: EmbedNote))
 
     # Checkpoint with the same content as setup ("base") — no hash change, no new embed.
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     {:ok, raw_state} = Crypto.decrypt_crdt_state(raw_note, user)
     {:ok, doc} = CrdtBridge.doc_from_state(raw_state)
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "base")

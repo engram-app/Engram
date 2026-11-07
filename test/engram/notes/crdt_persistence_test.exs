@@ -91,11 +91,8 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     tampered = <<:erlang.bxor(first, 0xFF), rest::binary>>
 
     Repo.with_tenant(user.id, fn ->
-      from(n in Note, where: n.id == ^note.id)
-      |> Repo.update_all(set: [crdt_state_ciphertext: tampered])
+      Engram.Fixtures.write_note_body!(note.id, crdt_state_ciphertext: tampered)
     end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
     doc = CrdtBridge.new_doc()
@@ -120,11 +117,11 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(<<255, 254, 253, 0, 1, 2>>, user, note.id)
 
     Repo.with_tenant(user.id, fn ->
-      from(n in Note, where: n.id == ^note.id)
-      |> Repo.update_all(set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce])
+      Engram.Fixtures.write_note_body!(note.id,
+        crdt_state_ciphertext: ct,
+        crdt_state_nonce: nonce
+      )
     end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
 
@@ -141,11 +138,8 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     %{user: user, note: note} = ctx
 
     Repo.with_tenant(user.id, fn ->
-      from(n in Note, where: n.id == ^note.id)
-      |> Repo.update_all(set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil])
+      Engram.Fixtures.write_note_body!(note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil)
     end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
     doc = CrdtBridge.new_doc()
@@ -180,13 +174,11 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # so it has to be constructed by hand.
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note2.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        Engram.Fixtures.write_note_body!(note2.id,
+          crdt_state_ciphertext: nil,
+          crdt_state_nonce: nil
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note2.id)
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()
@@ -228,13 +220,11 @@ defmodule Engram.Notes.CrdtPersistenceTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note2.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        Engram.Fixtures.write_note_body!(note2.id,
+          crdt_state_ciphertext: nil,
+          crdt_state_nonce: nil
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note2.id)
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
 
@@ -260,13 +250,11 @@ defmodule Engram.Notes.CrdtPersistenceTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note2.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        Engram.Fixtures.write_note_body!(note2.id,
+          crdt_state_ciphertext: nil,
+          crdt_state_nonce: nil
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note2.id)
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()
@@ -291,13 +279,11 @@ defmodule Engram.Notes.CrdtPersistenceTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note2.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        Engram.Fixtures.write_note_body!(note2.id,
+          crdt_state_ciphertext: nil,
+          crdt_state_nonce: nil
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note2.id)
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()
@@ -326,13 +312,11 @@ defmodule Engram.Notes.CrdtPersistenceTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note2.id),
-          set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+        Engram.Fixtures.write_note_body!(note2.id,
+          crdt_state_ciphertext: ct,
+          crdt_state_nonce: nonce
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note2.id)
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()
@@ -355,13 +339,11 @@ defmodule Engram.Notes.CrdtPersistenceTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note2.id),
-          set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+        Engram.Fixtures.write_note_body!(note2.id,
+          crdt_state_ciphertext: ct,
+          crdt_state_nonce: nonce
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note2.id)
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()
@@ -383,13 +365,11 @@ defmodule Engram.Notes.CrdtPersistenceTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note2.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
+        Engram.Fixtures.write_note_body!(note2.id,
+          crdt_state_ciphertext: nil,
+          crdt_state_nonce: nil
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note2.id)
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
 
@@ -428,13 +408,11 @@ defmodule Engram.Notes.CrdtPersistenceTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(
-          from(n in Note, where: n.id == ^note2.id),
-          set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+        Engram.Fixtures.write_note_body!(note2.id,
+          crdt_state_ciphertext: ct,
+          crdt_state_nonce: nonce
         )
       end)
-
-    Engram.Fixtures.mirror_body!(note2.id)
 
     st = %{user_id: user.id, vault_id: note2.vault_id, note_id: note2.id}
     doc = CrdtBridge.new_doc()
@@ -525,7 +503,7 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # transport self-heal read path), so the seq-fetching update_all's
     # `not is_nil(n.crdt_head)` guard matches ZERO rows here and update_v1
     # must fall back to a select-only query to still surface the seq.
-    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Repo.get(Note, note.id) end)
+    {:ok, raw_note} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note(note.id) end)
     assert raw_note.crdt_head == nil
 
     {:ok, %{state: upd}} = CrdtBridge.merge_plaintext(nil, "zero rows fallback")
@@ -580,7 +558,7 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     assert seq == note.seq
 
     # The stale head cache was invalidated by the same update_all.
-    {:ok, updated} = Repo.with_tenant(user.id, fn -> Repo.get(Note, note.id) end)
+    {:ok, updated} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note(note.id) end)
     assert updated.crdt_head == nil
   end
 
@@ -682,7 +660,7 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # Load fresh note row and decrypt crdt_state
     {:ok, raw_note} =
       Repo.with_tenant(user.id, fn ->
-        Repo.get!(Note, note.id)
+        Engram.Fixtures.raw_note!(note.id)
       end)
 
     refute is_nil(raw_note.crdt_state_ciphertext)
@@ -769,11 +747,11 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state(state, user, note.id)
 
     Repo.with_tenant(user.id, fn ->
-      from(n in Note, where: n.id == ^note.id)
-      |> Repo.update_all(set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce])
+      Engram.Fixtures.write_note_body!(note.id,
+        crdt_state_ciphertext: ct,
+        crdt_state_nonce: nonce
+      )
     end)
-
-    Engram.Fixtures.mirror_body!(note.id)
 
     st = %{user_id: user.id, vault_id: note.vault_id, note_id: note.id}
     bound = CrdtBridge.new_doc()
@@ -822,7 +800,7 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # Record the original seq
     {:ok, raw_note} =
       Repo.with_tenant(user.id, fn ->
-        Repo.get!(Note, note.id)
+        Engram.Fixtures.raw_note!(note.id)
       end)
 
     original_seq = raw_note.seq
@@ -840,7 +818,7 @@ defmodule Engram.Notes.CrdtPersistenceTest do
     # Verify the trailing edit made it into notes.content and seq was bumped
     {:ok, {:ok, updated}} =
       Repo.with_tenant(user.id, fn ->
-        Crypto.maybe_decrypt_note_fields(Repo.get!(Note, note.id), user)
+        Crypto.maybe_decrypt_note_fields(Engram.Fixtures.raw_note!(note.id), user)
       end)
 
     assert updated.content =~ "trailing edit never checkpointed"

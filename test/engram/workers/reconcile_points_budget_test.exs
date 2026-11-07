@@ -267,7 +267,7 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
   end
 
   defp reload(note) do
-    {:ok, row} = Repo.with_tenant(note.user_id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, row} = Repo.with_tenant(note.user_id, fn -> Engram.Fixtures.raw_note!(note.id) end)
     row
   end
 

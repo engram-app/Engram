@@ -37,7 +37,7 @@ defmodule Engram.Workers.FinalizeRevisionTest do
 
   alias Engram.{Crypto, Notes, Repo, Storage, Vaults}
   alias Engram.Crypto.Envelope
-  alias Engram.Notes.{Note, Revision, Revisions}
+  alias Engram.Notes.{Revision, Revisions}
   alias Engram.Workers.FinalizeRevision
 
   setup do
@@ -49,7 +49,7 @@ defmodule Engram.Workers.FinalizeRevisionTest do
     {:ok, note} =
       Notes.upsert_note(user, vault, %{"path" => "f.md", "content" => "keep me"}, actor: "api")
 
-    {:ok, existing} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, existing} = Repo.with_tenant(user.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
 
     {:ok, :ok} =
       Repo.with_tenant(user.id, fn -> Revisions.record_write(existing, "sync", true) end)
