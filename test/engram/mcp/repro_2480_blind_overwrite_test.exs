@@ -12,6 +12,8 @@ defmodule Engram.MCP.Repro2480BlindOverwriteTest do
 
   alias Engram.MCP.Handlers
   alias Engram.Notes
+  alias Engram.Notes.CrdtBridge
+  alias Engram.Notes.CrdtPersistence
 
   @path "Plan.md"
   @v0 "# Plan\n\n## Goals\n\nold section\n\n## Notes\n\nkeep me\n"
@@ -371,5 +373,93 @@ defmodule Engram.MCP.Repro2480BlindOverwriteTest do
              Handlers.handle("append_to_note", u, v, %{"path" => @path, "text" => "appended\n"})
 
     assert_mcp_kept(u, v, "append_to_note")
+  end
+
+  # -- #2486 fix-forward: the ChatGPT sequence (create, then rewrite blind) --
+
+  test "write_note's reply carries the content_hash a rewrite needs", %{user: u, vault: v} do
+    assert {:ok, _, %{"content_hash" => hash}} =
+             Handlers.handle("write_note", u, v, %{"path" => "Made.md", "content" => "first\n"})
+
+    assert hash == read_hash(u, v, "Made.md")
+
+    assert {:ok, _, %{"content_hash" => next}} =
+             Handlers.handle("write_note", u, v, %{
+               "path" => "Made.md",
+               "content" => "second\n",
+               "base_hash" => hash
+             })
+
+    assert body_at(u, v, "Made.md") == "second\n"
+    assert next == read_hash(u, v, "Made.md")
+  end
+
+  test "create_note's reply carries the content_hash a rewrite needs", %{user: u, vault: v} do
+    assert {:ok, _, %{"path" => path, "content_hash" => hash}} =
+             Handlers.handle("create_note", u, v, %{
+               "title" => "Fresh Idea",
+               "content" => "draft\n",
+               "suggested_folder" => "Ideas"
+             })
+
+    assert hash == read_hash(u, v, path)
+
+    assert {:ok, _, _} =
+             Handlers.handle("write_note", u, v, %{
+               "path" => path,
+               "content" => "final\n",
+               "base_hash" => hash
+             })
+
+    assert body_at(u, v, path) == "final\n"
+  end
+
+  test "a blind rewrite's refusal names the exact retry", %{user: u, vault: v} do
+    assert {:error, {:version_conflict, msg}} =
+             Handlers.handle("write_note", u, v, %{"path" => @path, "content" => "x\n"})
+
+    assert msg =~ "base_hash = "
+    assert msg =~ "content_hash"
+    assert msg =~ "get_notes"
+    assert msg =~ "edit_note"
+  end
+
+  test "a stale base's refusal names the exact retry", %{user: u, vault: v} do
+    assert {:error, {:version_conflict, msg}} =
+             Handlers.handle("write_note", u, v, %{
+               "path" => @path,
+               "content" => "x\n",
+               "base_hash" => "deadbeef"
+             })
+
+    assert msg =~ "base_hash = "
+    assert msg =~ "get_notes"
+    assert msg =~ "edit_note"
+  end
+
+  test "after a rewrite over a live tail edit, the reply's content_hash is get_notes'", %{
+    user: u,
+    vault: v
+  } do
+    {:ok, row} = Notes.get_note(u, v, @path)
+    {:ok, state} = Engram.Crypto.decrypt_crdt_state(row, u)
+    {:ok, doc} = CrdtBridge.doc_from_state(state)
+    {:ok, sv} = Yex.encode_state_vector(doc)
+    text = Yex.Doc.get_text(doc, CrdtBridge.text_name())
+    CrdtBridge.diff_into_text(text, Yex.Text.to_string(text) <> "LIVE\n")
+    {:ok, upd} = Yex.encode_state_as_update(doc, sv)
+    st = %{user_id: u.id, vault_id: v.id, note_id: row.id}
+    _ = CrdtPersistence.update_v1(st, upd, row.id, doc)
+
+    base = read_hash(u, v)
+
+    assert {:ok, _, %{"content_hash" => hash}} =
+             Handlers.handle("write_note", u, v, %{
+               "path" => @path,
+               "content" => body(u, v) <> "AGENT\n",
+               "base_hash" => base
+             })
+
+    assert hash == read_hash(u, v)
   end
 end
