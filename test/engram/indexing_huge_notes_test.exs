@@ -20,6 +20,7 @@ defmodule Engram.IndexingHugeNotesTest do
   use Engram.DataCase, async: false
 
   import Ecto.Query
+  import Engram.IndexingTestHelpers
   import Mox
 
   alias Engram.Crypto
@@ -156,8 +157,10 @@ defmodule Engram.IndexingHugeNotesTest do
     @tag shard: rem(i, @huge_shards)
     @tag size: size, shape: shape, headings: headings, tier: tier
     # The ExUnit default (60 s) is the harness's, not the pipeline's: the
-    # bound under test is `@seconds_per_mb` x size, asserted below.
-    @tag timeout: (@seconds_per_mb * size + 60) * 1_000
+    # bound under test is `@seconds_per_mb` x size a pass, asserted below. A
+    # note past the 12 MiB pass embed budget takes several passes (10 MB
+    # tiny_sections selfhost: 2), so the harness allows 3.
+    @tag timeout: (@seconds_per_mb * size * 3 + 60) * 1_000
     test("#{size} MB #{shape} headings=#{headings} #{tier}", ctx, do: run_case(ctx))
   end
 
@@ -309,19 +312,34 @@ defmodule Engram.IndexingHugeNotesTest do
     {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
     stub_voyage(dir)
 
-    {{micros, result}, peak} =
-      measure_peak(fn ->
-        :timer.tc(fn -> Indexing.index_note_with_usage(note, vault, nil, index_opts(tier)) end)
+    # Past one pass's embed budget a note finishes over several passes
+    # (`:embed_continues`, EmbedNote snoozes and runs the next), each its own
+    # job attempt: every per-pass limit below holds for each pass.
+    passes =
+      index_passes(fn ->
+        seen = length(voyage_calls(dir))
+
+        {{micros, result}, peak} =
+          measure_peak(fn ->
+            :timer.tc(fn -> Indexing.index_note_with_usage(note, vault, nil, index_opts(tier)) end)
+          end)
+
+        voyage = Enum.drop(voyage_calls(dir), seen)
+        {result, %{micros: micros, peak: peak, job: Process.get(:job_peak), voyage: voyage}}
       end)
+
+    {result, _} = List.last(passes)
+    per_pass = Enum.map(passes, &elem(&1, 1))
 
     report = %{
       size_mb: size,
       shape: shape,
       headings: headings,
       tier: tier,
-      ms: div(micros, 1000),
-      peak_mb: Float.round(peak / @mib, 1),
-      job_mb: Float.round(Process.get(:job_peak) / @mib, 1),
+      passes: length(passes),
+      ms: per_pass |> Enum.map(& &1.micros) |> Enum.sum() |> div(1000),
+      peak_mb: Float.round(Enum.max(Enum.map(per_pass, & &1.peak)) / @mib, 1),
+      job_mb: Float.round(Enum.max(Enum.map(per_pass, & &1.job)) / @mib, 1),
       tags: length(tags)
     }
 
@@ -345,25 +363,27 @@ defmodule Engram.IndexingHugeNotesTest do
 
     assert points <= cap, "#{inspect(report)}: #{points} points over the cap #{cap}"
 
-    assert micros <= @seconds_per_mb * size * 1_000_000,
-           "#{inspect(report)}: over #{@seconds_per_mb * size} s"
+    for %{micros: micros, job: job} <- per_pass do
+      assert micros <= @seconds_per_mb * size * 1_000_000,
+             "#{inspect(report)}: a pass over #{@seconds_per_mb * size} s"
 
-    assert Process.get(:job_peak) <= @per_job_memory,
-           "#{inspect(report)}: job over 250 MB"
+      assert job <= @per_job_memory, "#{inspect(report)}: a pass's job over 250 MB"
+    end
 
     for bytes <- qdrant_sizes(dir) do
       assert bytes <= @qdrant_max_request,
              "#{inspect(report)}: a #{bytes}-byte Qdrant request is over 8 MiB"
     end
 
-    voyage = voyage_calls(dir)
-    sent = voyage |> Enum.map(&elem(&1, 1)) |> Enum.sum()
-    assert sent <= @pass_embed_bytes, "#{inspect(report)}: #{sent} bytes to Voyage in one pass"
+    for %{voyage: voyage} <- per_pass do
+      sent = voyage |> Enum.map(&elem(&1, 1)) |> Enum.sum()
+      assert sent <= @pass_embed_bytes, "#{inspect(report)}: #{sent} bytes to Voyage in one pass"
 
-    assert length(voyage) <= @max_voyage_requests,
-           "#{inspect(report)}: #{length(voyage)} Voyage requests in one pass"
+      assert length(voyage) <= @max_voyage_requests,
+             "#{inspect(report)}: #{length(voyage)} Voyage requests in one pass"
+    end
 
-    for {count, request_bytes, max_input} <- voyage do
+    for {count, request_bytes, max_input} <- voyage_calls(dir) do
       assert count <= @voyage_inputs
       assert request_bytes <= @voyage_request_tokens, "#{inspect(report)}: Voyage batch"
       assert max_input <= @voyage_input_tokens, "#{inspect(report)}: Voyage input"
@@ -388,16 +408,10 @@ defmodule Engram.IndexingHugeNotesTest do
 
       prose_sentinels = Enum.filter(sentinels, &MapSet.member?(prose, &1))
 
-      # Past the per-pass embed budget (12 MiB) the rest of the prose is
-      # keyword-only by design, in note order: the dense sentinels are then a
-      # prefix of the prose ones, never a scatter.
-      dense_lost =
-        if sent > @pass_embed_bytes - 256 * 1024,
-          do:
-            prose_sentinels
-            |> Enum.drop_while(&MapSet.member?(embedded, &1))
-            |> Enum.filter(&MapSet.member?(embedded, &1)),
-          else: Enum.reject(prose_sentinels, &MapSet.member?(embedded, &1))
+      # Past the per-pass embed budget (12 MiB) the next pass embeds the
+      # rest (the vector cache keeps what the earlier ones paid for), so by
+      # the last pass every prose sentinel was in some dense input.
+      dense_lost = Enum.reject(prose_sentinels, &MapSet.member?(embedded, &1))
 
       assert dense_lost == [],
              "#{inspect(report)}: #{length(dense_lost)}/#{length(sentinels)} sentinels " <>

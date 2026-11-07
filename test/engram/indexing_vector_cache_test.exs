@@ -221,15 +221,10 @@ defmodule Engram.IndexingVectorCacheTest do
     on_exit(fn -> Application.delete_env(:engram, :max_pass_embed_bytes) end)
     note = put_note(ctx.user, ctx.vault, "Long.md", body(8))
 
-    passes =
-      Stream.repeatedly(fn -> Indexing.index_note(note, ctx.vault) end)
-      |> Enum.reduce_while(1, fn
-        {:error, :embed_continues}, n when n < 20 -> {:cont, n + 1}
-        result, n -> {:halt, {n, result}}
-      end)
+    passes = index_passes(fn -> Indexing.index_note(note, ctx.vault) end)
 
-    assert {n, {:ok, count}} = passes
-    assert n > 1
+    assert {:ok, count} = List.last(passes)
+    assert length(passes) > 1
     assert embedded() == count
   end
 
@@ -360,15 +355,11 @@ defmodule Engram.IndexingVectorCacheTest do
       a = put_note(ctx.user, ctx.vault, "Work/Split.md", body(4) <> new_sections(2))
       opts = meter_opts(ctx.user)
 
-      per_pass =
-        Stream.repeatedly(fn ->
-          result = Indexing.index_note_with_usage(a, ctx.vault, nil, opts)
-          {result, calls()}
-        end)
-        |> Enum.reduce_while([], fn
-          {{:error, :embed_continues}, sent}, acc when length(acc) < 20 -> {:cont, [sent | acc]}
-          {{:ok, _, _, true}, sent}, acc -> {:halt, Enum.reverse([sent | acc])}
-        end)
+      passes =
+        index_passes(fn -> {Indexing.index_note_with_usage(a, ctx.vault, nil, opts), calls()} end)
+
+      assert {{:ok, _, _, true}, _} = List.last(passes)
+      per_pass = Enum.map(passes, &elem(&1, 1))
 
       assert length(per_pass) > 1
       assert [first | _] = per_pass
@@ -393,9 +384,5 @@ defmodule Engram.IndexingVectorCacheTest do
       refute_received {:reserved, _}
       assert UsageMeters.lifetime_embed_tokens(ctx.user.id) == 0
     end
-  end
-
-  defp until_done(fun) do
-    Stream.repeatedly(fun) |> Stream.take(20) |> Enum.find(&match?({:ok, _}, &1))
   end
 end
