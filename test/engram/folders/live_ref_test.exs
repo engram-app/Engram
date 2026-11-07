@@ -154,7 +154,9 @@ defmodule Engram.Folders.LiveRefTest do
     setup do
       {user, vault} =
         Sandbox.unboxed_run(Repo, fn ->
-          user = insert(:user)
+          # A unique email: this row is committed, so a factory sequence that
+          # restarts each run would collide with one a crashed run left.
+          user = insert(:user, email: "live-ref-#{Ecto.UUID.generate()}@test.local")
           {user, insert(:vault, user: user)}
         end)
 
