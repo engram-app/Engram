@@ -114,7 +114,7 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNullTest do
     assert [^ct, nil, ^cn, _] = raw(drifted.id)
   end
 
-  test "a stale copy under the body's nonce is nulled and counted", %{user: u, vault: v} do
+  test "a stale copy under the body's nonce is nulled", %{user: u, vault: v} do
     n = write!(u, v, "same.md", "stale under its nonce")
     old_release_copy!(n.id)
 
@@ -326,14 +326,74 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNullTest do
       assert nulled(u) in 400..600
     end
 
-    test "an invalid override falls back to 10,000, with a warning", %{user: u, vault: v} do
+    test "an invalid override falls back to 2,000, with a warning", %{user: u, vault: v} do
       copies!(u, v, 700)
       Engram.ServiceConfig.put_override(:note_body_columns_null_max_fixed, -5)
 
       log = capture_log([level: :warning], fn -> Null.run_pass() end)
       assert nulled(u) == 700
       assert log =~ "note_body_columns_null_max_fixed"
+      assert capture_log(fn -> assert Null.max_fixed() == 2_000 end) =~ "positive integer"
     end
+
+    # A resumed batch starts gentle (prod swap 220 -> 709 MB per 10k pass).
+    test "defaults to 2,000" do
+      assert Null.max_fixed() == 2_000
+    end
+
+    # Prod 2026-11-07: every pass read every byte of both copies. A tail
+    # slice (or the length of an inline-compressed value) of a TOASTed
+    # ciphertext decompresses the whole value; a 13-byte prefix of an
+    # EXTERNAL one fetches one chunk. Red on main's statement (its `stale`
+    # test reads `octet_length` and the last 16 bytes of all four columns).
+    test "the null statement reads only the 13-byte prefix of a ciphertext column" do
+      sql = Null.null_sql()
+      cols = ~w(b.content_ct b.crdt_ct n.content_ciphertext n.crdt_state_ciphertext)
+
+      for col <- cols do
+        refute sql =~ "octet_length(#{col})", col
+        refute sql =~ "length(#{col})", col
+
+        for [slice] <- Regex.scan(~r/substring\(#{Regex.escape(col)} FROM [^)]*\)/, sql),
+            do: assert(slice == "substring(#{col} FROM 1 FOR 13)", slice)
+      end
+    end
+
+    # One window's plan: both tables are probed by the window's ids, so the
+    # planner can bound either side by the window whatever join it picks
+    # (on main the body rows were reachable only through the join, so at
+    # prod size a hash join could scan all of `note_bodies`). The suite's
+    # tables are tiny, where a scan is the cheapest plan, so scans are
+    # disabled to show the access path; the row estimate is the real one.
+    # Red on main's statement (its `note_bodies` probe has no window
+    # condition).
+    test "the null statement probes both tables by the window's ids", %{user: u, vault: v} do
+      copies!(u, v, 700)
+      Repo.query!("ANALYZE notes")
+      Repo.query!("ANALYZE note_bodies")
+      Repo.query!("SET LOCAL enable_seqscan = off")
+      ids = for _ <- 1..200, do: Ecto.UUID.dump!(Ecto.UUID.generate())
+
+      %{rows: [[[plan]]]} = Repo.query!("EXPLAIN (FORMAT JSON) " <> Null.null_sql(), [ids])
+
+      scans =
+        for n <- plan_nodes(plan["Plan"]),
+            n["Relation Name"] in ~w(notes note_bodies),
+            n["Node Type"] != "ModifyTable",
+            do:
+              {n["Relation Name"], n["Node Type"], n["Index Cond"] || n["Recheck Cond"],
+               n["Plan Rows"]}
+
+      assert Enum.any?(scans, &match?({"note_bodies", _, _, _}, &1)), inspect(scans)
+
+      for {rel, type, cond, rows} = scan <- scans do
+        refute type == "Seq Scan", inspect(scan)
+        assert rows <= 200, inspect(scan)
+        assert cond =~ "ANY" or (rel == "notes" and cond == "(id = c.id)"), inspect(scan)
+      end
+    end
+
+    defp plan_nodes(node), do: [node | Enum.flat_map(node["Plans"] || [], &plan_nodes/1)]
 
     test "run_pass/1's max_fixed: wins over the override", %{user: u, vault: v} do
       copies!(u, v, 700)
