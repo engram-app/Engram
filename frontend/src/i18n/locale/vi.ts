@@ -5,6 +5,8 @@ export default {
 		"Bạn đã đạt giới hạn ghi chú — nâng cấp để thêm nhiều hơn.",
 	"Changes can't be saved: your account can't sync right now.":
 		"Không thể lưu thay đổi: tài khoản của bạn không thể đồng bộ hóa ngay bây giờ.",
+	"Folder too large to rename here ({count} items). Rename it in Obsidian.":
+		"Thư mục quá lớn để đổi tên ở đây ({count} mục). Đổi tên nó trong Obsidian.",
 	"A note with that name already exists.": "Một ghi chú với tên đó đã tồn tại.",
 	"A folder with that name already exists.": "Một thư mục với tên đó đã tồn tại.",
 	"A file with that name already exists.": "Đã có một tệp với tên đó.",
@@ -84,6 +86,7 @@ export default {
 	"Already have an account? {signin}": "Đã có tài khoản? {signin}",
 	"Loading...": "Đang tải...",
 	"An account with this email already exists": "Đã có tài khoản với email này",
+	"Contact support to restore access.": "Liên hệ bộ phận hỗ trợ để khôi phục quyền truy cập.",
 	"Billing history": "Lịch sử thanh toán",
 	"No transactions yet.": "Chưa có giao dịch nào.",
 	Date: "Ngày",
@@ -221,7 +224,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"Bạn đã đạt giới hạn thiết bị trên gói Free. Hủy kết nối một thiết bị bạn không sử dụng để kết nối thiết bị này, hoặc nâng cấp để kết nối nhiều thiết bị hơn.",
 	"Account suspended": "Tài khoản đã bị đình chỉ",
-	"Contact support to restore access.": "Liên hệ bộ phận hỗ trợ để khôi phục quyền truy cập.",
 	"Account setup incomplete": "Thiết lập tài khoản chưa hoàn tất",
 	"Please complete onboarding.": "Vui lòng hoàn tất quá trình hướng dẫn.",
 	"Limit reached": "Đã đạt giới hạn",

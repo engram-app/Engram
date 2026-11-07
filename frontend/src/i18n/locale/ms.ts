@@ -5,6 +5,8 @@ export default {
 		"Anda telah mencapai had nota anda — tingkatkan untuk menambah lebih banyak.",
 	"Changes can't be saved: your account can't sync right now.":
 		"Perubahan tidak dapat disimpan: akaun anda tidak dapat disegerakkan sekarang.",
+	"Folder too large to rename here ({count} items). Rename it in Obsidian.":
+		"Folder terlalu besar untuk ditukar nama di sini ({count} item). Tukar nama di Obsidian.",
 	"A note with that name already exists.": "Nota dengan nama itu sudah wujud.",
 	"A folder with that name already exists.": "Folder dengan nama itu sudah wujud.",
 	"A file with that name already exists.": "Fail dengan nama itu sudah wujud.",
@@ -86,6 +88,7 @@ export default {
 	"Already have an account? {signin}": "Sudah mempunyai akaun? {signin}",
 	"Loading...": "Memuatkan...",
 	"An account with this email already exists": "Sudah ada akaun dengan e-mel ini",
+	"Contact support to restore access.": "Hubungi sokongan untuk memulihkan akses.",
 	"Billing history": "Sejarah pembayaran",
 	"No transactions yet.": "Tiada transaksi lagi.",
 	Date: "Tarikh",
@@ -227,7 +230,6 @@ export default {
 	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
 		"Anda telah mencapai had peranti pada pelan percuma anda. Putuskan sambungan peranti yang tidak anda gunakan untuk menyambungkan yang ini, atau tingkatkan langganan anda untuk menyambungkan lebih banyak peranti.",
 	"Account suspended": "Akaun ditangguhkan",
-	"Contact support to restore access.": "Hubungi sokongan untuk memulihkan akses.",
 	"Account setup incomplete": "Persediaan akaun belum selesai",
 	"Please complete onboarding.": "Sila lengkapkan proses permulaan.",
 	"Limit reached": "Had telah dicapai",
