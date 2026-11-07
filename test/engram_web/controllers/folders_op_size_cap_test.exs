@@ -47,4 +47,33 @@ defmodule EngramWeb.FoldersOpSizeCapTest do
 
     assert body == %{"error" => "folder_too_large", "limit" => 1, "over_limit" => true}
   end
+
+  # The folder's own row is not one of its items (no attachments here: this
+  # file does not stub storage).
+  test "POST /api/folders/rename of exactly the cap of children is a 200", %{
+    conn: conn,
+    user: user,
+    vault: vault
+  } do
+    Engram.ServiceConfig.put_override(:folder_op_max_rows, 200)
+    :ok = Engram.Fixtures.fill_folder!(user, vault, "A", 200, 0)
+
+    conn
+    |> post(~p"/api/folders/rename", %{"old_path" => "A", "new_path" => "B"})
+    |> json_response(200)
+  end
+
+  test "POST /api/folders/rename of one child over the cap is a 422", %{
+    conn: conn,
+    user: user,
+    vault: vault
+  } do
+    Engram.ServiceConfig.put_override(:folder_op_max_rows, 200)
+    :ok = Engram.Fixtures.fill_folder!(user, vault, "A", 201, 0)
+
+    assert %{"error" => "folder_too_large", "limit" => 200} =
+             conn
+             |> post(~p"/api/folders/rename", %{"old_path" => "A", "new_path" => "B"})
+             |> json_response(422)
+  end
 end

@@ -30,6 +30,10 @@ defmodule Engram.Notes.Note do
     field :tags, {:array, :string}, virtual: true, default: [], redact: true
     field :title, :string, virtual: true, redact: true
     field :content, :string, virtual: true, redact: true
+    # Set by a folder scan only (`Notes.scan_folders/3`): the
+    # `full_path_hmac` the row named by `folder_ref_id` had when the scan
+    # walked it, which the delete fence re-checks.
+    field :folder_row_hmac, :binary, virtual: true
 
     # OKF v0.1 fields (spec 2026-07-02). type/description/resource are
     # encrypted (virtuals below); the two dates are the ONLY plaintext
@@ -345,7 +349,8 @@ defmodule Engram.Notes.Note do
       :path_hmac,
       :path_ciphertext,
       :path_nonce,
-      :folder_hmac,
+      # Not `:folder_hmac`: a note's folder is its `folder_ref_id`, and a
+      # later release stops writing the hash (R9). A marker still needs it.
       :folder_ciphertext,
       :folder_nonce,
       :content_ciphertext,

@@ -2,6 +2,7 @@ defmodule Engram.FoldersTest do
   use Engram.DataCase, async: false
 
   alias Engram.{Attachments, Folders, Notes}
+  alias Engram.Folders.Rows
 
   setup do
     prev = Application.get_env(:engram, :storage)
@@ -47,6 +48,23 @@ defmodule Engram.FoldersTest do
       from(a in Engram.Attachments.Attachment, where: a.id == ^att_id),
       [set: [path_ciphertext: <<head::binary, Bitwise.bxor(last, 0xFF)>>]],
       skip_tenant_check: true
+    )
+  end
+
+  # Moves only the folder ROW at `from` to `to` (same id, new path hash): the
+  # notes under it keep every column, as an O(1) folder rename leaves them.
+  defp rename_folder_row_in_place!(user, vault, from, to) do
+    {:ok, fk} = Engram.Crypto.dek_filter_key(user)
+
+    Engram.Repo.query!(
+      "UPDATE folders SET full_path_hmac = $1, name_hmac = $2 " <>
+        "WHERE vault_id = $3 AND full_path_hmac = $4 AND deleted_at IS NULL",
+      [
+        Rows.path_hmac(fk, to),
+        Rows.name_hmac(fk, to),
+        Ecto.UUID.dump!(vault.id),
+        Rows.path_hmac(fk, from)
+      ]
     )
   end
 
@@ -787,6 +805,125 @@ defmodule Engram.FoldersTest do
       {:ok, _} = Notes.rename_note(user, vault, "Docs/a.md", "Archive/a.md")
 
       assert {:ok, %{deleted: 0, notes: 0}} = Notes.delete_scanned(user, vault, matches)
+    end
+
+    # R9: the fence is the note's folder ROW, not its folder hash. A rename
+    # that moves only the folder row (in place, same id, new path hash) after
+    # the scan must leave the notes alone: the folder the user named is gone.
+    test "a folder row renamed in place between scan and delete deletes nothing", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
+      rename_folder_row_in_place!(user, vault, "Docs", "Moved")
+
+      assert {:ok, %{notes: 0}} = Notes.delete_scanned(user, vault, matches)
+      assert {:ok, _} = Notes.get_note(user, vault, "Docs/a.md")
+    end
+
+    test "a delete of the live folder still removes its notes", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
+
+      assert {:ok, %{notes: 1}} = Notes.delete_scanned(user, vault, matches)
+      assert {:error, :not_found} = Notes.get_note(user, vault, "Docs/a.md")
+    end
+
+    # A drift note (no folder row reference) is placed by its own envelope, so
+    # its fence is that envelope's nonce: unchanged since the scan, deleted.
+    test "a drift note with no folder reference is still deleted", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      Engram.Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [
+        Ecto.UUID.dump!(note.id)
+      ])
+
+      {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
+      assert Enum.any?(matches, &(&1.id == note.id))
+
+      assert {:ok, %{notes: 1}} = Notes.delete_scanned(user, vault, matches)
+      assert {:error, :not_found} = Notes.get_note(user, vault, "Docs/a.md")
+    end
+
+    # #2508 review F1: a folder delete takes no folder-write lock, so the
+    # drain can heal a drift note (set its reference, envelope untouched)
+    # between scan and delete. The note must still go: otherwise it outlives
+    # the delete and the next drain recreates the folder from its envelope.
+    test "a drift note healed between scan and delete is still deleted", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      %{rows: [[row]]} =
+        Engram.Repo.query!("SELECT folder_ref_id FROM notes WHERE id = $1", [
+          Ecto.UUID.dump!(note.id)
+        ])
+
+      Engram.Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [
+        Ecto.UUID.dump!(note.id)
+      ])
+
+      {:ok, matches} = Notes.scan_folders(user, vault, ["Docs"])
+
+      Engram.Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
+        Ecto.UUID.dump!(note.id),
+        row
+      ])
+
+      assert {:ok, %{notes: 1}} = Notes.delete_scanned(user, vault, matches)
+      assert {:error, :not_found} = Notes.get_note(user, vault, "Docs/a.md")
+    end
+
+    # #2508 review F2: the fence is the folder rows the scan walked, not the
+    # note's own envelope. A note whose reference names another row of the
+    # subtree than its envelope's folder is still inside the delete.
+    test "a note whose reference names another scanned folder row is deleted", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "A/B/x.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      # An empty folder: a row of the subtree that no note's envelope names.
+      {:ok, _} = Notes.create_folder_marker(user, vault, "A/C")
+
+      Engram.Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
+        Ecto.UUID.dump!(note.id),
+        Ecto.UUID.dump!(Engram.FolderRows.tree(user)["A/C"].id)
+      ])
+
+      {:ok, matches} = Notes.scan_folders(user, vault, ["A"])
+
+      assert {:ok, %{notes: 1}} = Notes.delete_scanned(user, vault, matches)
+      assert {:error, :not_found} = Notes.get_note(user, vault, "A/B/x.md")
     end
 
     # The fence firing is the only in-prod evidence the race is real, and it

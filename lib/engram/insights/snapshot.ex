@@ -31,6 +31,7 @@ defmodule Engram.Insights.Snapshot do
   alias Engram.Billing
   alias Engram.Billing.UserLimitOverride
   alias Engram.DataMigrations.NoteSizes
+  alias Engram.Folders.Folder
   alias Engram.Insights.UserDailyMetric
   alias Engram.Insights.VaultDailyMetric
   alias Engram.Links.NoteLink
@@ -389,15 +390,34 @@ defmodule Engram.Insights.Snapshot do
     # in ONE pass over the live rows: `notes` is the widest heap here, and one
     # subquery for each read it twice per chunk. The lateral unnest keeps an
     # untagged row (tag NULL), so its folder still counts.
+    #
+    # A note's folder is its folder ROW (R9: notes stop carrying
+    # `folder_hmac`), counted by that row's path hash so it dedupes with a
+    # marker's own `folder_hmac` (a marker made on an existing folder is not
+    # that row's id). Plus one for the root when a live note has no reference
+    # (the root has no row; a drift note, rare and healed by the drain,
+    # counts there too). Cost: one `folders` primary-key probe per live note.
+    # Both kinds on purpose: a marker is a folder (an empty one counts).
     folders_tags =
       from(n in Note,
+        where: n.kind == "note" or n.kind == "folder",
         left_lateral_join: t in fragment("SELECT unnest(?) AS tag", n.tags_hmac),
         on: true,
+        left_join: f in Folder,
+        on: f.id == n.folder_ref_id,
         where: n.vault_id in ^ids and is_nil(n.deleted_at),
         group_by: n.vault_id,
         select: %{
           vault_id: n.vault_id,
-          folders: count(n.folder_hmac, :distinct),
+          folders:
+            fragment(
+              "count(DISTINCT CASE WHEN ? = 'folder' THEN ? ELSE ? END) + (bool_or(? = 'note' AND ? IS NULL))::int",
+              n.kind,
+              n.folder_hmac,
+              f.full_path_hmac,
+              n.kind,
+              n.folder_ref_id
+            ),
           tags: filter(count(t.tag, :distinct), n.kind == "note")
         }
       )

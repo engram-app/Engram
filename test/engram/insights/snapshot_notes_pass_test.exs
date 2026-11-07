@@ -10,8 +10,10 @@ defmodule Engram.Insights.SnapshotNotesPassTest do
 
   alias Engram.DataMigrations
   alias Engram.DataMigrations.NoteSizes
+  alias Engram.FolderRows
   alias Engram.Insights.Snapshot
   alias Engram.Insights.VaultDailyMetric
+  alias Engram.Notes
   alias Engram.QueryPlan
   alias Engram.QueryRecorder
 
@@ -33,6 +35,9 @@ defmodule Engram.Insights.SnapshotNotesPassTest do
     [f1, f2, f3, f4, t1, t2, t3] = for _ <- 1..7, do: h()
 
     rich = insert(:vault, user: user)
+    # Each note folder has its row, so `notes_set_folder_ref` gives the notes
+    # their reference (the count reads references, not hashes).
+    for f <- [f1, f2, f4], do: FolderRows.insert!(user, rich, h(), full_path_hmac: f)
     note = &insert(:note, Keyword.merge([user: user, vault: rich], &1))
     note.(folder_hmac: f1, tags_hmac: [t1, t2])
     note.(folder_hmac: f1, tags_hmac: [t2])
@@ -44,6 +49,7 @@ defmodule Engram.Insights.SnapshotNotesPassTest do
     note.(folder_hmac: h(), tags_hmac: [h()], deleted_at: DateTime.utc_now())
 
     untagged = insert(:vault, user: user)
+    FolderRows.insert!(user, untagged, h(), full_path_hmac: f2)
     insert(:note, user: user, vault: untagged, folder_hmac: f2, tags_hmac: [])
 
     markers_only = insert(:vault, user: user)
@@ -100,6 +106,44 @@ defmodule Engram.Insights.SnapshotNotesPassTest do
     assert got == reference(ids)
     # Pinned too, so a reference that drifted with the code cannot pass.
     assert Enum.map(ids, &got[&1]) == [{4, 3}, {1, 0}, {1, 0}, {0, 0}]
+  end
+
+  # R9: a note's folder is its folder ROW (`folder_ref_id`), not its folder
+  # hash, which notes stop carrying. Red before: every note below holds the
+  # same (stale) hash, so a count of distinct hashes says 3 (that hash and
+  # the two markers'); the rows say A, B, Empty and the root.
+  test "folders count folder rows, not note folder hashes" do
+    user = insert(:user)
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    vault = insert(:vault, user: user)
+
+    for path <- ["A/x.md", "A/y.md", "B/z.md", "root.md"] do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => path, "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
+    end
+
+    # A marker on a folder that has notes is the same folder; an empty one is
+    # one more.
+    {:ok, _} = Notes.create_folder_marker(user, vault, "A")
+    {:ok, _} = Notes.create_folder_marker(user, vault, "Empty")
+
+    # Triggers off: `notes_set_folder_ref` would re-derive the reference from
+    # the hash written here.
+    Repo.query!("SET LOCAL session_replication_role = replica")
+
+    Repo.query!("UPDATE notes SET folder_hmac = $1 WHERE vault_id = $2 AND kind = 'note'", [
+      h(),
+      Ecto.UUID.dump!(vault.id)
+    ])
+
+    Repo.query!("SET LOCAL session_replication_role = origin")
+
+    day = Date.add(Date.utc_today(), -1)
+    Snapshot.run(day: day)
+
+    assert Repo.get_by!(VaultDailyMetric, vault_id: vault.id, date: day).folders == 4
   end
 
   # Red before: the statement planned two scans of `notes`, one per subquery.
