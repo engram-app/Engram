@@ -40,7 +40,8 @@ reply like any unknown frame. Both ops ack `{folder_id, seq}`; refusals are
 `rate_limited`). Create is find-or-create by (parent, name).
 Owner: `Engram.Folders.Wire`. While on, the `crdt_create` reply also carries
 the note's `folder_id`, and `GET /api/sync/manifest` carries `folders: [{id,
-parent_id, name}]` plus a `folder_id` per note.
+parent_id, name}]` plus a `folder_id` per note. The `crdt_create` reply and
+`POST /api/folders` also carry `folders`: the folder's whole chain, root first.
 
 ## Server → Client Broadcasts
 

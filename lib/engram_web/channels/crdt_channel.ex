@@ -1082,7 +1082,11 @@ defmodule EngramWeb.CrdtChannel do
     })
 
     reply = %{doc_id: note.id, seeded: genesis == :stored, genesis: Atom.to_string(genesis)}
-    {:reply, {:ok, Map.merge(reply, Wire.create_reply(note))}, socket}
+
+    {:reply,
+     {:ok,
+      Map.merge(reply, Wire.create_reply(socket.assigns.current_user, socket.assigns.vault, note))},
+     socket}
   end
 
   defp reconcile_with_row(:stored, _note), do: :stored

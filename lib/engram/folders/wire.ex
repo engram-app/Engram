@@ -246,10 +246,55 @@ defmodule Engram.Folders.Wire do
     })
   end
 
-  @doc "The `crdt_create` reply's extra fields: `folder_id` (nil at root) while on."
-  @spec create_reply(map()) :: map()
-  def create_reply(note),
-    do: if(enabled?(), do: %{folder_id: Map.get(note, :folder_ref_id)}, else: %{})
+  @doc """
+  The `crdt_create` reply's extra fields while on: the note's `folder_id`
+  (nil at root) and its folder chain (`chain/3`). Off: none.
+  """
+  @spec create_reply(map(), map(), map()) :: map()
+  def create_reply(user, vault, note) do
+    if enabled?() do
+      folder = if is_binary(note.path), do: parent_path(note.path), else: ""
+      %{folder_id: Map.get(note, :folder_ref_id), folders: chain(user, vault, folder)}
+    else
+      %{}
+    end
+  end
+
+  @doc """
+  `POST /folders`'s extra fields while on: the created folder's chain
+  (`chain/3`). Off: none.
+  """
+  @spec created_reply(map(), map(), String.t()) :: map()
+  def created_reply(user, vault, folder),
+    do: if(enabled?(), do: %{folders: chain(user, vault, folder)}, else: %{})
+
+  # `[%{id, parent_id, name}]` for `folder` and every ancestor, root first
+  # (root itself has no entry, so its children have parent_id nil), so a
+  # client learns a new nested folder's ids at once. ONE bounded read: every
+  # prefix's row by its path hash (`Rows.ids_by_path/3`, O(depth) keys on one
+  # index); names are the path's own segments, so nothing is decrypted. The
+  # chain stops at the first prefix with no row (a writer creates ancestors
+  # first, so that is only drift).
+  defp chain(_user, _vault, ""), do: []
+
+  defp chain(user, vault, folder) do
+    prefixes = Rows.prefixes(folder)
+    ids = Repo.with_tenant!(user.id, fn -> Rows.ids_by_path(user, vault.id, prefixes) end)
+
+    prefixes
+    |> Enum.reduce_while({[], nil}, fn prefix, {acc, parent} ->
+      case ids[prefix] do
+        nil ->
+          {:halt, {acc, parent}}
+
+        id ->
+          name = prefix |> String.split("/") |> List.last()
+          {:cont, {[%{id: id, parent_id: parent, name: name} | acc], id}}
+      end
+    end)
+    |> elem(0)
+    |> Enum.reverse()
+  end
 
   defp parent_path(path), do: path |> String.split("/") |> Enum.drop(-1) |> Enum.join("/")
 

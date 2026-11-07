@@ -60,15 +60,7 @@ defmodule EngramWeb.Schemas.ManifestResponse do
         description:
           "Only while the server's folder_ops switch is on: every live folder. " <>
             "The root has no entry; its children have parent_id null.",
-        items: %Schema{
-          type: :object,
-          properties: %{
-            id: %Schema{type: :string, format: :uuid},
-            parent_id: %Schema{type: :string, format: :uuid, nullable: true},
-            name: %Schema{type: :string}
-          },
-          required: [:id, :parent_id, :name]
-        }
+        items: EngramWeb.Schemas.FolderNode
       },
       unchanged: %Schema{
         type: :boolean,

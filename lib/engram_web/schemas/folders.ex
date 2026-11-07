@@ -143,14 +143,46 @@ defmodule EngramWeb.Schemas.BatchCreateFoldersResponse do
   })
 end
 
+defmodule EngramWeb.Schemas.FolderNode do
+  @moduledoc "One folder row on the folder-op wire (#2523 S4): `Engram.Folders.Wire`."
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "FolderNode",
+    type: :object,
+    properties: %{
+      id: %Schema{type: :string, format: :uuid},
+      parent_id: %Schema{
+        type: :string,
+        format: :uuid,
+        nullable: true,
+        description: "Null for a child of the root (the root has no row)."
+      },
+      name: %Schema{type: :string, description: "One path segment."}
+    },
+    required: [:id, :parent_id, :name]
+  })
+end
+
 defmodule EngramWeb.Schemas.FolderResponse do
   @moduledoc false
+  alias OpenApiSpex.Schema
   require OpenApiSpex
 
   OpenApiSpex.schema(%{
     title: "FolderResponse",
     type: :object,
-    properties: %{folder: EngramWeb.Schemas.Folder},
+    properties: %{
+      folder: EngramWeb.Schemas.Folder,
+      folders: %Schema{
+        type: :array,
+        items: EngramWeb.Schemas.FolderNode,
+        description:
+          "Only while the server's folder_ops switch is on: the created folder and " <>
+            "every ancestor, root first."
+      }
+    },
     required: [:folder]
   })
 end
