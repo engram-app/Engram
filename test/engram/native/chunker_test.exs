@@ -8,21 +8,50 @@ defmodule Engram.Native.ChunkerTest do
   # tables, blobs, long sections). A change here re-chunks notes nobody
   # edits only if @chunker_version is bumped too (#1620): bump it, then rerun
   # test/support/fixtures/chunker_golden.gen.exs.
+  #
+  # R3c: that set is frozen as the `legacy: true` output (the pre-R3c
+  # inputs, which the reuse fingerprints of old points were taken over), and
+  # chunker_golden_path_free.json.gz pins today's, from the same notes.
   @golden_path "test/support/fixtures/chunker_golden.json.gz"
+  @path_free_path "test/support/fixtures/chunker_golden_path_free.json.gz"
   @external_resource @golden_path
+  @external_resource @path_free_path
   @golden @golden_path |> File.read!() |> :zlib.gunzip() |> Jason.decode!(keys: :atoms)
+  @path_free @path_free_path |> File.read!() |> :zlib.gunzip() |> Jason.decode!(keys: :atoms)
+
+  defp expected(chunks) do
+    Enum.map(chunks, fn c ->
+      c
+      |> Map.drop([:ctx, :emb])
+      |> Map.merge(%{context_text: c.ctx <> c.text, embed_text: c.emb <> c.text})
+    end)
+  end
+
+  test "legacy output matches the pre-R3c golden set byte for byte" do
+    for %{input: input, path: path, chunks: chunks} <- @golden do
+      assert Markdown.parse(input, path, legacy: true) == expected(chunks),
+             "legacy chunker output changed for #{inspect(path)}: it must not, ever"
+    end
+  end
 
   test "output matches the golden set for this chunker_version" do
-    for %{input: input, path: path, chunks: expected} <- @golden do
-      expected =
-        Enum.map(expected, fn c ->
-          c
-          |> Map.drop([:ctx, :emb])
-          |> Map.merge(%{context_text: c.ctx <> c.text, embed_text: c.emb <> c.text})
-        end)
+    assert length(@path_free) == length(@golden)
 
-      assert Markdown.parse(input, path) == expected,
+    for %{input: input, path: path, chunks: chunks} <- @path_free do
+      assert Markdown.parse(input, path) == expected(chunks),
              "chunker output changed for #{inspect(path)}: bump @chunker_version and regenerate"
+    end
+  end
+
+  # R3c: the inputs are the note's bytes only, so the same note at any path
+  # chunks the same, and the two modes cut the same chunks.
+  test "a note chunks the same at every path, with the legacy boundaries" do
+    for %{input: input, path: path} <- @path_free do
+      chunks = Markdown.parse(input, path)
+      assert Markdown.parse(input, "elsewhere/deeper/Renamed.md") == chunks, path
+
+      cut = &Enum.map(&1, fn c -> Map.take(c, [:position, :text, :char_start, :char_end]) end)
+      assert cut.(Markdown.parse(input, path, legacy: true)) == cut.(chunks), path
     end
   end
 
@@ -84,8 +113,12 @@ defmodule Engram.Native.ChunkerTest do
     test "setext headings split sections" do
       content = "Title\n=====\n\nintro #{@pad}\n\nSection\n-------\n\nbody #{@pad}"
       paths = content |> Markdown.parse("Doc.md") |> Enum.map(& &1.heading_path)
-      # "Title" is not the note's title ("Doc"), so it stays in the path.
-      assert paths == ["Doc > Title", "Doc > Title > Section"]
+      # The title is the frontmatter title or an ATX H1, never the file name
+      # (R3c), so with neither the setext H1 heads the path.
+      assert paths == ["Title", "Title > Section"]
+
+      legacy = content |> Markdown.parse("Doc.md", legacy: true) |> Enum.map(& &1.heading_path)
+      assert legacy == ["Doc > Title", "Doc > Title > Section"]
     end
 
     test "a closing # sequence is not part of the heading" do
@@ -101,7 +134,7 @@ defmodule Engram.Native.ChunkerTest do
 
     test "a setext underline inside a list item is not a heading" do
       content = "- item\n  ---\n\nafter"
-      assert [%{heading_path: "x"}] = Markdown.parse(content, "x.md")
+      assert [%{heading_path: ""}] = Markdown.parse(content, "x.md")
     end
   end
 
@@ -117,7 +150,7 @@ defmodule Engram.Native.ChunkerTest do
             "![i](data:image/png;base64," <>
               Base.encode64(:crypto.strong_rand_bytes(1_500_000)) <> ")"
           ] do
-        {_chunks, peak} = Engram.Native.chunk_dirty_nif(content, "f", "T", [], nil)
+        {_chunks, peak} = Engram.Native.chunk_dirty_nif(content, "f", "T", [], nil, false)
         # Measured 0.5-1.8x; 3x catches a regression the 10x standard would not.
         assert peak <= 3 * byte_size(content), "#{peak} for #{binary_part(content, 0, 20)}"
       end
@@ -175,16 +208,31 @@ defmodule Engram.Native.ChunkerTest do
       for content <- [tree.(12_000), tree.(30_000), "---\na: 1\n---\n" <> tree.(12_000)] do
         assert byte_size(content) > 262_144
         ref = Engram.NativeScheduled.attach_nif_events()
-        sliced = Engram.Native.chunk(content, "f", "T", ["al"], "Type: d")
-        {whole, _peak} = Engram.Native.chunk_dirty_nif(content, "f", "T", ["al"], "Type: d")
-        assert sliced == whole
+
+        for legacy <- [true, false] do
+          sliced = Engram.Native.chunk(content, "f", "T", ["al"], "Type: d", legacy)
+
+          {whole, _peak} =
+            Engram.Native.chunk_dirty_nif(content, "f", "T", ["al"], "Type: d", legacy)
+
+          assert sliced == whole
+        end
+
         assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :chunk, sliced: true}}
         :telemetry.detach(ref)
       end
     end
 
     test "repeated calls leak nothing" do
-      args = ["---\ntags: [a]\n---\n# A\n\ntext `c`\n\n## B\n\nmore", "f", "T", ["x"], "lead"]
+      args = [
+        "---\ntags: [a]\n---\n# A\n\ntext `c`\n\n## B\n\nmore",
+        "f",
+        "T",
+        ["x"],
+        "lead",
+        false
+      ]
+
       Engram.NativeLeak.assert_no_leak(fn -> apply(Engram.Native, :chunk_nif, args) end)
     end
 
@@ -258,8 +306,11 @@ defmodule Engram.Native.ChunkerTest do
   describe "embed_text (#1621)" do
     test "carries the heading path but not the folder" do
       [chunk] = Markdown.parse("# T\n\nbody", "Work/Projects/T.md")
-      assert chunk.context_text == "Work/Projects > T\n\n# T\n\nbody"
+      assert chunk.context_text == "T\n\n# T\n\nbody"
       assert chunk.embed_text == "T\n\n# T\n\nbody"
+
+      [old] = Markdown.parse("# T\n\nbody", "Work/Projects/T.md", legacy: true)
+      assert old.context_text == "Work/Projects > T\n\n# T\n\nbody"
     end
 
     test "moving a note between folders leaves embed_text unchanged" do
