@@ -31,18 +31,30 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   policy has no `TO` clause, so it applies to the owner too. No table lock
   is taken (the `NO FORCE` pattern would hold ACCESS EXCLUSIVE on `notes`
   for every window). Each user's walk ends with a check in the same
-  context: a note of that user that still reads with no body logs a
-  warning. Never a raise: a raising migration blocks every boot (zero
-  operator action). The insert takes every `kind = 'note'` row of the
-  user, tombstones and NULL-nonce rows included (their envelopes, NULL or
-  merged, copied as they are); folder rows have no body. The one row it can
-  skip is a note whose body row exists under another owner (drift; ON
-  CONFLICT keeps it): every read joins on the owner, so that note reads
-  with a NULL body, and `Engram.Bookkeeping.Canary` reports it as owner
-  drift (`NoteBody.drift_ids/2`).
+  context. The insert takes every `kind = 'note'` row of the user,
+  tombstones and NULL-nonce rows included (their envelopes, NULL or merged,
+  copied as they are); folder rows have no body.
 
-  Prod (2026-11-07): 0 notes without a body row, so it inserts nothing; it
-  reads each user's note ids once. Rerun-safe; no `down` work (the rows
+  The one row it skips is a note whose body row exists under another owner
+  (drift: hand-edited SQL or a restore; no code path writes one): the
+  tenant policy hides it and ON CONFLICT keeps it, every read joins on the
+  owner (so the note reads with a NULL body), and every write fails RLS.
+  Nothing else heals it, so the check repairs it: for those notes only, in
+  one transaction with `note_bodies` under `NO FORCE ROW LEVEL SECURITY`
+  (the documented bypass; ACCESS EXCLUSIVE on `note_bodies`, restored by
+  FORCE or the rollback), a note whose `notes` copy is present (the null
+  batch never clears such a row) gets its body rebuilt from that copy, as
+  the insert builds it (the CRDT state kept when the copy has none), and a
+  note without one gets its body row handed back to its owner, with a
+  warning that the bytes may not decrypt. A note's envelopes are bound to
+  its own id (AAD) and its owner's key, so bytes written for it decrypt
+  once the row is the owner's again. A note still unreadable after that
+  logs a warning. Never a raise: a raising migration blocks every boot
+  (zero operator action).
+
+  Prod (2026-11-07): 0 notes without a body row and 0 body rows under
+  another owner, so it inserts nothing, takes no table lock, and reads each
+  user's note ids twice (the walk and the check). Rerun-safe; no `down` work (the rows
   are what every release from 0.76 on writes). Calls no app module.
   """
 
@@ -92,9 +104,41 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   # owner (`NoteBody.join/1` matches the owner too). The same answer with or
   # without RLS bypass.
   @left """
-  SELECT count(*)::int FROM notes n
+  SELECT n.id FROM notes n
   WHERE n.user_id = $1 AND n.kind = 'note'
     AND NOT EXISTS (SELECT 1 FROM note_bodies x WHERE x.note_id = n.id AND x.user_id = n.user_id)
+  ORDER BY n.id LIMIT #{@window}
+  """
+
+  # The repair, RLS bypassed on `note_bodies`: rebuild from the `notes`
+  # copy where it is present, else hand the row back to the owner.
+  @from_copy """
+  INSERT INTO note_bodies (note_id, user_id, key_version, content_ct, crdt_ct, crdt_head)
+    SELECT n.id, n.user_id,
+      CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END,
+      #{merged.("content_ciphertext", "content_nonce")},
+      #{merged.("crdt_state_ciphertext", "crdt_state_nonce")},
+      CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$'
+        THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END
+    FROM notes n
+    WHERE n.id = ANY($1::uuid[]) AND n.user_id = $2 AND n.kind = 'note'
+      AND n.content_ciphertext IS NOT NULL
+  ON CONFLICT (note_id) DO UPDATE SET
+    user_id = EXCLUDED.user_id,
+    key_version = EXCLUDED.key_version,
+    content_ct = EXCLUDED.content_ct,
+    crdt_ct = COALESCE(EXCLUDED.crdt_ct, note_bodies.crdt_ct),
+    crdt_head = EXCLUDED.crdt_head
+  """
+
+  @to_owner """
+  UPDATE note_bodies b SET
+    user_id = n.user_id,
+    key_version = CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END
+  FROM notes n
+  WHERE b.note_id = n.id AND n.id = ANY($1::uuid[]) AND n.user_id = $2
+    AND b.user_id <> n.user_id
+  RETURNING b.note_id::text
   """
 
   def up, do: complete_split(repo())
@@ -119,13 +163,44 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   defp user!(repo, user_id) do
     walk(repo, user_id, <<0::128>>)
 
-    # A warning, never a raise: a raising migration blocks every boot.
-    case tenant(repo, user_id, fn -> repo.query!(@left, [user_id]).rows end) do
-      [[0]] ->
+    case left(repo, user_id) do
+      [] ->
         :ok
 
-      [[n]] ->
-        Logger.warning("note_bodies split incomplete: #{n} notes of a user have no body row")
+      ids ->
+        repair(repo, user_id, ids)
+
+        # A warning, never a raise: a raising migration blocks every boot.
+        with [_ | _] = still <- left(repo, user_id) do
+          Logger.warning("note_bodies split incomplete: notes still read with no body",
+            user_id: Ecto.UUID.load!(user_id),
+            note_ids: Enum.map(still, &Ecto.UUID.load!/1)
+          )
+        end
+    end
+  end
+
+  defp left(repo, user_id) do
+    tenant(repo, user_id, fn -> Enum.map(repo.query!(@left, [user_id]).rows, &hd/1) end)
+  end
+
+  # Only for a user with a note under a foreign body row (prod: none).
+  defp repair(repo, user_id, ids) do
+    handed_back =
+      tenant(repo, user_id, fn ->
+        repo.query!("ALTER TABLE note_bodies NO FORCE ROW LEVEL SECURITY")
+        repo.query!(@from_copy, [ids, user_id])
+        %{rows: rows} = repo.query!(@to_owner, [ids, user_id])
+        repo.query!("ALTER TABLE note_bodies FORCE ROW LEVEL SECURITY")
+        Enum.map(rows, &hd/1)
+      end)
+
+    if handed_back != [] do
+      Logger.warning(
+        "note_bodies split: body rows handed back to their owner, no notes copy; the bytes may not decrypt",
+        user_id: Ecto.UUID.load!(user_id),
+        note_ids: handed_back
+      )
     end
   end
 

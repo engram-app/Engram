@@ -606,16 +606,30 @@ defmodule Engram.Fixtures do
 
   @doc """
   Runs migration 20261107120000 (R8(c): every note gets its body row before
-  boot) on the test's sandbox connection, as an upgrade runs it.
+  boot) on the test's sandbox connection, as an upgrade runs it. `role:`
+  runs it as that database role (`"engram_app"`: RLS enforced, no bypass).
   """
-  def complete_split! do
+  def complete_split!(opts \\ []) do
     Code.require_file(
       "priv/repo/migrations/20261107120000_note_bodies_complete_split_migrate.exs"
     )
 
     # By name at runtime: migrations are not compiled with the app.
     mod = String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate")
-    mod.complete_split(Engram.Repo)
+
+    case Keyword.fetch(opts, :role) do
+      {:ok, role} ->
+        Engram.Repo.query!("SELECT set_config('role', $1, false)", [role])
+
+        try do
+          mod.complete_split(Engram.Repo)
+        after
+          Engram.Repo.query!("RESET ROLE")
+        end
+
+      :error ->
+        mod.complete_split(Engram.Repo)
+    end
   end
 
   @doc """

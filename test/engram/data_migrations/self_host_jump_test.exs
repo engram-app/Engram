@@ -152,20 +152,60 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
     assert bodies(u) == written
   end
 
-  # The one note the insert can skip: its body row exists but is owned by
-  # another user (drift), so the tenant policy hides it and ON CONFLICT DO
-  # NOTHING keeps it. A raising migration would block every boot; this one
-  # warns and boots, and the Canary reports the row as owner drift.
-  test "a body row owned by another user warns, does not block boot", %{user: u, vault: v} do
-    import ExUnit.CaptureLog
-    note = write!(u, v, "owned.md", "owned text")
+  # Under the RLS-enforced runtime role (`engram_app`, not the owner, no
+  # bypass), as prod's non-superuser migrator sees the tables: the per-user
+  # tenant context must see and insert every row. The suite's own role
+  # bypasses RLS, so without this CI never runs the policy path.
+  test "under the RLS-enforced role, the split inserts every body row", %{user: u, vault: v} do
+    _ = write!(u, v, "rls.md", "rls text")
+    written = bodies(u)
+    pre_split!(u)
 
+    Engram.Fixtures.complete_split!(role: "engram_app")
+
+    assert bodies(u) == written
+    assert read!(u, v, "rls.md") == "rls text"
+  end
+
+  # The one note the insert skips: its body row exists but is owned by
+  # another user (drift; hand-edited SQL or a restore), so the tenant policy
+  # hides it, ON CONFLICT keeps it, and every read (which joins on the
+  # owner) gets a NULL body. Nothing else can heal it, so the migration
+  # repairs it, and only then bypasses RLS.
+  defp foreign_body!(note) do
     Repo.query!("UPDATE note_bodies SET user_id = $2 WHERE note_id = $1", [
       Ecto.UUID.dump!(note.id),
       Ecto.UUID.dump!(insert(:user).id)
     ])
+  end
+
+  test "a body row owned by another user, notes copy present: rebuilt from the copy",
+       %{user: u, vault: v} do
+    note = write!(u, v, "owned.md", "owned text")
+    Engram.Fixtures.old_release_notes_copy!(note.id)
+
+    # The foreign row's bytes are not the note's: only the notes copy reads.
+    Repo.query!(
+      "UPDATE note_bodies SET content_ct = $2 WHERE note_id = $1",
+      [Ecto.UUID.dump!(note.id), <<1>> <> :crypto.strong_rand_bytes(60)]
+    )
+
+    foreign_body!(note)
+    assert read!(u, v, "owned.md") == nil
+
+    Engram.Fixtures.complete_split!()
+    assert read!(u, v, "owned.md") == "owned text"
+  end
+
+  test "a body row owned by another user, no notes copy: handed back to the owner",
+       %{user: u, vault: v} do
+    import ExUnit.CaptureLog
+    note = write!(u, v, "owned.md", "owned text")
+    foreign_body!(note)
+    assert read!(u, v, "owned.md") == nil
 
     log = capture_log([level: :warning], fn -> assert :ok = Engram.Fixtures.complete_split!() end)
-    assert log =~ "note_bodies split incomplete"
+    assert log =~ "may not decrypt"
+    assert read!(u, v, "owned.md") == "owned text"
   end
 end
