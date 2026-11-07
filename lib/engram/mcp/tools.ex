@@ -868,14 +868,16 @@ defmodule Engram.MCP.Tools do
     }
   end
 
-  # What a read returns as `content_hash` and write_note takes back as
-  # `base_hash`. One definition so the two cannot describe it differently.
+  # What a read (and write_note/create_note) returns as `content_hash` and
+  # write_note takes back as `base_hash`. One definition so they cannot
+  # describe it differently.
   @content_hash_prop %{
     "type" => ["string", "null"],
     "description" =>
-      "Hash of exactly the content returned. Pass it to write_note as base_hash so the " <>
-        "write refuses if the note changed since. Null for a section or outline read: the " <>
-        "hash would name the whole note, not the part returned."
+      "Hash of exactly the content returned (from a write: of the note as saved, the same " <>
+        "hash get_notes returns). Pass it to write_note as base_hash so the write refuses " <>
+        "if the note changed since. Null for a section or outline read: the hash would " <>
+        "name the whole note, not the part returned."
   }
 
   # The optional compare-and-swap guard edit_note and append_to_note take
@@ -1068,7 +1070,8 @@ defmodule Engram.MCP.Tools do
             "path" => %{
               "type" => "string",
               "description" => "Where the note landed; the server picks the folder"
-            }
+            },
+            "content_hash" => @content_hash_prop
           }
           |> Map.merge(@index_delay_properties),
         "required" => ["path"]
@@ -1110,7 +1113,9 @@ defmodule Engram.MCP.Tools do
       },
       outputSchema: %{
         "type" => "object",
-        "properties" => %{"path" => %{"type" => "string"}} |> Map.merge(@index_delay_properties),
+        "properties" =>
+          %{"path" => %{"type" => "string"}, "content_hash" => @content_hash_prop}
+          |> Map.merge(@index_delay_properties),
         "required" => ["path"]
       },
       handler: &Handlers.handle("write_note", &1, &2, &3)
