@@ -188,13 +188,11 @@ defmodule Engram.Crypto.UserDekRotation do
          {:ok, new_wrapped, new_dek} <-
            provider.rotate_dek(user.encrypted_dek, %{user_id: user_id}),
          new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek),
-         # Folders before notes: the `notes_set_folder_ref` trigger re-resolves
-         # `folder_ref_id` from `folders.full_path_hmac` whenever the notes sweep
-         # rewrites `folder_hmac`, so the rows must already carry the new key.
-         # The trigger resolves LIVE folders only, so a trashed note in a
-         # soft-deleted folder ends with a NULL ref. Harmless: nothing reads
-         # the ref yet, and a restored note is live with a NULL ref, which
-         # `FolderTable` re-resolves (pinned in user_dek_rotation_folders_test).
+         # Folders before notes: a pre-D node's `notes_set_folder_ref` trigger
+         # re-resolved `folder_ref_id` from `folders.full_path_hmac` when the
+         # notes sweep rewrote `folder_hmac`, so the rows had to carry the new
+         # key first. Release D dropped the trigger: the notes sweep no longer
+         # touches a reference, and the order stays for a rollback.
          :ok <- sweep_folders(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_notes(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- enqueue_crdt_head_rewarm(user),

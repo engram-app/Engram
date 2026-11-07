@@ -1,6 +1,6 @@
 defmodule Engram.Folders.FolderRefTriggerTest do
-  # `notes_set_folder_ref`: a write that lists only `folder_hmac` (what the
-  # previous release does) gets its `folder_ref_id`.
+  # `notes.folder_ref_id` once `notes_set_folder_ref` is dropped (R9 release
+  # D): writers set it, the foreign key nulls it on a hard folder delete.
   use Engram.DataCase, async: false
 
   alias Engram.Crypto
@@ -21,10 +21,6 @@ defmodule Engram.Folders.FolderRefTriggerTest do
   defp folder!(user, vault, name_hmac, opts),
     do: Engram.FolderRows.insert!(user, vault, name_hmac, opts)
 
-  # The previous release's write: only the stored columns, no folder row.
-  defp old_release_write!(user, vault, path),
-    do: Engram.Fixtures.insert_note!(user, vault, %{path: path, content: "# T\n\nbody"})
-
   defp write!(user, vault, path) do
     {:ok, note} =
       Notes.upsert_note(user, vault, %{"path" => path, "content" => "# T\n\nbody"}, actor: "api")
@@ -39,46 +35,38 @@ defmodule Engram.Folders.FolderRefTriggerTest do
     ref && Ecto.UUID.load!(ref)
   end
 
-  describe "notes_set_folder_ref trigger" do
-    test "a write that sets only folder_hmac gets its folder_ref_id", %{user: u, vault: v, fk: fk} do
-      f = folder!(u, v, hmac(fk, "Dir"), full_path_hmac: hmac(fk, "Dir"))
+  describe "after the R9 release D contract" do
+    test "notes_set_folder_ref, its restore twin and their function are gone" do
+      %{rows: [[triggers]]} =
+        Repo.query!("""
+        SELECT count(*)::int FROM pg_trigger
+        WHERE tgrelid = 'public.notes'::regclass
+          AND tgname IN ('notes_set_folder_ref', 'notes_set_folder_ref_on_restore')
+        """)
 
-      # What the previous release does: it knows nothing of folder_ref_id.
+      %{rows: [[functions]]} =
+        Repo.query!("SELECT count(*)::int FROM pg_proc WHERE proname = 'notes_set_folder_ref'")
+
+      assert {triggers, functions} == {0, 0}
+    end
+
+    # The writer sets the reference, not the database: a raw hash write
+    # (what no release does any more) leaves it alone.
+    test "a write that sets only folder_hmac keeps the stored reference", %{
+      user: u,
+      vault: v,
+      fk: fk
+    } do
+      f = folder!(u, v, hmac(fk, "Dir"), full_path_hmac: hmac(fk, "Dir"))
       note = write!(u, v, "Dir/A.md")
       assert folder_ref(note.id) == f
 
-      # A move to a folder with no row clears it; a move back restores it.
       Repo.query!("UPDATE notes SET folder_hmac = $1 WHERE id = $2", [
         hmac(fk, "Elsewhere"),
         dump(note.id)
       ])
 
-      assert folder_ref(note.id) == nil
-
-      Repo.query!("UPDATE notes SET folder_hmac = $1 WHERE id = $2", [
-        hmac(fk, "Dir"),
-        dump(note.id)
-      ])
-
       assert folder_ref(note.id) == f
-    end
-
-    test "a folder with no row, the root, another vault's folder and a tombstone stay NULL", %{
-      user: u,
-      vault: v,
-      fk: fk
-    } do
-      other = insert(:vault, user: u)
-      folder!(u, other, hmac(fk, "Other"), full_path_hmac: hmac(fk, "Other"))
-
-      folder!(u, v, hmac(fk, "Gone"),
-        full_path_hmac: hmac(fk, "Gone"),
-        deleted_at: ~U[2026-10-27 00:00:00Z]
-      )
-
-      for path <- ["Nobody/A.md", "Root.md", "Other/B.md", "Gone/C.md"] do
-        assert folder_ref(old_release_write!(u, v, path).id) == nil, path
-      end
     end
 
     test "a folder marker row is not given a reference", %{user: u, vault: v, fk: fk} do
@@ -111,11 +99,11 @@ defmodule Engram.Folders.FolderRefTriggerTest do
       assert folder_ref(note.id) == nil
     end
 
-    # #2413: folder rows are soft-deleted, so the FK never nulls a reference to
-    # one. A note restored after its folder row died re-resolves on the restore
-    # (NULL here, which the drain heals; the live row once one exists). Red
-    # before: it kept the dead row's id and nothing ever re-pointed it.
-    test "restoring a note re-resolves a reference to a soft-deleted folder row", %{
+    # #2413 / owner rule (a note never leaves a folder listing): a raw restore
+    # of a note whose folder row died must not leave a live note naming the
+    # dead row, which no listing places and the drain's index
+    # (`notes_unresolved_folder`, NULL references only) cannot find.
+    test "a raw restore NULLs a reference to a dead folder row; the drain re-links it", %{
       user: u,
       vault: v
     } do
@@ -124,15 +112,28 @@ defmodule Engram.Folders.FolderRefTriggerTest do
       assert dead
 
       Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [dump(note.id)])
+      # A row written before `folders_release_refs`: the trashed note still
+      # names the row when it dies (replayed with triggers off).
+      Repo.query!("SET LOCAL session_replication_role = replica")
       Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [dump(dead)])
+      Repo.query!("SET LOCAL session_replication_role = origin")
+      assert folder_ref(note.id) == dead
+
       Repo.query!("UPDATE notes SET deleted_at = NULL WHERE id = $1", [dump(note.id)])
       assert folder_ref(note.id) == nil
 
-      # With a live row at the path again, a later restore points at it.
-      revived = write!(u, v, "Gone/B.md") |> Map.fetch!(:id) |> folder_ref()
-      Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [dump(note.id)])
-      Repo.query!("UPDATE notes SET deleted_at = NULL WHERE id = $1", [dump(note.id)])
-      assert folder_ref(note.id) == revived
+      %{rows: [[unresolved]]} =
+        Repo.query!(
+          "SELECT count(*)::int FROM notes WHERE id = $1 AND " <>
+            Engram.Folders.Drift.notes_unresolved_sql(),
+          [dump(note.id)]
+        )
+
+      assert unresolved == 1
+
+      Engram.DataMigrations.FolderTable.run_pass(user_ids: [u.id])
+      relinked = folder_ref(note.id)
+      assert relinked && relinked != dead
     end
 
     test "a delete or an ordinary save does not touch the reference", %{user: u, vault: v} do
