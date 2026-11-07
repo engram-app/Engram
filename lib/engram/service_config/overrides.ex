@@ -63,7 +63,10 @@ defmodule Engram.ServiceConfig.Overrides do
     # Folder rename/move size cap (`Engram.Folders`, #2492).
     folder_op_max_rows: {:integer, 0..1_000_000},
     # The null batch's per-pass cap (rows), to slow it without a deploy.
-    note_body_columns_null_max_fixed: {:integer, 1..1_000_000}
+    note_body_columns_null_max_fixed: {:integer, 1..1_000_000},
+    # Markdown content writes as Yjs ops (`Notes.CrdtWrite`, #2519). Off: the
+    # snapshot path.
+    crdt_write_apply_text: :boolean
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})

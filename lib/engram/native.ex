@@ -67,6 +67,7 @@ defmodule Engram.Native do
     {:frontmatter_split, :frontmatter_split_nif, :frontmatter_split_dirty_nif, 1},
     {:frontmatter_parse, :frontmatter_parse_nif, :frontmatter_parse_dirty_nif, 1},
     {:text_diff, :text_diff_nif, :text_diff_dirty_nif, 2},
+    {:text_hunks, :text_hunks_nif, :text_hunks_dirty_nif, 2},
     {:utf16_offsets, :utf16_offsets_nif, :utf16_offsets_dirty_nif, 2},
     {:hmac_hex_many, :hmac_hex_many_nif, :hmac_hex_many_dirty_nif, 3},
     {:json_decode, :json_decode_nif, :json_decode_dirty_nif, 1},
@@ -196,6 +197,16 @@ defmodule Engram.Native do
   """
   def text_diff(current, incoming),
     do: sized(:text_diff, [current, incoming], [current, incoming])
+
+  @doc """
+  The multi-hunk diff for `CrdtBridge.diff_hunks_into_text/2`: `[{offset_u16,
+  delete_u16, insert_start, insert_len}]`, ascending and non-overlapping, in
+  the same units as `text_diff/2`. A line diff bounded by a 20 ms deadline
+  (past it the diff is coarser, never wrong), each changed block trimmed to
+  its changed span. Valid UTF-8 only.
+  """
+  def text_hunks(current, incoming),
+    do: sized(:text_hunks, [current, incoming], [current, incoming])
 
   @doc """
   What `Engram.MCP.Sections` reads from a CommonMark parse (comrak) of a

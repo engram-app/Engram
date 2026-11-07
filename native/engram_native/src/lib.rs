@@ -576,6 +576,13 @@ fn text_diff(current: &str, incoming: &str) -> ((usize, usize, usize, usize), us
 
 sized_nif!(text_diff, text_diff_nif, text_diff_dirty_nif, (current: &str, incoming: &str) [current, incoming] -> ((usize, usize, usize, usize), usize));
 
+/// `CrdtBridge.diff_hunks_into_text/2`'s hunks, and the peak.
+fn text_hunks(current: &str, incoming: &str) -> (Vec<(usize, usize, usize, usize)>, usize) {
+    memory::measured(|| text_diff::hunks(current, incoming))
+}
+
+sized_nif!(text_hunks, text_hunks_nif, text_hunks_dirty_nif, (current: &str, incoming: &str) [current, incoming] -> (Vec<(usize, usize, usize, usize)>, usize));
+
 /// `Rewriter.apply_edits!/3`'s UTF-16 offsets: one per byte offset (sorted,
 /// each on a char boundary), in one pass, and the peak. Raises otherwise.
 fn utf16_offsets(text: &str, at: Vec<usize>) -> NifResult<(Vec<usize>, usize)> {

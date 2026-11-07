@@ -532,6 +532,25 @@ defmodule Engram.Notes.CrdtPersistence do
   end
 
   @doc """
+  A note's current doc: its decrypted snapshot with tail `rows` folded in
+  (`:read` reads them now). `{:ok, doc, applied_ids}`, or the decrypt or decode
+  error. Bind's recipe for callers outside a room that already hold a tenant
+  transaction (the REST write path, the unedited merge). Runs in it, like
+  `replay_tail/4`, decrypt included. `CrdtTransport.load_doc/3` keeps its own
+  copy on purpose: it decrypts OUTSIDE the transaction, so a slow key
+  provider does not hold one open.
+  """
+  @spec load_doc(Note.t(), map(), :read | [struct()]) ::
+          {:ok, Yex.Doc.t(), [Ecto.UUID.t()]} | {:error, term()}
+  def load_doc(%Note{} = note, user, rows \\ :read) do
+    with {:ok, state} <- Crypto.decrypt_crdt_state(note, user),
+         {:ok, doc} <- CrdtBridge.doc_from_state(state) do
+      rows = if rows == :read, do: tail_rows(note.id, note.vault_id), else: rows
+      {:ok, doc, apply_tail_rows(doc, user, note.id, rows)}
+    end
+  end
+
+  @doc """
   A note's tail rows, oldest first. The caller supplies the tenant (this issues
   a bare `Repo.all`, like the rest of this module's reads).
 

@@ -29,6 +29,7 @@ defmodule Engram.Notes do
     CrdtDeliver,
     CrdtPersistence,
     CrdtUpdateLog,
+    CrdtWrite,
     EffectiveDates,
     Enqueue,
     FlatFields,
@@ -1003,6 +1004,8 @@ defmodule Engram.Notes do
       # #1710: decided once, before the transaction (see Revisions moduledoc).
       recording = Revisions.recording?(user)
       opts = Keyword.put(opts, :recording, recording)
+      # #2519: the ops-path switch, read once per write (`crdt_write?/3`).
+      opts = Keyword.put(opts, :crdt_write, CrdtWrite.enabled?())
 
       base_attrs = %{
         # Belt-and-suspenders: schema default is "note", but stamping it
@@ -1051,6 +1054,8 @@ defmodule Engram.Notes do
           |> commit_content(user, opts, recording)
         end)
 
+      {result, opts} = crdt_applied(result, user, opts)
+
       case result do
         {:ok, :stale_expected} ->
           {:error, :stale_note}
@@ -1064,8 +1069,11 @@ defmodule Engram.Notes do
           # every connected device. Inserts (prev_hash nil) and real updates
           # always differ, so they broadcast as before; forced rewrites may
           # keep the same hash (e.g. a tags repair) but did persist a change.
+          # An ops-path write that applied a delta always delivers it, even
+          # when its text hashes like the row's (an rmw reverting a pending
+          # tail edit): a live room still holds that edit.
           _ =
-            if prev_hash != note.content_hash or Keyword.get(opts, :force, false) do
+            if persisted_change?(prev_hash, note, opts) do
               :ok = broadcast_change(user, vault.id, "upsert", note.path, note, opts)
             end
 
@@ -1190,6 +1198,22 @@ defmodule Engram.Notes do
           err
       end
     end
+  end
+
+  # A `CrdtWrite` write is an ordinary update from here on, except that
+  # deliver-out pushes its delta into a live room (`crdt_delta:`, read by
+  # `broadcast_change/6`) instead of the stored snapshot, and its post-write
+  # step runs once the write commits (only for a write that applied ops).
+  defp crdt_applied({:ok, {:ok, {:crdt_applied, prev, note, text, hash, delta}}}, user, opts) do
+    :ok = Repo.after_commit(fn -> CrdtWrite.on_written(user, note) end)
+    {{:ok, {:ok, {prev, note, text, hash}}}, Keyword.put(opts, :crdt_delta, delta)}
+  end
+
+  defp crdt_applied(result, _user, opts), do: {result, opts}
+
+  defp persisted_change?(prev_hash, note, opts) do
+    prev_hash != note.content_hash or Keyword.get(opts, :force, false) or
+      Keyword.has_key?(opts, :crdt_delta)
   end
 
   @doc """
@@ -2364,6 +2388,9 @@ defmodule Engram.Notes do
   defp commit_content({:ok, {:moved, prev_hash, note, _text, _hash}} = written, user, opts, rec),
     do: commit_content(written, prev_hash, note, user, opts, rec)
 
+  defp commit_content({:ok, {:crdt_applied, prev, note, _, _, _}} = written, user, opts, rec),
+    do: commit_content(written, prev, note, user, opts, rec)
+
   defp commit_content(other, _user, _opts, _recording), do: other
 
   defp commit_content(written, prev_hash, note, user, opts, recording) do
@@ -2747,9 +2774,7 @@ defmodule Engram.Notes do
   defp unedited_merge(%Note{content: content} = prior, content, user) when is_binary(content) do
     with true <- CrdtBridge.markdown_path?(prior.path),
          [_ | _] = rows <- CrdtPersistence.tail_rows(prior.id, prior.vault_id),
-         {:ok, state} <- Crypto.decrypt_crdt_state(prior, user),
-         {:ok, doc} <- CrdtBridge.doc_from_state(state),
-         applied = CrdtPersistence.apply_tail_rows(doc, user, prior.id, rows),
+         {:ok, doc, applied} <- CrdtPersistence.load_doc(prior, user, rows),
          text = CrdtBridge.project_doc(doc),
          true <- trust_projection?("move", prior.id, user, {text, applied, rows}, content) do
       {text, doc}
@@ -2833,6 +2858,21 @@ defmodule Engram.Notes do
     end
   end
 
+  # What the rewrite (and its merge, `prepare_rewrite/6`) reads from the
+  # upsert's options.
+  @rewrite_opts [
+    :db_mode,
+    :merge_doc,
+    :prepared,
+    :actor,
+    :recording,
+    :crdt_write,
+    :force,
+    :locked_note,
+    :expected_note,
+    :base_hash
+  ]
+
   defp rewrite(existing, base_attrs, user, sanitized_path, folder, opts) do
     do_rewrite_note(
       existing,
@@ -2840,8 +2880,70 @@ defmodule Engram.Notes do
       user,
       sanitized_path,
       folder,
-      Keyword.take(opts, [:db_mode, :merge_doc, :prepared, :actor, :recording])
+      Keyword.take(opts, @rewrite_opts)
     )
+  end
+
+  # #2519 step 1: a markdown content update enters the doc as Yjs ops
+  # (`CrdtWrite.apply_text/4`) instead of as a snapshot-relative merge. The
+  # switch is read once per write (`:crdt_write`, set by upsert_note/4). Not
+  # yet: a row with no CRDT state (legacy, two-way into its tail today), a
+  # `force:` repair (it rewrites unchanged text, which the ops path answers as
+  # a no-op), and the batch savepoint mode.
+  defp crdt_write?(%Note{} = row, sanitized_path, opts) do
+    Keyword.get(opts, :crdt_write, false) and CrdtBridge.markdown_path?(sanitized_path) and
+      is_binary(row.crdt_state_nonce) and not Keyword.get(opts, :force, false) and
+      is_nil(Keyword.get(opts, :db_mode))
+  end
+
+  # The ops path's merge result: the same encrypted-state map
+  # `maybe_merge_crdt` returns, plus the write's `delta` (for deliver-out). A
+  # doc that already held the text (its tail or a room did, the row did not)
+  # gives an empty delta, and the row is still written: the reply then carries
+  # what a read serves, not the stale row.
+  #
+  # A room takes the diff only for a write that holds no row lock (an rmw
+  # locks the row before it writes) and declares no base: its text is the
+  # whole note as the writer has it (a plugin push), so it is diffed against
+  # everything the room holds. A writer with a base (an rmw's doc, a matched
+  # `base_hash`) authored its change against the STORED view, and diffing it
+  # against the room would delete room edits it never saw (another device's
+  # keystrokes); it merges as a concurrent edit instead. Accepted risk: if
+  # such a text also carries a room edit whose tail append has not landed
+  # (only the plugin's own oversized REST push, milliseconds after its own
+  # keystroke), that edit goes in twice. Deleting another device's edit is the
+  # worse failure; the plugin sends its base from BaseStore in step 5.
+  defp crdt_ops_merge(existing, content, user, path, opts) do
+    {base, room?} =
+      case Keyword.get(opts, :merge_doc) do
+        %Yex.Doc{} = doc ->
+          {{:doc, doc}, false}
+
+        _ ->
+          {:current,
+           is_nil(Keyword.get(opts, :base_hash)) and
+             not Keyword.has_key?(opts, :locked_note) and
+             not Keyword.has_key?(opts, :expected_note)}
+      end
+
+    case CrdtWrite.apply_text(user, existing, content, base: base, room: room?) do
+      {:ok, %{state: state, text: text, delta: delta}} ->
+        with {:ok, crdt} <-
+               crdt_merge_result(%{state: state, text: text}, user, existing.id, path),
+             do: {:ok, Map.put(crdt, :delta, delta)}
+
+      # A room that timed out or raised wrote nothing we can rely on: read
+      # again, like a lost fence (`lookup_and_write/2` retries once, then
+      # answers a conflict with the served note, a 409 the writer retries).
+      {:error, :room_unavailable} ->
+        :stale_snapshot
+
+      {:error, {:room_raised, _}} ->
+        :stale_snapshot
+
+      {:error, _} = err ->
+        err
+    end
   end
 
   # #2480: the base a writer declares is checked against the hash a reader is
@@ -3072,8 +3174,7 @@ defmodule Engram.Notes do
         if base_attrs.content == Keyword.get(opts, :current_text) do
           opts
         else
-          prepared =
-            prepare_rewrite(expected, base_attrs, user, sanitized_path, folder, opts[:merge_doc])
+          prepared = prepare_rewrite(expected, base_attrs, user, sanitized_path, folder, opts)
 
           Keyword.put(opts, :prepared, prepared)
         end
@@ -3137,9 +3238,13 @@ defmodule Engram.Notes do
 
     prepared =
       Keyword.get_lazy(opts, :prepared, fn ->
-        prepare_rewrite(existing, base_attrs, user, sanitized_path, folder, opts[:merge_doc])
+        prepare_rewrite(existing, base_attrs, user, sanitized_path, folder, opts)
       end)
 
+    write_prepared(existing, prepared, db_opts, opts)
+  end
+
+  defp write_prepared(existing, prepared, db_opts, opts) do
     with {:ok, {crdt, phase_b}} <- prepared do
       seq = Engram.Vaults.next_seq!(existing.vault_id, db_opts)
 
@@ -3166,6 +3271,10 @@ defmodule Engram.Notes do
         # so callers can include the stored hash in broadcast digests without
         # re-deriving it.
         {:ok, updated} ->
+          # Test-only seam (nil elsewhere): a raise here must roll back the
+          # row AND its body, which nothing on this path rescues.
+          interleave_hook(:after_fenced_write)
+
           # #1710. AFTER the fenced write, in the same transaction:
           # `lookup_and_write` retries a lost fence INSIDE this transaction,
           # so a history step placed before the write would commit a version
@@ -3180,7 +3289,7 @@ defmodule Engram.Notes do
                   Keyword.fetch!(opts, :recording)
                 )
 
-          {:ok, {existing.content_hash, updated, crdt.merged_text, crdt.content_hash}}
+          written(existing, updated, crdt)
 
         {:error, changeset} ->
           {:error, changeset}
@@ -3191,21 +3300,22 @@ defmodule Engram.Notes do
     end
   end
 
+  # An ops-path write (`crdt_ops_merge/5`) comes back tagged with its delta, so
+  # deliver-out hands a live room the write's ops (`crdt_applied/3`).
+  defp written(existing, updated, %{delta: delta} = crdt),
+    do:
+      {:ok,
+       {:crdt_applied, existing.content_hash, updated, crdt.merged_text, crdt.content_hash, delta}}
+
+  defp written(existing, updated, crdt),
+    do: {:ok, {existing.content_hash, updated, crdt.merged_text, crdt.content_hash}}
+
   # The merge, field encryption and Phase B/frontmatter derivation of a rewrite:
   # everything that depends only on the pre-image row and the incoming text. Split
   # out so a read-modify-write can run it BEFORE taking the row lock
   # (`expected_note:` in upsert_note/4).
-  defp prepare_rewrite(existing, base_attrs, user, sanitized_path, folder, merge_doc) do
-    with {:ok, crdt} <-
-           maybe_merge_crdt(
-             existing,
-             base_attrs.content,
-             user,
-             existing.id,
-             existing.vault_id,
-             sanitized_path,
-             merge_doc
-           ),
+  defp prepare_rewrite(existing, base_attrs, user, sanitized_path, folder, opts) do
+    with {:ok, crdt} <- merge(existing, base_attrs.content, user, sanitized_path, opts),
          merged_attrs =
            keep_stored_ctime(
              %{
@@ -3227,6 +3337,21 @@ defmodule Engram.Notes do
 
       {:ok, {crdt, phase_b}}
     end
+  end
+
+  defp merge(existing, content, user, path, opts) do
+    if crdt_write?(existing, path, opts),
+      do: crdt_ops_merge(existing, content, user, path, opts),
+      else:
+        maybe_merge_crdt(
+          existing,
+          content,
+          user,
+          existing.id,
+          existing.vault_id,
+          path,
+          opts[:merge_doc]
+        )
   end
 
   # Pin the write to the row pre-image the merge was computed against.
@@ -9172,7 +9297,9 @@ defmodule Engram.Notes do
     deliver_note = if is_binary(user), do: note.id, else: note
 
     Repo.after_commit(fn ->
-      CrdtDeliver.deliver_out(user, vault_id, path, deliver_note, note.content || "")
+      CrdtDeliver.deliver_out(user, vault_id, path, deliver_note, note.content || "",
+        delta: Keyword.get(opts, :crdt_delta)
+      )
     end)
 
     :ok
