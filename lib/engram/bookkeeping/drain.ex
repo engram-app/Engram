@@ -270,7 +270,7 @@ defmodule Engram.Bookkeeping.Drain do
     end
   end
 
-  # One page (500 refs) of the `name_terms` orphan sweep per tick, cycling
+  # One page (4,000 rows) of the `name_terms` orphan sweep per tick, cycling
   # the table: rows whose note or folder is gone or deleted (a purge, or an
   # older release's delete that skipped `NameTerms.on_note_deleted/2`).
   # Returns the rows removed.
@@ -280,11 +280,19 @@ defmodule Engram.Bookkeeping.Drain do
       {:fleet, repo} ->
         from = Cursor.get(@orphan_cursor)
         {read, last, removed} = NameTerms.sweep_orphans(repo, from && from["ref_id"])
-        :ok = Cursor.advance(@orphan_cursor, last && %{"ref_id" => last}, read, 500)
+
+        :ok =
+          Cursor.advance(
+            @orphan_cursor,
+            last && %{"ref_id" => last},
+            read,
+            NameTerms.orphan_page_rows()
+          )
+
         removed
 
-      # Self-host: each user's refs from the start, at most 10 pages a tick.
-      # ponytail: a user past 5,000 refs has its tail swept only by a later
+      # Self-host: each user's rows from the start, at most 10 pages a tick.
+      # ponytail: a user past 40,000 rows has its tail swept only by a later
       # page cursor; add a per-user cursor if a self-host gets that big.
       :per_user ->
         TenantScan.flat_map_users(fn _uid -> [sweep_pages(nil, 10, 0)] end) |> Enum.sum()
@@ -294,10 +302,11 @@ defmodule Engram.Bookkeeping.Drain do
   defp sweep_pages(_after, 0, removed), do: removed
 
   defp sweep_pages(after_id, pages, removed) do
-    case NameTerms.sweep_orphans(Repo, after_id) do
-      {500, last, n} -> sweep_pages(last, pages - 1, removed + n)
-      {_short, _last, n} -> removed + n
-    end
+    {read, last, n} = NameTerms.sweep_orphans(Repo, after_id)
+
+    if read == NameTerms.orphan_page_rows(),
+      do: sweep_pages(last, pages - 1, removed + n),
+      else: removed + n
   end
 
   @doc false

@@ -64,7 +64,13 @@ defmodule Engram.ServiceConfig.Overrides do
     folder_ops: :boolean,
     # `name_terms` backfill kill switch and the search leg's (`Engram.Search.NameTerms`).
     name_terms_backfill: :boolean,
-    name_terms_search: :boolean
+    name_terms_search: :boolean,
+    # The name leg's fusion weights (percent of a Qdrant leg's) and its cap on
+    # folder-only page slots (`Engram.Search.NameTerms.weights/0`), tuned by the
+    # search-quality eval without a deploy.
+    name_terms_title_weight_pct: {:integer, 0..1_000},
+    name_terms_folder_weight_pct: {:integer, 0..1_000},
+    name_terms_folder_slots: {:integer, 0..1_000}
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})

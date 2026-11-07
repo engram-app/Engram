@@ -24,11 +24,22 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderRefLiveIdExpand do
   content save, so no save that was heap-only stops being so and saves add
   no entry.
 
-  Additive: the previous release ignores it. Dropped by name first, so a
+  `folders_live_parent_id`: a folder's live children in id order, so the
+  leg's descendant walk takes the newest-created subfolders first, at most
+  200 read per parent. `id` and `parent_id` change only on create and move.
+
+  Additive: the previous release ignores them. Dropped by name first, so a
   retry after a failed CONCURRENTLY build rebuilds an INVALID index.
   """
 
   def up do
+    execute "DROP INDEX CONCURRENTLY IF EXISTS folders_live_parent_id"
+
+    execute """
+    CREATE INDEX CONCURRENTLY folders_live_parent_id
+    ON folders (vault_id, parent_id, id) WHERE deleted_at IS NULL
+    """
+
     execute "DROP INDEX CONCURRENTLY IF EXISTS notes_folder_ref_live_id"
 
     execute """
@@ -40,5 +51,6 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderRefLiveIdExpand do
 
   def down do
     execute "DROP INDEX CONCURRENTLY IF EXISTS notes_folder_ref_live_id"
+    execute "DROP INDEX CONCURRENTLY IF EXISTS folders_live_parent_id"
   end
 end
