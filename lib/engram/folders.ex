@@ -73,7 +73,7 @@ defmodule Engram.Folders do
   # transaction (`Repo.with_tenant_snapshot!/2` cannot raise its isolation).
   # Ordinary writers never take it, so the vault seq lock is still taken at
   # the first write, as before: this adds no hold time on the vault row.
-  defp atomic(user, vault, fun) do
+  defp atomic(vault, fun) do
     # Defer cascade broadcasts until AFTER the outer transaction resolves.
     # Each leg's per-item broadcast routes through `Sync.Broadcast.emit/3`,
     # which — because the buffer is active inside `deferred/1` — buffers rather
@@ -211,7 +211,7 @@ defmodule Engram.Folders do
          :ok <- refuse_own_subtree(String.trim_trailing(old_folder, "/"), new_folder),
          {:ok, att_pairs} <-
            Attachments.folder_rename_pairs(user, vault, old_folder, new_folder) do
-      atomic(user, vault, fn ->
+      atomic(vault, fn ->
         with {:ok, notes} <- Notes.rename_folder(user, vault, old_folder, new_folder),
              {:ok, atts} <- Attachments.move_folder_pairs(user, vault, att_pairs) do
           {:ok, %{notes: notes, attachments: atts}}
@@ -475,7 +475,7 @@ defmodule Engram.Folders do
     # moved folders' attachments are read.
     with {:ok, folders} <- Notes.resolve_folder_markers(user, vault, marker_ids),
          {:ok, %{metas: metas}} <- Attachments.scan_under(user, vault, folders) do
-      atomic(user, vault, fn ->
+      atomic(vault, fn ->
         with {:ok, %{moved: notes, pairs: pairs}} <-
                Notes.batch_move_folders(user, vault, marker_ids, target),
              {:ok, atts} <- rename_attachments_for(user, vault, metas, pairs) do
