@@ -61,8 +61,9 @@ defmodule Engram.Fixtures do
           |> Note.changeset(note_attrs)
           |> Repo.insert!()
 
-        # As every app writer: the body row in the same transaction.
-        _ = NoteBody.sync!(note.id, note_attrs)
+        # As every app writer: the body row in the same transaction, from
+        # the values written (the `notes` ciphertext columns are not, R8(b2)).
+        _ = NoteBody.put!({note.id, note_attrs})
         note
       end)
 
@@ -83,7 +84,7 @@ defmodule Engram.Fixtures do
   def insert_notes!(user, vault, entries) do
     user = with_dek(user)
     now = DateTime.utc_now()
-    fields = Note.__schema__(:fields)
+    fields = NoteBody.note_fields()
 
     rows =
       for entry <- entries do
@@ -116,10 +117,11 @@ defmodule Engram.Fixtures do
         |> Enum.with_index(last - length(rows) + 1)
         |> Enum.map(fn {row, seq} -> Map.put_new(row, :seq, seq) end)
 
-      for chunk <- Enum.chunk_every(rows, 1000), do: Repo.insert_all(Note, chunk)
-      ids = Enum.map(rows, & &1.id)
-      _ = NoteBody.sync!(ids, [])
-      ids
+      for chunk <- Enum.chunk_every(rows, 1000),
+          do: Repo.insert_all(Note, Enum.map(chunk, &NoteBody.notes_row/1))
+
+      _ = NoteBody.put!(Enum.map(rows, &{&1.id, &1}))
+      Enum.map(rows, & &1.id)
     end)
   end
 
@@ -429,7 +431,8 @@ defmodule Engram.Fixtures do
   @doc """
   Every `kind = 'note'` row of `user_id` whose `note_bodies` row is missing
   or disagrees with its `notes` body columns, as `{id, [column]}`, compared
-  in full against the dropped `notes_sync_body` trigger's mapping (20261021110200),
+  in full against the dropped `notes_sync_body` trigger's mapping (20261021110200)
+  while the `notes` ciphertext is set, by nonce once it is NULL (R8(b2)),
   restated here independently of `Engram.Notes.NoteBody`. Ids and column
   names only, never content. `[]` means in step.
   """
@@ -443,6 +446,21 @@ defmodule Engram.Fixtures do
       """
     end
 
+    # While the notes ciphertext is set, the body must equal it whole. Once
+    # it is NULL (R8(b2): writers write only the body, the null batch clears
+    # older rows) the nonce is the notes side of the pair: the body holds an
+    # envelope under that nonce, or nothing when the nonce is NULL.
+    differs = fn body, ct, nonce ->
+      prefix =
+        "CASE WHEN length(n.#{nonce}) = 13 THEN n.#{nonce} ELSE '\\x00'::bytea || n.#{nonce} END"
+
+      """
+      CASE WHEN n.#{ct} IS NOT NULL THEN b.#{body} IS DISTINCT FROM (#{merged.(ct, nonce)})
+        WHEN n.#{nonce} IS NULL THEN b.#{body} IS NOT NULL
+        ELSE b.#{body} IS NULL OR substring(b.#{body} FROM 1 FOR 13) <> substring((#{prefix}) FROM 1 FOR 13) END
+      """
+    end
+
     %{rows: rows} =
       Engram.Repo.query!(
         """
@@ -451,8 +469,8 @@ defmodule Engram.Fixtures do
           b.user_id IS DISTINCT FROM n.user_id,
           b.key_version IS DISTINCT FROM
             (CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END),
-          b.content_ct IS DISTINCT FROM (#{merged.("content_ciphertext", "content_nonce")}),
-          b.crdt_ct IS DISTINCT FROM (#{merged.("crdt_state_ciphertext", "crdt_state_nonce")}),
+          #{differs.("content_ct", "content_ciphertext", "content_nonce")},
+          #{differs.("crdt_ct", "crdt_state_ciphertext", "crdt_state_nonce")},
           b.crdt_head IS DISTINCT FROM (CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$'
             THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END)
         FROM notes n LEFT JOIN note_bodies b ON b.note_id = n.id
@@ -466,6 +484,25 @@ defmodule Engram.Fixtures do
     for [id | flags] <- rows, Enum.any?(flags) do
       {id, for({name, true} <- Enum.zip(names, flags), do: name)}
     end
+  end
+
+  @doc """
+  Sets a note's `notes` content and CRDT state ciphertexts to the envelopes
+  its body row holds: the row a release before R8(b2) (which still wrote
+  those columns) leaves. For the null batch (`NoteBodyColumnsNull`) and the
+  pre-split copy (`NoteSplit`). R8(c) drops the columns and this with them.
+  """
+  def old_release_notes_copy!(note_id) do
+    Engram.Repo.query!(
+      """
+      UPDATE notes AS n SET content_ciphertext = substring(b.content_ct FROM 14),
+        crdt_state_ciphertext = substring(b.crdt_ct FROM 14)
+      FROM note_bodies AS b WHERE b.note_id = n.id AND n.id = $1
+      """,
+      [Ecto.UUID.dump!(note_id)]
+    )
+
+    :ok
   end
 
   @doc """

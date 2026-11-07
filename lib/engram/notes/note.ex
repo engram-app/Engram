@@ -118,7 +118,13 @@ defmodule Engram.Notes.Note do
     # The undoable delete that tombstoned this row (#609), restored by
     # `Engram.Folders.restore_op/3`. Nil on live rows and rename tombstones.
     field :delete_op_id, Ecto.UUID
-    field :content_ciphertext, :binary
+    # R8(b2): the content and CRDT state ciphertexts live in `note_bodies`
+    # (`Engram.Notes.NoteBody`); these struct keys are virtual, so no Ecto
+    # write or read names the `notes` columns (R8(c) drops them). A read
+    # fills them from the body row (`NoteBody.select_note/2`); a writer puts
+    # them through `NoteBody.put!/2`. The nonces stay real `notes` columns:
+    # the write fences compare them.
+    field :content_ciphertext, :binary, virtual: true
     field :content_nonce, :binary
     field :title_ciphertext, :binary
     field :title_nonce, :binary
@@ -147,7 +153,7 @@ defmodule Engram.Notes.Note do
     # `Yex.encode_state_as_update` snapshot, AES-256-GCM encrypted under the
     # per-user DEK with AAD `aad_for_row(:notes, :crdt_state, id)`. NULL until
     # a note's first CRDT-aware write seeds it from an empty Y.Doc.
-    field :crdt_state_ciphertext, :binary
+    field :crdt_state_ciphertext, :binary, virtual: true
     field :crdt_state_nonce, :binary
 
     # Head marker of the canonical CRDT doc: sha256(state_vector) url-b64 (see

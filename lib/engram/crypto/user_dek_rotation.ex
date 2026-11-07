@@ -270,7 +270,7 @@ defmodule Engram.Crypto.UserDekRotation do
               if updates != [] do
                 case from(n in Engram.Notes.Note, where: n.id == ^note.id)
                      |> Repo.update_all(
-                       [set: updates ++ [dek_version: new_dek_version]],
+                       [set: NoteBody.notes_row(updates) ++ [dek_version: new_dek_version]],
                        skip_tenant_check: true
                      ) do
                   {1, _} ->

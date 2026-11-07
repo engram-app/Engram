@@ -3,24 +3,35 @@ defmodule Engram.Notes.NoteBody do
   A note's body, 1:1 with `notes` (migration 20261021110100): materialized
   content, CRDT state and manifest head.
 
-  Every app writer of the `notes` body columns calls `put!/2` after its
-  `notes` write, in the same transaction, with the values it wrote: the body
-  is never a copy of the `notes` columns. R8 (stop storing every body twice)
-  runs in releases: N added `sync!/3` (a copy from `notes`) beside the
+  Every app writer of a body field calls `put!/2` after its `notes` write,
+  in the same transaction, with the values it wrote: the body is never a
+  copy of the `notes` columns. R8 (stop storing every body twice) runs in
+  releases: N added `sync!/3` (a copy from `notes`) beside the
   `notes_sync_body` trigger, N+1 dropped the trigger (20261104000000), R8(b1)
-  moved every writer to `put!/2`, and the release after it stops writing the
-  `notes` ciphertext columns. Order matters: a copy from `notes` once those
-  columns go NULL or stale would erase bodies, so the release beside the
-  one that stops writing them (this one) must copy nothing a writer wrote.
-  `sync!/3` remains for `NoteSplit` (a missing body row) and the head
-  self-heal, and never copies a NULL ciphertext over a body.
+  (release A) moved every writer to `put!/2`, and R8(b2) (this release)
+  stops writing `notes.content_ciphertext` / `crdt_state_ciphertext`: those
+  `Note` fields are virtual, a raw write drops them (`notes_row/1`), and
+  `Engram.DataMigrations.NoteBodyColumnsNull` nulls the older rows. The
+  nonces and `crdt_head` are still written on `notes` (the fences below).
+  Order matters: a copy from `notes` over a NULL column would erase a body,
+  so this release ships only after A has rolled out everywhere (A's
+  `sync!/3` never copies a NULL and compares nonces), and the null batch
+  refuses to run beside an older node. Rollback floor: A. R8(c) drops the
+  two columns. `sync!/3` remains for `NoteSplit` (a missing body row) and
+  the head self-heal.
 
   Wave 3 migrate-data (`docs/context/notes-chunks-hyperopt.md` 6.1 step 2):
   every READ of a body column goes through `select_note/2` (or `join/1` +
   `fields/1` where a caller builds its own select), so the body comes from
-  this table. The `notes` columns are still written (the previous release
-  reads them: `docs/context/migrate-data-rollback-trap.md`); a later
-  contract release stops writing and drops them.
+  this table.
+
+  Accepted risk (R8(b1) review): every in-step test here (`sync!/3`,
+  `put!/2`'s rewrite skip, `drift_ids/2`, the `Canary` sample) compares a
+  ciphertext by its 13-byte nonce field, not its bytes. Every encryption
+  takes a fresh nonce, so only a write that changes a ciphertext but keeps
+  its nonce (no app writer does; a restore or a hand edit could) goes
+  unseen. Reading the bytes would de-TOAST every body on every check. The
+  null batch alone also compares length and tag before it drops a copy.
 
   `content_ct` / `crdt_ct` hold `nonce || ciphertext`
   (`Engram.Crypto.Envelope.split_merged/1`). The read splits them back in
@@ -295,12 +306,34 @@ defmodule Engram.Notes.NoteBody do
     AND (b.user_id <> n.user_id OR b.key_version <> #{key_version} OR #{all_differ})
   """
 
+  # Virtual on `Note` since R8(b2): stored only here.
+  @virtual_body [:content_ciphertext, :crdt_state_ciphertext]
+
+  @doc """
+  Every field a full note read selects: the `Note` columns plus the two
+  ciphertexts that live only in `note_bodies` (virtual on `Note`). The
+  default of `select_note/2` and `get/2`.
+  """
+  @spec note_fields() :: [atom()]
+  def note_fields, do: Note.__schema__(:fields) ++ @virtual_body
+
+  @doc """
+  `values` (a keyword list or map of `Note` fields) without the two
+  ciphertexts that live only in `note_bodies`: what a raw `notes` write
+  (`update_all` `set:`, `insert_all` rows) may name. The writer hands the
+  full `values` to `put!/2`.
+  """
+  @spec notes_row(keyword()) :: keyword()
+  @spec notes_row(map()) :: map()
+  def notes_row(values) when is_list(values), do: Keyword.drop(values, @virtual_body)
+  def notes_row(values) when is_map(values), do: Map.drop(values, @virtual_body)
+
   @doc """
   Every `Note` field except the CRDT state, about half of a note's stored
   bytes: for reads that need the content but never the doc.
   """
   @spec without_crdt() :: [atom()]
-  def without_crdt, do: Note.__schema__(:fields) -- [:crdt_state_ciphertext, :crdt_state_nonce]
+  def without_crdt, do: note_fields() -- [:crdt_state_ciphertext, :crdt_state_nonce]
 
   @doc "The `Note` fields that live in `note_bodies`."
   def body_fields, do: @body
@@ -311,7 +344,7 @@ defmodule Engram.Notes.NoteBody do
   list with no body field adds no join.
   """
   @spec select_note(Ecto.Queryable.t(), [atom()]) :: Ecto.Query.t()
-  def select_note(query, fields \\ Note.__schema__(:fields)) do
+  def select_note(query, fields \\ note_fields()) do
     query = from(n in query, select: struct(n, ^(fields -- @body)))
 
     case Enum.filter(@body, &(&1 in fields)) do
@@ -342,7 +375,7 @@ defmodule Engram.Notes.NoteBody do
 
   @doc "The note row with primary key `id` (any kind), body from `note_bodies`."
   @spec get(Ecto.UUID.t(), [atom()]) :: Note.t() | nil
-  def get(id, fields \\ Note.__schema__(:fields)) do
+  def get(id, fields \\ note_fields()) do
     Note |> where([n], n.id == ^id) |> select_note(fields) |> Repo.one()
   end
 
@@ -588,7 +621,7 @@ defmodule Engram.Notes.NoteBody do
         "coalesce((SELECT b.crdt_ct IS NULL FROM note_bodies AS b WHERE b.note_id = ? AND b.user_id = ?), ? IS NULL)",
         n.id,
         n.user_id,
-        n.crdt_state_ciphertext
+        ^pre_split(:crdt_state_ciphertext)
       )
     )
   end
@@ -645,6 +678,9 @@ defmodule Engram.Notes.NoteBody do
     )
   end
 
+  # The no-body fallback reads the `notes` ciphertext by a per-row
+  # primary-key subquery (`pre_split/2`): the column is not in the `Note`
+  # schema (R8(b2)), and only a row without a body runs it.
   defp ct_expr(body, notes) do
     dynamic(
       [n, note_body: b],
@@ -652,7 +688,7 @@ defmodule Engram.Notes.NoteBody do
         fragment(
           "CASE WHEN ? IS NULL THEN ? ELSE substring(? FROM 14) END",
           b.note_id,
-          field(n, ^notes),
+          ^pre_split(notes),
           field(b, ^body)
         ),
         :binary
@@ -693,11 +729,29 @@ defmodule Engram.Notes.NoteBody do
       fragment(
         "coalesce(CASE WHEN ? IS NULL THEN octet_length(?) ELSE octet_length(?) - 13 END, 0)",
         b.note_id,
-        field(n, ^notes),
+        ^pre_split(notes),
         field(b, ^body)
       )
     )
   end
+
+  # The `notes` ciphertext column `col` of the row bound as `n`, for a note
+  # with no body row (a self-hoster who skipped releases, before `NoteSplit`
+  # reaches it). By name in SQL, by primary key, so nothing outside this
+  # module names the column and a row with a body never reads it. The
+  # pre-split fallbacks (this, the `put!/2` / `sync!/3` insert of a missing
+  # row, the drift test) are the last references R8(c) removes before it
+  # drops the columns.
+  defp pre_split(:content_ciphertext),
+    do:
+      dynamic([n], fragment("(SELECT x.content_ciphertext FROM notes AS x WHERE x.id = ?)", n.id))
+
+  defp pre_split(:crdt_state_ciphertext),
+    do:
+      dynamic(
+        [n],
+        fragment("(SELECT x.crdt_state_ciphertext FROM notes AS x WHERE x.id = ?)", n.id)
+      )
 
   @doc """
   The notes among `ids` whose body row exists and disagrees with its `notes`

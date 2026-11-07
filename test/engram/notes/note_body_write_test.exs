@@ -252,9 +252,7 @@ defmodule Engram.Notes.NoteBodyWriteTest do
       {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state("state", u, note.id)
 
       Repo.with_tenant(u.id, fn ->
-        Repo.update_all(from(n in Note, where: n.id == ^note.id),
-          set: [crdt_state_ciphertext: nil, crdt_state_nonce: nil]
-        )
+        Repo.update_all(from(n in Note, where: n.id == ^note.id), set: [crdt_state_nonce: nil])
 
         NoteBody.put!({note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil})
         Repo.query!("DELETE FROM crdt_update_log WHERE note_id = $1", [Ecto.UUID.dump!(note.id)])
@@ -272,7 +270,7 @@ defmodule Engram.Notes.NoteBodyWriteTest do
 
     test "envelope re-encode", %{user: u, vault: v} do
       note = write!(u, v, "a.md", "first")
-      raw = Repo.reload!(note, skip_tenant_check: true)
+      raw = Repo.with_tenant!(u.id, fn -> NoteBody.get(note.id) end)
       {:ok, dek} = Crypto.get_dek(u)
       aad = Crypto.aad_for_row(:notes, :content, note.id)
       {:ok, plain} = Envelope.decrypt(raw.content_ciphertext, raw.content_nonce, dek, aad)
@@ -324,7 +322,10 @@ defmodule Engram.Notes.NoteBodyWriteTest do
     end
 
     test "NoteSplit fills a missing body row", %{user: u, vault: v} do
+      # A row an older release wrote (its notes ciphertexts set), before the
+      # body table: the copy NoteSplit makes is from those columns.
       note = write!(u, v, "a.md", "first")
+      Engram.Fixtures.old_release_notes_copy!(note.id)
       Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [Ecto.UUID.dump!(note.id)])
       NoteSplit.run_pass()
       assert_in_step!(u.id)
@@ -544,10 +545,12 @@ defmodule Engram.Notes.NoteBodyWriteTest do
   SELECT ((SELECT count(*) FROM upd) + (SELECT count(*) FROM ins))::int
   """
 
-  describe "R8(b1): 0.75's copy over rows this release wrote" do
-    # Beside this release the previous one still runs its copy. This release
-    # still writes the `notes` columns with the values it hands `put!/2`, so
-    # that copy finds every row in step and writes nothing.
+  describe "R8(b2): the copies older releases run, over rows this release wrote" do
+    # Beside this release the previous one (release A, R8(b1)) still runs
+    # its copy (`sync!/3`: COALESCE, nonce compare): this release writes the
+    # nonces, so that copy finds every row in step and writes nothing. 0.75's
+    # copy has neither, which is why this release ships only after A has
+    # fully rolled out and the null batch refuses to run beside an older node.
     defp copy_v0_75_0!(ids) do
       %{rows: [[n]]} = Repo.query!(@copy_sql_v0_75_0, [Enum.map(ids, &Ecto.UUID.dump!/1)])
       n
@@ -570,7 +573,7 @@ defmodule Engram.Notes.NoteBodyWriteTest do
 
     defp assert_copy_writes_nothing!(u) do
       before = bodies(u)
-      assert copy_v0_75_0!(ids(u)) == 0
+      assert NoteBody.sync!(ids(u), NoteBody.body_fields()) == 0
       assert bodies(u) == before
     end
 
@@ -589,22 +592,129 @@ defmodule Engram.Notes.NoteBodyWriteTest do
       assert text =~ "changed"
     end
 
-    test "a control: it does copy over a body out of step", %{user: u, vault: v} do
+    test "a control: 0.75's copy erases a body this release wrote", %{user: u, vault: v} do
       note = write!(u, v, "a.md", "first")
-
-      Repo.query!("UPDATE note_bodies SET content_ct = NULL WHERE note_id = $1", [
-        Ecto.UUID.dump!(note.id)
-      ])
-
       assert copy_v0_75_0!([note.id]) == 1
-      assert {:ok, %{content: "first"}} = Notes.get_note(u, v, "a.md")
+      assert {:ok, %{content: nil}} = Notes.get_note(u, v, "a.md")
+    end
+  end
+
+  describe "R8(b2): writers stop writing the notes ciphertexts" do
+    # The notes row after a write: both ciphertexts NULL, the nonces (the
+    # write fences compare them) still set; the body decrypts.
+    defp assert_body_only!(u, id, crdt? \\ true) do
+      %{rows: [[content_ct, state_ct, content_n, state_n]]} =
+        Repo.query!(
+          "SELECT content_ciphertext, crdt_state_ciphertext, content_nonce, crdt_state_nonce FROM notes WHERE id = $1",
+          [Ecto.UUID.dump!(id)]
+        )
+
+      assert {content_ct, state_ct} == {nil, nil}
+      assert is_binary(content_n)
+
+      note = Repo.with_tenant!(u.id, fn -> NoteBody.get(id) end)
+      assert note.content_nonce == content_n
+      assert {:ok, %Note{content: content}} = Crypto.maybe_decrypt_note_fields(note, u)
+      assert is_binary(content)
+
+      if crdt? do
+        assert is_binary(state_n)
+        assert note.crdt_state_nonce == state_n
+        assert is_binary(crdt_state!(u, id))
+      end
+
+      content
+    end
+
+    defp tombstones(u) do
+      Repo.all(
+        from(n in Note, where: n.user_id == ^u.id and not is_nil(n.deleted_at), select: n.id),
+        skip_tenant_check: true
+      )
+    end
+
+    test "create and update", %{user: u, vault: v} do
+      note = write!(u, v, "a.md", "first")
+      assert assert_body_only!(u, note.id) == "first"
+      write!(u, v, "a.md", "second")
+      assert assert_body_only!(u, note.id) == "second"
+    end
+
+    test "content checkpoint and compaction", %{user: u, vault: v} do
+      note = write!(u, v, "a.md", "first")
+      :ok = CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc_with("changed"))
+      assert assert_body_only!(u, note.id) =~ "changed"
+      {:ok, doc} = CrdtBridge.doc_from_state(crdt_state!(u, note.id))
+      :ok = CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc)
+      assert assert_body_only!(u, note.id) =~ "changed"
+    end
+
+    test "rename, with its tombstone", %{user: u, vault: v} do
+      note = write!(u, v, "a.md", "first")
+      assert {:ok, _} = Notes.rename_note(u, v, "a.md", "b.md")
+      assert assert_body_only!(u, note.id) == "first"
+      assert [tomb] = tombstones(u)
+      assert assert_body_only!(u, tomb, false) == ""
+    end
+
+    test "folder rename of a legacy row and a bound row, with tombstones", %{user: u, vault: v} do
+      legacy = insert_legacy_note!(u, v, "Dir/old.md", "legacy body")
+      bound = write!(u, v, "Dir/new.md", "bound body")
+      assert {:ok, _} = Notes.rename_folder(u, v, "Dir", "New")
+      assert assert_body_only!(u, legacy.id, false) == "legacy body"
+      assert assert_body_only!(u, bound.id) == "bound body"
+      assert [_, _] = tombs = tombstones(u)
+      for t <- tombs, do: assert(assert_body_only!(u, t, false) == "")
+    end
+
+    test "AAD rebind of a legacy row", %{user: u, vault: v} do
+      legacy = insert_legacy_note!(u, v, "legacy/path.md", "legacy body")
+      assert :ok = AadRebind.rebind_user(u.id)
+      assert assert_body_only!(u, legacy.id, false) == "legacy body"
+    end
+
+    test "CRDT state backfill seed", %{user: u, vault: v} do
+      note = write!(u, v, "a.md", "first")
+      {:ok, {ct, nonce}} = Crypto.encrypt_crdt_state("state", u, note.id)
+
+      Repo.with_tenant(u.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id), set: [crdt_state_nonce: nil])
+        NoteBody.put!({note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil})
+        Repo.query!("DELETE FROM crdt_update_log WHERE note_id = $1", [Ecto.UUID.dump!(note.id)])
+        assert BackfillCrdtState.write_seed(note.id, ct, nonce) == 1
+      end)
+
+      assert assert_body_only!(u, note.id, false) == "first"
+      assert crdt_state!(u, note.id) == "state"
+    end
+
+    test "envelope re-encode", %{user: u, vault: v} do
+      note = write!(u, v, "a.md", "first")
+      raw = Repo.with_tenant!(u.id, fn -> NoteBody.get(note.id) end)
+      {:ok, dek} = Crypto.get_dek(u)
+      aad = Crypto.aad_for_row(:notes, :content, note.id)
+      {:ok, plain} = Envelope.decrypt(raw.content_ciphertext, raw.content_nonce, dek, aad)
+      {ct, nonce} = Envelope.encrypt(plain, dek, aad)
+
+      {1, _} =
+        Repo.with_tenant!(u.id, fn ->
+          ReencodeEnvelopes.write_row(
+            :notes_content,
+            note.id,
+            {raw.content_ciphertext, raw.content_nonce},
+            ct,
+            nonce
+          )
+        end)
+
+      assert assert_body_only!(u, note.id) == "first"
     end
   end
 
   describe "R8(b1): put!" do
     test "writes nothing when the row already holds the values", %{user: u, vault: v} do
       note = write!(u, v, "a.md", "first")
-      raw = Repo.reload!(note, skip_tenant_check: true)
+      raw = Repo.with_tenant!(u.id, fn -> NoteBody.get(note.id) end)
       values = Map.take(raw, NoteBody.body_fields())
 
       assert NoteBody.put!({note.id, values}) == 0
@@ -709,7 +819,7 @@ defmodule Engram.Notes.NoteBodyWriteTest do
 
   # Hand-built legacy note (dek_version 1, empty AAD), as AadRebindTest does.
   # A fixture writes `notes` directly, so it puts its body row in place the
-  # way every writer does.
+  # way every writer does (`put!/2`; the content ciphertext is virtual).
   defp insert_legacy_note!(user, vault, path, content) do
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, filter_key} = Crypto.dek_filter_key(user)
@@ -747,7 +857,7 @@ defmodule Engram.Notes.NoteBodyWriteTest do
         skip_tenant_check: true
       )
 
-    NoteBody.sync!(note.id, NoteBody.body_fields())
+    NoteBody.put!({note.id, content_ciphertext: content_ct, content_nonce: content_n})
     note
   end
 end
@@ -835,6 +945,26 @@ defmodule Engram.Notes.NoteBodyRotationTest do
     DekCache.invalidate_all()
     u = Engram.Accounts.get_user!(u.id)
     assert {:ok, %{content: "rotated by the crashed run"}} = Notes.get_note(u, v, "r.md")
+  end
+
+  test "R8(b2): rotation rewraps into note_bodies only, the notes ciphertexts stay NULL",
+       %{user: u, vault: v, note: note} do
+    before =
+      Repo.query!("SELECT content_nonce FROM notes WHERE id = $1", [Ecto.UUID.dump!(note.id)]).rows
+
+    assert :ok = UserDekRotation.rotate_user(u.id)
+
+    assert [[nil, nil, content_n, state_n]] =
+             Repo.query!(
+               "SELECT content_ciphertext, crdt_state_ciphertext, content_nonce, crdt_state_nonce FROM notes WHERE id = $1",
+               [Ecto.UUID.dump!(note.id)]
+             ).rows
+
+    assert is_binary(content_n) and is_binary(state_n)
+    refute [[content_n]] == before
+    DekCache.invalidate_all()
+    u = Engram.Accounts.get_user!(u.id)
+    assert {:ok, %{content: "from notes"}} = Notes.get_note(u, v, "r.md")
   end
 
   defp content_in_notes(id),
