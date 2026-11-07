@@ -24,8 +24,8 @@ defmodule Engram.Bookkeeping.Canary do
   and `Engram.Bookkeeping.Drain` only finds references whose drift its indexes
   describe (a NULL note reference, an attachment reference stamped for another
   path). This counts the references that are wrong anyway: a sampled note
-  whose folder row is deleted or has another `full_path_hmac` than its
-  `folder_hmac` (no index can find a reference to a deleted row), and a
+  whose folder row is deleted or is not at its decrypted folder (no index
+  can find a reference to a deleted row), and a
   sampled attachment, stamped current, whose decrypted path is not in its
   folder row (a writer that stamped a wrong folder). Users under a DEK
   rotation are skipped: their rows and folder rows are re-keyed in separate
@@ -57,7 +57,6 @@ defmodule Engram.Bookkeeping.Canary do
   import Ecto.Query
 
   alias Engram.Accounts.User
-  alias Engram.Attachments.Attachment
   alias Engram.Backfill.TenantScan
   alias Engram.Crypto
   alias Engram.DataMigrations.NoteIndexState
@@ -126,20 +125,32 @@ defmodule Engram.Bookkeeping.Canary do
   end
 
   # Live notes whose reference names a deleted folder row, or a live one of
-  # another path. A NULL reference (no row yet) is the drain's.
+  # another path. A NULL reference (no row yet) is the drain's. The path is
+  # the note's decrypted folder envelope, never `notes.folder_hmac`, which a
+  # note may not carry (R9): one decrypt per sampled note with a reference.
   defp wrong_note_refs(repo, ids) do
     from(n in "notes",
       as: :a,
       left_join: f in "folders",
-      on: f.id == n.folder_ref_id,
+      on: f.id == n.folder_ref_id and is_nil(f.deleted_at) and f.vault_id == n.vault_id,
       where:
         n.id in type(^ids, {:array, Ecto.UUID}) and n.kind == "note" and is_nil(n.deleted_at) and
-          not is_nil(n.folder_ref_id) and not exists(rotating()) and
-          (is_nil(f.id) or not is_nil(f.deleted_at) or f.full_path_hmac != n.folder_hmac or
-             f.vault_id != n.vault_id),
-      select: count()
+          not is_nil(n.folder_ref_id) and not exists(rotating()),
+      select: %{
+        id: n.id,
+        user_id: type(n.user_id, Ecto.UUID),
+        dek_version: n.dek_version,
+        ct: n.folder_ciphertext,
+        nonce: n.folder_nonce,
+        ref: n.folder_ref_id,
+        folder_live?: not is_nil(f.id),
+        folder_hmac: f.full_path_hmac
+      }
     )
-    |> repo.one()
+    |> repo.all()
+    |> count_wrong_by_user(repo, fn row, dek ->
+      Rows.decrypt_field(dek, :notes, :folder, row.id, row.dek_version, row.ct, row.nonce)
+    end)
   end
 
   # The sampled row's (bound as `:a`) user is mid DEK rotation.
@@ -174,22 +185,42 @@ defmodule Engram.Bookkeeping.Canary do
       }
     )
     |> repo.all()
+    |> count_wrong_by_user(repo, fn row, dek ->
+      id = Ecto.UUID.dump!(row.id)
+
+      with {:ok, path} <-
+             Rows.decrypt_field(
+               dek,
+               :attachments,
+               :path,
+               id,
+               row.dek_version,
+               row.path_ciphertext,
+               row.path_nonce
+             ),
+           do: {:ok, Helpers.extract_folder(path)}
+    end)
+  end
+
+  # Per sampled user, the rows whose decrypted folder (`folder_of.(row, dek)`)
+  # is not their folder row's path. A folder that does not decrypt is not
+  # judged here (the drain's warning owns it).
+  defp count_wrong_by_user(rows, repo, folder_of) do
+    rows
     |> Enum.group_by(& &1.user_id)
-    |> Enum.map(fn {user_id, rows} -> count_wrong(repo, user_id, rows) end)
+    |> Enum.map(fn {user_id, rows} -> count_wrong(repo, user_id, rows, folder_of) end)
     |> Enum.sum()
   end
 
-  # A path that does not decrypt is not judged here (the drain's warning owns it).
-  defp count_wrong(repo, user_id, rows) do
+  defp count_wrong(repo, user_id, rows, folder_of) do
     with %User{} = user <- repo.get(User, user_id),
-         {:ok, fk} <- Crypto.dek_filter_key(user) do
-      Enum.count(rows, fn row ->
-        att =
-          struct(Attachment, Map.take(row, [:id, :dek_version, :path_ciphertext, :path_nonce]))
+         {:ok, dek} <- Crypto.get_dek(user) do
+      fk = Crypto.dek_filter_key_from_bytes(dek)
 
-        case Crypto.maybe_decrypt_attachment_fields(att, user) do
-          {:ok, %{path: path}} -> wrong_ref?(row, Helpers.extract_folder(path), fk)
-          _ -> false
+      Enum.count(rows, fn row ->
+        case folder_of.(row, dek) do
+          {:ok, folder} -> wrong_ref?(row, folder, fk)
+          :error -> false
         end
       end)
     else
