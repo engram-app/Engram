@@ -101,4 +101,21 @@ defmodule EngramWeb.RateLimiterTest do
       assert_receive {:hit, ^ref, %{count: 1}, %{purpose: :other, result: :allow}}, 1000
     end
   end
+
+  # The n backfill's free gate: integer remaining, nothing spent. A float
+  # limit is refused (it would make a page size or a spend a float).
+  describe "peek/3" do
+    test "returns the integer remaining without counting a hit" do
+      key = "peek:#{System.unique_integer([:positive])}"
+      assert RateLimiter.peek(key, 60_000, 10) === 10
+      assert {:allow, 3} = RateLimiter.hit(key, 60_000, 10, :other, 3)
+      assert RateLimiter.peek(key, 60_000, 10) === 7
+      assert RateLimiter.peek(key, 60_000, 10) === 7
+      assert RateLimiter.peek(key, 60_000, 2) === 0
+    end
+
+    test "refuses a non-integer limit" do
+      assert_raise FunctionClauseError, fn -> RateLimiter.peek("peek:f", 60_000, 1000.0) end
+    end
+  end
 end

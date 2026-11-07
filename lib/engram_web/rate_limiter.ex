@@ -76,8 +76,10 @@ defmodule EngramWeb.RateLimiter do
   this node's counter, which peers' hits reach by broadcast (eventually
   consistent, as `hit/5`).
   """
+  # `is_integer/1` keeps the arithmetic integer: an unguarded `limit` made
+  # `limit - count` a number() to dialyzer (callers pass validated integers).
   @spec peek(String.t(), pos_integer(), non_neg_integer()) :: non_neg_integer()
-  def peek(key, scale_ms, limit) do
+  def peek(key, scale_ms, limit) when is_integer(limit) do
     count =
       case backend() do
         :distributed_ets -> EngramWeb.RateLimiter.DistributedETS.get(key, scale_ms)
