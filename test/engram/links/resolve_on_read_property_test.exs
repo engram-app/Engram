@@ -105,9 +105,13 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
   defp check_run(user, vault, notes, atts, targets, keys) do
     # Paths are unique exactly, not case-insensitively: `a/Hub.md` beside
     # `A/hub.md` is legal, and the ranking must break that tie.
-    rows = Enum.map(notes, &Fixtures.insert_note!(user, vault, %{path: &1}))
+    # The notes in one bulk INSERT (`Fixtures.insert_notes!/3`: the same rows
+    # `insert_note!/3` writes, keys included), the source last as before.
+    # Setup was over a third of the property's time.
+    paths = notes ++ ["zz/Source.md"]
+    ids = Fixtures.insert_notes!(user, vault, Enum.map(paths, &%{path: &1}))
+    {rows, [src]} = ids |> Enum.zip_with(paths, &%{id: &1, path: &2}) |> Enum.split(-1)
     Enum.each(atts, &Fixtures.insert_attachment!(user, vault, %{path: &1}))
-    src = Fixtures.insert_note!(user, vault, %{path: "zz/Source.md"})
 
     :ok =
       Links.replace_links(

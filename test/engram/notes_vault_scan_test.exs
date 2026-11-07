@@ -189,8 +189,13 @@ defmodule Engram.NotesVaultScanTest do
       # A vault big enough that the plan reflects selectivity, not a tiny
       # table's cost ties (as NotesPathIndexPlanTest). Added after the rename:
       # their ciphertext is not real, and only the plan reads them.
-      for _ <- 1..1000,
-          do: insert(:note, user: u, vault: v, folder_ref_id: nil)
+      # One bulk INSERT (`Fixtures.insert_notes!/3`), not 1,000 round trips:
+      # the same factory rows, through the same triggers.
+      Engram.Fixtures.insert_notes!(
+        u,
+        v,
+        for(_ <- 1..1000, do: build(:note, folder_ref_id: nil))
+      )
 
       plan = QueryPlan.generic_plan(fetch, analyze: ["notes"], bitmapscan: false)
       assert plan =~ "notes_folder_ref", plan
