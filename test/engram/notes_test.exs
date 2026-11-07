@@ -543,8 +543,6 @@ defmodule Engram.NotesTest do
 
     test "#738: note_changed broadcast from rename is JSON-safe for a note corrupt at rest",
          %{user: user, vault: vault} do
-      import Ecto.Query, only: [from: 2]
-
       # Legacy row: written before the #740 write-time scrub, so its content
       # decrypts to invalid UTF-8. Rename only changes the path, then re-broadcasts
       # the note's content over the sync Channel — exercising the read-boundary
@@ -2914,77 +2912,15 @@ defmodule Engram.NotesTest do
   # No re-embed either (#746).
   # ---------------------------------------------------------------------------
 
-  describe "a rename makes no Qdrant call and queues no index job" do
-    setup %{user: user, vault: vault} do
-      test = self()
-      handler = {__MODULE__, make_ref()}
-
-      # Global handler, this process only (the module is async).
-      :telemetry.attach(
-        handler,
-        [:engram, :qdrant, :request, :start],
-        fn _, _, meta, _ -> if self() == test, do: send(test, {:qdrant_request, meta}) end,
-        nil
-      )
-
-      on_exit(fn -> :telemetry.detach(handler) end)
-
-      notes =
-        for i <- 1..3 do
-          note =
-            Engram.Fixtures.insert_note!(user, vault, %{
-              path: "A/Note#{i}.md",
-              content: "# x\n\nbody #{i}"
-            })
-
-          embedded!(note)
-        end
-
-      %{notes: notes}
-    end
-
-    defp embedded!(note) do
-      import Ecto.Query
-
-      from(n in Engram.Notes.Note, where: n.id == ^note.id)
-      |> Engram.Repo.update_all([set: [embed_hash: note.content_hash]], skip_tenant_check: true)
-
-      note
-    end
-
-    defp refute_index_work do
-      refute_received {:qdrant_request, _}
-      refute_enqueued(worker: Engram.Workers.RepathNoteIndex)
-      refute_enqueued(worker: Engram.Workers.RefreshKeywordVectors)
-      refute_enqueued(worker: Engram.Workers.EmbedNote)
-    end
-
-    test "single-note rename", %{user: user, vault: vault, notes: [note | _]} do
-      assert {:ok, _} = Engram.Notes.rename_note(user, vault, "A/Note1.md", "B/Note1.md")
-
-      refute_index_work()
-      assert Engram.Fixtures.raw_note!(note.id).embed_hash == note.content_hash
-    end
-
-    test "folder rename moving many notes", %{user: user, vault: vault, notes: notes} do
-      assert {:ok, _} = Engram.Notes.rename_folder(user, vault, "A", "B")
-
-      refute_index_work()
-      for n <- notes, do: assert(Engram.Fixtures.raw_note!(n.id).embed_hash == n.content_hash)
-    end
-
-    # #1612: the web app moves every note through crdt_create.
-    test "crdt_create live relocate", %{user: user, vault: vault, notes: [note | _]} do
-      assert {:ok, moved} = Engram.Notes.genesis_crdt_note(user, vault, note.id, "B/Note1.md")
-      assert moved.path == "B/Note1.md"
-
-      refute_index_work()
-    end
-
+  # The zero-call invariant (note/folder rename and move, plus every job they
+  # queue) lives in `Engram.RenameZeroIndexWritesTest`.
+  describe "rename index jobs" do
     # The tombstone's points were deleted with it, so the resurrected note
     # embeds fresh (its embed_hash no longer matches); still no repath.
-    test "crdt_create resurrect-rename embeds, never repaths",
-         %{user: user, vault: vault, notes: [note | _]} do
+    test "crdt_create resurrect-rename embeds, never repaths", %{user: user, vault: vault} do
+      note =
+        Engram.Fixtures.insert_note!(user, vault, %{path: "A/Note1.md", content: "# x\n\nbody"})
+
       :ok = Engram.Notes.delete_note(user, vault, "A/Note1.md")
 
       assert {:ok, _} = Engram.Notes.genesis_crdt_note(user, vault, note.id, "B/Note1.md")
