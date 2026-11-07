@@ -422,6 +422,7 @@ defmodule Engram.FoldersTest do
       vault: vault
     } do
       for i <- 1..30, do: put_att(user, vault, "Docs/f#{i}.png")
+      put_att(user, vault, "One/f.png")
 
       # Warm the data_migrations caches (Keys) with a throwaway
       # rename: cold, they add 3 statements, and whether they are cold depends
@@ -429,18 +430,26 @@ defmodule Engram.FoldersTest do
       put_att(user, vault, "Warm/f.png")
       assert {:ok, %{attachments: 1}} = Folders.rename(user, vault, "Warm", "Warmed")
 
-      {{:ok, %{attachments: 30}}, queries} =
-        Engram.QueryRecorder.record(fn -> Folders.rename(user, vault, "Docs", "Archive") end)
+      # The rename transaction's statements for 1 attachment and for 30: equal.
+      # (A fixed ceiling, `< 30`, sat one statement over the baseline and went
+      # red on any unrelated fixed statement, #2485 review LOW-3.)
+      largest = fn from, to, n ->
+        {{:ok, %{attachments: ^n}}, queries} =
+          Engram.QueryRecorder.record(fn -> Folders.rename(user, vault, from, to) end)
 
-      largest =
-        queries |> Engram.QueryRecorder.transactions() |> Enum.map(&length/1) |> Enum.max()
+        {queries |> Engram.QueryRecorder.transactions() |> Enum.map(&length/1) |> Enum.max(),
+         queries}
+      end
 
-      assert largest < 30,
-             "the rename transaction ran #{largest} statements for 30 attachments\n" <>
-               Engram.QueryRecorder.format(queries)
+      {one, _} = largest.("One", "Uno", 1)
+      {thirty, queries} = largest.("Docs", "Archive", 30)
+
+      assert thirty == one,
+             "the rename transaction ran #{thirty} statements for 30 attachments, " <>
+               "#{one} for 1\n" <> Engram.QueryRecorder.format(queries)
 
       assert att_paths(user, vault) ==
-               Enum.sort(["Warmed/f.png" | for(i <- 1..30, do: "Archive/f#{i}.png")])
+               Enum.sort(["Uno/f.png", "Warmed/f.png" | for(i <- 1..30, do: "Archive/f#{i}.png")])
     end
 
     # ~7,500 attachments scaled down: 75 rows in chunks of 10 is the same
