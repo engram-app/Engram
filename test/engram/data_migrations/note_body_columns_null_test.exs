@@ -290,6 +290,63 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNullTest do
       assert Null.enabled?()
     end
   end
+
+  describe "per-pass cap (note_body_columns_null_max_fixed)" do
+    import ExUnit.CaptureLog
+
+    # 700 notes with the `notes` copies an older release left, in a few
+    # statements.
+    defp copies!(u, v, n) do
+      _ = Engram.Fixtures.insert_notes!(u, v, for(i <- 1..n, do: %{path: "cap/#{i}.md"}))
+
+      Repo.query!(
+        """
+        UPDATE notes AS n SET content_ciphertext = substring(b.content_ct FROM 14)
+        FROM note_bodies AS b WHERE b.note_id = n.id AND n.user_id = $1
+        """,
+        [Ecto.UUID.dump!(u.id)]
+      )
+    end
+
+    defp nulled(u) do
+      [[n]] =
+        Repo.query!(
+          "SELECT count(*)::int FROM notes WHERE user_id = $1 AND kind = 'note' AND content_ciphertext IS NULL",
+          [Ecto.UUID.dump!(u.id)]
+        ).rows
+
+      n
+    end
+
+    test "an override of 400 fixes at most 400 plus one window in a pass", %{user: u, vault: v} do
+      copies!(u, v, 700)
+      Engram.ServiceConfig.put_override(:note_body_columns_null_max_fixed, 400)
+
+      assert {:more, _} = Null.run_pass()
+      assert nulled(u) in 400..600
+    end
+
+    test "an invalid override falls back to 10,000, with a warning", %{user: u, vault: v} do
+      copies!(u, v, 700)
+      Engram.ServiceConfig.put_override(:note_body_columns_null_max_fixed, -5)
+
+      log = capture_log([level: :warning], fn -> Null.run_pass() end)
+      assert nulled(u) == 700
+      assert log =~ "note_body_columns_null_max_fixed"
+    end
+
+    test "run_pass/1's max_fixed: wins over the override", %{user: u, vault: v} do
+      copies!(u, v, 700)
+      Engram.ServiceConfig.put_override(:note_body_columns_null_max_fixed, 10_000)
+
+      assert {:more, _} = Null.run_pass(max_fixed: 200)
+      assert nulled(u) in 200..400
+    end
+
+    test "is overridable at runtime" do
+      assert :note_body_columns_null_max_fixed in Engram.ServiceConfig.Overrides.keys()
+    end
+  end
 end
 
 defmodule Engram.DataMigrations.NoteBodyColumnsNullLockTest do

@@ -46,7 +46,10 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
       `notes` ciphertext over a body. A single node (self-host) passes.
 
   Kill switch: `enabled?/0` is the `note_body_columns_null` service
-  override (default on). Not re-verified: no release from R8(b2) on writes
+  override (default on). Pace: the per-pass cap is the
+  `note_body_columns_null_max_fixed` service override (rows, default
+  10,000; prod RDS swap rose 197 to 508 MB during the first 10k-row pass on
+  2026-11-07), so prod can slow the batch without a deploy. Not re-verified: no release from R8(b2) on writes
   the columns, and the rollback floor is release A (rolling back below it
   is data loss: its readers take the `notes` columns).
   """
@@ -56,7 +59,10 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
   alias Engram.Cluster.Readiness
   alias Engram.Notes.Note
   alias Engram.Notes.NoteBody
+  alias Engram.Logger.Metadata
   alias Engram.Repo
+
+  require Logger
 
   @batch 200
   @max_fixed 10_000
@@ -153,13 +159,32 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
     result =
       IdWindows.heal_pass(name(), Note, &null(&1, &2, stale),
         batch_size: Keyword.get(opts, :batch, @batch),
-        max_fixed: Keyword.get(opts, :max_fixed, @max_fixed)
+        max_fixed: Keyword.get_lazy(opts, :max_fixed, &max_fixed/0)
       )
 
     # Copies a release-B write left stale (new nonce on notes and body, old
     # bytes on notes): nulled like any in-step copy, counted for the summary.
     :ok = Engram.DataMigration.report(stale: :counters.get(stale, 1))
     result
+  end
+
+  @doc false
+  # The per-pass cap: the service override when it is a positive integer,
+  # else (an invalid value reaching it through env) the default, with a
+  # warning. The override table itself refuses an invalid value.
+  def max_fixed do
+    case Engram.ServiceConfig.get(:note_body_columns_null_max_fixed, @max_fixed) do
+      n when is_integer(n) and n > 0 ->
+        n
+
+      _ ->
+        Logger.warning(
+          "note_body_columns_null_max_fixed is not a positive integer, using #{@max_fixed}",
+          Metadata.with_category(:warning, :data)
+        )
+
+        @max_fixed
+    end
   end
 
   # Per ciphertext column: the notes copy is still set and the body row holds

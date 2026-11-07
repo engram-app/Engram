@@ -10,7 +10,8 @@ defmodule Engram.ServiceConfig.Overrides do
   are the v5 rebuild kill switch (`index_rebuild`) and the v5 step not
   taken yet (`tenant_idf`), plus the data migrations' kill switches
   (`file_times_backfill`, `note_body_columns_null`): every data migration
-  added since 2026-11-06 has one (`docs/context/data-migrations-ledger.md`).
+  added since 2026-11-06 has one (`docs/context/data-migrations-ledger.md`),
+  and the null batch's per-pass cap (`note_body_columns_null_max_fixed`).
 
   ## Reads
 
@@ -60,7 +61,9 @@ defmodule Engram.ServiceConfig.Overrides do
     file_times_backfill: :boolean,
     note_body_columns_null: :boolean,
     # Folder rename/move size cap (`Engram.Folders`, #2492).
-    folder_op_max_rows: {:integer, 0..1_000_000}
+    folder_op_max_rows: {:integer, 0..1_000_000},
+    # The null batch's per-pass cap (rows), to slow it without a deploy.
+    note_body_columns_null_max_fixed: {:integer, 1..1_000_000}
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})
