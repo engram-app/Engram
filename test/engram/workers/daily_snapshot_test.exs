@@ -3,13 +3,27 @@ defmodule Engram.Workers.DailySnapshotTest do
   use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Analytics.Event
+  alias Engram.Insights.Snapshot
   alias Engram.Insights.UserDailyMetric
   alias Engram.Insights.VaultDailyMetric
   alias Engram.Links.NoteLink
   alias Engram.Workers.DailySnapshot
 
-  defp yesterday, do: Date.add(Date.utc_today(), -1)
-  defp days_ago(n), do: Date.add(Date.utc_today(), -n)
+  # One instant per test: the job's inserted_at and every expected day come
+  # from it, so no test reads the wall clock twice (a run that straddles UTC
+  # midnight would name two different days).
+  setup do
+    Process.put(:snapshot_now, DateTime.utc_now())
+    :ok
+  end
+
+  defp now, do: Process.get(:snapshot_now)
+  defp today, do: DateTime.to_date(now())
+  defp yesterday, do: Date.add(today(), -1)
+  defp days_ago(n), do: Date.add(today(), -n)
+
+  # The nightly job as cron inserts it: it snapshots the day before now().
+  defp run_job, do: build_job(DailySnapshot, %{}) |> Map.put(:inserted_at, now()) |> perform_job()
 
   defp at(date), do: DateTime.new!(date, ~T[12:00:00.000000], "Etc/UTC")
 
@@ -47,7 +61,7 @@ defmodule Engram.Workers.DailySnapshotTest do
     event(user, "api_key_created", %{}, days_ago(30))
     event(user, "api_key_created", %{}, days_ago(20))
 
-    assert :ok = perform_job(DailySnapshot, %{})
+    assert :ok = run_job()
 
     row = user_row(user)
     assert %DateTime{} = row.captured_at
@@ -68,7 +82,7 @@ defmodule Engram.Workers.DailySnapshotTest do
     d = yesterday()
     event(user, "search_performed", %{"status" => "ok"}, d)
     event(user, "search_performed", %{"status" => "ok"}, d)
-    event(user, "search_performed", %{"status" => "ok"}, Date.utc_today())
+    event(user, "search_performed", %{"status" => "ok"}, today())
     event(user, "mcp_tool_called", %{"tool" => "search_notes", "calls" => 4}, d)
     event(user, "mcp_tool_called", %{"tool" => "search_notes", "calls" => 1}, d)
     event(user, "mcp_tool_called", %{"tool" => "get_notes", "calls" => 2}, d)
@@ -76,7 +90,7 @@ defmodule Engram.Workers.DailySnapshotTest do
     event(user, "mcp_tool_called_rollup", %{"tool" => "get_notes", "calls" => 3}, d)
     event(user, "surface_active", %{"surface" => "web", "client_type" => "web"}, d)
 
-    assert :ok = perform_job(DailySnapshot, %{})
+    assert :ok = run_job()
 
     row = user_row(user)
     assert row.searches == 2
@@ -88,7 +102,7 @@ defmodule Engram.Workers.DailySnapshotTest do
     user = insert(:user)
     event(user, "surface_active", %{"surface" => "web"}, yesterday())
 
-    assert :ok = perform_job(DailySnapshot, %{})
+    assert :ok = run_job()
     refute user_row(user).web_edited
   end
 
@@ -130,7 +144,7 @@ defmodule Engram.Workers.DailySnapshotTest do
       value: %{"v" => 40_000_000}
     )
 
-    assert :ok = perform_job(DailySnapshot, %{})
+    assert :ok = run_job()
 
     assert user_row(free).embed_tokens_used == 10_000_000
     assert user_row(free).embed_budget_pct == 50.0
@@ -150,7 +164,7 @@ defmodule Engram.Workers.DailySnapshotTest do
     link!(user, vault, n1, 1)
     gone = insert(:vault, user: user, deleted_at: DateTime.utc_now(:second))
 
-    assert :ok = perform_job(DailySnapshot, %{})
+    assert :ok = run_job()
 
     row = Repo.get_by(VaultDailyMetric, vault_id: vault.id, date: yesterday())
     assert row.user_id == user.id
@@ -168,7 +182,7 @@ defmodule Engram.Workers.DailySnapshotTest do
     user = insert(:user)
     vaults = for _ <- 1..3, do: insert(:vault, user: user)
 
-    assert %{vaults: 3} = Engram.Insights.Snapshot.run(chunk: 1)
+    assert %{vaults: 3} = Snapshot.run(day: yesterday(), chunk: 1)
 
     for v <- vaults, do: assert(Repo.get_by(VaultDailyMetric, vault_id: v.id, date: yesterday()))
   end
@@ -180,8 +194,6 @@ defmodule Engram.Workers.DailySnapshotTest do
   # The factory's inserts do not take a seq, so a copied row is visible as
   # one that missed them.
   describe "an unchanged vault" do
-    alias Engram.Insights.Snapshot
-
     setup do
       user = insert(:user)
       vault = insert(:vault, user: user)
@@ -201,8 +213,8 @@ defmodule Engram.Workers.DailySnapshotTest do
       assert %{notes: 1, links: 1} = vault_row(vault, yesterday())
 
       Repo.with_tenant!(user.id, fn -> Engram.Vaults.next_seq!(vault.id) end)
-      Snapshot.run(day: Date.utc_today())
-      assert %{notes: 2, links: 1} = vault_row(vault, Date.utc_today())
+      Snapshot.run(day: today())
+      assert %{notes: 2, links: 1} = vault_row(vault, today())
     end
 
     test "is rescanned a week after its last scan anyway", %{user: user, vault: vault} do
@@ -228,40 +240,45 @@ defmodule Engram.Workers.DailySnapshotTest do
   end
 
   # A retry of a job that timed out half way keeps the chunks it already
-  # wrote and does the rest, so the day is not lost to a timeout.
+  # wrote and does the rest, so the day is not lost to a timeout. The job
+  # was inserted just before a midnight and retries after it, and the day
+  # comes from inserted_at, never the wall clock, so the test holds at any
+  # hour.
   test "a retry resumes: vaults this job already wrote are not redone" do
     user = insert(:user)
     done = insert(:vault, user: user)
     todo = insert(:vault, user: user)
     insert(:note, user: user, vault: done)
-    inserted_at = DateTime.add(DateTime.utc_now(), -60, :second)
+    inserted_at = DateTime.new!(yesterday(), ~T[23:59:30.000000], "Etc/UTC")
+    day = Date.add(DateTime.to_date(inserted_at), -1)
 
     Repo.insert!(
-      %VaultDailyMetric{vault_id: done.id, user_id: user.id, date: yesterday(), notes: 99},
+      %VaultDailyMetric{vault_id: done.id, user_id: user.id, date: day, notes: 99},
       skip_tenant_check: true
     )
 
     job = build_job(DailySnapshot, %{}) |> Map.put(:inserted_at, inserted_at)
     assert :ok = perform_job(job)
 
-    assert Repo.get_by(VaultDailyMetric, vault_id: done.id, date: yesterday()).notes == 99
-    assert Repo.get_by(VaultDailyMetric, vault_id: todo.id, date: yesterday())
+    assert vault_row(done, day).notes == 99
+    assert vault_row(todo, day)
 
-    # A new job (a manual rerun) rewrites every vault.
-    assert :ok = perform_job(DailySnapshot, %{})
-    assert Repo.get_by(VaultDailyMetric, vault_id: done.id, date: yesterday()).notes == 1
+    # A new run (no `since`, as a manual rerun) rewrites every vault.
+    Snapshot.run(day: day)
+    assert vault_row(done, day).notes == 1
   end
 
   test "writes the day before the job was inserted, even when it runs later" do
     user = insert(:user)
     insert(:vault, user: user)
-    inserted_at = DateTime.add(DateTime.utc_now(), -1, :day)
+    inserted_at = DateTime.add(now(), -1, :day)
+    day = Date.add(DateTime.to_date(inserted_at), -1)
 
     job = build_job(DailySnapshot, %{}) |> Map.put(:inserted_at, inserted_at)
     assert :ok = perform_job(job)
 
-    assert user_row(user, days_ago(2))
-    refute user_row(user, yesterday())
+    assert user_row(user, day)
+    refute user_row(user, Date.add(day, 1))
   end
 
   test "skips users who opted out of analytics and deleted users" do
@@ -269,7 +286,7 @@ defmodule Engram.Workers.DailySnapshotTest do
     insert(:vault, user: opted)
     deleted = insert(:user, deleted_at: DateTime.utc_now())
 
-    assert :ok = perform_job(DailySnapshot, %{})
+    assert :ok = run_job()
 
     refute user_row(opted)
     refute user_row(deleted)
@@ -280,9 +297,9 @@ defmodule Engram.Workers.DailySnapshotTest do
     user = insert(:user)
     vault = insert(:vault, user: user)
 
-    assert :ok = perform_job(DailySnapshot, %{})
+    assert :ok = run_job()
     insert(:note, user: user, vault: vault)
-    assert :ok = perform_job(DailySnapshot, %{})
+    Snapshot.run(day: yesterday())
 
     assert Repo.aggregate(UserDailyMetric, :count) == 1
     assert Repo.aggregate(VaultDailyMetric, :count) == 1
@@ -305,7 +322,7 @@ defmodule Engram.Workers.DailySnapshotTest do
     event(user, "search_performed", %{}, captured)
     event(user, "search_performed", %{}, days_ago(30))
 
-    assert :ok = perform_job(DailySnapshot, %{})
+    assert :ok = run_job()
 
     healed = user_row(user, missed)
     assert healed.searches == 1
