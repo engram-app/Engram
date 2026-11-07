@@ -1,23 +1,17 @@
-"""Test 77: folder rename repaths Qdrant points — search finds the note under
-its NEW folder and no longer under the OLD one (#746, end-to-end).
+"""Test 77: after a folder rename, search finds the note under its NEW folder
+and no longer under the OLD one (#746, end-to-end).
 
-Renaming a folder updates each note's path_hmac/folder_hmac on the row inside
-the rename transaction, then the `RepathNoteIndex` Oban worker PATCHes the
-existing Qdrant points' path_hmac/folder_hmac in place — no re-embed. The unit
-tests prove the wire contract and that the embedder is never called; this test
-proves the repath actually lands in a real Qdrant by exercising the user-facing
-seam:
+R3a: a rename makes ZERO Qdrant writes. A point's payload is the note's
+identity (`u`, `v`, `n`); Postgres resolves the folder filter to note ids, so
+the rename transaction alone moves the note. This test keeps proving the
+user-facing seam against a real Qdrant:
 
-  1. A folder-scoped `/api/search` (folder -> folder_hmac -> Qdrant filter)
-     finds the note under its NEW folder after the rename.
-  2. The same search under the OLD folder returns nothing — the points no
-     longer carry the old folder_hmac.
-
-The "zero Voyage calls" half is covered by `RepathNoteIndexTest`
-(no-Mox-expectation); e2e has no way to count embedder calls.
+  1. A folder-scoped `/api/search` finds the note under its NEW folder.
+  2. The same search under the OLD folder returns nothing.
 
 API-only (no Obsidian, no Clerk gate). Mirrors test_67's index-then-search
-shape; the repath runs asynchronously (Oban, ~3s debounce), so step 1 polls.
+shape; step 1 still polls (search runs on the request path, no job to wait
+for, but the poll is harmless).
 """
 
 from __future__ import annotations
@@ -83,23 +77,19 @@ class TestRenameRepathSearch:
         )
 
         # 2. Rename the folder. This repoints the note row (new path_hmac /
-        #    folder_hmac) and enqueues RepathNoteIndex — NOT a re-embed.
+        #    folder_hmac): no re-embed, no Qdrant write.
         status = client.rename_folder(src_folder, dst_folder)
         assert status == 200, f"rename_folder returned {status}"
 
-        # 3. Poll until the repath lands: folder-scoped search under the NEW
-        #    folder returns the note at its new path. This only succeeds if the
-        #    Qdrant points now carry the new folder_hmac AND path_hmac — i.e.
-        #    the points were PATCHed in place, not deleted.
+        # 3. Folder-scoped search under the NEW folder returns the note at its
+        #    new path: Postgres resolves the folder, and the points were kept.
         found = self._poll_search(client, query, folder=dst_folder, want=new_path, timeout=90)
         assert found, (
             f"after rename, search in {dst_folder!r} never returned {new_path!r} "
-            f"within 90s — repath did not land in Qdrant"
+            f"within 90s"
         )
 
-        # 4. The OLD folder filter must now return nothing — the points no
-        #    longer carry the old folder_hmac. (Guards a repath that ADDED the
-        #    new hmac without overwriting the old, leaving ghost matches.)
+        # 4. The OLD folder filter must now return nothing (no ghost match).
         after_old = self._search(client, query, folder=src_folder, limit=10)
         assert after_old == [], (
             f"after rename, search in old folder {src_folder!r} should be empty, "
