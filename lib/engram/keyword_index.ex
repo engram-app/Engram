@@ -63,15 +63,10 @@ defmodule Engram.KeywordIndex do
   # `b`; chunker v5 PR-17). 4: adjacent-word pair dims for quoted-phrase
   # queries. 5: the pair dims dropped again (they were 50 to 70% of the sparse
   # entries; quoted phrases are checked at query time, `Search.PhraseCheck`).
-  # 6: the path-free prefix (R3c): no folder, no file-name title, aliases on
-  # the first chunk only. Inert: `off` targets the newest completed pass
-  # (5), so no sweep starts and the IndexVersions ledger stays closed; a
-  # reused point keeps its folder tokens with its stamp at 5, and the next
-  # bundled pass heals that with no Voyage call.
-  # 3 to 6 are reached only under `INDEX_REBUILD=on`
+  # 3 to 5 are reached only under `INDEX_REBUILD=on`
   # (`Engram.Rebuild.target_versions/0` pins 2 until then); the bump is
   # sparse-only, so it adds no Voyage call.
-  @version 6
+  @version 5
 
   @doc "Version of the keyword encoding in this build, stamped on `notes.keyword_version`."
   # No @spec, like `Markdown.chunker_version/0`: the body is a literal, so
