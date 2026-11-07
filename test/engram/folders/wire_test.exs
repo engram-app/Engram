@@ -87,6 +87,11 @@ defmodule Engram.Folders.WireTest do
       refute Map.has_key?(note, "folder_id")
     end
 
+    test "POST /folders carries no folders chain", %{conn: conn} do
+      body = conn |> post(~p"/api/folders", %{"folder" => "X/Y"}) |> json_response(201)
+      assert body == %{"folder" => %{"name" => "X/Y", "count" => 0}}
+    end
+
     test "rename reports no seq", %{user: user, vault: vault} do
       assert {:ok, counts} = Folders.rename(user, vault, "A", "A2")
       refute Map.get(counts, :seq)
@@ -169,6 +174,22 @@ defmodule Engram.Folders.WireTest do
 
       by_path = Map.new(body["notes"], &{&1["path"], &1["folder_id"]})
       assert by_path == %{"A/Sub/n.md" => sub, "r.md" => nil}
+    end
+
+    test "POST /folders returns the folder chain, root first", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      body = conn |> post(~p"/api/folders", %{"folder" => "A/New/Leaf"}) |> json_response(201)
+      a = id_of(user, vault, "A")
+      new = id_of(user, vault, "A/New")
+
+      assert body["folders"] == [
+               %{"id" => a, "parent_id" => nil, "name" => "A"},
+               %{"id" => new, "parent_id" => a, "name" => "New"},
+               %{"id" => id_of(user, vault, "A/New/Leaf"), "parent_id" => new, "name" => "Leaf"}
+             ]
     end
 
     test "rename returns the op's seq", %{user: user, vault: vault} do

@@ -64,6 +64,7 @@ defmodule EngramWeb.CrdtChannelFolderOpTest do
       ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "A/n.md"})
       assert_reply ref, :ok, reply
       refute Map.has_key?(reply, :folder_id)
+      refute Map.has_key?(reply, :folders)
     end
 
     test "the join replies do not advertise folder_ops", %{user: user, vault: vault} do
@@ -207,7 +208,28 @@ defmodule EngramWeb.CrdtChannelFolderOpTest do
       assert_reply ref, :ok, %{folder_id: ^a}
 
       ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "r.md"})
-      assert_reply ref, :ok, %{folder_id: nil}
+      assert_reply ref, :ok, %{folder_id: nil, folders: []}
+    end
+
+    test "crdt_create replies with the folder chain, root first", %{
+      user: user,
+      vault: vault,
+      a: a
+    } do
+      socket = join!(user, vault)
+      doc = Ecto.UUID.generate()
+
+      ref = push(socket, "crdt_create", %{"doc_id" => doc, "path" => "A/Sub/Deep/n.md"})
+      assert_reply ref, :ok, %{folder_id: deep, folders: chain}
+
+      sub = id_of(user, vault, "A/Sub")
+      assert deep == id_of(user, vault, "A/Sub/Deep")
+
+      assert chain == [
+               %{id: a, parent_id: nil, name: "A"},
+               %{id: sub, parent_id: a, name: "Sub"},
+               %{id: deep, parent_id: sub, name: "Deep"}
+             ]
     end
 
     test "create is idempotent by path", %{user: user, vault: vault, b: b} do
