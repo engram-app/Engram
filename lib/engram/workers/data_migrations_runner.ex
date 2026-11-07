@@ -57,6 +57,22 @@ defmodule Engram.Workers.DataMigrationsRunner do
   def perform(%Oban.Job{scheduled_at: scheduled_at}) do
     reverify = match?(%DateTime{hour: @reverify_hour}, scheduled_at)
     Enum.each(@migrations, &run(&1, reverify))
+    hold_orphans(Enum.map(@migrations, & &1.name()))
+  end
+
+  # After the runs, so the names are the ones this release evaluated (an
+  # `index_versions` key is computed live).
+  defp hold_orphans(names) do
+    case DataMigrations.hold_orphans(names) do
+      0 ->
+        :ok
+
+      held ->
+        Logger.debug(
+          "data migration orphans held",
+          Metadata.with_category(:debug, :oban, total_count: held)
+        )
+    end
   end
 
   # A failure here, before any pass ran (name/0, version/0, the done?/2 read),
