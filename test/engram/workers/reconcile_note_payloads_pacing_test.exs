@@ -685,7 +685,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     # The same race on the fleet slot: two pending fleet jobs. One running
     # beside another cancels (no double write, no double spend); two pending
     # ones run in turn, and the re-queue conflicts, so one stays pending.
-    test "a duplicated fleet job never runs beside the first and converges to one", ctx do
+    test "simultaneous fleet jobs give one writer and one pending, converging to one", ctx do
       users = stale_users(ctx, 6, 1)
 
       [a, b] =
@@ -696,29 +696,32 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
 
       assert length(fleet_jobs()) == 2
 
-      # Oban takes `a`; `b` wakes beside it (another node) and cancels,
+      # Two nodes fetch both at once. The higher id yields to the lower one
+      # executing: it snoozes (stays pending, the chain is never dropped),
       # reading and spending nothing.
       state!(a, "executing")
-      assert {:cancel, :duplicate} = ReconcileNotePayloads.perform(b)
-      state!(b, "cancelled")
+      state!(b, "executing")
+      assert {:snooze, 60} = ReconcileNotePayloads.perform(b)
+      state!(b, "scheduled")
       refute_received :read
       refute_received :rewrite
       assert EngramWeb.RateLimiter.peek("payload_backfill_points", 60_000, 500) == 500
 
-      # `a` runs alone, spends the window and queues one successor.
+      # `a` is the one writer: it spends the window, and its re-queue
+      # conflicts with the snoozed `b`, so exactly one stays pending.
       ServiceConfig.put_override(:payload_backfill_points_per_min, 3)
       assert :ok = ReconcileNotePayloads.perform(a)
       state!(a, "completed")
-      assert [c] = fleet_jobs()
+      assert [%{id: b_id}] = fleet_jobs()
+      assert b_id == b.id
       assert length(users_written(ctx, users)) <= 3
-
-      # Two pending again (`c` and a racing `d`): they run in turn, `c`'s
+      # Two pending again (`b` and a racing `d`): they run in turn, `b`'s
       # re-queue conflicts with `d`, and one stays pending.
       {:ok, d} = Oban.insert(ReconcileNotePayloads.new(@fleet, unique: false))
       EngramWeb.RateLimiter.reset_buckets!()
-      state!(c, "executing")
-      assert :ok = ReconcileNotePayloads.perform(c)
-      state!(c, "completed")
+      state!(b, "executing")
+      assert :ok = ReconcileNotePayloads.perform(b)
+      state!(b, "completed")
       assert [%{id: id}] = fleet_jobs()
       assert id == d.id
 
@@ -729,6 +732,31 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
       state!(d, "completed")
       assert length(users_written(ctx, users)) == 6
       assert fleet_jobs() == []
+    end
+
+    # A fleet job stuck in `executing` (its node died) never strands the
+    # chain: its successor snoozes while it looks alive, and takes over once
+    # Oban's Lifeline rescues it.
+    test "a stuck executing fleet job does not strand the chain", ctx do
+      users = stale_users(ctx, 3, 1)
+
+      [stuck, next] =
+        for _ <- 1..2 do
+          {:ok, job} = Oban.insert(ReconcileNotePayloads.new(@fleet, unique: false))
+          job
+        end
+
+      state!(stuck, "executing")
+      state!(next, "executing")
+      assert {:snooze, 60} = ReconcileNotePayloads.perform(next)
+      state!(next, "scheduled")
+      assert [_] = fleet_jobs()
+
+      # Lifeline rescues the orphan (back to available); the snoozer runs.
+      state!(stuck, "available")
+      state!(next, "executing")
+      assert :ok = ReconcileNotePayloads.perform(next)
+      assert length(users_written(ctx, users)) == 3
     end
 
     defp state!(job, state) do

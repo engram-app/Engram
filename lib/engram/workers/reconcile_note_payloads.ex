@@ -169,7 +169,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     case n_gates(job) do
       :ok -> n_fleet()
       :paused -> {:cancel, :paused}
-      :duplicate -> {:cancel, :duplicate}
+      :yield -> yield(job)
       {:snooze, wait} -> requeue_fleet(wait, gated(job) + 1)
       :spent -> requeue_fleet(edge_snooze(), 0)
     end
@@ -285,16 +285,14 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     :ok
   end
 
-  # A fleet job in `states`, other than `except` (a job id).
-  defp fleet_job?(states, except \\ nil) do
-    query =
-      from(j in Oban.Job,
-        where: j.worker == ^inspect(__MODULE__) and j.state in ^states,
-        where: fragment("?->>'mode' = ?", j.args, ^@fleet_mode)
-      )
-
-    query = if except, do: where(query, [j], j.id != ^except), else: query
-    Repo.exists?(query)
+  # A fleet job in `states` (narrowed by `scope`, a query function).
+  defp fleet_job?(states, scope \\ & &1) do
+    from(j in Oban.Job,
+      where: j.worker == ^inspect(__MODULE__) and j.state in ^states,
+      where: fragment("?->>'mode' = ?", j.args, ^@fleet_mode)
+    )
+    |> scope.()
+    |> Repo.exists?()
   end
 
   # Tests stand in for Oban's busy-lock conflict here.
@@ -577,14 +575,18 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   # then a free peek of the bucket. A gated job reads nothing from Postgres
   # or Qdrant. The Qdrant gate backs off on its own count (meta `"gated"`),
   # not on Oban's `"snoozed"`, so edge waits never push it to the ceiling.
-  # A second fleet job (the unique race let one in) never runs beside the
-  # first: it cancels while another one executes. Two pending ones need no
-  # check: they run one after the other, and the first one's re-queue then
-  # conflicts with the second, so one stays pending.
+  # A second fleet job (the unique race, a budget re-queue fetched on
+  # another node before its parent acked) never runs beside the first: the
+  # higher id yields to a lower-id one executing, by SNOOZING, so it stays
+  # the pending chain if the other dies (a job orphaned in `executing`
+  # until Lifeline rescues it). Never a cancel: two that each saw the other
+  # executing would both drop out. Two pending ones need no check: they
+  # run one after the other, and the first one's re-queue conflicts with
+  # the second, so one stays pending.
   defp n_gates(job) do
     cond do
       not backfill_enabled?() -> :paused
-      fleet_job?(["executing"], job.id) -> :duplicate
+      lower_fleet_executing?(job) -> :yield
       (pace = Rebuild.qdrant_pace(%{job | meta: %{"snoozed" => gated(job)}})) != :ok -> pace
       RateLimiter.peek(@n_bucket, @n_window_ms, n_per_min()) == 0 -> :spent
       true -> :ok
@@ -593,6 +595,22 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   defp gated(%Oban.Job{meta: meta}), do: Map.get(meta || %{}, "gated", 0)
 
+  @yield_s 60
+
+  defp yield(%Oban.Job{id: id}) do
+    Logger.debug(
+      "note payload reconcile: fleet job yields to a lower-id one executing",
+      Metadata.with_category(:debug, :oban, job_id: id)
+    )
+
+    {:snooze, @yield_s}
+  end
+
+  defp lower_fleet_executing?(%Oban.Job{id: nil}), do: fleet_job?(["executing"])
+
+  defp lower_fleet_executing?(%Oban.Job{id: id}),
+    do: fleet_job?(["executing"], &where(&1, [j], j.id < ^id))
+
   # One run of the fleet job: users in id order from the stored cursor, each
   # walked (`n_walk/3`) until the bucket, the budget or the switch stops it.
   # The cursor is stored where it stopped; a lap that reached the last user
@@ -600,7 +618,9 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   defp n_fleet do
     deadline = System.monotonic_time(:millisecond) + @budget_ms
 
-    case fleet_walk(Cursor.get(@fleet_cursor), deadline) do
+    {result, _locked} = fleet_walk(Cursor.get(@fleet_cursor), deadline, 0)
+
+    case result do
       :lap ->
         Cursor.reset(@fleet_cursor)
 
@@ -618,15 +638,16 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   # Cursor shapes: nil (the lap's start), `%{"user" => id, "after" => note}`
   # (resume that user after that note), `%{"past" => id}` (the next user).
-  defp fleet_walk(cursor, deadline) do
+  # With how many rotation-locked users it passed over.
+  defp fleet_walk(cursor, deadline, locked) do
     case next_users(cursor) do
       [] ->
-        :lap
+        {:lap, locked}
 
       users ->
-        case Enum.reduce_while(users, cursor, &fleet_user(&1, &2, deadline)) do
-          {:stop, stop, at} -> {stop, at}
-          cursor -> fleet_walk(cursor, deadline)
+        case Enum.reduce_while(users, {cursor, locked}, &fleet_user(&1, &2, deadline)) do
+          {:stop, stop, at, locked} -> {{stop, at}, locked}
+          {cursor, locked} -> fleet_walk(cursor, deadline, locked)
         end
     end
   end
@@ -647,24 +668,27 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   # once by `answer/2` (the `payload_reconcile_cancelled` alert), and the
   # walk carries on with the next user, so one user's refusal never holds
   # the fleet.
-  defp fleet_user(%User{id: id} = user, cursor, deadline) do
+  defp fleet_user(%User{id: id} = user, {cursor, locked}, deadline) do
     after_id = if match?(%{"user" => ^id}, cursor), do: cursor["after"]
     past = %{"past" => id}
 
     cond do
       # A user with no notes reads no window, so the budget is checked here too.
       System.monotonic_time(:millisecond) > deadline ->
-        {:halt, {:stop, :budget, %{"user" => id, "after" => after_id}}}
+        {:halt, {:stop, :budget, %{"user" => id, "after" => after_id}, locked}}
 
       RotationGate.check_user(user) != :ok ->
-        {:cont, past}
+        {:cont, {past, locked + 1}}
 
       # A done user costs this one probe, not a walk of its notes.
       not n_behind?(id) ->
-        {:cont, past}
+        {:cont, {past, locked}}
 
       true ->
-        walk_user(user, after_id, deadline, past)
+        case walk_user(user, after_id, deadline) do
+          :next -> {:cont, {past, locked}}
+          {stop, at} -> {:halt, {:stop, stop, at, locked}}
+        end
     end
   end
 
@@ -682,15 +706,16 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     any
   end
 
-  defp walk_user(%User{id: id} = user, after_id, deadline, past) do
+  # `:next` (the user is done, gone or refused with a 4xx), or `{stop,
+  # cursor}` to resume it from.
+  defp walk_user(%User{id: id} = user, after_id, deadline) do
     {stop, done, counts} = n_walk(user, after_id, deadline)
     if counts != @zero, do: report(id, counts)
 
     case stop do
-      :done -> {:cont, past}
-      :ok -> {:cont, past}
-      {:cancel, _} -> {:cont, past}
-      stop -> {:halt, {:stop, stop, %{"user" => id, "after" => done}}}
+      stop when stop in [:done, :ok] -> :next
+      {:cancel, _} -> :next
+      stop -> {stop, %{"user" => id, "after" => done}}
     end
   end
 
