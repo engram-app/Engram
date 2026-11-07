@@ -6,8 +6,18 @@ defmodule Engram.InsightsTest do
   alias Engram.Insights.UserDailyMetric
   alias Engram.Insights.VaultDailyMetric
 
+  # One instant per test: every timestamp and expected day comes from it, so
+  # a run that straddles UTC midnight cannot name two different days.
+  setup do
+    Process.put(:insights_now, DateTime.utc_now())
+    :ok
+  end
+
+  defp now, do: Process.get(:insights_now)
+  defp today, do: DateTime.to_date(now())
+
   defp ago(days, hours \\ 0) do
-    DateTime.utc_now()
+    now()
     |> DateTime.add(-days, :day)
     |> DateTime.add(-hours, :hour)
   end
@@ -37,7 +47,8 @@ defmodule Engram.InsightsTest do
       ago(18)
     )
 
-    event(u, "search_performed", %{"status" => "ok"}, ago(17))
+    # An hour before the visit below: path_to_paid orders steps by time.
+    event(u, "search_performed", %{"status" => "ok"}, ago(17, 1))
     event(u, "surface_active", %{"surface" => "mcp"}, ago(17))
     event(u, "limit_hit", %{"limit_key" => "notes_cap"}, ago(12))
     event(u, "payment_completed", %{"amount_bucket" => "under_10"}, ago(10))
@@ -83,20 +94,20 @@ defmodule Engram.InsightsTest do
   test "converters: the payer's state the day before paying vs peers at the same tenure" do
     p = payer()
     peer = signup(15)
-    paid_day = Date.add(Date.utc_today(), -10)
+    paid_day = Date.add(today(), -10)
 
     Repo.insert!(%UserDailyMetric{
       user_id: p.id,
       date: Date.add(paid_day, -1),
-      captured_at: DateTime.utc_now(),
+      captured_at: now(),
       notes: 40,
       obsidian_devices: 1
     })
 
     Repo.insert!(%UserDailyMetric{
       user_id: peer.id,
-      date: Date.add(Date.utc_today(), -6),
-      captured_at: DateTime.utc_now(),
+      date: Date.add(today(), -6),
+      captured_at: now(),
       notes: 4
     })
 
@@ -171,7 +182,7 @@ defmodule Engram.InsightsTest do
     u = signup(5)
     v1 = insert(:vault, user: u)
     v2 = insert(:vault, user: u)
-    today = Date.add(Date.utc_today(), -1)
+    today = Date.add(today(), -1)
 
     for {v, notes, date} <- [{v1, 10, today}, {v2, 30, today}, {v1, 5, Date.add(today, -1)}] do
       Repo.insert!(%VaultDailyMetric{vault_id: v.id, user_id: u.id, date: date, notes: notes})
@@ -245,7 +256,7 @@ defmodule Engram.InsightsTest do
       event(u, "vault_created", ago(4))
       event(u, "note_created", %{"surface" => "web"}, ago(3))
       event(other, "vault_created", ago(4))
-      Repo.insert!(%UserDailyMetric{user_id: u.id, date: Date.utc_today(), notes: 1})
+      Repo.insert!(%UserDailyMetric{user_id: u.id, date: today(), notes: 1})
 
       t = Insights.timeline(u.id, :all)
       assert Enum.map(t.events, & &1.event) == ["vault_created", "note_created"]
@@ -294,7 +305,6 @@ defmodule Engram.InsightsTest do
   # returning rows per user (or per user-week), never one row per event.
   test "reports do not load per-event rows" do
     users = for d <- 1..5, do: signup(20 + d)
-    now = DateTime.utc_now()
 
     rows =
       for u <- users, i <- 1..600 do
@@ -310,7 +320,7 @@ defmodule Engram.InsightsTest do
             "limit_key" => "notes_cap",
             "calls" => 1
           },
-          inserted_at: DateTime.add(now, -rem(i, 19 * 24), :hour)
+          inserted_at: DateTime.add(now(), -rem(i, 19 * 24), :hour)
         }
       end
 
