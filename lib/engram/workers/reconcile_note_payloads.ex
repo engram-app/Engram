@@ -500,19 +500,29 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     end
   end
 
+  # Off: no retry; the ledger is paused too, and requeues once it is on.
+  # Nothing to write (every point already carries `n`, the common case for a
+  # rotation or FileTimes job): no Qdrant gate, no bucket.
   defp open_and_write(pairs, job, counts) do
-    with {:switch, true} <- {:switch, backfill_enabled?()},
-         :ok <- Rebuild.qdrant_pace(job) do
-      case write_n(pairs, counts) do
-        {:ok, counts} -> {:ok, counts, :open, true}
-        {:denied, counts} -> {:ok, counts, {:held, edge_snooze()}, false}
-        {:error, _reason, _counts} = error -> error
-      end
-    else
-      # Off: no retry; the ledger is paused too, and requeues once it is on.
-      {:switch, false} -> {:ok, counts, :off, false}
+    cond do
+      not backfill_enabled?() -> {:ok, counts, :off, false}
+      pairs == [] -> {:ok, counts, :open, true}
+      true -> paced_write(pairs, job, counts)
+    end
+  end
+
+  defp paced_write(pairs, job, counts) do
+    case Rebuild.qdrant_pace(job) do
       # The disk or optimizer gate (`Rebuild.gate_snooze/1`, growing).
-      {:snooze, seconds} -> {:ok, counts, {:held, seconds}, false}
+      {:snooze, seconds} ->
+        {:ok, counts, {:held, seconds}, false}
+
+      :ok ->
+        case write_n(pairs, counts) do
+          {:ok, counts} -> {:ok, counts, :open, true}
+          {:denied, counts} -> {:ok, counts, {:held, edge_snooze()}, false}
+          {:error, _reason, _counts} = error -> error
+        end
     end
   end
 

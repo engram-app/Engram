@@ -134,9 +134,20 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
     bypass
   end
 
-  # A v5 point still on the retired key: its type id is not the new one.
-  defp stale_v5(point, user),
-    do: [%{"id" => point, "payload" => %{"u" => FilterId.uuid(user.id), "y" => "stale"}}]
+  # A v5 point still on the retired key: its type id is not the new one. It
+  # carries `n`, as every point this release writes does, so the job's `n`
+  # backfill has nothing to do and the test stays on the rotation heal.
+  defp stale_v5(%{point: point, user: user, note: note}),
+    do: [
+      %{
+        "id" => point,
+        "payload" => %{
+          "u" => FilterId.uuid(user.id),
+          "n" => FilterId.uuid(note.id),
+          "y" => "stale"
+        }
+      }
+    ]
 
   defp new_filter_key(user),
     do: Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))
@@ -205,7 +216,7 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
   end
 
   test "the rotation leaves the v5 filter keys to the job the flip commits", ctx do
-    stub_qdrant(heal: stale_v5(ctx.point, ctx.user))
+    stub_qdrant(heal: stale_v5(ctx))
 
     assert :ok = UserDekRotation.rotate_user(ctx.user.id)
 
@@ -224,7 +235,7 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
   end
 
   test "an edit after the flip is healed from the row as it is now", ctx do
-    stub_qdrant(heal: stale_v5(ctx.point, ctx.user))
+    stub_qdrant(heal: stale_v5(ctx))
     assert :ok = UserDekRotation.rotate_user(ctx.user.id)
     {:ok, new_fk} = new_filter_key(ctx.user)
 
@@ -244,7 +255,7 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
   end
 
   test "a note an index already re-stamped since the flip is left alone", ctx do
-    stub_qdrant(heal: stale_v5(ctx.point, ctx.user))
+    stub_qdrant(heal: stale_v5(ctx))
     assert :ok = UserDekRotation.rotate_user(ctx.user.id)
 
     {1, _} =
@@ -261,7 +272,7 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
   # A note the payload heal marked undecryptable is re-checked after a
   # rotation: the flip NULLs every stamp, the marker included.
   test "a rotation clears the undecryptable marker", ctx do
-    stub_qdrant(heal: stale_v5(ctx.point, ctx.user))
+    stub_qdrant(heal: stale_v5(ctx))
 
     {1, _} =
       Repo.update_all(
@@ -275,7 +286,7 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
   end
 
   test "a Qdrant failure is retried by the heal and costs no re-embed", ctx do
-    stub_qdrant(heal: stale_v5(ctx.point, ctx.user), overwrite_status: 500)
+    stub_qdrant(heal: stale_v5(ctx), overwrite_status: 500)
 
     assert :ok = UserDekRotation.rotate_user(ctx.user.id)
     assert {:error, _} = heal!(ctx.user)

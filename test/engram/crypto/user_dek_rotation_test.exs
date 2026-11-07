@@ -1294,7 +1294,10 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
     test "a v5 point is rebuilt under the new key and note_attrs rewritten from the frontmatter",
          %{user: user, note: note, point: point} do
-      capture_payload_writes(self(), [%{"id" => point, "payload" => %{"u" => "x", "y" => "b2xk"}}])
+      # The point carries `n`, as every point this release writes does.
+      capture_payload_writes(self(), [
+        %{"id" => point, "payload" => %{"u" => "x", "n" => FilterId.uuid(note.id), "y" => "b2xk"}}
+      ])
 
       assert :ok = UserDekRotation.rotate_user(user.id)
       refute_received {:set, _}
