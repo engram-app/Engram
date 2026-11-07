@@ -57,16 +57,7 @@ def latest_note_path_hmac(vault_id: str) -> str:
         f"WHERE vault_id = '{vault_id}' AND kind = 'note' "
         "ORDER BY created_at DESC, id DESC LIMIT 1;"
     )
-    result = subprocess.run(
-        ["docker", "exec", "-i", CI_POSTGRES_CONTAINER,
-         "psql", "-U", "engram", "-d", "engram", "-tA", "-c", sql],
-        capture_output=True, text=True, timeout=10,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"latest_note_path_hmac({vault_id}) failed: {result.stderr.strip()}"
-        )
-    val = result.stdout.strip()
+    val = _psql_one(sql, f"latest_note_path_hmac({vault_id})")
     if not val:
         raise RuntimeError(
             f"latest_note_path_hmac({vault_id}): no note row found in vault"
@@ -97,14 +88,51 @@ def note_id_for(vault_id: str, path_hmac_b64: str) -> str | None:
         f"AND path_hmac = decode('{path_hmac_b64}', 'base64') "
         "AND kind = 'note' AND deleted_at IS NULL LIMIT 1;"
     )
+    return _psql_one(sql, f"note_id_for({vault_id})") or None
+
+
+def _psql_one(sql: str, what: str) -> str:
     result = subprocess.run(
         ["docker", "exec", "-i", CI_POSTGRES_CONTAINER,
          "psql", "-U", "engram", "-d", "engram", "-tA", "-c", sql],
         capture_output=True, text=True, timeout=10,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"note_id_for({vault_id}) failed: {result.stderr.strip()}")
-    return result.stdout.strip() or None
+        raise RuntimeError(f"{what} failed: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def db_now() -> str:
+    """The database's clock (ISO text), so a later `inserted_at >=` compare
+    is free of host clock skew."""
+    return _psql_one("SELECT now()::text;", "db_now")
+
+
+_INDEX_WORKERS = (
+    "Engram.Workers.EmbedNote",
+    "Engram.Workers.RepathNoteIndex",
+    "Engram.Workers.RefreshKeywordVectors",
+)
+
+
+def index_jobs_since(note_id: str, since: str) -> list[str]:
+    """Workers of the index jobs (embed, repath, keyword refresh) inserted
+    for `note_id` at or after `since` (a `db_now/0` value). A Qdrant write
+    for a note goes through one of them; point ids cannot show one, since
+    they are deterministic (`Engram.Indexing.PointId`)."""
+    if not _UUID_RE.match(note_id):
+        raise ValueError(f"Unsafe note_id rejected: {note_id!r}")
+    if not re.fullmatch(r"[0-9: .+-]+", since):
+        raise ValueError(f"Unsafe timestamp rejected: {since!r}")
+
+    workers = ", ".join(f"'{w}'" for w in _INDEX_WORKERS)
+    out = _psql_one(
+        "SELECT worker FROM oban_jobs "
+        f"WHERE args->>'note_id' = '{note_id}' AND inserted_at >= '{since}' "
+        f"AND worker IN ({workers}) ORDER BY id;",
+        f"index_jobs_since({note_id})",
+    )
+    return out.splitlines()
 
 
 def qdrant_point_ids(vault_id: str, note_id: str) -> list[str]:
@@ -132,7 +160,8 @@ def _qdrant_has_point(vault_id: str, path_hmac_b64: str) -> bool:
     try:
         note_id = note_id_for(vault_id, path_hmac_b64)
         return note_id is not None and bool(qdrant_point_ids(vault_id, note_id))
-    except (requests.RequestException, KeyError):
+    # A poll: a transient psql or Qdrant failure is a "not yet", retried.
+    except (requests.RequestException, KeyError, RuntimeError, subprocess.TimeoutExpired):
         return False
 
 

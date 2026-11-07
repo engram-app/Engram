@@ -8,6 +8,9 @@ user-facing seam against a real Qdrant:
 
   1. A folder-scoped `/api/search` finds the note under its NEW folder.
   2. The same search under the OLD folder returns nothing.
+  3. The rename queued no embed, repath or keyword-refresh job for the note
+     (`oban_jobs`, since the rename's database time): every Qdrant write to a
+     note's points goes through one of them.
 
 API-only (no Obsidian, no Clerk gate). Mirrors test_67's index-then-search
 shape; step 1 still polls (search runs on the request path, no job to wait
@@ -21,6 +24,8 @@ import os
 import time
 
 from helpers.crypto_probe import (
+    db_now,
+    index_jobs_since,
     latest_note_path_hmac,
     note_id_for,
     qdrant_point_ids,
@@ -85,6 +90,7 @@ class TestRenameSearchZeroQdrantWrites:
 
         # 2. Rename the folder. This repoints the note row (new path_hmac /
         #    folder_hmac): no re-embed, no Qdrant write.
+        renamed_at = db_now()
         status = client.rename_folder(src_folder, dst_folder)
         assert status == 200, f"rename_folder returned {status}"
 
@@ -103,12 +109,19 @@ class TestRenameSearchZeroQdrantWrites:
             f"got {[r.get('path') for r in after_old]}"
         )
 
-        # 5. Zero Qdrant writes: the note's points are the same points (no
-        #    re-embed, no re-upsert under new ids).
+        # 5. Zero Qdrant writes: every write to a note's points goes through
+        #    an embed, repath or keyword-refresh job, and the rename queued
+        #    none for this note. (Point ids alone cannot show a write: they are
+        #    deterministic, so a re-embed of the same text keeps them.)
+        jobs = index_jobs_since(note_id, renamed_at)
+        assert jobs == [], (
+            f"a folder rename must queue no index job for the note, got {jobs}"
+        )
+
+        # 6. And the point set is stable (a cheap extra: no point lost or added).
         points_after = qdrant_point_ids(vault_id, note_id)
         assert points_after == points_before, (
-            f"a folder rename must not rewrite the note's Qdrant points: "
-            f"before {points_before}, after {points_after}"
+            f"the note's Qdrant points changed: before {points_before}, after {points_after}"
         )
 
     @staticmethod

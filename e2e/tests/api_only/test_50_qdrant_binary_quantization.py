@@ -168,6 +168,7 @@ class TestSearchRoundTrip:
         # R3a: a point's payload is the note's identity (`u`, `v`, `n`), no
         # path and no plaintext, so match the hit by its note id `n`.
         note_id = note_id_for(seeded_note["vault_id"], path_hmac)
+        assert note_id, f"no note row for {note_path!r}"
         ids = [r.get("payload", {}).get("n", "?") for r in result]
         assert v5_uuid(note_id) in ids, (
             f"Expected the note id for '{note_path}' in Qdrant results. "
