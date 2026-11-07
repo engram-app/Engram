@@ -51,38 +51,8 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
     )
   end
 
-  test "the build is chunker 5, keyword 6 (R3c's path-free prefix)" do
-    assert Rebuild.build_versions() == {5, 6}
-  end
-
-  # R3c bumps keyword to 6 with no pass: `off` keeps the completed 5/5 pass
-  # as the target, so no sweep starts, no note goes keyword-stale and the
-  # ledger row stays closed (no reopen, no 5-minute chain).
-  for mode <- ["off", "dry_run"] do
-    test "#{mode}: keyword 6 is inert after the completed 5/5 pass" do
-      name = "index_versions:chunker=5,keyword=5,model=#{Engram.Indexing.embed_model() || "none"}"
-      complete!(name)
-      mode!(unquote(mode))
-
-      assert IndexVersions.newest_completed(Rebuild.build_versions()) == {5, 5}
-      assert Rebuild.target_versions() == {5, 5}
-      assert IndexVersions.name() == name
-      assert IndexVersions.done?()
-      assert IndexVersions.run_pass() == :done
-
-      note = stamped_note(5, 5)
-      refute EmbedNote.version_stale?(note)
-
-      expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("Voyage called") end)
-      assert :ok = perform_job(ReconcileEmbeddings, %{})
-
-      for worker <- [EmbedNote, RebuildStaleNote, RefreshKeywordVectors] do
-        refute_enqueued(worker: worker, args: %{"note_id" => note.id})
-      end
-
-      assert IndexVersions.done?()
-      refute Rebuild.holding?()
-    end
+  test "the build is v5: chunker 5, keyword 5" do
+    assert Rebuild.build_versions() == {5, 5}
   end
 
   test "the pins equal prod's pre-v5 stamps: chunker 3, keyword 2" do
@@ -190,14 +160,14 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
     end
   end
 
-  test "on targets the build: chunker 5, keyword 6" do
+  test "on targets the build: chunker 5, keyword 5" do
     Rebuild.set_budget(1_000)
     mode!("on")
 
-    assert Rebuild.target_versions() == {5, 6}
+    assert Rebuild.target_versions() == {5, 5}
 
     assert IndexVersions.name() ==
-             "index_versions:chunker=5,keyword=6,model=#{Engram.Indexing.embed_model() || "none"}"
+             "index_versions:chunker=5,keyword=5,model=#{Engram.Indexing.embed_model() || "none"}"
 
     assert EmbedNote.version_stale?(stamped_note(3, 2))
   end
@@ -243,7 +213,7 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
       end
     end
 
-    test "off after the pass completed: EmbedNote stamps that pass, 5 / 5", %{note: note} do
+    test "off after the pass completed: EmbedNote stamps the build, 5 / 5", %{note: note} do
       complete!("index_versions:chunker=5,keyword=5,model=voyage-4-large")
       mode!("off")
 
