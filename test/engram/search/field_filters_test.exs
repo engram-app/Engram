@@ -5,7 +5,6 @@ defmodule Engram.Search.FieldFiltersTest do
   alias Engram.Notes.FrontmatterKeys
   alias Engram.Search.FieldFilters
   alias Engram.Vector.FilterId
-  alias Engram.Vector.Qdrant
 
   setup do
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
@@ -17,23 +16,23 @@ defmodule Engram.Search.FieldFiltersTest do
     %{user: user, fk: fk, id: id}
   end
 
-  defp run(ctx, filters), do: FieldFilters.to_conditions(ctx.user.id, ctx.fk, filters)
+  # The parsed specs Postgres resolves (`Engram.Search.NoteFilter`, R3a: no
+  # Qdrant condition is built from them any more).
+  defp run(ctx, filters), do: FieldFilters.to_specs(ctx.user.id, ctx.fk, filters)
 
-  # `in: []` names no value, so it is a bad filter, never a legacy-key or
-  # match-nothing condition (v3 has no legacy index; strict mode 400s).
-  test "in with an empty list is an invalid filter, legacy fields off", ctx do
-    Engram.ServiceConfig.put_override(:legacy_filter_fields, false)
+  defp h(ctx, v), do: FilterId.value_hmac(ctx.fk, v)
 
+  # `in: []` names no value, so it is a bad filter, never a match-nothing one.
+  test "in with an empty list is an invalid filter", ctx do
     for key <- ~w(type tags status phase) do
       assert run(ctx, [%{"key" => key, "op" => "in", "value" => []}]) ==
                {:error, {:invalid_field_filter, key}}
     end
   end
 
-  test "eq on a string is an exact match on its value id, key case-insensitive", ctx do
+  test "eq on a string is an exact match on its value hmac, key case-insensitive", ctx do
     assert run(ctx, [%{"key" => "phase", "op" => "eq", "value" => "Draft"}]) ==
-             {:ok,
-              [Qdrant.attr_filter(ctx.id.("phase"), {:h, FilterId.attr_value(ctx.fk, "draft")})]}
+             {:ok, [{:h, nil, ctx.id.("phase"), h(ctx, "draft")}]}
   end
 
   test "numbers compare n; dates compare d; a bare-date eq is that UTC day", ctx do
@@ -47,81 +46,59 @@ defmodule Engram.Search.FieldFiltersTest do
                %{"key" => "rating", "op" => "eq", "value" => 4.5}
              ])
 
-    assert n == Qdrant.attr_filter(ctx.id.("rating"), {:n, gte: 4})
-    assert d == Qdrant.attr_filter(ctx.id.("launch"), {:d, gte: day, lt: day + 86_400})
-    assert after_ == Qdrant.attr_filter(ctx.id.("launch"), {:d, gte: day})
-    assert between == Qdrant.attr_filter(ctx.id.("rating"), {:n, gte: 4.5, lte: 4.5})
+    assert n == {:range, nil, ctx.id.("rating"), :n, %{gte: 4}}
+    assert d == {:range, nil, ctx.id.("launch"), :d, %{gte: day, lt: day + 86_400}}
+    assert after_ == {:range, nil, ctx.id.("launch"), :d, %{gte: day}}
+    assert between == {:range, nil, ctx.id.("rating"), :n, %{gte: 4.5, lte: 4.5}}
   end
 
-  test "in over strings is one any-match; a mixed in is a should", ctx do
-    v = &FilterId.attr_value(ctx.fk, &1)
-
+  test "in over strings is one any-match; a mixed in is an any of specs", ctx do
     assert run(ctx, [%{"key" => "phase", "op" => "in", "value" => ["a", "b"]}]) ==
-             {:ok, [Qdrant.attr_filter(ctx.id.("phase"), {:h, [v.("a"), v.("b")]})]}
+             {:ok, [{:h, nil, ctx.id.("phase"), [h(ctx, "a"), h(ctx, "b")]}]}
 
-    assert {:ok, [%{should: [_, _]}]} =
+    assert {:ok, [{:any, [_, _]}]} =
              run(ctx, [%{"key" => "rating", "op" => "in", "value" => [3, "x"]}])
   end
 
-  # H1: every named field (and alias) routes to the payload key v5 writes.
+  # H1: every named field (and alias) routes to its named key.
   describe "named fields" do
     defp one(ctx, filter) do
       {:ok, [c]} = run(ctx, [filter])
       c
     end
 
-    defp v5(%{should: [_legacy, v5]}), do: v5
-    defp v5(c), do: c
-
     test "exact strings: status, author, reviewed_by, project, source (+ aliases)", ctx do
-      v = &FilterId.attr_value(ctx.fk, &1)
-
-      for {key, short} <- [
-            {"status", "s"},
-            {"author", "a"},
-            {"reviewed_by", "r"},
-            {"Project", "j"},
-            {"source", "o"},
-            {"resource", "o"},
-            {"sources", "o"}
+      for {key, field} <- [
+            {"author", :author_id},
+            {"reviewed_by", :rev_by_id},
+            {"Project", :proj_id},
+            {"source", :src_id},
+            {"resource", :src_id},
+            {"sources", :src_id}
           ] do
-        assert one(ctx, %{"key" => key, "value" => "Draft"}) ==
-                 %{key: short, match: %{value: v.("draft")}},
-               key
+        assert {:h, ^field, _id, [hmac]} = one(ctx, %{"key" => key, "value" => "Draft"}), key
+        assert hmac == h(ctx, "draft"), key
       end
 
-      assert one(ctx, %{"key" => "author", "op" => "in", "value" => ["a", "b"]}) ==
-               %{key: "a", match: %{any: [v.("a"), v.("b")]}}
+      assert {:h, :author_id, _, [a, b]} =
+               one(ctx, %{"key" => "author", "op" => "in", "value" => ["a", "b"]})
+
+      assert [a, b] == [h(ctx, "a"), h(ctx, "b")]
     end
 
     # A named exact field stores every string as a value HMAC, date-shaped
     # ones too (a `project: 2026-01-01`), so the filter must match them as
     # text; the field catalog lists such values.
     test "a date-shaped string on a named exact field is an exact match", ctx do
-      v = &FilterId.attr_value(ctx.fk, &1)
-
-      assert one(ctx, %{"key" => "project", "value" => "2026-01-01"}) ==
-               %{key: "j", match: %{value: v.("2026-01-01")}}
-
-      assert one(ctx, %{"key" => "source", "op" => "in", "value" => ["2026-01-01", "x"]}) ==
-               %{key: "o", match: %{any: [v.("2026-01-01"), v.("x")]}}
+      assert {:h, :proj_id, _, [hmac]} = one(ctx, %{"key" => "project", "value" => "2026-01-01"})
+      assert hmac == h(ctx, "2026-01-01")
     end
 
-    test "status stable is the default: it matches a missing s", ctx do
-      assert one(ctx, %{"key" => "status", "value" => "Stable"}) == %{is_empty: %{key: "s"}}
+    test "status stable is the default", ctx do
+      assert {:status, true, []} = one(ctx, %{"key" => "status", "value" => "Stable"})
 
-      assert %{should: [%{is_empty: %{key: "s"}}, %{key: "s"}]} =
+      assert {:status, true, [_draft]} =
                one(ctx, %{"key" => "status", "op" => "in", "value" => ["stable", "draft"]})
-    end
-
-    test "type and tags use the row blind indexes, both formats", ctx do
-      type = Base.encode64(Engram.Crypto.hmac_field(ctx.fk, "playbook"))
-
-      assert one(ctx, %{"key" => "type", "value" => "Playbook"}) ==
-               Qdrant.match_filter(:type, type)
-
-      tag = Base.encode64(Engram.Crypto.hmac_field(ctx.fk, "ops"))
-      assert one(ctx, %{"key" => "tags", "value" => "ops"}) == Qdrant.match_filter(:tags, [tag])
     end
 
     test "a named key folds NFKC + case and takes its localized names", ctx do
@@ -141,35 +118,39 @@ defmodule Engram.Search.FieldFiltersTest do
     test "dates in seconds: created (date), updated (timestamp, modified), reviewed", ctx do
       day = DateTime.to_unix(~U[2026-11-01 00:00:00Z])
 
-      for {key, short} <- [
-            {"created", "cr"},
-            {"date", "cr"},
-            {"updated", "up"},
-            {"timestamp", "up"},
-            {"modified", "up"},
-            {"reviewed", "rd"}
+      for {key, field} <- [
+            {"created", :fm_created},
+            {"date", :fm_created},
+            {"updated", :fm_timestamp},
+            {"timestamp", :fm_timestamp},
+            {"modified", :fm_timestamp},
+            {"reviewed", :fm_reviewed}
           ] do
-        assert %{key: ^short, range: %{gte: ^day}} =
-                 v5(one(ctx, %{"key" => key, "op" => "after", "value" => "2026-11-01"})),
+        assert {:range, ^field, _id, :d, %{gte: ^day}} =
+                 one(ctx, %{"key" => key, "op" => "after", "value" => "2026-11-01"}),
                key
       end
     end
 
-    test "expires (stale_after) and due compare day numbers", ctx do
-      d = div(DateTime.to_unix(~U[2026-11-01 00:00:00Z]), 86_400)
+    test "expires (stale_after) and due bound whole days", ctx do
+      d = DateTime.to_unix(~U[2026-11-01 00:00:00Z])
 
-      for {key, short} <- [{"expires", "ex"}, {"stale_after", "ex"}, {"due", "du"}] do
-        assert one(ctx, %{"key" => key, "op" => "before", "value" => "2026-11-01"}) ==
-                 %{key: short, range: %{lt: d}}
+      for {key, field} <- [
+            {"expires", :fm_expires},
+            {"stale_after", :fm_expires},
+            {"due", :fm_due}
+          ] do
+        assert {:range, ^field, _, :d, %{lt: ^d}} =
+                 one(ctx, %{"key" => key, "op" => "before", "value" => "2026-11-01"})
 
-        assert one(ctx, %{"key" => key, "value" => "2026-11-01"}) ==
-                 %{key: short, range: %{gte: d, lt: d + 1}}
+        assert {:range, ^field, _, :d, range} = one(ctx, %{"key" => key, "value" => "2026-11-01"})
+        assert range == %{gte: d, lt: d + 86_400}
       end
     end
 
     test "priority ranges as a number", ctx do
-      assert one(ctx, %{"key" => "priority", "op" => "gte", "value" => 2}) ==
-               %{key: "pr", range: %{gte: 2}}
+      assert {:range, :fm_priority, _, _, %{gte: 2}} =
+               one(ctx, %{"key" => "priority", "op" => "gte", "value" => 2})
 
       assert run(ctx, [%{"key" => "priority", "value" => "high"}]) ==
                {:error, {:invalid_field_filter, "priority"}}
@@ -205,7 +186,7 @@ defmodule Engram.Search.FieldFiltersTest do
       elem(run(ctx, [%{"key" => "launch", "op" => op, "value" => "2026-11-01"}]), 1)
     end
 
-    range = fn [%{nested: %{filter: %{must: [_, %{range: range}]}}}] -> range end
+    range = fn [{:range, nil, _id, :d, range}] -> range end
 
     assert range.(r.("before")) == %{lt: d}
     assert range.(r.("after")) == %{gte: d}
@@ -221,7 +202,7 @@ defmodule Engram.Search.FieldFiltersTest do
              {:error, {:too_many_field_filters, 16}}
   end
 
-  test "a huge integer is invalid, not a Qdrant 400", ctx do
+  test "a huge integer is invalid", ctx do
     assert run(ctx, [%{"key" => "rating", "op" => "gt", "value" => 10 ** 400}]) ==
              {:error, {:invalid_field_filter, "rating"}}
   end

@@ -22,7 +22,6 @@ defmodule Engram.Vector.QdrantStrictModeTest do
   @vector List.duplicate(0.1, @dims)
   @user_id "11111111-1111-1111-1111-111111111111"
   @vault_id "22222222-2222-2222-2222-222222222222"
-  @tag_hmac "dGFnLWhtYWM="
   @note_id "33333333-3333-3333-3333-333333333333"
 
   setup do
@@ -69,11 +68,10 @@ defmodule Engram.Vector.QdrantStrictModeTest do
 
     cases = [
       {"user_id + vault_id", []},
-      {"folder_hmac", [folder_hmac: "Zm9sZGVyLWhtYWM="]},
-      {"tags_hmac", [tags_hmac: [@tag_hmac]]},
-      {"type_hmac", [type_hmac: "dHlwZS1obWFj"]},
-      {"fm_timestamp range", [fm_timestamp_gte: 0, fm_timestamp_lte: 2_000_000_000]},
-      {"fm_created range", [fm_created_gte: 0, fm_created_lte: 2_000_000_000]}
+      # R3a: the note scope (`n any`, `is_empty(n)`, `must_not n any`) is
+      # the only filter beside the tenant.
+      {"note scope ids", [note_scope: {:ids, [Ecto.UUID.generate()]}]},
+      {"note scope exclude", [note_scope: {:exclude, [Ecto.UUID.generate()]}]}
     ]
 
     for {label, opts} <- cases do
@@ -130,9 +128,7 @@ defmodule Engram.Vector.QdrantStrictModeTest do
       opts = [
         user_id: @user_id,
         vault_id: for(_ <- 1..Qdrant.max_ids(), do: Ecto.UUID.generate()),
-        tags_hmac: for(i <- 1..Qdrant.max_ids(), do: "t#{i}"),
-        folder_hmac: "Zm9sZGVyLWhtYWM=",
-        fm_timestamp_gte: 0,
+        note_scope: {:ids, for(_ <- 1..Qdrant.max_note_ids(), do: Ecto.UUID.generate())},
         limit: Qdrant.max_page()
       ]
 
@@ -169,7 +165,7 @@ defmodule Engram.Vector.QdrantStrictModeTest do
           note_id: Ecto.UUID.generate(),
           path_hmac: "cGF0aC1obWFj",
           folder_hmac: "Zm9sZGVyLWhtYWM=",
-          tags_hmac: [@tag_hmac],
+          tags_hmac: ["dGFnLWhtYWM="],
           type_hmac: "dHlwZS1obWFj",
           fm_timestamp: 1_700_000_000,
           fm_created: 1_600_000_000

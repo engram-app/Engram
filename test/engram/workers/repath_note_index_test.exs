@@ -44,18 +44,13 @@ defmodule Engram.Workers.RepathNoteIndexTest do
     end)
   end
 
-  test "PATCHes payload, emits repath:ok telemetry, makes no embedder call", %{
+  # R3a: a point's payload holds no path, so a rename writes no payload (an
+  # unstubbed `/points/payload` request fails the test in Bypass).
+  test "writes no payload, emits repath:ok telemetry, makes no embedder call", %{
     bypass: bypass,
     note: note
   } do
     stub_count(bypass, 2)
-
-    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
-      {:ok, body, conn} = Plug.Conn.read_body(conn)
-      decoded = Jason.decode!(body)
-      assert decoded["payload"]["path_hmac"] == Base.encode64(note.path_hmac)
-      Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
-    end)
 
     ref = make_ref()
     test_pid = self()
@@ -81,10 +76,6 @@ defmodule Engram.Workers.RepathNoteIndexTest do
   # moved points still carry the old path's keywords until a resparse.
   test "a rename that moves points enqueues a keyword refresh", %{bypass: bypass, note: note} do
     stub_count(bypass, 2)
-
-    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
-      Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
-    end)
 
     assert :ok =
              perform_job(RepathNoteIndex, %{note_id: note.id, old_path_hmac: Base.encode64(<<7>>)})
@@ -244,32 +235,6 @@ defmodule Engram.Workers.RepathNoteIndexTest do
     old_path_hmac = Base.encode64(<<7>>)
 
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
-      Plug.Conn.send_resp(conn, 503, ~s({"status":"error"}))
-    end)
-
-    assert :ok =
-             perform_job(
-               RepathNoteIndex,
-               %{note_id: note.id, old_path_hmac: old_path_hmac},
-               attempt: 5,
-               max_attempts: 5
-             )
-
-    assert_enqueued(worker: EmbedNote, args: %{note_id: note.id, old_path_hmac: old_path_hmac})
-  end
-
-  test "final attempt with repath PATCH 503 falls back to EmbedNote and returns :ok", %{
-    bypass: bypass,
-    note: note
-  } do
-    old_path_hmac = Base.encode64(<<7>>)
-
-    # Points exist (count > 0) but the payload PATCH itself keeps failing. The
-    # other exhaustion test fails the COUNT call; this one exercises the
-    # repath_points/2 error arm of maybe_fallback/4 (#755).
-    stub_count(bypass, 2)
-
-    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
       Plug.Conn.send_resp(conn, 503, ~s({"status":"error"}))
     end)
 

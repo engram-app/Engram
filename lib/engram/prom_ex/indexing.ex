@@ -7,10 +7,9 @@ defmodule Engram.PromEx.Indexing do
 
     * `[:engram, :indexing, :repath, :stop]` — `%{count}`, metadata
       `%{outcome: :ok | :missing_points | :fallback}`:
-        - `:ok`             — points PATCHed in place (the cheap, 0-Voyage path);
-          `count` is the note's points `Qdrant.count_by_note/5` found (its
-          `n` points at any path, plus points with no `n` under the old
-          path); the PATCH changes only those under the old path.
+        - `:ok`             — the cheap, 0-Voyage path: no payload write (R3a,
+          a point holds no path), only a keyword refresh; `count` is the
+          note's points `Qdrant.count_by_note/5` found.
         - `:missing_points` — embedded note had zero points under the old path
           (benign on rapid multi-rename; a real inconsistency otherwise).
         - `:fallback`       — repath exhausted retries and fell back to a full
@@ -38,9 +37,6 @@ defmodule Engram.PromEx.Indexing do
     * `engram_prom_ex_indexing_repath_total` — counter of repath events by
       `:outcome`. Alert on `:fallback` / `:missing_points` rate; the `:ok` rate
       is the "renames took the cheap path" signal.
-    * `engram_prom_ex_indexing_repath_points_total` — sum of `count` by
-      `:outcome`. For `:ok` this is the renamed notes' points (an upper
-      bound on those PATCHed) = the zero-Voyage volume saved.
     * `engram_prom_ex_indexing_link_rewrite_failures_total` — counter of
       per-source-note link-rewrite failures from `RewriteNoteLinks`
       (rename propagation, #648/#1231), tagged by `:reason`.
@@ -76,13 +72,12 @@ defmodule Engram.PromEx.Indexing do
       refused to write, tagged by `:reason` (`rotation | note_deleted`). A
       sustained rate means the cache is not saving the retries it exists for.
     * `engram_prom_ex_indexing_payload_reconcile_total`: notes handled by
-      `ReconcileNotePayloads`, tagged by `:outcome` (`checked | drifted |
-      rewritten | skipped_v5`; `n_points`: POINTS the `n` backfill wrote;
-      `legacy_v3`: notes it left unstamped for their legacy v3 points, with
-      those points in `legacy_v3_points`. Re-counted every lap until the
-      notes are re-indexed, and they hold the `note_payload_stamps` ledger
-      open). `rewritten / checked` is how much of the
-      collection the heal is rewriting; expected near zero outside a rotation.
+      `ReconcileNotePayloads`, tagged by `:outcome` (`checked`: notes the
+      heal stamped or the `n` backfill checked; `n_points`: POINTS the `n`
+      backfill wrote; `legacy_v3`: notes it left unstamped for their legacy
+      v3 points, with those points in `legacy_v3_points`. Re-counted every
+      lap until the notes are re-indexed, and they hold the
+      `note_payload_stamps` ledger open). The heal rewrites no point (R3a).
     * `engram_prom_ex_indexing_payload_reconcile_cancelled_total`: reconcile
       jobs cancelled on a 4xx Qdrant refusal, tagged by `:http_status`
       (100..599, bounded). Any increase means a request Qdrant refuses on
@@ -201,14 +196,6 @@ defmodule Engram.PromEx.Indexing do
           description: "Rename repath outcomes from the RepathNoteIndex worker.",
           tags: [:outcome]
         ),
-        sum(
-          metric_prefix ++ [:repath, :points, :total],
-          event_name: @repath_stop_event,
-          measurement: :count,
-          description:
-            "Renamed notes' Qdrant points kept in place by outcome (0-Voyage volume saved on :ok).",
-          tags: [:outcome]
-        ),
         counter(
           metric_prefix ++ [:link_rewrite, :failures, :total],
           event_name: @link_rewrite_failed_event,
@@ -325,8 +312,8 @@ defmodule Engram.PromEx.Indexing do
           event_name: @payload_reconcile_event,
           measurement: :count,
           description:
-            "Notes handled by ReconcileNotePayloads, by outcome (checked, drifted, " <>
-              "rewritten, skipped_v5, legacy_v3); n_points counts points given n, " <>
+            "Notes handled by ReconcileNotePayloads, by outcome (checked, legacy_v3); " <>
+              "n_points counts points given n, " <>
               "legacy_v3_points the v3 points of legacy_v3 notes.",
           tags: [:outcome]
         ),

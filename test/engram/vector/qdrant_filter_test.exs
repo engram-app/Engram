@@ -9,25 +9,32 @@ defmodule Engram.Vector.QdrantFilterTest do
 
   defp build(opts), do: legacy_view(Qdrant.build_tenant_filter(opts))
 
-  test "type_hmac adds an equality match clause" do
-    %{must: must} = build(@base ++ [type_hmac: "aGFzaA=="])
-    assert %{key: "type_hmac", match: %{value: "aGFzaA=="}} in must
+  # R3a: the payload filters left the points. Folder, tag, type, date and
+  # field filters resolve in Postgres to note ids, so the Qdrant filter names
+  # no payload key but the identity ones, whatever opts a caller still sends.
+  test "payload filter opts and a note scope name no key but u, v and n" do
+    filter =
+      Qdrant.build_tenant_filter(
+        user_id: "6f9619ff-8b86-d011-b42d-00c04fc964ff",
+        vault_id: "6f9619ff-8b86-d011-b42d-00c04fc964ff",
+        type_hmac: Base.encode64(:crypto.strong_rand_bytes(32)),
+        tags_hmac: [Base.encode64(:crypto.strong_rand_bytes(32))],
+        folder_hmac: Base.encode64(:crypto.strong_rand_bytes(32)),
+        fm_timestamp_gte: 1,
+        fm_created_lte: 2,
+        attr_filters: [%{nested: %{key: "fa", filter: %{must: []}}}],
+        note_scope: {:ids, [Ecto.UUID.generate()]}
+      )
+
+    keys = filter |> keys() |> Enum.uniq() |> Enum.sort()
+    assert keys == ~w(n u user_id v vault_id)
   end
 
-  test "date bounds add range clauses (unix seconds)" do
-    %{must: must} =
-      build(@base ++ [fm_timestamp_gte: 1_750_000_000, fm_created_lte: 1_760_000_000])
-
-    assert %{key: "fm_timestamp", range: %{gte: 1_750_000_000}} in must
-    assert %{key: "fm_created", range: %{lte: 1_760_000_000}} in must
-  end
-
-  test "gte and lte on the same field merge into one range clause" do
-    %{must: must} =
-      build(@base ++ [fm_timestamp_gte: 1, fm_timestamp_lte: 2])
-
-    assert %{key: "fm_timestamp", range: %{gte: 1, lte: 2}} in must
-  end
+  defp keys(%{} = m), do: Enum.flat_map(m, fn {k, v} -> key(k, v) ++ keys(v) end)
+  defp keys(l) when is_list(l), do: Enum.flat_map(l, &keys/1)
+  defp keys(_), do: []
+  defp key(:key, v), do: [v]
+  defp key(_, _), do: []
 
   test "no OKF opts produces the unchanged base filter" do
     assert %{must: [%{key: "user_id", match: %{value: "u1"}}]} =
@@ -88,23 +95,12 @@ defmodule Engram.Vector.QdrantFilterTest do
     test "an HMAC filter matches base64 or the 128-bit id" do
       b64 = Base.encode64(@hmac)
 
-      for {field, legacy, short} <- [
-            {:path, "path_hmac", "p"},
-            {:folder, "folder_hmac", "f"},
-            {:type, "type_hmac", "y"}
-          ] do
-        assert Qdrant.match_filter(field, b64) == %{
-                 should: [
-                   %{key: legacy, match: %{value: b64}},
-                   %{key: short, match: %{value: FilterId.from_hmac(@hmac)}}
-                 ]
-               }
-      end
-
-      assert %{should: [%{key: "tags_hmac"}, %{key: "g", match: %{any: [id]}}]} =
-               Qdrant.match_filter(:tags, [b64])
-
-      assert id == FilterId.from_hmac(@hmac)
+      assert Qdrant.match_filter(:path, b64) == %{
+               should: [
+                 %{key: "path_hmac", match: %{value: b64}},
+                 %{key: "p", match: %{value: FilterId.from_hmac(@hmac)}}
+               ]
+             }
     end
 
     test "a value with no v5 form keeps the legacy condition alone" do
@@ -114,69 +110,6 @@ defmodule Engram.Vector.QdrantFilterTest do
              }
     end
 
-    test "a folder row id matches the same `f` index, in either uuid form" do
-      row_id = "33333333-3333-3333-3333-333333333333"
-      undashed = FilterId.uuid(row_id)
-
-      # No legacy member: a row id has no legacy form.
-      assert Qdrant.match_filter(:folder, row_id) == %{key: "f", match: %{value: undashed}}
-      assert Qdrant.match_filter(:folder, undashed) == %{key: "f", match: %{value: undashed}}
-    end
-
-    test "a folder list may mix hash forms and row ids: one any over `f`" do
-      b64 = Base.encode64(@hmac)
-      row_id = "33333333-3333-3333-3333-333333333333"
-
-      assert %{should: [%{key: "folder_hmac", match: %{any: [^b64]}}, v5]} =
-               Qdrant.match_filter(:folder, [b64, row_id])
-
-      assert v5 == %{key: "f", match: %{any: [FilterId.uuid(row_id), FilterId.from_hmac(@hmac)]}}
-    end
-
-    test "a folder row id list never reaches the legacy key" do
-      ids =
-        for n <- 1..3,
-            do:
-              Ecto.UUID.generate()
-              |> String.replace("-", "")
-              |> Kernel.<>("#{n}")
-              |> binary_part(0, 32)
-
-      assert %{key: "f", match: %{any: any}} = Qdrant.match_filter(:folder, ids)
-      assert any == ids
-    end
-
-    test "the old hash form alone is unchanged" do
-      b64 = Base.encode64(@hmac)
-
-      assert %{should: [%{key: "folder_hmac", match: %{value: ^b64}}, v5]} =
-               Qdrant.match_filter(:folder, b64)
-
-      assert v5 == %{key: "f", match: %{value: FilterId.from_hmac(@hmac)}}
-    end
-
-    test "with legacy fields off, an empty folder list fails closed and row ids still match" do
-      ServiceConfig.put_override(:legacy_filter_fields, false)
-      id = "33333333333333333333333333333333"
-
-      assert Qdrant.match_filter(:folder, []) == %{key: "f", match: %{any: []}}
-      assert Qdrant.match_filter(:folder, [id]) == %{key: "f", match: %{any: [id]}}
-
-      assert Qdrant.match_filter(:folder, Base.encode64(@hmac)) ==
-               %{key: "f", match: %{value: FilterId.from_hmac(@hmac)}}
-    end
-
-    test "ranges match fm_timestamp or up, fm_created or cr" do
-      %{must: [_user, ts]} = Qdrant.build_tenant_filter(user_id: "u1", fm_timestamp_gte: 5)
-
-      assert ts == %{
-               should: [%{key: "fm_timestamp", range: %{gte: 5}}, %{key: "up", range: %{gte: 5}}]
-             }
-
-      assert Qdrant.range_filter(:fm_created, %{lte: 9}) ==
-               %{should: [%{key: "fm_created", range: %{lte: 9}}, %{key: "cr", range: %{lte: 9}}]}
-    end
-
     test "with legacy fields off only the v5 condition is sent" do
       ServiceConfig.put_override(:legacy_filter_fields, false)
 
@@ -184,50 +117,11 @@ defmodule Engram.Vector.QdrantFilterTest do
                key: "u",
                match: %{value: FilterId.uuid(@uuid)}
              }
-
-      assert Qdrant.range_filter(:fm_timestamp, %{gte: 1}) == %{key: "up", range: %{gte: 1}}
-    end
-
-    # v3 has no legacy index, so a legacy key there is a strict-mode 400. A
-    # value with no v5 form (an empty list, a non-HMAC) fails closed on the
-    # v5 key instead of falling back to the legacy one.
-    test "with legacy fields off no value falls back to a legacy key" do
-      ServiceConfig.put_override(:legacy_filter_fields, false)
-
-      assert Qdrant.match_filter(:tags, []) == %{key: "g", match: %{any: []}}
-      assert Qdrant.match_filter(:type, []) == %{key: "y", match: %{any: []}}
-      assert Qdrant.match_filter(:folder, "notb64") == %{key: "f", match: %{any: []}}
     end
 
     test "the tenant condition stays inside must, so it is still an AND" do
       %{must: must} = Qdrant.build_tenant_filter(user_id: @uuid, vault_id: @uuid)
       assert [%{should: [_, _]}, %{should: [_, _]}] = must
-    end
-
-    test "nested user-key filters: key id and value in the same fa entry" do
-      assert Qdrant.attr_filter(70, {:h, "v1"}) == %{
-               nested: %{
-                 key: "fa",
-                 filter: %{
-                   must: [%{key: "k", match: %{value: 70}}, %{key: "h", match: %{value: "v1"}}]
-                 }
-               }
-             }
-
-      assert %{nested: %{filter: %{must: [_, %{key: "h", match: %{any: ["a", "b"]}}]}}} =
-               Qdrant.attr_filter(70, {:h, ["a", "b"]})
-
-      assert %{nested: %{key: "fa", filter: %{must: [_, %{key: "n", range: %{gte: 4}}]}}} =
-               Qdrant.attr_filter(70, {:n, gte: 4})
-
-      assert %{nested: %{key: "fa", filter: %{must: [_, %{key: "d", range: %{lt: 9}}]}}} =
-               Qdrant.attr_filter(70, {:d, lt: 9})
-    end
-
-    test "resolved field filters join the tenant filter's must" do
-      cond = Qdrant.attr_filter(70, {:n, gte: 4})
-      %{must: must} = Qdrant.build_tenant_filter(user_id: @uuid, attr_filters: [cond])
-      assert List.last(must) == cond
     end
   end
 end

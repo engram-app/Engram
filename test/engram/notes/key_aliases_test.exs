@@ -2,7 +2,6 @@ defmodule Engram.Notes.KeyAliasesTest do
   use ExUnit.Case, async: true
 
   alias Engram.Crypto
-  alias Engram.Indexing.PayloadV5
   alias Engram.Notes.FlatFields
   alias Engram.Notes.Frontmatter
   alias Engram.Notes.KeyAliases
@@ -131,7 +130,9 @@ defmodule Engram.Notes.KeyAliasesTest do
 
     [chunk0 | _] = Markdown.parse(content, "n.md")
 
-    {Markdown.lead(OkfFields.values(Frontmatter.parse(block))), PayloadV5.build(note, flat),
+    # The filter inputs an index pass writes (`notes.type_hmac`, `note_attrs`
+    # from `flat`), not a payload: no point carries a field since R3a.
+    {Markdown.lead(OkfFields.values(Frontmatter.parse(block))), {note.type_hmac, flat},
      chunk0.embed_text}
   end
 end

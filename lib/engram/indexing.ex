@@ -14,7 +14,6 @@ defmodule Engram.Indexing do
   alias Engram.Embedders.UsageLabels
   alias Engram.EmbedModels
   alias Engram.Indexing.ChunkRows
-  alias Engram.Indexing.PayloadV5
   alias Engram.Indexing.PayloadV6
   alias Engram.Indexing.PointId
   alias Engram.Indexing.RetainedVectors
@@ -34,6 +33,8 @@ defmodule Engram.Indexing do
   alias Engram.Rebuild
   alias Engram.Repo
   alias Engram.UsageMeters
+  alias Engram.Vector.FilterId
+  alias Engram.Vector.PayloadKeys
   alias Engram.Vector.Qdrant
 
   require Logger
@@ -1105,16 +1106,10 @@ defmodule Engram.Indexing do
           qdrant_points: qdrant_points,
           reused_point_ids: reused_point_ids,
           stale_point_ids: stale_point_ids,
-          note_payload: note_payload,
           payload_hash: payload_hash
         } = prepared,
         in_commit
       ) do
-    # Skip the PATCH when the note-level payload is what was last written:
-    # on Qdrant 1.18 every set_payload target is copied into a new segment,
-    # so an unconditional refresh rewrote the whole collection on each pass.
-    refresh_ids = if payload_hash == note.payload_hash, do: [], else: reused_point_ids
-
     # Ordered so that every failure leaves STRAY points (which OrphanSweep
     # reaps) rather than a chunk row naming a point that is already gone —
     # which nothing self-heals and which reads as silently missing content.
@@ -1136,15 +1131,10 @@ defmodule Engram.Indexing do
              do: :ok,
              else: purge_before_rebuild(note, reused_point_ids, stale_point_ids)
            ),
-         :ok <- upsert_points_batched(qdrant_points),
-         # Reused points keep their vectors AND their ciphertext (every
-         # encrypted field is inside `context_text`, so an equal hmac means an
-         # identical payload), but the note-level filter keys on them are
-         # note-level: a frontmatter tag edit changes ONE chunk while every
-         # other point still answers tag filters with the pre-edit tags. One
-         # PATCH refreshes the lot — the values are identical across a note's
-         # points, which is why `chunk_index` no longer lives in the payload.
-         :ok <- refresh_payload(refresh_ids, note_payload) do
+         # A reused point keeps its payload: it is the note's identity
+         # (`identity_payload/1`), which no edit, tag, date or move changes
+         # (R3a, the immutable chunk payload). No payload write, ever.
+         :ok <- upsert_points_batched(qdrant_points) do
       # Only the rows that changed (`ChunkRows.write!/3`). One transaction
       # so OrphanSweep can never scroll a live point during the window where
       # its row is momentarily absent.
@@ -1175,23 +1165,14 @@ defmodule Engram.Indexing do
 
           write_point_rows(note, Map.get(prepared, :point_rows))
 
-          # The version only when every point holds this payload (which
-          # carries `n`): none reused, or the reused ones just PATCHed.
-          stamp_payload_hash(note, payload_hash, reused_point_ids == [] or refresh_ids != [])
+          # The version only when every point was written this pass (none
+          # reused): a reused point may predate `n`, and is the backfill's.
+          stamp_identity_hash(note, payload_hash, reused_point_ids == [])
           clear_rebuild_paid(prepared)
           stamp_okf_timestamp(prepared)
           stamp_flat_fields(prepared)
           in_commit.(length(chunk_rows))
         end)
-
-      # Lost to a newer pass after writing points it shares with it: PATCHed
-      # reused points, or upserted ones (deterministic v5 ids). That pass may
-      # have stamped a payload our write just replaced, so the stamp no longer
-      # vouches for the points. NULL makes them refreshed.
-      shared_write? = refresh_ids != [] or qdrant_points != []
-
-      if committed == {:error, :superseded} and shared_write?,
-        do: unstamp_payload_hash(note)
 
       with {:ok, _} <- committed,
            :ok <-
@@ -1239,57 +1220,18 @@ defmodule Engram.Indexing do
     :ok
   end
 
-  @doc """
-  NULLs `note`'s `payload_hash`: a writer that may have replaced a fresher
-  payload on its points (a lost race) must not leave a stamp vouching for
-  them. The note's next pass refreshes the payload.
-  """
-  @spec unstamp_payload_hash(Note.t()) :: :ok
-  def unstamp_payload_hash(note) do
-    {:ok, _} =
-      Repo.with_tenant(note.user_id, fn ->
-        from(n in Note,
-          where: n.kind == "note" and n.id == ^note.id and not is_nil(n.payload_hash)
-        )
-        |> Repo.update_all(set: [payload_hash: nil])
-      end)
-
-    :ok
-  end
-
-  # Every point of the note now carries `note_payload`: upserted ones were
-  # built from it, reused ones were just PATCHed (or already held it). The
-  # payload holds `n`, so when every point was WRITTEN with it this pass
-  # (`all_written?`: none reused, or the reused ones PATCHed) the points
-  # carry the current payload version too (`PayloadV6.stamp/2`). A reused
-  # point left untouched (the payload unchanged) may predate `n`: the version
-  # is left for the `n` backfill. Only while the row holds this hash.
-  defp stamp_payload_hash(%Note{payload_hash: hash} = note, hash, all_written?),
-    do: if(all_written?, do: PayloadV6.stamp(note.id, hash: hash), else: :ok)
-
-  #
-  # Compare-and-set on the hash this pass loaded (review L1): a NULL-clear
-  # that landed mid-pass (payload drift, a cluster diff, a DEK rotation) or
-  # another writer's stamp leaves NULL, so the next pass refreshes the
-  # payload instead of this stamp vouching for points it did not check.
-  defp stamp_payload_hash(note, hash, all_written?) do
+  # The identity payload is a function of the note's ids alone, so its hash
+  # is the same for every writer and needs no compare-and-set: stamped
+  # unconditionally (the drain and the ledger select on a NULL). The payload
+  # version only when every point was written this pass (`all_written?`).
+  defp stamp_identity_hash(note, hash, all_written?) do
     {_, _} =
       Repo.update_all(
         from(n in Note,
           where: n.kind == "note" and n.id == ^note.id,
-          update: [
-            set: [
-              payload_hash:
-                fragment(
-                  "CASE WHEN ? IS NOT DISTINCT FROM ? THEN ? ELSE NULL END",
-                  n.payload_hash,
-                  type(^note.payload_hash, :binary),
-                  type(^hash, :binary)
-                )
-            ]
-          ]
+          where: is_nil(n.payload_hash) or n.payload_hash != ^hash
         ),
-        []
+        set: [payload_hash: hash]
       )
 
     if all_written?, do: PayloadV6.stamp(note.id, hash: hash), else: :ok
@@ -1720,29 +1662,10 @@ defmodule Engram.Indexing do
   end
 
   @doc """
-  Re-path a note's Qdrant points after a rename (#746): overwrite the
-  `path_hmac`/`folder_hmac` payload keys on the points still filed under
-  `old_path_hmac` with the note row's CURRENT (post-rename) hmacs. Vectors,
-  sparse vectors, and encrypted payload fields are untouched — no Voyage call.
-  """
-  def repath_points(note, old_path_hmac) do
-    Qdrant.set_payload_by_filter(
-      collection(),
-      to_string(note.user_id),
-      to_string(note.vault_id),
-      old_path_hmac,
-      %{
-        "path_hmac" => encode_hmac(note.path_hmac),
-        "folder_hmac" => encode_hmac(note.folder_hmac)
-      }
-    )
-  end
-
-  @doc """
   Exact count of a note's Qdrant points (#746): the ones carrying its id, and
   the ones with no id under `path_hmac` (`Qdrant.count_by_note/5`). Used by the
-  repath worker to branch between PATCH, re-embed self-heal, and the
-  embedded-but-missing inconsistency warning.
+  repath worker to branch between a keyword refresh, re-embed self-heal, and
+  the embedded-but-missing inconsistency warning.
   """
   def count_points_by_path_hmac(note, path_hmac) do
     Qdrant.count_by_note(
@@ -3517,15 +3440,15 @@ defmodule Engram.Indexing do
         note_language(Enum.map(plan.entries, &entry_chunk/1))
       end)
 
-    # ONE extraction of the v5 frontmatter filter fields, two sinks: the
-    # `note_attrs` rows (the source of truth, written in the chunk-row
-    # transaction by `stamp_flat_fields/1`) and the v5 Qdrant payload.
-    # User-added keys get their per-user dictionary ids first (allocated
-    # here, committed on their own: an id for a key whose pass then fails is
-    # harmless).
+    # The frontmatter filter fields go to `note_attrs` only (the source of
+    # truth, written in the chunk-row transaction by `stamp_flat_fields/1`);
+    # Postgres resolves every filter (R3a). User-added keys get their
+    # per-user dictionary ids first (allocated here, committed on their own:
+    # an id for a key whose pass then fails is harmless). Every point of the
+    # note carries the same immutable identity payload.
     rebuild? = Map.get(plan, :rebuild?, false)
     flat = note.content |> FlatFields.extract(filter_key) |> with_key_ids(note, dek)
-    note_payload = PayloadV5.build(note, flat)
+    note_payload = identity_payload(note)
     ctx = {note, note_payload}
     point_ids = v5_point_ids(note, plan)
 
@@ -3567,7 +3490,6 @@ defmodule Engram.Indexing do
        # is either a stray or a row pointing at nothing.
        reused_point_ids: plan.reused_point_ids,
        stale_point_ids: unrewritten(plan.stale_point_ids, qdrant_points),
-       note_payload: note_payload,
        payload_hash: payload_hash(note_payload),
        rebuild?: rebuild?,
        attr_rows: FlatFields.attr_rows(flat, note),
@@ -3677,10 +3599,10 @@ defmodule Engram.Indexing do
   defp build_entry({:embed, chunk}, {ctx, point_id}, [{vector, {sparse, doc_len}} | rest]) do
     {note, note_payload} = ctx
 
-    # A v5 point carries filter fields and ids only: its text, title and
-    # heading live in Postgres (Task 11), so there is nothing to encrypt. No
-    # per-chunk key either, so a reused point is refreshed for the whole note
-    # in ONE payload write (`commit_index/1`).
+    # A point carries its note's identity only (`identity_payload/1`): its
+    # text, title and heading live in Postgres (Task 11) and so do its
+    # filter fields (R3a), so there is nothing to encrypt and nothing an
+    # edit could change.
     #
     # Omit the dense named vector entirely when there is none — Qdrant
     # rejects a null vector, and a partial named-vector upsert is the
@@ -3737,42 +3659,6 @@ defmodule Engram.Indexing do
   end
 
   @doc """
-  The note-level Qdrant payload `note`'s points must carry (`note_payload/1`:
-  filter HMACs and dates, no ciphertext). For `ReconcileNotePayloads`.
-
-  Invariant behind `notes.payload_hash`: every writer of a note's points
-  either stamps the hash of this payload or leaves it NULL. A writer that
-  changes points without doing either hides drift from the heal forever.
-  """
-  @spec expected_note_payload(Note.t()) :: map()
-  def expected_note_payload(note), do: note_payload(note)
-
-  @doc """
-  The v5 note-level payload `note`'s v5 points must carry: `PayloadV5.build/2`
-  over the frontmatter filter fields, extracted and keyed exactly as a pass
-  does (`build_prepared/6`). For `ReconcileNotePayloads`. `note` is
-  decrypted; `{:error, reason}` when the DEK is unavailable (`:no_dek`, or a
-  load failure such as `:dek_load_timeout`). Never a payload without the
-  user-added keys.
-  """
-  @spec expected_v5_payload(Note.t(), Engram.Accounts.User.t()) ::
-          {:ok, map()} | {:error, term()}
-  def expected_v5_payload(note, user) do
-    with {:ok, dek} <- Crypto.get_dek(user) do
-      flat =
-        (note.content || "")
-        |> FlatFields.extract(Crypto.dek_filter_key_from_bytes(dek))
-        |> with_key_ids(note, dek)
-
-      {:ok, PayloadV5.build(note, flat)}
-    end
-  end
-
-  @doc "The `notes.payload_hash` value for `payload` (see `stamp_payload_hash/2`)."
-  @spec note_payload_hash(map()) :: binary()
-  def note_payload_hash(payload), do: payload_hash(payload)
-
-  @doc """
   Maps every chunk fingerprint `note`'s current text produces under
   `old_key` to its twin under `new_key` (dense and sparse-only alike, as
   `plan_fingerprints/3` writes them). DEK rotation rekeys `chunks.context_hmac`
@@ -3795,30 +3681,6 @@ defmodule Engram.Indexing do
             |> Map.merge(acc)
         end
     end
-  end
-
-  # The slice of a Qdrant payload that is a property of the NOTE rather than of
-  # the chunk — identical across every point the note owns, which is what makes
-  # refreshing a reused point a single call.
-  #
-  # #590: source_path/folder/tags plaintext intentionally NOT stored. Qdrant
-  # Cloud is a separate breach surface; the cleartext leaked every user's folder
-  # tree + tags. Display values (path/title/tags) are rehydrated from the
-  # `notes` row at search time, keyed by the chunk's note_id. The *_hmac fields
-  # carry all filter load (folder/tags/path scoping) without exposing plaintext.
-  defp note_payload(note) do
-    %{
-      user_id: to_string(note.user_id),
-      vault_id: to_string(note.vault_id),
-      path_hmac: encode_hmac(note.path_hmac),
-      folder_hmac: encode_hmac(note.folder_hmac),
-      tags_hmac: Enum.map(note.tags_hmac || [], &Base.encode64/1),
-      type_hmac: encode_hmac(note.type_hmac),
-      # Plaintext by design (spec 2026-07-02): dates are the only unencrypted
-      # frontmatter fields, needed for range filters.
-      fm_timestamp: note.fm_timestamp && DateTime.to_unix(note.fm_timestamp),
-      fm_created: note.fm_created && DateTime.to_unix(note.fm_created)
-    }
   end
 
   # Deterministic ids for the :embed entries (nil for :reuse), in entry order.
@@ -3845,13 +3707,6 @@ defmodule Engram.Indexing do
 
     ids
   end
-
-  # v5 points are REPLACED, not merged: their payload omits absent and default
-  # keys, so a merge would keep a removed key (or an old folder id) forever. A
-  # reused v3/v4 point gets the v5 payload too (its text is in `chunk_points`
-  # from this pass on).
-  defp refresh_payload(ids, payload),
-    do: Qdrant.overwrite_payload(collection(), ids, payload, caller: :refresh)
 
   # A deterministic id can equal a stale id of the previous pass (same
   # fingerprint and ordinal, not reused because the plan regrouped). The point
@@ -3951,12 +3806,27 @@ defmodule Engram.Indexing do
     if length(held) < length(ids), do: Repo.rollback(:frontmatter_keys_gone), else: :ok
   end
 
-  # Plaintext inputs, not the stored payload: nothing here is encrypted, but
-  # comparing what we would write against a stamp avoids reading Qdrant back.
-  # `:deterministic` so equal maps hash equal; an OTP change that alters the
-  # encoding costs one extra refresh per note, nothing worse.
-  defp payload_hash(note_payload),
-    do: :crypto.hash(:sha256, :erlang.term_to_binary(note_payload, [:deterministic]))
+  @doc """
+  A point's whole payload (R3a, the immutable chunk payload): the tenant
+  (`u`, `v`) and the note row (`n`), undashed. The same for every point of a
+  note and never rewritten: filters resolve in Postgres to note ids.
+  """
+  @spec identity_payload(Note.t() | map()) :: %{String.t() => String.t()}
+  def identity_payload(note) do
+    %{
+      PayloadKeys.short(:user_id) => FilterId.uuid(to_string(note.user_id)),
+      PayloadKeys.short(:vault_id) => FilterId.uuid(to_string(note.vault_id)),
+      PayloadKeys.short(:note) => FilterId.uuid(to_string(note.id))
+    }
+  end
+
+  @doc "`notes.payload_hash` for `note`: the hash of `identity_payload/1`."
+  @spec identity_hash(Note.t() | map()) :: binary()
+  def identity_hash(note), do: payload_hash(identity_payload(note))
+
+  # `:deterministic` so equal maps hash equal.
+  defp payload_hash(payload),
+    do: :crypto.hash(:sha256, :erlang.term_to_binary(payload, [:deterministic]))
 
   # Encodes a Phase B HMAC binary as base64 for JSON-safe Qdrant payload.
   # Returns nil for nil — leaves the field absent so legacy/un-backfilled

@@ -1,21 +1,23 @@
 defmodule Engram.Workers.RepathNoteIndex do
   @moduledoc """
-  Oban worker: re-paths a note's Qdrant points after a rename WITHOUT
-  re-embedding (#746). Point IDs are random UUIDs preserved across rename and
-  the payload AAD binds to point-UUID, so dense/sparse vectors and ciphertext
-  survive — only the plaintext `path_hmac`/`folder_hmac` filter-keys change.
+  Oban worker: brings a note's index up to a rename WITHOUT re-embedding
+  (#746). A point's payload is the note's identity (`u`, `v`, `n`, R3a), which
+  a rename does not change, so no payload is written; only the keyword
+  vectors, which encode the path's context prefix, are refreshed. The job
+  name stays: an older node that runs an R3a-queued job repaths its own
+  payload, which is harmless.
 
   Branches on the note's point count: points carrying its note id `n`, plus
   points with no `n` under the OLD path_hmac (`Qdrant.count_by_note/5`). A
   point with `n` and no path key (an R3a chunk point) counts, so the rename
   still resparses its keyword vector:
 
-    * count > 0                                -> PATCH new hmacs onto the points
+    * count > 0                                -> queue `RefreshKeywordVectors`
     * count == 0 and content_hash != embed_hash -> enqueue EmbedNote (embed fresh)
     * count == 0 and content_hash == embed_hash -> warn: benign on rapid multi-rename
       (A→B→C) or when a content-edit EmbedNote wins the race; not an error
 
-  On repeated Qdrant failure (count or PATCH), Oban retries up to max_attempts.
+  On repeated Qdrant failure (the count), Oban retries up to max_attempts.
   On the final attempt, instead of discarding with stranded points, the worker
   falls back to `EmbedNote` with `old_path_hmac` — which deletes old-path points
   and re-embeds under the new path — so no points ever strand permanently.
@@ -91,19 +93,12 @@ defmodule Engram.Workers.RepathNoteIndex do
       {:ok, note} ->
         case Indexing.count_points_by_path_hmac(note, old_path_hmac) do
           {:ok, count} when count > 0 ->
-            case Indexing.repath_points(note, old_path_hmac) do
-              :ok ->
-                # #746 — Grafana proof that rename took the cheap path (0 Voyage).
-                # `count` is the note's points counted (see `emit_repath/2`).
-                emit_repath(:ok, count)
-                # The moved points' keyword vectors still encode the old
-                # path's context prefix; a resparse is cheap (no Voyage).
-                _ = Oban.insert(RefreshKeywordVectors.new_for_note(note.id, note.user_id))
-                :ok
-
-              {:error, _} = err ->
-                maybe_fallback(job, note, old_path_hmac, err)
-            end
+            # #746 — Grafana proof that rename took the cheap path (0 Voyage).
+            emit_repath(:ok, count)
+            # The points' keyword vectors still encode the old path's context
+            # prefix; a resparse is cheap (no Voyage).
+            _ = Oban.insert(RefreshKeywordVectors.new_for_note(note.id, note.user_id))
+            :ok
 
           {:ok, 0} ->
             handle_no_points(note)
