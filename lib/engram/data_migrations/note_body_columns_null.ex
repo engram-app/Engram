@@ -44,7 +44,6 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
 
   alias Engram.Backfill.IdWindows
   alias Engram.Cluster.Readiness
-  alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Notes.NoteBody
   alias Engram.Repo
@@ -132,20 +131,35 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNull do
 
   defp blocked(reason) do
     IdWindows.reset_walk(name())
+    :ok = Engram.DataMigration.report(blocked: with({r, _node} <- reason, do: r))
 
     Logger.info(
       "note body columns null blocked",
-      Metadata.with_category(:info, :data, reason: inspect(reason))
+      Engram.DataMigration.progress_metadata(blocked_by(reason))
     )
 
     {:more, rows: 0, blocked: 1}
   end
 
+  defp blocked_by({reason, node}), do: [reason: reason, peer: inspect(node)]
+  defp blocked_by(reason), do: [reason: reason]
+
   defp walk(opts) do
-    IdWindows.heal_pass(name(), Note, &null/2,
-      batch_size: Keyword.get(opts, :batch, @batch),
-      max_fixed: Keyword.get(opts, :max_fixed, @max_fixed)
-    )
+    result =
+      IdWindows.heal_pass(name(), Note, &null/2,
+        batch_size: Keyword.get(opts, :batch, @batch),
+        max_fixed: Keyword.get(opts, :max_fixed, @max_fixed)
+      )
+
+    with {:more, found} <- result,
+         rows when rows > 0 <- Keyword.get(found, :rows, 0) do
+      Logger.info(
+        "note body columns nulled",
+        Engram.DataMigration.progress_metadata(total_count: rows)
+      )
+    end
+
+    result
   end
 
   # Per ciphertext column: the body row holds the same envelope (same

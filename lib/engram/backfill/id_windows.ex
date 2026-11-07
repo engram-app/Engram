@@ -390,6 +390,14 @@ defmodule Engram.Backfill.IdWindows do
 
     dirty = walk.dirty or pass.fixed > 0 or pass.left
 
+    :ok =
+      Engram.DataMigration.record_walk(%{
+        walk: name,
+        fixed: pass.fixed,
+        left: pass.left,
+        hit_budget: pass.stop == :budget
+      })
+
     case pass.stop do
       nil ->
         Agent.update(@cursors, &Map.delete(&1, name))

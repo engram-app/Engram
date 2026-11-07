@@ -12,6 +12,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
     max_attempts: 3,
     unique: Engram.Jobs.unique(__MODULE__)
 
+  alias Engram.DataMigration
   alias Engram.DataMigrations
   alias Engram.Logger.Metadata
 
@@ -70,6 +71,13 @@ defmodule Engram.Workers.DataMigrationsRunner do
   # pass runs, and `:more` reopens it (note_open/2 clears completed_at).
   @spec run(module(), boolean()) :: :skipped | :done | :more | :error
   def run(mod, reverify \\ false) do
+    _ = DataMigration.take_stats()
+    result = run_one(mod, reverify)
+    summarize(mod, result)
+    result
+  end
+
+  defp run_one(mod, reverify) do
     {name, version} = {mod.name(), mod.version()}
 
     cond do
@@ -145,8 +153,49 @@ defmodule Engram.Workers.DataMigrationsRunner do
     case mod.run_pass() do
       :done -> :done
       :more -> {:more, []}
-      {:more, found} when is_list(found) -> {:more, found}
+      {:more, found} when is_list(found) -> {:more, tap(found, &DataMigration.report(found: &1))}
     end
+  end
+
+  # ONE line per migration per run, shipped to Loki
+  # (`DataMigration.progress_metadata/1`): name, version, result (`:blocked`
+  # when a pass walked nothing behind a guard), the totals and per-walk
+  # counts `IdWindows.heal_pass/4` recorded, and what the migration reported
+  # (`FileTimes`' open and clean tables). Counts and names only.
+  defp summarize(mod, result) do
+    stats = DataMigration.take_stats()
+    walks = stats |> Map.get(:walks, []) |> Enum.reverse()
+    blocked = stats[:blocked] || get_in(stats, [:found, :blocked])
+    result = if result == :more and blocked, do: :blocked, else: result
+
+    fields =
+      [
+        migration: ledger_name(mod),
+        version: ledger_version(mod),
+        result: result,
+        fixed: walks |> Enum.map(& &1.fixed) |> Enum.sum(),
+        left: Enum.any?(walks, & &1.left),
+        hit_budget: Enum.any?(walks, & &1.hit_budget),
+        walks:
+          Enum.map_join(walks, "; ", fn w ->
+            "#{w.walk} fixed=#{w.fixed} left=#{w.left} budget=#{w.hit_budget}"
+          end),
+        blocked: blocked && to_string(blocked),
+        open: stats[:open],
+        clean: stats[:clean]
+      ]
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+
+    Logger.info("data migration pass", DataMigration.progress_metadata(fields))
+  rescue
+    # A summary must never fail the run.
+    _ -> :ok
+  end
+
+  defp ledger_version(mod) do
+    mod.version()
+  catch
+    _kind, _reason -> nil
   end
 
   defp describe([]), do: ""
