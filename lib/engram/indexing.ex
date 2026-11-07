@@ -313,13 +313,15 @@ defmodule Engram.Indexing do
     # with zero embedding spend. A floor pass is sparse-only too, and asks no
     # budget at all: it is maintenance, never metered.
     #
-    # The points-budget count and the plan's chunk read share ONE tenant
-    # transaction (both `with_tenant` calls nest into it), so the check costs
-    # a query, not a transaction. ponytail: the token reservation's one-row
-    # upsert runs inside it too and locks the meter row even when it refuses.
-    # Nothing after it queries but a refusal's meter read for its log line;
-    # the sparse re-plan reuses the rows already read (`plan_within_budget/5`).
-    # Move the reservation past the commit if that ever contends.
+    # No O(note) work while a pooled connection is held (#2532). The tier
+    # check, the chunk rows and the points count are one short tenant
+    # transaction (`planning_reads/3`); planning (capping, fingerprints, the
+    # vector cache digests) runs after it, outside any transaction. Its DB
+    # steps then run in this order, each its own short transaction or
+    # statement: the cache lookup (`VectorCache.get_many/3`, batched), then
+    # the token reservation, so the reservation charges only the misses. A
+    # 10 MB note's digests held the old single planning transaction past the
+    # 15 s checkout limit in prod (2026-10-24).
     #
     # ONE DEK fetch for everything the pass derives from it (filter and
     # content keys, vector cache, frontmatter key ids). A second fetch that
@@ -330,11 +332,9 @@ defmodule Engram.Indexing do
          {:ok, dek} <- Crypto.get_dek(user),
          content_key = Crypto.dek_content_hash_key_from_bytes(dek),
          {:ok, opts} <- with_vector_cache(user, note, dek, content_key, dims, opts),
+         {:ok, rows, counted} <- planning_reads(note, user, opts),
          {tier, dense?, plan, retained} <-
-           Repo.with_tenant!(note.user_id, fn ->
-             with :ok <- tier_unchanged(note),
-                  do: plan_index(note, user, chunks, content_key, opts)
-           end),
+           plan_index(note, user, chunks, {rows, counted}, content_key, opts),
          {:ok, dense?, plan, retained} <-
            rebuild_sources(note, dense?, plan, retained, content_key, opts),
          :ok = collect_garbage(n),
@@ -428,10 +428,30 @@ defmodule Engram.Indexing do
 
   defp merged?(plan), do: Enum.any?(plan.entries, &Map.get(entry_chunk(&1), :merged, false))
 
+  # The DB reads planning needs, in ONE short tenant transaction that holds
+  # no O(note) work: the tier check, the note's chunk rows (none for a forced
+  # floor, which reuses nothing and checks no budget), and the counter-based
+  # points count for `points_budget_ok?/5` (its own-note share is the rows
+  # just read).
+  defp planning_reads(note, user, opts) do
+    forced? = floor_tier(note, opts) != nil
+
+    Repo.with_tenant!(note.user_id, fn ->
+      with :ok <- tier_unchanged(note) do
+        rows = if forced?, do: [], else: indexed_rows(note)
+
+        counted =
+          if !forced? and index_points_cap(user),
+            do: {point_count(user.id), length(rows)}
+
+        {:ok, rows, counted}
+      end
+    end)
+  end
+
   # The index budget sweep may have demoted or promoted the note since it was
-  # loaded. Checked inside the planning transaction, before any Voyage call
-  # or Qdrant write, so a lost race spends nothing; `stamp_index_tier/3`
-  # re-checks at commit.
+  # loaded. Checked before any Voyage call or Qdrant write, so a lost race
+  # spends nothing; `stamp_index_tier/3` re-checks at commit.
   defp tier_unchanged(note) do
     expected = Map.get(note, :index_tier)
 
@@ -466,10 +486,9 @@ defmodule Engram.Indexing do
 
   # The per-note cap runs first, so the points budget below counts the points
   # a full pass would actually write.
-  defp plan_index(note, user, chunks, content_key, opts) do
+  defp plan_index(note, user, chunks, {rows, counted}, content_key, opts) do
     forced = floor_tier(note, opts)
     cap = note_points_cap(user)
-    rows = if forced, do: [], else: indexed_rows(note)
 
     capped =
       if forced,
@@ -477,7 +496,7 @@ defmodule Engram.Indexing do
         else: fit_note(chunks, cap, merged_rows?(rows))
 
     case forced || over_note_cap_tier(note, capped, cap) ||
-           over_points_budget_tier(note, user, capped) do
+           over_points_budget_tier(note, user, capped, counted) do
       nil ->
         dense_opt = Keyword.get(opts, :dense, true)
 
@@ -529,8 +548,8 @@ defmodule Engram.Indexing do
   # least recently edited notes. Past that it floors.
   @inline_overshoot_pct 5
 
-  defp over_points_budget_tier(note, user, chunks) do
-    unless points_budget_ok?(user, note.id, length(chunks), @inline_overshoot_pct),
+  defp over_points_budget_tier(note, user, chunks, counted) do
+    unless points_budget_ok?(user, note.id, length(chunks), @inline_overshoot_pct, counted),
       do: demoted_tier(note)
   end
 
@@ -814,26 +833,38 @@ defmodule Engram.Indexing do
   the count to 0 and every pass would fit.
 
   `overshoot_pct` lets the count pass the cap by that share (the inline
-  pass, see `over_points_budget_tier/3`).
+  pass, see `over_points_budget_tier/4`).
 
   No lock: two concurrent passes can both fit on one reading, so the cap can
   be overshot by one note's chunks. Accepted.
+
+  `counted`: the counter-based `{all, own}` already read by the caller (the
+  index pass reads it with its chunk rows, `planning_reads/3`), so the first
+  check costs no query.
   """
-  @spec points_budget_ok?(map(), Ecto.UUID.t(), non_neg_integer(), non_neg_integer()) ::
-          boolean()
-  def points_budget_ok?(user, note_id, planned_points, overshoot_pct \\ 0) do
-    case Engram.Billing.effective_limit(user, :index_points_cap) do
-      cap when is_integer(cap) and cap >= 0 ->
+  @spec points_budget_ok?(
+          map(),
+          Ecto.UUID.t(),
+          non_neg_integer(),
+          non_neg_integer(),
+          {non_neg_integer(), non_neg_integer()} | nil
+        ) :: boolean()
+  def points_budget_ok?(user, note_id, planned_points, overshoot_pct \\ 0, counted \\ nil) do
+    case index_points_cap(user) do
+      cap when is_integer(cap) ->
         # All the user's points minus this note's rows (at most its point
         # cap). The counters first; a refusal floors the note and drops its
         # dense vectors, so it is re-checked on the real chunk count, which
         # only a user at the cap pays.
         fits? = fn opts ->
           {:ok, {all, own}} =
-            Repo.with_tenant(user.id, fn ->
-              {point_count(user.id, opts),
-               Repo.one(from(o in Chunk, where: o.note_id == ^note_id, select: count()))}
-            end)
+            if counted && opts == [],
+              do: {:ok, counted},
+              else:
+                Repo.with_tenant(user.id, fn ->
+                  {point_count(user.id, opts),
+                   Repo.one(from(o in Chunk, where: o.note_id == ^note_id, select: count()))}
+                end)
 
           all - own + planned_points <= cap + div(cap * overshoot_pct, 100)
         end
@@ -841,8 +872,16 @@ defmodule Engram.Indexing do
         fits?.([]) or fits?.(exact: true)
 
       # nil / :unlimited / a negative sentinel: no ceiling.
-      _ ->
+      nil ->
         true
+    end
+  end
+
+  # nil: no ceiling.
+  defp index_points_cap(user) do
+    case Engram.Billing.effective_limit(user, :index_points_cap) do
+      cap when is_integer(cap) and cap >= 0 -> cap
+      _ -> nil
     end
   end
 
@@ -1839,9 +1878,9 @@ defmodule Engram.Indexing do
   # pass would send (reused chunks cost nothing). Refused → re-plan sparse:
   # the fingerprints differ, so a dense plan cannot be reused for a sparse pass.
   #
-  # The re-plan reuses the rows the dense plan read: a reservation, refused or
-  # not, holds the meter row until the planning transaction commits, so on a
-  # refusal nothing after it but CPU (fingerprints) may run under that lock.
+  # The re-plan reuses the rows the dense plan read (`planning_reads/3`). No
+  # transaction is open here: the reservation is one autocommit statement, so
+  # it holds the meter row only for itself.
   #
   # Third element: dense vectors an earlier attempt already paid for but did
   # not commit (`retain/1`, held across the commit). A hit skips the
@@ -1851,8 +1890,8 @@ defmodule Engram.Indexing do
   # same partial plan (`partial_from_retained/5`).
   #
   # A v5 rebuild (`rebuild: true`, chunker v5 Task 16.3) only plans here:
-  # its vectors are sourced after the planning transaction
-  # (`rebuild_sources/6`), since the copy reads Qdrant.
+  # its vectors are sourced after it (`rebuild_sources/6`), since the copy
+  # reads Qdrant.
   defp plan_within_budget(note, rows, chunks, content_key, dense?, opts) do
     if Keyword.get(opts, :rebuild, false),
       do:
@@ -2097,7 +2136,9 @@ defmodule Engram.Indexing do
   # to re-plan the whole note sparse, which deleted the dense vectors the
   # rebuild had just copied for free.
   defp priced_rebuild(note, rows, chunks, ck, plan, opts) do
-    case Repo.with_tenant!(note.user_id, fn -> price(note, rows, chunks, ck, plan, opts) end) do
+    # No transaction around it: pricing is O(note) CPU (#2532), and its DB
+    # steps (cache lookup, reservation) scope themselves.
+    case price(note, rows, chunks, ck, plan, opts) do
       {false, {:refused, priced}, nil} ->
         # A vector cache hit costs nothing and stays dense; every other
         # sent text waits, so the re-run sends Voyage nothing.
@@ -2371,7 +2412,8 @@ defmodule Engram.Indexing do
     end
   end
 
-  # ONE query for every dense text of the pass. Misses are deduplicated by
+  # ONE lookup (`VectorCache.get_many/3`, batched) for every dense text of
+  # the pass. Misses are deduplicated by
   # key (a note repeating a section embeds it once) and taken in note order up
   # to the pass byte budget; any left over make the pass `:continues`.
   defp with_cache_lookup(plan, _texts, nil, _user_bytes), do: plan
