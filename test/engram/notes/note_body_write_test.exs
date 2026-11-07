@@ -667,6 +667,52 @@ defmodule Engram.Notes.NoteBodyWriteTest do
       for t <- tombs, do: assert(assert_body_only!(u, t, false) == "")
     end
 
+    # A tombstone INSERT that no-ops on a row already holding its id (a
+    # test trigger makes that row, with its own body, first): the rename
+    # must leave that row's body alone. `ON CONFLICT DO NOTHING` names a
+    # row the insert did not make.
+    defp tombstone_id_taken! do
+      Repo.query!("""
+      CREATE FUNCTION r8_tomb_taken() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.deleted_at IS NOT NULL AND current_setting('r8.taken', true) IS DISTINCT FROM 'on' THEN
+          PERFORM set_config('r8.taken', 'on', true);
+          INSERT INTO notes SELECT (NEW).*;
+          INSERT INTO note_bodies (note_id, user_id, key_version, content_ct)
+            VALUES (NEW.id, NEW.user_id, 2, '\\x01'::bytea || decode(repeat('ab', 40), 'hex'));
+        END IF;
+        RETURN NEW;
+      END $$ LANGUAGE plpgsql
+      """)
+
+      Repo.query!(
+        "CREATE TRIGGER aa_r8_tomb_taken BEFORE INSERT ON notes FOR EACH ROW EXECUTE FUNCTION r8_tomb_taken()"
+      )
+    end
+
+    defp taken_body(u) do
+      [id] = tombstones(u)
+
+      Repo.query!("SELECT content_ct FROM note_bodies WHERE note_id = $1", [Ecto.UUID.dump!(id)]).rows
+    end
+
+    test "a rename whose tombstone insert no-ops leaves that row's body", %{user: u, vault: v} do
+      write!(u, v, "a.md", "first")
+      tombstone_id_taken!()
+      assert {:ok, _} = Notes.rename_note(u, v, "a.md", "b.md")
+      assert taken_body(u) == [[<<1>> <> :binary.copy(<<0xAB>>, 40)]]
+      assert {:ok, %{content: "first"}} = Notes.get_note(u, v, "b.md")
+    end
+
+    test "a folder rename whose tombstone insert no-ops leaves that row's body",
+         %{user: u, vault: v} do
+      write!(u, v, "d/a.md", "first")
+      tombstone_id_taken!()
+      assert {:ok, _} = Notes.rename_folder(u, v, "d", "e")
+      assert taken_body(u) == [[<<1>> <> :binary.copy(<<0xAB>>, 40)]]
+      assert {:ok, %{content: "first"}} = Notes.get_note(u, v, "e/a.md")
+    end
+
     test "AAD rebind of a legacy row", %{user: u, vault: v} do
       legacy = insert_legacy_note!(u, v, "legacy/path.md", "legacy body")
       assert :ok = AadRebind.rebind_user(u.id)
