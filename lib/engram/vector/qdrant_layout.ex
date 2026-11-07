@@ -90,9 +90,11 @@ defmodule Engram.Vector.QdrantLayout do
   # indexed only while `:legacy_filter_fields` is on (a collection that may
   # still hold v3/v4 points); the v5 short-key indexes come from
   # `PayloadKeys.index_fields/0`.
-  @legacy_keyword ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac)
-  # OKF frontmatter dates, plaintext so Qdrant can range-filter on them.
-  @legacy_integer ~w(fm_timestamp fm_created)
+  # R3a: the tenant and the path only. Every other filter resolves in
+  # Postgres; `path_hmac` stays while the note belts (`Qdrant.note_filter/3`)
+  # still match legacy points by it. An index already built is never dropped
+  # here (R3b drops the retired ones once no peer reads them).
+  @legacy_keyword ~w(user_id vault_id path_hmac)
   # The tenant field of each format. Legacy `user_id` gets no `is_tenant`
   # (one tenant field per collection), but keeps `enable_hnsw` so copied
   # v3/v4 points still have a per-user graph while the pass runs.
@@ -298,9 +300,7 @@ defmodule Engram.Vector.QdrantLayout do
   def payload_indexes(version, legacy?) do
     legacy =
       if legacy?,
-        do:
-          Enum.map(@legacy_keyword, &{&1, "keyword"}) ++
-            Enum.map(@legacy_integer, &{&1, "integer"}),
+        do: Enum.map(@legacy_keyword, &{&1, "keyword"}),
         else: []
 
     indexes = legacy ++ PayloadKeys.index_fields()

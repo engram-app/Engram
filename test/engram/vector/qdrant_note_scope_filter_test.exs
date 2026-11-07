@@ -1,9 +1,11 @@
 defmodule Engram.Vector.QdrantNoteScopeFilterTest do
   @moduledoc """
-  The note-id reader (immutable chunk index R1, Engram#2263): Postgres
-  resolves a search's filters to note ids, and the Qdrant filter is the
-  tenant (`u`, `v`) plus the note ids on `n`, in `match.any` blocks of
-  `Qdrant.max_ids/0` (the strict `condition_max_size` bound).
+  The note-id reader (immutable chunk index, Engram#2263): Postgres resolves
+  a search's filters to note ids, and the Qdrant filter is the tenant (`u`,
+  `v`) plus the note ids on `n`, in `match.any` blocks of `Qdrant.max_ids/0`.
+  R3a: no payload condition rides along. A point without `n` (not yet
+  backfilled) is let through by `is_empty(n)` and post-filtered in Postgres
+  (`Engram.Search`), so it stays findable at every moment of the backfill.
   """
   use ExUnit.Case, async: true
 
@@ -16,73 +18,69 @@ defmodule Engram.Vector.QdrantNoteScopeFilterTest do
 
   defp ids(n), do: for(_ <- 1..n//1, do: Ecto.UUID.generate())
 
-  defp filter(scope, extra \\ []),
-    do: Qdrant.build_tenant_filter(@base ++ extra ++ [note_scope: scope])
+  defp filter(scope), do: Qdrant.build_tenant_filter(@base ++ [note_scope: scope])
 
   @empty_n %{is_empty: %{key: "n"}}
 
-  # The one per-point branch beside the tenant: `should [n path, fallback]`.
-  defp branches(%{must: must}) do
-    tenant = Qdrant.build_tenant_filter(@base).must
-    assert [%{should: [n_path, fallback]}] = must -- tenant
-    {n_path, fallback}
+  # The one clause beside the tenant.
+  defp scope_clause(%{must: must} = filter) do
+    refute Map.has_key?(filter, :must_not)
+    assert [clause] = must -- Qdrant.build_tenant_filter(@base).must
+    clause
   end
-
-  defp n_blocks(%{should: blocks}), do: blocks
 
   defp block_sizes(blocks), do: Enum.map(blocks, &length(&1.match.any))
 
-  describe "{:ids, ids}" do
-    test "the tenant, then ONE should: the n blocks, or no n and today's conditions" do
-      ids = ids(5_000)
-      folder = Base.encode64(:crypto.strong_rand_bytes(32))
-      filter = filter({:ids, ids}, folder_hmac: folder)
-      {n_path, fallback} = branches(filter)
+  # Every key the filter tree names.
+  defp keys(%{} = m), do: Enum.flat_map(m, fn {k, v} -> key(k, v) ++ keys(v) end)
+  defp keys(l) when is_list(l), do: Enum.flat_map(l, &keys/1)
+  defp keys(_), do: []
+  defp key(:key, v), do: [v]
+  defp key(_, _), do: []
 
-      refute Map.has_key?(filter, :must_not)
-      blocks = n_blocks(n_path)
+  describe "{:ids, ids}" do
+    test "the tenant, then ONE should: the n blocks or no n" do
+      ids = ids(5_000)
+      %{should: should} = scope_clause(filter({:ids, ids}))
+
+      assert {blocks, [@empty_n]} = Enum.split(should, -1)
       assert block_sizes(blocks) == [2048, 2048, 904]
       assert Enum.all?(blocks, &(&1.key == "n"))
       assert Enum.flat_map(blocks, & &1.match.any) == Enum.map(ids, &FilterId.uuid/1)
+    end
 
-      today = Qdrant.build_tenant_filter(@base ++ [folder_hmac: folder]).must
-      assert fallback == %{must: [@empty_n | today -- Qdrant.build_tenant_filter(@base).must]}
+    test "names no payload key but u, v and n anywhere in the tree" do
+      filter = filter({:ids, ids(3)})
+      assert filter |> keys() |> Enum.uniq() |> Enum.sort() == ~w(n u user_id v vault_id)
     end
 
     test "exactly max_ids is one block, one more is two" do
-      assert filter({:ids, ids(2048)}) |> branches() |> elem(0) |> n_blocks() |> block_sizes() ==
-               [2048]
-
-      assert filter({:ids, ids(2049)}) |> branches() |> elem(0) |> n_blocks() |> block_sizes() ==
-               [2048, 1]
+      %{should: s1} = scope_clause(filter({:ids, ids(2048)}))
+      %{should: s2} = scope_clause(filter({:ids, ids(2049)}))
+      assert block_sizes(Enum.drop(s1, -1)) == [2048]
+      assert block_sizes(Enum.drop(s2, -1)) == [2048, 1]
     end
 
     test "max_note_ids (5 blocks) is accepted, one more is refused" do
       assert Qdrant.max_note_ids() == 5 * Qdrant.max_ids()
-
-      assert filter({:ids, ids(Qdrant.max_note_ids())})
-             |> branches()
-             |> elem(0)
-             |> n_blocks()
-             |> length() == 5
-
+      %{should: should} = scope_clause(filter({:ids, ids(Qdrant.max_note_ids())}))
+      assert length(should) == 6
       assert_raise ArgumentError, fn -> filter({:ids, ids(Qdrant.max_note_ids() + 1)}) end
     end
 
-    test "an empty id list matches nothing (fail closed, never an empty should)" do
-      tenant = Qdrant.build_tenant_filter(@base).must
-      assert filter({:ids, []}).must -- tenant == [%{should: [%{key: "n", match: %{any: []}}]}]
+    test "an empty id list matches only points without n (post-filtered away)" do
+      assert scope_clause(filter({:ids, []})) == %{
+               should: [%{key: "n", match: %{any: []}}, @empty_n]
+             }
     end
   end
 
   describe "{:exclude, ids}" do
-    test "the tenant, then ONE should: n outside the ids, or no n and today's conditions" do
+    test "the tenant, then n outside the ids (a point without n passes, post-filtered)" do
       ids = ids(2049)
-      {n_path, fallback} = branches(filter({:exclude, ids}, type_hmac: "dHlwZQ=="))
-
-      assert [@empty_n | blocks] = n_path.must_not
+      %{must_not: blocks} = scope_clause(filter({:exclude, ids}))
       assert block_sizes(blocks) == [2048, 1]
-      assert [@empty_n | _today] = fallback.must
+      assert Enum.all?(blocks, &(&1.key == "n"))
     end
 
     test "an empty complement (every note matches) is the tenant filter alone" do
@@ -94,14 +92,12 @@ defmodule Engram.Vector.QdrantNoteScopeFilterTest do
     end
   end
 
-  # What the filter MATCHES, point by point (a minimal Qdrant evaluator):
-  # a point with `n` is judged by its note id, one without by today's payload
-  # conditions, and the tenant holds in both branches.
-  describe "per-point fallback, evaluated" do
+  # What the filter MATCHES, point by point (a minimal Qdrant evaluator).
+  describe "evaluated" do
     @other_user "33333333-3333-3333-3333-333333333333"
 
-    defp point(note, extra) do
-      Map.merge(%{"u" => FilterId.uuid(@user), "v" => FilterId.uuid(@vault)}, extra)
+    defp point(note, user \\ @user) do
+      %{"u" => FilterId.uuid(user), "v" => FilterId.uuid(@vault)}
       |> then(&if note, do: Map.put(&1, "n", FilterId.uuid(note)), else: &1)
     end
 
@@ -121,47 +117,31 @@ defmodule Engram.Vector.QdrantNoteScopeFilterTest do
     defp eval(%{"key" => k, "match" => %{"any" => vs}}, p),
       do: Enum.any?(List.wrap(p[k]), &(&1 in vs))
 
-    # With legacy filter fields on, each condition is `should [legacy, v5]`;
-    # these points carry only the v5 keys, so the v5 member decides.
-    setup do
-      [folder, other] = for _ <- 1..2, do: :crypto.strong_rand_bytes(32)
-      f = Engram.Vector.PayloadKeys.short(:folder_id)
-
-      %{
-        folder: Base.encode64(folder),
-        in_folder: %{f => FilterId.from_hmac(folder)},
-        out: %{f => FilterId.from_hmac(other)}
-      }
-    end
-
-    test "include: a point with n by its id; without n by today's folder condition", ctx do
+    test "include: a point with n by its id; a point without n passes" do
       [hit, miss] = ids(2)
-      filter = filter({:ids, [hit]}, folder_hmac: ctx.folder)
+      filter = filter({:ids, [hit]})
 
-      assert matches?(filter, point(hit, ctx.out))
-      refute matches?(filter, point(miss, ctx.in_folder))
-      assert matches?(filter, point(nil, ctx.in_folder))
-      refute matches?(filter, point(nil, ctx.out))
+      assert matches?(filter, point(hit))
+      refute matches?(filter, point(miss))
+      assert matches?(filter, point(nil))
     end
 
-    test "exclude: a point with n unless excluded; without n by today's folder condition", ctx do
+    test "exclude: a point with n unless excluded; a point without n passes" do
       [excluded, kept] = ids(2)
-      filter = filter({:exclude, [excluded]}, folder_hmac: ctx.folder)
+      filter = filter({:exclude, [excluded]})
 
-      assert matches?(filter, point(kept, ctx.out))
-      refute matches?(filter, point(excluded, ctx.in_folder))
-      assert matches?(filter, point(nil, ctx.in_folder))
-      refute matches?(filter, point(nil, ctx.out))
+      assert matches?(filter, point(kept))
+      refute matches?(filter, point(excluded))
+      assert matches?(filter, point(nil))
     end
 
-    test "the tenant holds in both branches", ctx do
+    test "the tenant holds for every point" do
       [hit] = ids(1)
 
       for scope <- [{:ids, [hit]}, {:exclude, [Ecto.UUID.generate()]}] do
-        filter = filter(scope, folder_hmac: ctx.folder)
-        foreign = &Map.put(&1, "u", FilterId.uuid(@other_user))
-        refute matches?(filter, foreign.(point(hit, ctx.in_folder)))
-        refute matches?(filter, foreign.(point(nil, ctx.in_folder)))
+        filter = filter(scope)
+        refute matches?(filter, point(hit, @other_user))
+        refute matches?(filter, point(nil, @other_user))
       end
     end
   end
@@ -172,12 +152,12 @@ defmodule Engram.Vector.QdrantNoteScopeFilterTest do
     body = Qdrant.recommend_body([source], @base ++ [note_scope: {:exclude, [note]}])
 
     assert body.filter.must_not == [%{has_id: [source]}]
-    {n_path, _fallback} = branches(body.filter)
-    assert n_path.must_not == [@empty_n, %{key: "n", match: %{any: [FilterId.uuid(note)]}}]
+
+    n = FilterId.uuid(note)
+    assert %{must_not: [%{key: "n", match: %{any: [^n]}}]} = List.last(body.filter.must)
   end
 
-  test "no :note_scope leaves the filter exactly as before" do
-    opts = @base ++ [folder_hmac: Base.encode64(:crypto.strong_rand_bytes(32))]
-    refute inspect(Qdrant.build_tenant_filter(opts)) =~ ~s(key: "n")
+  test "no :note_scope is the tenant filter alone" do
+    refute inspect(Qdrant.build_tenant_filter(@base)) =~ ~s(key: "n")
   end
 end

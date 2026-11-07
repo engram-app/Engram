@@ -150,11 +150,12 @@ defmodule Engram.QueryBudgetTest do
     #  so concurrent release chunks cannot overwrite each other's snapshot.
     #  The separate tail-ids read is gone (-1, #2306): the fold prunes exactly
     #  the ids its replay applied.
-    #  13-21 rename txn (2 note reads, seq, the destination folder row probe,
-    #  UPDATE, tombstone INSERT).
-    #  22-27 post-commit jobs (one unique, own txn). 28-32 idle-room fanout
-    #  (fresh users row + note read). 33-36 links txn.
-    "POST notes/rename" => 37,
+    #  13-22 rename txn (2 note reads, seq, the destination folder row probe,
+    #  UPDATE, tombstone INSERT, note body).
+    #  23-24 the link-rewrite job insert + its pg_notify. The unique repath
+    #  job (own txn, -4) is gone: R3a, a rename makes no Qdrant write.
+    #  25-29 idle-room fanout (fresh users row + note read). 30-33 links txn.
+    "POST notes/rename" => 33,
     # begin, enter, the note row, seq bump, tombstone, usage_meters, the
     # index-delete job insert + its pg_notify, the release joining the
     # warm-up's pending release job (one UPDATE, no insert), commit. With no

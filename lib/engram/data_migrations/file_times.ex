@@ -30,11 +30,6 @@ defmodule Engram.DataMigrations.FileTimes do
   Only `*_at` columns are written: no trigger fires (every `notes` trigger
   is `UPDATE OF` other columns), `updated_at`/`seq` never move, no fan-out.
 
-  A fixed note with a millisecond double served a different `up`/`cr` before
-  this release, so its points hold a stale payload: its `payload_hash` is
-  NULLed (only those notes) and `ReconcileNotePayloads` is queued for its
-  user, which rewrites only unstamped notes' points.
-
   v2 re-walked for the rounding fix, v3 for exact rounding (`version/0`).
   A pass first asks every cluster node for `FileTime.twin_rounding/0`
   (`Readiness.peers_report/4`, the gate `CompressionGate` uses) and needs
@@ -50,11 +45,9 @@ defmodule Engram.DataMigrations.FileTimes do
   import Ecto.Query
 
   alias Engram.Backfill.IdWindows
-  alias Engram.Backfill.TenantScan
   alias Engram.Cluster.Readiness
   alias Engram.FileTime
   alias Engram.Logger.Metadata
-  alias Engram.Workers.ReconcileNotePayloads
 
   require Logger
 
@@ -183,8 +176,7 @@ defmodule Engram.DataMigrations.FileTimes do
   defp walk(schema, table, pairs, opts) do
     tally = %{
       fixed: :counters.new(1, []),
-      oor: :counters.new(1, []),
-      refresh: :ets.new(:refresh, [:set])
+      oor: :counters.new(1, [])
     }
 
     result =
@@ -205,13 +197,11 @@ defmodule Engram.DataMigrations.FileTimes do
     end
   end
 
-  # One line per table per pass; the payload refresh after every window
-  # committed, so the worker sees the NULLed stamps.
+  # One line per table per pass. No point carries a date since R3a, so a
+  # fixed twin rewrites no payload.
   defp report(table, tally) do
     fixed = :counters.get(tally.fixed, 1)
     oor = :counters.get(tally.oor, 1)
-    users = tally.refresh |> :ets.tab2list() |> Enum.map(&elem(&1, 0))
-    :ets.delete(tally.refresh)
 
     if fixed > 0,
       do:
@@ -226,8 +216,6 @@ defmodule Engram.DataMigrations.FileTimes do
           "file_time_out_of_range",
           Metadata.with_category(:warning, :data, table: table, total_count: oor)
         )
-
-    if users != [], do: TenantScan.enqueue_users(ReconcileNotePayloads, users)
   end
 
   # One window: read the rows' doubles and twins by primary key, compute the
@@ -253,7 +241,6 @@ defmodule Engram.DataMigrations.FileTimes do
       end)
     )
 
-    refresh_ms_payloads(repo, schema, pairs, fixed, tally)
     {length(written), length(written) < length(drift)}
   end
 
@@ -304,35 +291,6 @@ defmodule Engram.DataMigrations.FileTimes do
         reduce: counts,
         do: (counts -> Map.update!(counts, "#{table}.#{d}", &(&1 + 1)))
   end
-
-  defp refresh_ms_payloads(repo, Engram.Notes.Note, pairs, fixed, tally) do
-    # Only rows whose served time moved: a v1 floored twin is within
-    # `FileTime.twin?/2`, so `epoch/2` already sent the double.
-    ms =
-      for {row, _} <- fixed,
-          Enum.any?(pairs, fn {d, at} ->
-            FileTime.ms?(row[d]) and not FileTime.twin?(row[at], row[d])
-          end),
-          do: row
-
-    if ms != [] do
-      ids = Enum.map(ms, & &1.id)
-
-      {_, _} =
-        repo.update_all(
-          from(n in Engram.Notes.Note,
-            where: n.id in ^ids and n.kind == "note" and not is_nil(n.payload_hash)
-          ),
-          set: [payload_hash: nil]
-        )
-
-      :ets.insert(tally.refresh, Enum.map(ms, &{&1.user_id}))
-    end
-
-    :ok
-  end
-
-  defp refresh_ms_payloads(_repo, _schema, _pairs, _fixed, _tally), do: :ok
 
   defp write(_repo, _schema, []), do: []
 

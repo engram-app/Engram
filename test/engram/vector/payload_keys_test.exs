@@ -42,12 +42,10 @@ defmodule Engram.Vector.PayloadKeysTest do
            }
   end
 
-  # `n` is the point's note: identity, not metadata. A payload refresh drops
-  # the known keys its payload omits (`Qdrant.overwrite_payload/3`), so `n`
-  # must never be one of them, or a release that does not write `n` strips
-  # it from every point a newer node stamped.
-  test "n is never a key a payload refresh deletes" do
-    refute "n" in PayloadKeys.note_keys()
+  # R3a: a new collection indexes the identity keys, plus `p` while the note
+  # belts still match pre-`n` points by it.
+  test "the v5 index list is u, v, n and p" do
+    assert Enum.map(PayloadKeys.index_fields(), &elem(&1, 0)) |> Enum.sort() == ~w(n p u v)
   end
 
   test "an unknown logical name raises instead of writing a long key" do

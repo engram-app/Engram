@@ -13,12 +13,8 @@ defmodule Engram.Notes.Enqueue do
       [:engram, :notes, :enqueue, :failed]
         measurements: %{count: 1}   # jobs lost (a failed bulk chunk: its size)
         metadata:     %{worker: "<label>"}
-
-      [:engram, :notes, :enqueue, :lookup_failed]
-        measurements: %{count: n}   # notes that fell back to unfiltered enqueue
-        metadata:     %{worker: "<label>"}
   """
-  alias Engram.{Batch, Jobs}
+  alias Engram.Batch
   alias Engram.Logger.Metadata
 
   require Logger
@@ -74,7 +70,7 @@ defmodule Engram.Notes.Enqueue do
   idempotent. Callers are post-commit only, never inside a transaction.
 
   `Oban.insert_all/1` ignores `unique`: callers that relied on it drop
-  already-pending ids first (`reject_pending/4`).
+  already-pending ids first (`Engram.Jobs.reject_pending/3`).
   """
   @spec enqueue_all([term()], String.t()) :: :ok
   def enqueue_all(changesets, worker_label) when is_binary(worker_label) do
@@ -109,32 +105,6 @@ defmodule Engram.Notes.Enqueue do
       )
 
       :ok
-  end
-
-  @doc """
-  `Engram.Jobs.reject_pending/3` that never raises, for the same post-commit
-  callers as `enqueue_all/2`. If the lookup fails, every id is returned: a
-  duplicate job is harmless, a lost one is not. The failure logs and emits the
-  same telemetry.
-  """
-  @spec reject_pending(module(), [term()], keyword(), String.t()) :: [term()]
-  def reject_pending(worker, ids, opts, worker_label) do
-    lookup = Application.get_env(:engram, :enqueue_reject_pending, &Jobs.reject_pending/3)
-    lookup.(worker, ids, opts)
-  rescue
-    e ->
-      Logger.error(
-        "oban pending lookup failed worker=#{worker_label} reason=#{Metadata.safe_reason(e)}; queueing all",
-        Metadata.with_category(:error, :search, worker: worker_label)
-      )
-
-      :telemetry.execute(
-        [:engram, :notes, :enqueue, :lookup_failed],
-        %{count: length(ids)},
-        %{worker: worker_label}
-      )
-
-      ids
   end
 
   defp format_reason(%Ecto.Changeset{errors: errors}), do: inspect(errors)

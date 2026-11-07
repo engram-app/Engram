@@ -9,6 +9,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
   alias Engram.Crypto
   alias Engram.Crypto.{DekCache, Envelope, UserDekRotation}
 
+  alias Engram.Maintenance.Cursor
+
   alias Engram.Notes.{
     CrdtBridge,
     CrdtIndexDoc,
@@ -57,7 +59,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
   end
 
   # Only legacy-format points hold ciphertext (v5 payloads carry no text,
-  # `Engram.Indexing.PayloadV5`), so the sweep scrolls exactly those, on the
+  # `Engram.Indexing.identity_payload/1`), so the sweep scrolls exactly those, on the
   # legacy `user_id` key. With the v5 format on and legacy filters off (the
   # v3 cluster) there are none and `user_id` has no index, so a scroll there
   # would 400 under strict mode: the sweep makes no Qdrant call (#2198).
@@ -1184,126 +1186,180 @@ defmodule Engram.Crypto.UserDekRotationTest do
   # A number reads back from Postgres as a float.
   defp attr_tuple(a), do: {a.key_id, a.ord, a.h, a.n && a.n / 1, a.d}
 
-  # Every filter key derives from the DEK, so a rotation must rewrite the
-  # HMACs Qdrant filters on, or a type/tag/folder filter built with the new
-  # key silently matches nothing. Nothing re-indexes after a rotation, and it
-  # must not: a re-index would re-embed (the content-hash key rotates too).
-  describe "rotate_user/1 - Qdrant filter keys follow the new key, $0 in Voyage" do
+  # Every filter key derives from the DEK. Since R3a no point carries a
+  # filter HMAC (its payload is `u`, `v`, `n`), so a rotation rewrites no
+  # payload: Postgres holds the filters (`note_attrs`, rewritten in the
+  # rotation) and only the sparse vectors, whose dimensions are filter-key
+  # HMACs of the tokens, need the resparse. Nothing re-embeds.
+  describe "rotate_user/1 - filters follow the new key, $0 in Voyage" do
     setup %{user: user} do
       vault = Engram.Fixtures.insert_vault!(user, "KeysVault")
       content = "---\ntype: Playbook\ntags: [ops]\nstatus: draft\nmood: calm\n---\nbody\n"
 
-      {:ok, note} =
-        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/keys.md", "content" => content},
-          actor: "api"
-        )
+      notes =
+        for path <- ["rot/keys.md", "rot/other.md"] do
+          {:ok, note} =
+            Engram.Notes.upsert_note(user, vault, %{"path" => path, "content" => content},
+              actor: "api"
+            )
 
-      point = Ecto.UUID.generate()
+          Repo.insert!(
+            %Engram.Notes.Chunk{
+              note_id: note.id,
+              user_id: user.id,
+              vault_id: vault.id,
+              position: 0,
+              char_start: 0,
+              char_end: 4,
+              qdrant_point_id: Ecto.UUID.generate()
+            },
+            skip_tenant_check: true
+          )
 
-      Repo.insert!(
-        %Engram.Notes.Chunk{
-          note_id: note.id,
-          user_id: user.id,
-          vault_id: vault.id,
-          position: 0,
-          char_start: 0,
-          char_end: 4,
-          qdrant_point_id: point
-        },
+          note
+        end
+
+      stamp = :crypto.strong_rand_bytes(32)
+
+      # Indexed at their current content and versions, as EmbedNote stamps.
+      Repo.update_all(
+        from(n in Engram.Notes.Note,
+          where: n.user_id == ^user.id,
+          update: [
+            set: [
+              payload_hash: ^stamp,
+              embed_hash: n.content_hash,
+              dense_indexed_hash: n.content_hash,
+              chunker_version: ^Engram.Parsers.Markdown.chunker_version()
+            ]
+          ]
+        ),
+        [],
         skip_tenant_check: true
       )
 
       # No embed, ever: the rotation must not reach the embedder.
       Mox.expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("embed during rotation") end)
 
-      {:ok, note: note, point: point}
-    end
-
-    # `points`: what Qdrant holds for the note, as the payload heal reads it.
-    defp capture_payload_writes(test_pid, points) do
+      # The text sweep's scroll finds no legacy point.
       bypass = Bypass.open()
       Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
 
       Bypass.stub(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:scroll, Jason.decode!(body)})
-
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.send_resp(
           200,
-          Jason.encode!(%{"result" => %{"points" => points, "next_page_offset" => nil}})
+          Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}})
         )
       end)
 
-      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:set, Jason.decode!(body)})
-        Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "completed"}, "status": "ok"}))
-      end)
-
-      # An overwrite is a merge plus a delete of the keys it omits.
-      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/payload/delete", fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:delete_keys, Jason.decode!(body)})
-        Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "completed"}, "status": "ok"}))
-      end)
-
-      bypass
+      {:ok, notes: notes, note: hd(notes), stamp: stamp, bypass: bypass}
     end
 
-    test "a v3 point gets the new type, tag and path HMACs", %{
-      user: user,
-      note: note,
-      point: point
-    } do
-      capture_payload_writes(self(), [
-        %{"id" => point, "payload" => %{"user_id" => user.id, "type_hmac" => "b2xk"}}
-      ])
-
+    # The flip commits the NULL `keyword_version` only (no per-note job inside
+    # its transaction, which would be O(vault)); after the commit it asks the
+    # paced sweep for a fleet version check, whose keyword top-up queues the
+    # resparse, capped by its backlog.
+    test "the flip keeps payload_hash, queues no job per note, and the paced sweep resparses",
+         %{user: user, notes: notes, stamp: stamp, bypass: bypass} do
+      Engram.QdrantStub.stub_healthy(bypass)
       assert :ok = UserDekRotation.rotate_user(user.id)
-      # Not in the rotating process: the flip commits the heal (#2067 delta).
-      refute_received {:set, %{"filter" => %{"should" => [%{"has_id" => [^point]}]}}}
-      assert :ok = perform_job(Engram.Workers.ReconcileNotePayloads, %{"user_id" => user.id})
-      Mox.verify!()
 
-      {:ok, new_fk} = Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))
+      for note <- notes do
+        raw = Engram.Fixtures.raw_note!(note.id)
+        assert raw.payload_hash == stamp
+        assert raw.keyword_version == nil
+      end
 
-      raw =
-        Engram.Fixtures.raw_note!(note.id)
+      refute_enqueued(worker: Engram.Workers.RefreshKeywordVectors)
+      refute_enqueued(worker: Engram.Workers.ReconcileNotePayloads)
+      assert_enqueued(worker: Engram.Workers.ReconcileEmbeddings, args: %{"mode" => "reverify"})
 
-      assert_received {:set,
-                       %{
-                         "filter" => %{"should" => [%{"has_id" => [^point]}]},
-                         "payload" => payload
-                       }}
+      assert :ok = perform_job(Engram.Workers.ReconcileEmbeddings, %{"mode" => "reverify"})
 
-      # Exactly what a type / tag filter built after the rotation sends.
-      assert payload["type_hmac"] == Base.encode64(Crypto.hmac_field(new_fk, "playbook"))
-      assert payload["tags_hmac"] == [Base.encode64(Crypto.hmac_field(new_fk, "ops"))]
-      assert payload["path_hmac"] == Base.encode64(raw.path_hmac)
+      for note <- notes do
+        assert_enqueued(
+          worker: Engram.Workers.RefreshKeywordVectors,
+          args: %{"note_id" => to_string(note.id)}
+        )
+      end
     end
 
-    test "a v5 point is rebuilt under the new key and note_attrs rewritten from the frontmatter",
-         %{user: user, note: note, point: point} do
-      # The point carries `n`, as every point this release writes does.
-      capture_payload_writes(self(), [
-        %{"id" => point, "payload" => %{"u" => "x", "n" => FilterId.uuid(note.id), "y" => "b2xk"}}
-      ])
+    # The resparse request is a row (O(1)), so it commits with the flip: a
+    # node that dies between the commit and the job insert loses nothing,
+    # since any later re-verify reads the pending request.
+    test "the resparse request row commits inside the flip transaction",
+         %{user: user, bypass: bypass} do
+      Engram.QdrantStub.stub_healthy(bypass)
+
+      {:ok = _rotated, queries} =
+        Engram.QueryRecorder.record(fn -> UserDekRotation.rotate_user(user.id) end)
+
+      [flip] =
+        queries
+        |> Engram.QueryRecorder.transactions()
+        |> Enum.filter(fn stmts ->
+          Enum.any?(stmts, &(&1 =~ ~r/UPDATE "users".*encrypted_dek/s))
+        end)
+
+      assert Enum.any?(flip, &(&1 =~ ~r/INSERT INTO "maintenance_cursors"/))
+    end
+
+    # A note inside an embed cooldown at the flip is not swept until the
+    # cooldown ends, so the request must outlive it: cleared only once every
+    # NULLed note could have been covered.
+    test "a note in embed cooldown at the flip is still resparsed after its cooldown",
+         %{user: user, notes: [cooling | rest], bypass: bypass} do
+      Engram.QdrantStub.stub_healthy(bypass)
+      until = DateTime.add(DateTime.utc_now(), 3600, :second)
+      set_retry_after!(cooling, until)
 
       assert :ok = UserDekRotation.rotate_user(user.id)
-      refute_received {:set, _}
-      assert :ok = perform_job(Engram.Workers.ReconcileNotePayloads, %{"user_id" => user.id})
-      Mox.verify!()
+      assert :ok = perform_job(Engram.Workers.ReconcileEmbeddings, %{"mode" => "reverify"})
 
+      for note <- rest,
+          do:
+            assert_enqueued(
+              worker: Engram.Workers.RefreshKeywordVectors,
+              args: %{"note_id" => to_string(note.id)}
+            )
+
+      refute_enqueued(
+        worker: Engram.Workers.RefreshKeywordVectors,
+        args: %{"note_id" => to_string(cooling.id)}
+      )
+
+      # Still requested: the run swept everything it could and did not clear it.
+      assert %{} = Cursor.get("reconcile:version_check")
+
+      # The cooldown ends (moved, not waited for).
+      past = DateTime.add(DateTime.utc_now(), -1, :second)
+      set_retry_after!(cooling, past)
+
+      Cursor.put(
+        "reconcile:version_check",
+        Map.put(Cursor.get("reconcile:version_check"), "not_before", DateTime.to_iso8601(past))
+      )
+
+      assert :ok = perform_job(Engram.Workers.ReconcileEmbeddings, %{})
+
+      assert_enqueued(
+        worker: Engram.Workers.RefreshKeywordVectors,
+        args: %{"note_id" => to_string(cooling.id)}
+      )
+
+      assert Cursor.get("reconcile:version_check") == nil
+    end
+
+    defp set_retry_after!(note, at) do
+      from(n in Engram.Notes.Note, where: n.id == ^note.id)
+      |> Repo.update_all([set: [embed_retry_after: at]], skip_tenant_check: true)
+    end
+
+    test "note_attrs are rewritten under the new key", %{user: user, note: note} do
+      assert :ok = UserDekRotation.rotate_user(user.id)
       {:ok, new_fk} = Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))
-
-      assert_received {:set,
-                       %{"filter" => %{"should" => [%{"has_id" => [^point]}]}, "payload" => p}}
-
-      assert_received {:delete_keys, %{"filter" => %{"should" => [%{"has_id" => [^point]}]}}}
-      assert p["y"] == FilterId.from_hmac(Crypto.hmac_field(new_fk, "playbook"))
-      assert p["s"] == FilterId.attr_value(new_fk, "draft")
 
       [mood] =
         Repo.all(from(k in FrontmatterKey, where: k.user_id == ^user.id),
@@ -1311,8 +1367,6 @@ defmodule Engram.Crypto.UserDekRotationTest do
         )
 
       assert mood.key_hmac == FilterId.key_hmac(new_fk, "mood")
-      assert p["fa"] == [%{"k" => mood.key_id, "h" => FilterId.attr_value(new_fk, "calm")}]
-
       rows = Repo.all(from(a in NoteAttr, where: a.note_id == ^note.id), skip_tenant_check: true)
       assert Enum.find(rows, &(&1.key_id == mood.key_id)).h == FilterId.value_hmac(new_fk, "calm")
 

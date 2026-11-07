@@ -109,68 +109,6 @@ defmodule Engram.Vector.QdrantTest do
     end
   end
 
-  describe "set_payload/3" do
-    test "patches payload onto specific point ids without re-upserting vectors", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/payload", fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        decoded = Jason.decode!(body)
-
-        # A has_id filter, not a `points` list: a missing id must not 404.
-        assert decoded["filter"] == %{"should" => [%{"has_id" => ["uuid-1", "uuid-2"]}]}
-        refute Map.has_key?(decoded, "points")
-        assert decoded["payload"]["path_hmac"] == "AAAA"
-        assert decoded["payload"]["folder_hmac"] == "BBBB"
-        assert decoded["payload"]["tags_hmac"] == ["TTTT"]
-        # Vectors must NOT be sent — set_payload is a payload-only PATCH.
-        refute Map.has_key?(decoded, "vectors")
-
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result": {"status": "acknowledged"}}))
-      end)
-
-      payload = %{path_hmac: "AAAA", folder_hmac: "BBBB", tags_hmac: ["TTTT"]}
-      assert :ok = Qdrant.set_payload("test_col", ["uuid-1", "uuid-2"], payload)
-    end
-
-    test "splits a long id list into has_id conditions of max_ids each", %{bypass: bypass} do
-      ids = for i <- 1..(Qdrant.max_ids() + 1), do: "uuid-#{i}"
-
-      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/payload", fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        %{"filter" => %{"should" => conds}} = Jason.decode!(body)
-
-        assert Enum.map(conds, &length(&1["has_id"])) == [Qdrant.max_ids(), 1]
-        assert Enum.flat_map(conds, & &1["has_id"]) == ids
-
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result": {"status": "acknowledged"}}))
-      end)
-
-      assert :ok = Qdrant.set_payload("test_col", ids, %{path_hmac: "x"})
-    end
-
-    test "returns :ok on empty point list without HTTP call", %{bypass: bypass} do
-      # No Bypass.expect — any call would fail the test
-      Bypass.stub(bypass, "POST", "/collections/test_col/points/payload", fn _ ->
-        flunk("set_payload must not call Qdrant for empty point list")
-      end)
-
-      assert :ok = Qdrant.set_payload("test_col", [], %{path_hmac: "x"})
-    end
-
-    test "returns error on non-200 response", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/payload", fn conn ->
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(400, ~s({"status":{"error":"bad request"}}))
-      end)
-
-      assert {:error, {400, _}} = Qdrant.set_payload("test_col", ["uuid-1"], %{path_hmac: "x"})
-    end
-  end
-
   describe "delete_payload_keys/2 (#590 backfill)" do
     test "posts a key-delete over a match-all filter", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/payload/delete", fn conn ->
@@ -284,7 +222,7 @@ defmodule Engram.Vector.QdrantTest do
     end
   end
 
-  describe "delete_by_note/4" do
+  describe "delete_by_note/5" do
     test "posts filter delete keyed on path_hmac (T3.2)", %{bypass: bypass} do
       # T3.2 — Qdrant filter keys off `path_hmac` (HMAC base64) instead of
       # plaintext `source_path`. Plaintext path in `oban_jobs.args` would
@@ -305,7 +243,14 @@ defmodule Engram.Vector.QdrantTest do
         |> Plug.Conn.send_resp(200, ~s({"result": {"status": "ok"}}))
       end)
 
-      assert :ok = Qdrant.delete_by_note("test_col", "user-1", "vault-1", "stub-hmac-base64")
+      assert :ok =
+               Qdrant.delete_by_note(
+                 "test_col",
+                 "user-1",
+                 "vault-1",
+                 "33333333-3333-3333-3333-333333333333",
+                 "stub-hmac-base64"
+               )
     end
   end
 
@@ -325,14 +270,21 @@ defmodule Engram.Vector.QdrantTest do
       assert :ok = Qdrant.delete_points("test_col", [Ecto.UUID.generate()])
     end
 
-    test "delete_by_note/4 treats 404 as nothing to delete", %{bypass: bypass} do
+    test "delete_by_note/5 treats 404 as nothing to delete", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.send_resp(404, ~s({"status":{"error":"Collection not found"}}))
       end)
 
-      assert :ok = Qdrant.delete_by_note("test_col", "user-1", "vault-1", "stub-hmac-base64")
+      assert :ok =
+               Qdrant.delete_by_note(
+                 "test_col",
+                 "user-1",
+                 "vault-1",
+                 "33333333-3333-3333-3333-333333333333",
+                 "stub-hmac-base64"
+               )
     end
 
     test "a 500 is still an error", %{bypass: bypass} do
@@ -346,7 +298,7 @@ defmodule Engram.Vector.QdrantTest do
     end
   end
 
-  describe "count_by_note/4" do
+  describe "count_by_note/5" do
     test "returns the exact point count for the filter", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -365,7 +317,14 @@ defmodule Engram.Vector.QdrantTest do
         |> Plug.Conn.send_resp(200, ~s({"result": {"count": 3}}))
       end)
 
-      assert {:ok, 3} = Qdrant.count_by_note("engram_notes", "7", "9", "oldp==")
+      assert {:ok, 3} =
+               Qdrant.count_by_note(
+                 "engram_notes",
+                 "7",
+                 "9",
+                 "33333333-3333-3333-3333-333333333333",
+                 "oldp=="
+               )
     end
 
     test "returns {:error, _} on non-200", %{bypass: bypass} do
@@ -373,7 +332,62 @@ defmodule Engram.Vector.QdrantTest do
         Plug.Conn.send_resp(conn, 503, ~s({"status":"error"}))
       end)
 
-      assert {:error, {503, _}} = Qdrant.count_by_note("engram_notes", "7", "9", "oldp==")
+      assert {:error, {503, _}} =
+               Qdrant.count_by_note(
+                 "engram_notes",
+                 "7",
+                 "9",
+                 "33333333-3333-3333-3333-333333333333",
+                 "oldp=="
+               )
+    end
+  end
+
+  describe "per-note filters' n probe" do
+    # A failed probe is not a "no": cached, it would keep the per-note
+    # filters path-only for a minute and miss R3a points (no `p`).
+    test "a failed n-index check is not cached; the next call uses the n arm", %{
+      bypass: bypass
+    } do
+      ServiceConfig.put_override(:qdrant_note_id_filter, true)
+      col = "n_probe_#{System.unique_integer([:positive])}"
+      note_id = "33333333-3333-3333-3333-333333333333"
+      {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+      Bypass.stub(bypass, "GET", "/collections/#{col}", fn conn ->
+        case Agent.get_and_update(calls, &{&1, &1 + 1}) do
+          0 ->
+            Plug.Conn.send_resp(conn, 500, ~s({"status":{"error":"boom"}}))
+
+          _ ->
+            info = %{"status" => "green", "payload_schema" => %{"n" => %{"data_type" => "uuid"}}}
+
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(200, Jason.encode!(%{result: info, status: "ok"}))
+        end
+      end)
+
+      test_pid = self()
+
+      Bypass.stub(bypass, "POST", "/collections/#{col}/points/count", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:count_filter, Jason.decode!(body)["filter"]})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": {"count": 0}}))
+      end)
+
+      by_id = %{"key" => "n", "match" => %{"value" => Engram.Vector.FilterId.uuid(note_id)}}
+
+      assert {:ok, 0} = Qdrant.count_by_note(col, "7", "9", note_id, "oldp==")
+      assert_received {:count_filter, first}
+      refute inspect(first) =~ inspect(by_id)
+
+      assert {:ok, 0} = Qdrant.count_by_note(col, "7", "9", note_id, "oldp==")
+      assert_received {:count_filter, %{"must" => must}}
+      assert Enum.any?(must, &match?(%{"should" => [^by_id, _]}, &1))
     end
   end
 
@@ -463,56 +477,6 @@ defmodule Engram.Vector.QdrantTest do
 
       assert {:ok, [%{score: 1, vector: [0.25, 0, -1.5]}]} =
                Qdrant.search("test_col", List.duplicate(0.1, 4), user_id: "1", limit: 5)
-    end
-
-    test "translates :folder_hmac opt to folder_hmac filter key (Phase B.2.3)",
-         %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        decoded = Jason.decode!(body)
-        conditions = legacy_view(decoded["filter"]["must"])
-
-        cond = Enum.find(conditions, &(&1["key"] == "folder_hmac"))
-        assert cond, "expected a folder_hmac filter, got #{inspect(conditions)}"
-        assert cond["match"]["value"] == "FOLDER-HMAC-B64"
-
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => []}))
-      end)
-
-      vector = List.duplicate(0.1, 1024)
-
-      assert {:ok, []} =
-               Qdrant.search("test_col", vector,
-                 user_id: "1",
-                 folder_hmac: "FOLDER-HMAC-B64"
-               )
-    end
-
-    test "translates :tags_hmac opt to tags_hmac filter with match.any (Phase B.2.3)",
-         %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        decoded = Jason.decode!(body)
-        conditions = legacy_view(decoded["filter"]["must"])
-
-        cond = Enum.find(conditions, &(&1["key"] == "tags_hmac"))
-        assert cond, "expected a tags_hmac filter, got #{inspect(conditions)}"
-        assert Enum.sort(cond["match"]["any"]) == Enum.sort(["HASH-A", "HASH-B"])
-
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => []}))
-      end)
-
-      vector = List.duplicate(0.1, 1024)
-
-      assert {:ok, []} =
-               Qdrant.search("test_col", vector,
-                 user_id: "1",
-                 tags_hmac: ["HASH-A", "HASH-B"]
-               )
     end
 
     test "includes binary quantization rescore params", %{bypass: bypass} do
@@ -925,71 +889,6 @@ defmodule Engram.Vector.QdrantTest do
       assert {:ok, [result]} = Qdrant.search("test_col", vector, user_id: "1", limit: 5)
       # nil values are stripped by Enum.reject in do_search, so :vector absent
       refute Map.has_key?(result, :vector)
-    end
-  end
-
-  describe "set_payload_by_filter/5" do
-    test "PATCHes payload on points matching the user/vault/path_hmac filter", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        decoded = Jason.decode!(body)
-
-        assert decoded["payload"] == %{"path_hmac" => "newp==", "folder_hmac" => "newf=="}
-
-        must = legacy_view(decoded["filter"]["must"])
-        assert %{"key" => "user_id", "match" => %{"value" => "7"}} in must
-        assert %{"key" => "vault_id", "match" => %{"value" => "9"}} in must
-        assert %{"key" => "path_hmac", "match" => %{"value" => "oldp=="}} in must
-        # No explicit point-id list — this is a filter-scoped patch.
-        refute Map.has_key?(decoded, "points")
-
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result": true}))
-      end)
-
-      assert :ok =
-               Qdrant.set_payload_by_filter("engram_notes", "7", "9", "oldp==", %{
-                 "path_hmac" => "newp==",
-                 "folder_hmac" => "newf=="
-               })
-    end
-
-    test "returns {:error, {status, body}} on non-200", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(500, ~s({"status":"error"}))
-      end)
-
-      assert {:error, {500, _}} =
-               Qdrant.set_payload_by_filter("engram_notes", "7", "9", "oldp==", %{
-                 "path_hmac" => "x"
-               })
-    end
-
-    # Tenant-isolation guard (#746): even if two users' folded path_hmacs
-    # collide, the filter is scoped by the caller's user_id + vault_id, so a
-    # PATCH for user 7 can never touch user 8's points. The typed required
-    # args make a path_hmac-only filter impossible to express.
-    test "scopes the PATCH to the caller's user_id/vault_id (no cross-tenant)", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        must = legacy_view(Jason.decode!(body)["filter"]["must"])
-
-        assert %{"key" => "user_id", "match" => %{"value" => "7"}} in must
-        assert %{"key" => "vault_id", "match" => %{"value" => "9"}} in must
-        # Crucially NOT user 8 — the colliding tenant.
-        refute %{"key" => "user_id", "match" => %{"value" => "8"}} in must
-
-        Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
-      end)
-
-      # Same colliding path_hmac "collide==" as a hypothetical user 8 — still scoped to 7/9.
-      assert :ok =
-               Qdrant.set_payload_by_filter("engram_notes", "7", "9", "collide==", %{
-                 "path_hmac" => "x"
-               })
     end
   end
 

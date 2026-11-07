@@ -200,6 +200,26 @@ defmodule Engram.DataMigrations do
     :ok
   end
 
+  @doc """
+  `hold_clock/1` for every OPEN row no migration in `names` owns (an
+  `index_versions:*` key a deploy left behind, #2494): reviving one later
+  must not page "stuck" for the span nobody ran it. Returns how many.
+  """
+  @spec hold_orphans([String.t()]) :: non_neg_integer()
+  def hold_orphans(names) do
+    now = DateTime.utc_now()
+
+    {count, _} =
+      Repo.update_all(
+        from(e in Entry,
+          where: e.name not in ^names and is_nil(e.completed_at) and not is_nil(e.opened_at)
+        ),
+        set: [opened_at: now, alerted_at: nil, updated_at: now]
+      )
+
+    count
+  end
+
   @spec mark_alerted(String.t()) :: :ok
   def mark_alerted(name) do
     now = DateTime.utc_now()

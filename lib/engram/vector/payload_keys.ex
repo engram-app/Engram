@@ -37,49 +37,15 @@ defmodule Engram.Vector.PayloadKeys do
   @short Map.new(@keys)
   @long Map.new(@keys, fn {l, s} -> {s, l} end)
 
-  @range %{"type" => "integer", "lookup" => false, "range" => true, "on_disk" => true}
   @uuid %{"type" => "uuid", "on_disk" => true}
-  @float %{"type" => "float", "on_disk" => true}
-  @keyword %{"type" => "keyword", "on_disk" => true}
-  @key_id %{"type" => "integer", "lookup" => true, "range" => false, "on_disk" => true}
-
-  # Everything a v3/v4 point's payload carries (`Indexing`'s legacy
-  # `note_payload/1` plus `Crypto.encrypt_qdrant_payload/4`'s per-chunk text,
-  # title, heading, nonces and AAD version, and `chunk_index`). A reused
-  # v3/v4 point can still hold them, and the v5 refresh must drop them all.
-  @legacy ~w(user_id vault_id path_hmac folder_hmac tags_hmac type_hmac fm_timestamp fm_created
-             text title heading_path text_nonce title_nonce heading_path_nonce aad_version
-             chunk_index)
 
   # #590: plaintext note metadata that points written before the fix carry.
-  # The one list: `Qdrant.delete_leaked_plaintext_keys/1` and `note_keys/0`.
+  # The one list: `Qdrant.delete_leaked_plaintext_keys/1`.
   @leaked_plaintext ~w(source_path folder tags)
 
   @doc "Keys that leaked plaintext into pre-#590 payloads."
   @spec leaked_plaintext_keys() :: [String.t()]
   def leaked_plaintext_keys, do: @leaked_plaintext
-
-  # What a point IS, not what its note says: the tenant and the note. They
-  # never change for a point (its id is derived from the note), so no
-  # refresh compares or deletes them. Load-bearing for `n`: a release that
-  # does not write it must never strip it from points a newer one stamped.
-  @identity [:user_id, :vault_id, :note]
-
-  @doc """
-  The v5 short keys a payload refresh compares and drops when its payload
-  omits them: every v5 key but the identity keys (`u`, `v`, `n`). The one
-  list `note_keys/0` and `Engram.Workers.ReconcileNotePayloads` derive from.
-  """
-  @spec refresh_keys() :: [String.t()]
-  def refresh_keys, do: for({name, short} <- @keys, name not in @identity, do: short)
-
-  @doc """
-  Every payload key a refresh may delete: the v5 `refresh_keys/0` plus the
-  legacy long ones. What a payload refresh drops when the new payload omits
-  it (`Engram.Vector.Qdrant.overwrite_payload/3`).
-  """
-  @spec note_keys() :: [String.t()]
-  def note_keys, do: refresh_keys() ++ @legacy ++ @leaked_plaintext ++ ["note_id"]
 
   @doc "Logical names, in declaration order."
   @spec logical_names() :: [atom()]
@@ -98,30 +64,13 @@ defmodule Engram.Vector.PayloadKeys do
   def decode(payload), do: Map.new(payload, fn {k, v} -> {long(to_string(k)) || k, v} end)
 
   @doc """
-  The v5 payload indexes as `{field, schema}`. All on disk, so the heap cost is
-  near zero. On
-  Qdrant >= 1.19.2 `QdrantLayout.payload_indexes/2` adds `is_tenant` to `u`
-  and `enable_hnsw: false` to the rest (Task 8.1). The source flags are
-  payload only.
+  The v5 payload indexes as `{field, schema}`: the identity keys `u`, `v`,
+  `n` (R3a: a point's whole payload) plus `p`, which the note belts
+  (`Qdrant.note_filter/3`) still match points written before `n` by. All on
+  disk. On Qdrant >= 1.19.2 `QdrantLayout.payload_indexes/2` adds `is_tenant`
+  to `u` and `enable_hnsw: false` to the rest. The other v5 keys are no longer
+  indexed on a new collection; an existing index is left alone.
   """
   @spec index_fields() :: [{String.t(), map()}]
-  def index_fields do
-    uuid = ~w(user_id vault_id path_id folder_id type_id tags_id status_id author_id
-              rev_by_id src_id proj_id note)a
-
-    range = ~w(fm_timestamp fm_created fm_reviewed fm_expires fm_due)a
-
-    Enum.map(uuid, &{short(&1), @uuid}) ++
-      Enum.map(range, &{short(&1), @range}) ++
-      [
-        {short(:fm_priority), @float},
-        # User-added keys, one nested entry per value: `k` the per-user key
-        # id (`FrontmatterKeys`, exact lookups only), and one of `h` (an
-        # exact value's filter id), `n` (number) or `d` (unix seconds).
-        {short(:fm_attrs) <> "[].k", @key_id},
-        {short(:fm_attrs) <> "[].h", @keyword},
-        {short(:fm_attrs) <> "[].n", @float},
-        {short(:fm_attrs) <> "[].d", @range}
-      ]
-  end
+  def index_fields, do: Enum.map(~w(user_id vault_id note path_id)a, &{short(&1), @uuid})
 end

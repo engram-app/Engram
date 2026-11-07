@@ -62,18 +62,47 @@ defmodule Engram.Vector.Qdrant do
 
   @doc """
   Whether the collection has its `n` payload index (immutable chunk index,
-  Engram#2263). Strict mode answers 400 to a filter on an unindexed key, and
-  the index is created by the first index pass per node
-  (`ensure_collection/2`), so a reader checks before it filters on `n`.
-  Unreadable counts as no. Callers cache it (`Engram.Search`).
+  Engram#2263), cached per node for a minute. Strict mode answers 400 to a
+  filter on an unindexed key, and the index is created by the first index
+  pass per node (`ensure_collection/2`, which then marks it here), so a
+  reader checks before it filters on `n`: a filtered search, and the
+  per-note deletes and counts. Each pays at most one collection-info read a
+  minute per collection.
+
+  A failed read answers no but is not cached: a cached "no" would keep the
+  per-note filters path-only for a minute, missing every point with no `p`.
   """
-  @spec n_indexed?() :: boolean()
-  def n_indexed? do
-    case collection_info(collection(), :search) do
-      {:ok, %{"payload_schema" => %{} = schema}} -> is_map_key(schema, PayloadKeys.short(:note))
-      _ -> false
+  @spec n_filterable?(String.t() | nil) :: boolean()
+  def n_filterable?(col \\ nil) do
+    col = col || collection()
+
+    Engram.Cache.fetch(:note_id_filter, n_index_key(col), fn ->
+      case n_index(col) do
+        :present -> true
+        :missing -> false
+        :unknown -> Engram.Cache.no_store(false)
+      end
+    end)
+  end
+
+  @doc """
+  The `n` index probe behind `n_filterable?/1`, uncached, telling an
+  unreadable schema (`:unknown`: the read failed, or the answer holds no
+  `payload_schema`) apart from an absent index (`:missing`). For
+  `NotePayloadStamps`' done, which must never close on a guess.
+  """
+  @spec n_index(String.t() | nil) :: :present | :missing | :unknown
+  def n_index(col \\ nil) do
+    case collection_info(col || collection(), :search) do
+      {:ok, %{"payload_schema" => %{} = schema}} ->
+        if is_map_key(schema, PayloadKeys.short(:note)), do: :present, else: :missing
+
+      _ ->
+        :unknown
     end
   end
+
+  defp n_index_key(col), do: {:n_index, base_url(), col}
 
   @doc "Largest point batch one upsert or vector update sends."
   def max_write_batch, do: @max_write_batch
@@ -338,8 +367,15 @@ defmodule Engram.Vector.Qdrant do
   # Storage/safety params are best-effort: a failed reconcile is logged and
   # retried next boot, never a reason to stop indexing. Only the payload
   # indexes above gate `:verified`, because strict mode 400s without them.
+  # Every payload index exists now, `n` included: say so to `n_filterable?/1`,
+  # replacing a cached "no" from before the index was built (a reader that ran
+  # first after boot), so the per-note filters use the `n` arm at once.
+  # Behind the memo switch for the memo's reason: the key is the base URL, a
+  # recycled Bypass port under test, so the marker would leak into unrelated
+  # tests (and turn on a search's `n` scope against a fake with no `n`).
   defp reconciled(col) do
     _ = reconcile_config(col)
+    if memo_enabled?(), do: Engram.Cache.put(:note_id_filter, n_index_key(col), true)
     {:ok, :verified}
   end
 
@@ -1143,83 +1179,7 @@ defmodule Engram.Vector.Qdrant do
     end)
   end
 
-  @doc """
-  Patch (overwrite-or-add) the given payload keys on the listed point ids.
-  Vectors are untouched — this is the cost-free path for re-shaping payloads
-  without re-running the embedder. Empty `point_ids` is a no-op.
-
-  Ids that name no point are skipped, not an error: the ids come from
-  `chunks` rows, and an orphaned row must not fail a rotation or a refresh.
-  A `points` list answers 404 for a missing id; a `has_id` filter does not.
-  """
-  def set_payload(col \\ nil, point_ids, payload),
-    do: set_payload(col, point_ids, payload, [])
-
-  @doc """
-  `set_payload/3` with `caller:` (one of `payload_callers/0`), the
-  `payload_write` telemetry tag that says which code path wrote.
-  """
-  def set_payload(_col, [], _payload, _opts), do: :ok
-
-  def set_payload(col, point_ids, payload, opts)
-      when is_list(point_ids) and is_map(payload) and is_list(opts) do
-    col = col || collection()
-    req = write_opts(%{filter: ids_filter(point_ids), payload: payload})
-    payload_write(:set_payload, length(point_ids), payload, opts)
-
-    instrument(:set_payload, fn ->
-      case Req.post("#{base_url()}/collections/#{col}/points/payload", req) do
-        {:ok, %{status: 200, body: body}} -> applied(body)
-        {:ok, %{status: status, body: body}} -> write_error(status, body)
-        {:error, reason} -> {:error, reason}
-      end
-    end)
-  end
-
-  @doc """
-  Make the listed points carry exactly `payload` for every known key
-  (`PayloadKeys.note_keys/0`): merge `payload` (`set_payload/3`), then delete
-  the known keys it omits. The v5 refresh path: a v5 payload omits absent and
-  default keys, so a bare merge would leave a removed key on the point.
-
-  Not `PUT /points/payload`: that call went from ~10 ms to ~3 s p95 in prod
-  while the POST routes stayed ~12 ms, so the same end state is reached with
-  the two fast ones. Empty `point_ids` is a no-op; missing ids are skipped.
-  """
-  def overwrite_payload(col \\ nil, point_ids, payload),
-    do: overwrite_payload(col, point_ids, payload, [])
-
-  @doc "`overwrite_payload/3` with `caller:` (see `set_payload/4`)."
-  def overwrite_payload(_col, [], _payload, _opts), do: :ok
-
-  def overwrite_payload(col, point_ids, payload, opts)
-      when is_list(point_ids) and is_map(payload) and is_list(opts) do
-    col = col || collection()
-    stale = PayloadKeys.note_keys() -- Enum.map(Map.keys(payload), &to_string/1)
-
-    with :ok <- set_payload(col, point_ids, payload, opts) do
-      delete_payload_keys_on(col, point_ids, stale, opts)
-    end
-  end
-
-  # Delete `keys` from the listed points only (`delete_payload_keys/2` hits
-  # every point). Missing ids are skipped, as in `set_payload/3`.
-  defp delete_payload_keys_on(_col, _point_ids, [], _opts), do: :ok
-
-  defp delete_payload_keys_on(col, point_ids, keys, opts) do
-    req = write_opts(%{keys: keys, filter: ids_filter(point_ids)})
-    payload_write(:delete_payload, length(point_ids), keys, opts)
-
-    instrument(:delete_payload, fn ->
-      case Req.post("#{base_url()}/collections/#{col}/points/payload/delete", req) do
-        {:ok, %{status: 200, body: body}} -> applied(body)
-        {:ok, %{status: status, body: body}} -> write_error(status, body)
-        {:error, reason} -> {:error, reason}
-      end
-    end)
-  end
-
-  @payload_callers [:refresh, :reconcile, :repath, :dek_rotation, :other]
+  @payload_callers [:reconcile, :dek_rotation, :other]
 
   @doc "The values of the `caller` tag on `[:engram, :qdrant, :payload_write]`."
   def payload_callers, do: @payload_callers
@@ -1241,7 +1201,7 @@ defmodule Engram.Vector.Qdrant do
 
   @doc """
   A different payload per point (`[{id, payload}]`), merged like
-  `set_payload/3`, in two requests whatever the count: one `/points/batch`
+  a merge (keys it omits stay), in two requests whatever the count: one `/points/batch`
   of set_payload ops without `wait`, then one waited barrier. Qdrant runs a
   batch's ops one by one with the request's `wait` (`do_batch_update_points`),
   so a waited batch still pays a WAL flush per op. The barrier, a delete of a
@@ -1363,89 +1323,6 @@ defmodule Engram.Vector.Qdrant do
     end
   end
 
-  @doc """
-  Patch (overwrite-or-add) payload keys on EVERY point matching the
-  `{user_id, vault_id, path_hmac}` filter — vectors untouched. The cost-free
-  way to re-path a note's points after a rename without re-running the
-  embedder (#746). Triple-scope is mandatory: filtering on `path_hmac` alone
-  could cross tenants if two users' folded HMACs collide.
-  """
-  #
-  # `payload` uses the legacy string keys (`"path_hmac"`, `"folder_hmac"`,
-  # base64). Each
-  # format gets its own keys, so a v3 point never gains `p` and a v5 point never
-  # gains a 44-byte `path_hmac`: one PATCH on the legacy points (while
-  # `:legacy_filter_fields` is on) and one on the v5 points. A nil value on a v5
-  # point deletes the key (no nulls in a v5 payload).
-  def set_payload_by_filter(col \\ nil, user_id, vault_id, path_hmac, payload)
-      when is_map(payload) do
-    col = col || collection()
-    # The filter's id count is unknown, so 0.
-    payload_write(:set_payload, 0, payload, caller: :repath)
-
-    legacy =
-      if legacy_filter_fields?(),
-        do: [{legacy_note_filter(user_id, vault_id, path_hmac), payload, []}],
-        else: []
-
-    v5 =
-      case hmac_id(path_hmac) do
-        nil ->
-          []
-
-        old_id ->
-          {set, unset} = v5_repath_payload(payload)
-          filter = %{must: v5_conditions(user_id, vault_id) ++ [v5_eq(:path_id, old_id)]}
-          [{filter, set, unset}]
-      end
-
-    Enum.reduce_while(legacy ++ v5, :ok, fn {filter, set, unset}, :ok ->
-      # Delete first: the set rewrites `p`, after which the old-path filter
-      # matches nothing.
-      with :ok <- delete_payload_keys(col, filter, unset),
-           :ok <- post_payload(col, filter, set) do
-        {:cont, :ok}
-      else
-        err -> {:halt, err}
-      end
-    end)
-  end
-
-  defp v5_repath_payload(payload) do
-    pairs =
-      for {legacy, short} <- [{"path_hmac", :path_id}, {"folder_hmac", :folder_id}],
-          Map.has_key?(payload, legacy),
-          do: {PayloadKeys.short(short), hmac_id(payload[legacy])}
-
-    {for({k, v} <- pairs, v != nil, into: %{}, do: {k, v}), for({k, nil} <- pairs, do: k)}
-  end
-
-  defp delete_payload_keys(_col, _filter, []), do: :ok
-
-  defp delete_payload_keys(col, filter, keys) do
-    opts = write_opts(%{filter: filter, keys: keys})
-
-    instrument(:set_payload, fn ->
-      case Req.post("#{base_url()}/collections/#{col}/points/payload/delete", opts) do
-        {:ok, %{status: 200, body: body}} -> applied(body)
-        {:ok, %{status: status, body: body}} -> write_error(status, body)
-        {:error, reason} -> {:error, reason}
-      end
-    end)
-  end
-
-  defp post_payload(col, filter, payload) do
-    opts = write_opts(%{filter: filter, payload: payload})
-
-    instrument(:set_payload, fn ->
-      case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
-        {:ok, %{status: 200, body: body}} -> applied(body)
-        {:ok, %{status: status, body: body}} -> write_error(status, body)
-        {:error, reason} -> {:error, reason}
-      end
-    end)
-  end
-
   # #590: note-metadata fields that leaked as plaintext into payloads written
   # before the fix. Canonical list — the mix task and prod rpc both go through
   # delete_leaked_plaintext_keys/1 so this never drifts.
@@ -1469,6 +1346,10 @@ defmodule Engram.Vector.Qdrant do
   untouched — the cost-free way to strip leaked plaintext
   (`source_path`/`folder`/`tags`) from points written before the fix.
   Empty `keys` is a no-op.
+
+  Kept on purpose after R3a stopped every per-edit payload write: an
+  operator tool for one-off strips (`strip_qdrant_plaintext`), never on an
+  edit path.
   """
   def delete_payload_keys(col \\ nil, keys)
   def delete_payload_keys(_col, []), do: :ok
@@ -1491,8 +1372,9 @@ defmodule Engram.Vector.Qdrant do
 
   The identity-safe delete: point ids come from `chunks.qdrant_point_id`, so
   this reaches a note's points no matter what its `path_hmac` has since become.
-  `delete_by_note/4` cannot — a rename retags the note row while the points keep
-  the old hmac, and the filter then matches nothing. Callers use both.
+  `delete_by_note/5` cannot for a point with no `n`: a rename retags the note
+  row while the points keep the old hmac, and the path arm then matches
+  nothing. Callers use both.
   """
   def delete_points(col \\ nil, point_ids)
   def delete_points(_col, []), do: :ok
@@ -1516,22 +1398,23 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
-  Delete all points for a given user+vault+path-hmac combination.
+  Delete all points of one note in a user+vault: the ones carrying its id
+  `n`, and the ones with no `n` under `path_hmac` (see `note_filter/5`).
 
   T3.2 — `path_hmac` is the base64-encoded HMAC of the note path under the
   user's filter key. Qdrant payloads carry `path_hmac` as a plaintext-safe
   filter key alongside the encrypted `source_path` (Phase B.2.4).
   """
-  def delete_by_note(col \\ nil, user_id, vault_id, path_hmac),
-    do: delete_by_note_except(col, user_id, vault_id, path_hmac, [])
+  def delete_by_note(col \\ nil, user_id, vault_id, note_id, path_hmac),
+    do: delete_by_note_except(col, user_id, vault_id, note_id, path_hmac, [])
 
   @doc """
-  `delete_by_note/4`, keeping the points in `keep_ids`.
+  `delete_by_note/5`, keeping the points in `keep_ids`.
   """
-  def delete_by_note_except(col, user_id, vault_id, path_hmac, keep_ids) do
+  def delete_by_note_except(col, user_id, vault_id, note_id, path_hmac, keep_ids) do
     col = col || collection()
 
-    filter = note_filter(user_id, vault_id, path_hmac)
+    filter = note_filter(col, user_id, vault_id, note_id, path_hmac)
 
     filter =
       if keep_ids == [], do: filter, else: Map.put(filter, :must_not, [%{has_id: keep_ids}])
@@ -1550,12 +1433,14 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
-  Exact count of points matching `{user_id, vault_id, path_hmac}`. Used by the
-  repath worker (#746) to confirm points exist before/after a payload PATCH and
-  to detect an embedded note whose points went missing.
+  Exact count of one note's points, matched as `delete_by_note/5` does. Used
+  by the repath worker (#746) to confirm points exist before/after a payload
+  PATCH and to detect an embedded note whose points went missing.
   """
-  def count_by_note(col \\ nil, user_id, vault_id, path_hmac),
-    do: count(col, note_filter(user_id, vault_id, path_hmac))
+  def count_by_note(col \\ nil, user_id, vault_id, note_id, path_hmac) do
+    col = col || collection()
+    count(col, note_filter(col, user_id, vault_id, note_id, path_hmac))
+  end
 
   @doc "Exact count of the points matching `filter` (`{:ok, n}`)."
   @spec count(String.t() | nil, map()) :: {:ok, non_neg_integer()} | {:error, term()}
@@ -1736,40 +1621,27 @@ defmodule Engram.Vector.Qdrant do
   #
   # A collection that predates the v5 layout holds v3/v4 points (long
   # `*_hmac` keys, base64 HMACs, dashed uuids) next to v5 points (short
-  # `PayloadKeys` keys, 128-bit hex ids). Every filter condition goes through
-  # `match_filter/2` or `range_filter/2`: they match EITHER format with a
+  # `PayloadKeys` keys, 128-bit hex ids). The tenant and path conditions go
+  # through `match_filter/2`: it matches EITHER format with a
   # `should` while `:legacy_filter_fields` is on (the default: a self-host
   # collection keeps its v3/v4 points until each note is rewritten), and only
   # the v5 format once no legacy point is left (prod, after the v5 pass). A
   # `should` nested in a `must` is still an AND with the other conditions, so
   # tenant scoping is unchanged.
 
-  @type match_field :: :user | :vault | :path | :folder | :type | :tags
+  @type match_field :: :user | :vault | :path
   @type key_condition :: %{key: String.t(), match: map()}
 
-  @legacy_keys %{
-    user: "user_id",
-    vault: "vault_id",
-    path: "path_hmac",
-    folder: "folder_hmac",
-    type: "type_hmac",
-    tags: "tags_hmac"
-  }
-  @v5_keys %{
-    user: :user_id,
-    vault: :vault_id,
-    path: :path_id,
-    folder: :folder_id,
-    type: :type_id,
-    tags: :tags_id
-  }
-  @range_keys %{fm_timestamp: :fm_timestamp, fm_created: :fm_created}
+  # `:path` stays for the note belts (`note_filter/5`, release D's), which
+  # still match points written before `n` by their path id.
+  @legacy_keys %{user: "user_id", vault: "vault_id", path: "path_hmac"}
+  @v5_keys %{user: :user_id, vault: :vault_id, path: :path_id}
 
   @doc """
   Whether filters still match the legacy (v3/v4) keys
   (`LEGACY_FILTER_FIELDS`, default on): the collection may hold legacy-format
   points. Only these points carry ciphertext; a v5 payload has none
-  (`Engram.Indexing.PayloadV5`).
+  (`Engram.Indexing.identity_payload/1`).
   """
   @spec legacy_filter_fields?() :: boolean()
   def legacy_filter_fields?, do: ServiceConfig.get(:legacy_filter_fields, true)
@@ -1786,16 +1658,14 @@ defmodule Engram.Vector.Qdrant do
   @doc """
   One filter condition for `field` equal to `value` (a list matches any), in
   both payload formats. `:user`/`:vault` take ids as stored in Postgres;
-  `:path`/`:folder`/`:type`/`:tags` take the base64 HMACs the legacy filters
-  use. `:folder` also takes a folder row id (see `folder_filter/1`).
+  `:path` takes the base64 HMAC the legacy filters use. Every other filter
+  resolves in Postgres to note ids (`build_tenant_filter/1`, `:note_scope`).
 
   With legacy filters off it never emits a legacy key
   (the v3 cluster has no index for one). A value with no v5 form there (an
   empty list, a malformed HMAC) matches nothing on the v5 key: fail closed.
   """
   @spec match_filter(match_field(), term()) :: key_condition() | %{should: [key_condition()]}
-  def match_filter(:folder, value), do: folder_filter(value)
-
   def match_filter(field, value) do
     legacy = legacy_match_filter(field, value)
     v5_key = PayloadKeys.short(Map.fetch!(@v5_keys, field))
@@ -1808,77 +1678,6 @@ defmodule Engram.Vector.Qdrant do
 
   defp v5_or_both(legacy, v5),
     do: if(legacy_filter_fields?(), do: %{should: [legacy, v5]}, else: v5)
-
-  # `:folder` takes the legacy base64 path HMAC AND a folder row id (a uuid,
-  # dashed or not), singly or mixed in a list: a point's `f` holds the HMAC
-  # form until the payload sweep rewrites it to the row id, so a search must
-  # match either. Both forms are uuid-shaped values of the same `f` index, so
-  # one `v5` condition covers them; the legacy key only knows the HMAC form.
-  defp folder_filter(value) do
-    {ids, hashes} = value |> List.wrap() |> Enum.split_with(&folder_row_id?/1)
-    v5_ids = Enum.map(ids, &FilterId.uuid/1) ++ Enum.flat_map(hashes, &List.wrap(hmac_id(&1)))
-    legacy? = hashes != [] and legacy_filter_fields?()
-    shape = fn values -> if is_list(value), do: values, else: hd(values) end
-
-    case {v5_ids, legacy?} do
-      {[], true} ->
-        legacy_match_filter(:folder, shape.(hashes))
-
-      {[], false} ->
-        %{key: v5_folder_key(), match: %{any: []}}
-
-      {_, true} ->
-        %{
-          should: [
-            legacy_match_filter(:folder, shape.(hashes)),
-            %{key: v5_folder_key(), match: match(shape.(v5_ids))}
-          ]
-        }
-
-      {_, false} ->
-        %{key: v5_folder_key(), match: match(shape.(v5_ids))}
-    end
-  end
-
-  defp v5_folder_key, do: PayloadKeys.short(Map.fetch!(@v5_keys, :folder))
-
-  defp folder_row_id?(value) when is_binary(value),
-    do: Regex.match?(~r/\A[0-9a-fA-F]{32}\z/, FilterId.uuid(value))
-
-  defp folder_row_id?(_), do: false
-
-  @doc "A range condition on `fm_timestamp` / `fm_created`, in both formats."
-  @spec range_filter(:fm_timestamp | :fm_created, map()) :: map()
-  def range_filter(field, range) do
-    legacy = %{key: Atom.to_string(field), range: range}
-    v5 = %{key: PayloadKeys.short(Map.fetch!(@range_keys, field)), range: range}
-
-    if legacy_filter_fields?(), do: %{should: [legacy, v5]}, else: v5
-  end
-
-  @doc """
-  Nested filter on a user-added frontmatter key: the note has an `fm_attrs`
-  (`fa`) entry whose key id is `key_id` AND whose value matches, in the SAME
-  element (so `a: 1, b: 5` never matches `a = 5`). `value` is
-  `{:h, id | [ids]}` (exact: a value filter id, or any of several) or
-  `{:n | :d, range}` (`gte`/`gt`/`lte`/`lt`; numbers, or dates in unix
-  seconds).
-  """
-  @spec attr_filter(integer(), {:h, String.t() | [String.t()]} | {:n | :d, keyword() | map()}) ::
-          map()
-  def attr_filter(key_id, {:h, ids}), do: nested_attr(key_id, %{key: "h", match: match(ids)})
-
-  def attr_filter(key_id, {field, range}) when field in [:n, :d],
-    do: nested_attr(key_id, %{key: Atom.to_string(field), range: Map.new(range)})
-
-  defp nested_attr(key_id, condition) do
-    %{
-      nested: %{
-        key: PayloadKeys.short(:fm_attrs),
-        filter: %{must: [%{key: "k", match: %{value: key_id}}, condition]}
-      }
-    }
-  end
 
   defp match(values) when is_list(values), do: %{any: values}
   defp match(value), do: %{value: value}
@@ -1910,95 +1709,71 @@ defmodule Engram.Vector.Qdrant do
 
   defp hmac_id(_), do: nil
 
-  defp legacy_note_filter(user_id, vault_id, path_hmac) do
-    %{
-      must: [
-        legacy_match_filter(:user, user_id),
-        legacy_match_filter(:vault, vault_id),
-        legacy_match_filter(:path, path_hmac)
-      ]
-    }
-  end
-
-  defp v5_conditions(user_id, vault_id),
-    do: [v5_eq(:user_id, FilterId.uuid(user_id)), v5_eq(:vault_id, FilterId.uuid(vault_id))]
-
   defp v5_eq(name, value), do: %{key: PayloadKeys.short(name), match: %{value: value}}
 
-  defp note_filter(user_id, vault_id, path_hmac) do
-    %{
-      must: [
-        match_filter(:user, user_id),
-        match_filter(:vault, vault_id),
-        match_filter(:path, path_hmac)
-      ]
-    }
+  # One note's points, decided per point like `note_scope/3`: a point with
+  # `n` by its note id, a point without one (v3 never has `n`; a v5 point the
+  # backfill has not reached) by its path. A point with `n` never matches by
+  # path, so after a rename swap a note's old path cannot reach the other
+  # note's points. An R3a chunk point carries `n` and no `p`, so only the
+  # `n` arm finds it. Without the `n` index (strict mode 400s an unindexed
+  # key) the path alone, as before. `config/test.exs` turns the probe off so
+  # the Bypass suites see no extra collection-info GET.
+  defp note_filter(col, user_id, vault_id, note_id, path_hmac) do
+    tenant = [match_filter(:user, user_id), match_filter(:vault, vault_id)]
+    path = match_filter(:path, path_hmac)
+
+    if ServiceConfig.get(:qdrant_note_id_filter, true) and n_filterable?(col) do
+      by_id = v5_eq(:note, FilterId.uuid(to_string(note_id)))
+      %{must: tenant ++ [%{should: [by_id, %{must: [n_empty(), path]}]}]}
+    else
+      %{must: tenant ++ [path]}
+    end
   end
 
   @doc false
   # Public for filter-shape tests only (test/engram/vector/qdrant_filter_test.exs).
-  # Extracted from search/3 so all three query shapes share tenant + OKF
-  # frontmatter filtering.
+  # Extracted from search/3 so all three query shapes share the tenant and
+  # the note scope. R3a: no payload filter key beyond the identity ones.
   def build_tenant_filter(search_opts) do
     user_id = Keyword.fetch!(search_opts, :user_id)
     vault_id = Keyword.get(search_opts, :vault_id)
-    tags_hmac = Keyword.get(search_opts, :tags_hmac)
-    folder_hmac = Keyword.get(search_opts, :folder_hmac)
-    type_hmac = Keyword.get(search_opts, :type_hmac)
 
     tenant = [match_filter(:user, user_id)]
     # `vault_id` accepts one id or a set. The set form is what a multi-vault
     # OAuth grant (and a subset-restricted API key) needs: without it the only
     # options were one query per vault or dropping the filter entirely, and
     # dropping it leaks every vault the credential was scoped away from (#729).
-    # `vault_id` is already a payload index (`QdrantLayout.payload_indexes/2`), so
-    # `any` needs no new index — same shape as tags_hmac below.
-    tenant =
-      case vault_id do
-        nil -> tenant
-        id when is_binary(id) -> tenant ++ [match_filter(:vault, id)]
-        ids when is_list(ids) -> tenant ++ [match_filter(:vault, ids)]
-      end
+    tenant = if vault_id, do: tenant ++ [match_filter(:vault, vault_id)], else: tenant
 
-    must = if tags_hmac, do: [match_filter(:tags, tags_hmac) | tenant], else: tenant
-    must = if folder_hmac, do: [match_filter(:folder, folder_hmac) | must], else: must
-    must = if type_hmac, do: [match_filter(:type, type_hmac) | must], else: must
-
-    must
-    |> add_range_clause(:fm_timestamp, search_opts, :fm_timestamp_gte, :fm_timestamp_lte)
-    |> add_range_clause(:fm_created, search_opts, :fm_created_gte, :fm_created_lte)
-    # User-added frontmatter key filters, already resolved to nested
-    # conditions (`Engram.Search.FieldFilters`).
-    |> Kernel.++(Keyword.get(search_opts, :attr_filters, []))
-    |> note_scope(tenant, Keyword.get(search_opts, :note_scope))
+    note_scope(tenant, Keyword.get(search_opts, :note_scope))
   end
 
-  # `:note_scope`, the Postgres resolver's answer (`Engram.Search`), decided
-  # PER POINT: a point with `n` is matched by its note id (the matching notes
-  # for `{:ids, _}`, any but the excluded ones for `{:exclude, _}`), a point
-  # without `n` (not yet backfilled, or rewritten by an older release) by
-  # today's payload conditions. So the filter is correct at every moment of
-  # the backfill, with no switch. The tenant (`u`, `v`) stays in the top-level
-  # `must`, outside the per-point `should`, so it holds in both branches.
-  # An empty `{:ids, _}` matches nothing; an empty complement matches the
-  # whole tenant. Past `max_note_ids/0` the filter would break the strict
-  # condition limits, so it raises: the resolver caps below it.
-  defp note_scope(must, _tenant, nil), do: %{must: must}
-  defp note_scope(_must, tenant, {:exclude, []}), do: %{must: tenant}
-  defp note_scope(_must, tenant, {:ids, []}), do: %{must: tenant ++ [%{should: n_blocks([])}]}
+  # `:note_scope`, the Postgres resolver's answer (`Engram.Search`). A point
+  # with `n` is matched by its note id; a point without `n` (not yet
+  # backfilled, or written by a release before R2) passes as `is_empty(n)`
+  # (or by `must_not` missing it) and `Engram.Search` drops it in Postgres
+  # unless its note is in scope, so it stays findable during the backfill and
+  # is never a wrong hit. After the backfill no point is empty, so the branch
+  # costs one index probe. The tenant (`u`, `v`) holds for every point. An
+  # empty complement matches the whole tenant. Past `max_note_ids/0` the
+  # filter would break the strict condition limits, so it raises: the
+  # resolver caps below it. The exclusion is nested in `must`, so a caller's
+  # own top-level `must_not` (recommend's source points) stays its own.
+  defp note_scope(tenant, nil), do: %{must: tenant}
+  defp note_scope(tenant, {:exclude, []}), do: %{must: tenant}
 
-  defp note_scope(must, tenant, {kind, ids}) do
+  defp note_scope(tenant, {kind, ids}) do
     if length(ids) > max_note_ids(),
       do: raise(ArgumentError, "note_scope: #{length(ids)} ids > #{max_note_ids()}")
 
-    fallback = %{must: [n_empty() | must -- tenant]}
-    %{must: tenant ++ [%{should: [n_path(kind, ids), fallback]}]}
+    case kind do
+      :ids -> %{must: tenant ++ [%{should: n_blocks(ids) ++ [n_empty()]}]}
+      :exclude -> %{must: tenant ++ [%{must_not: n_blocks(ids)}]}
+    end
   end
 
   defp n_empty, do: %{is_empty: %{key: PayloadKeys.short(:note)}}
-
-  defp n_path(:ids, ids), do: %{should: n_blocks(ids)}
-  defp n_path(:exclude, ids), do: %{must_not: [n_empty() | n_blocks(ids)]}
 
   # No ids stays one condition that matches nothing: an empty `should`
   # matches everything.
@@ -2010,18 +1785,6 @@ defmodule Engram.Vector.Qdrant do
       key: PayloadKeys.short(:note),
       match: %{any: Enum.map(ids, &FilterId.uuid(to_string(&1)))}
     }
-
-  defp add_range_clause(must, key, opts, gte_key, lte_key) do
-    range =
-      %{}
-      |> maybe_put_bound(:gte, Keyword.get(opts, gte_key))
-      |> maybe_put_bound(:lte, Keyword.get(opts, lte_key))
-
-    if range == %{}, do: must, else: must ++ [range_filter(key, range)]
-  end
-
-  defp maybe_put_bound(range, _bound, nil), do: range
-  defp maybe_put_bound(range, bound, value), do: Map.put(range, bound, value)
 
   @doc """
   Keyword-only search against the sparse `keyword` vector. `sparse` is
@@ -2243,9 +2006,6 @@ defmodule Engram.Vector.Qdrant do
 
   # One condition per `max_ids/0` ids (`has_id`, `n` any).
   defp id_blocks(ids, condition), do: ids |> Enum.chunk_every(@max_ids) |> Enum.map(condition)
-
-  # Any of the ids (`should` is OR), for a write that must skip missing ones.
-  defp ids_filter(point_ids), do: %{should: has_ids(point_ids)}
 
   # The body is decoded in Rust (`Engram.Native.json_decode/1`): with vectors
   # requested it is ~200 x 1024 floats, 2.3 MB of JSON that took Jason ~290 ms
