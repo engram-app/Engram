@@ -353,9 +353,12 @@ defmodule Engram.Vector.Qdrant do
   # Every payload index exists now, `n` included: say so to `n_filterable?/1`,
   # replacing a cached "no" from before the index was built (a reader that ran
   # first after boot), so the per-note filters use the `n` arm at once.
+  # Behind the memo switch for the memo's reason: the key is the base URL, a
+  # recycled Bypass port under test, so the marker would leak into unrelated
+  # tests (and turn on a search's `n` scope against a fake with no `n`).
   defp reconciled(col) do
     _ = reconcile_config(col)
-    Engram.Cache.put(:note_id_filter, n_index_key(col), true)
+    if memo_enabled?(), do: Engram.Cache.put(:note_id_filter, n_index_key(col), true)
     {:ok, :verified}
   end
 
