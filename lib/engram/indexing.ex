@@ -2722,18 +2722,20 @@ defmodule Engram.Indexing do
   # this pass on. The twin is built at the note's CURRENT path: a note
   # renamed before R3c and not edited since misses and re-embeds once.
   #
-  # Lazy: only when NO chunk matched a stored row and rows are left. A
-  # pass rewrites every row of the note, so one row on its R3c fingerprint
-  # means all are (a legacy row cannot match an R3c fingerprint while the
-  # inputs differ, and they differ for the whole note or for none of it):
-  # a migrated note's edits pay no legacy parse. The contract deletes this
-  # and `Markdown.parse/3`'s `:legacy` once `outcome="legacy"` of
-  # `[:engram, :indexing, :chunks]` reads 0 for 30 days.
+  # Lazy: only when a chunk is left unmatched while stored rows are left
+  # over, so a re-index with nothing changed pays no legacy parse. Not
+  # "only when nothing matched": some chunks have the same fingerprint in
+  # both modes (a heading path long enough that the 512 B prefix already
+  # cut the folder), so a legacy note can match a few chunks and still
+  # need the candidate for the rest. ponytail: an edit pays one extra
+  # chunk call (the same order as the pass's own parse) until the
+  # contract, which deletes this and `Markdown.parse/3`'s `:legacy` once
+  # `outcome="legacy"` of `[:engram, :indexing, :chunks]` reads 0 for 30
+  # days.
   defp legacy_reuse(entries, alts, left, {note, stored}, content_key, dense?) do
     missed = for {{:embed, _chunk}, i} <- Enum.with_index(entries), do: i
 
-    if missed == [] or length(missed) < length(entries) or
-         Enum.all?(left, &(elem(&1, 1) == [])) do
+    if missed == [] or Enum.all?(left, &(elem(&1, 1) == [])) do
       {entries, 0}
     else
       twins =
@@ -3412,12 +3414,15 @@ defmodule Engram.Indexing do
 
     by_fingerprint = match_fingerprints(chunks, candidates, by_hmac)
 
-    # Then, only when nothing matched (a note not yet on its R3c
-    # fingerprints, as `legacy_reuse/6` decides it), the same over the
-    # chunks' pre-R3c inputs (`legacy_twins/3`; a chunk without a twin
-    # repeats its own), for points indexed before R3c.
+    # Then, only when a chunk is left unmatched while a row is left over
+    # (as `legacy_reuse/6` decides it), the same over the chunks' pre-R3c
+    # inputs (`legacy_twins/3`; a chunk without a twin repeats its own), for
+    # points indexed before R3c.
+    matched = Enum.count(by_fingerprint, &(elem(&1, 1) != nil))
+
     by_fingerprint =
-      if by_hmac != %{} and Enum.all?(by_fingerprint, &is_nil(elem(&1, 1))) do
+      if matched < length(chunks) and
+           matched < Enum.sum(Enum.map(by_hmac, fn {_h, ids} -> length(ids) end)) do
         twins = Enum.zip_with(chunks, legacy_twins(chunks, note, length(rows)), &(&2 || &1))
 
         legacy =
