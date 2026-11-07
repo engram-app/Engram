@@ -232,7 +232,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   @doc "Queues an `n` backfill chain (`mode: \"n\"`) per user. Returns how many."
   @spec enqueue_n([Ecto.UUID.t()]) :: non_neg_integer()
   def enqueue_n(user_ids) do
-    executing = TenantScan.executing_user_ids(__MODULE__)
+    executing = TenantScan.executing_user_ids(__MODULE__, "n")
 
     # One insert per user: Oban's Basic engine ignores `unique` in insert_all.
     for uid <- user_ids,
