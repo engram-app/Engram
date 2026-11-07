@@ -5,8 +5,8 @@ export default {
 		"ノートの制限に達しました。追加するには、アップグレードしてください。",
 	"Changes can't be saved: your account can't sync right now.":
 		"変更を保存できません。現在、アカウントの同期ができません。",
-	"Folder too large to rename here ({count} items). Rename it in Obsidian.":
-		"ここで名前を変更するには、フォルダが大きすぎます ({count} 個の項目)。Obsidian で名前を変更してください。",
+	"Folder too large to rename here (more than {limit} items). Rename it in Obsidian.":
+		"ここで名前を変更できないフォルダです（{limit}項目以上）。Obsidianで名前を変更してください。",
 	"A note with that name already exists.": "同じ名前のノートが既に存在します。",
 	"A folder with that name already exists.": "同じ名前のフォルダが既に存在します。",
 	"A file with that name already exists.": "同じ名前のファイルが既に存在します。",

@@ -5,8 +5,8 @@ export default {
 		"Not sayınızın limiti aşıldı — daha fazla not için yükseltin.",
 	"Changes can't be saved: your account can't sync right now.":
 		"Değişiklikler kaydedilemedi: hesabınız şu anda senkronize olamıyor.",
-	"Folder too large to rename here ({count} items). Rename it in Obsidian.":
-		"Bu klasör burada yeniden adlandırmak için çok büyük ({count} öğe). Obsidian içinde yeniden adlandırın.",
+	"Folder too large to rename here (more than {limit} items). Rename it in Obsidian.":
+		"Bu klasör burada yeniden adlandırmak için çok büyük ({limit} öğeden fazla). Obsidian içinde yeniden adlandırın.",
 	"A note with that name already exists.": "Bu isimde bir not zaten var.",
 	"A folder with that name already exists.": "Bu isimde bir klasör zaten var.",
 	"A file with that name already exists.": "Aynı isimde bir dosya zaten var.",

@@ -135,8 +135,8 @@ function folderTooLarge(err: unknown, t: Translate): boolean {
 		return false;
 	}
 	notify.error(
-		t("Folder too large to rename here ({count} items). Rename it in Obsidian.", {
-			count: Number(err.body.count),
+		t("Folder too large to rename here (more than {limit} items). Rename it in Obsidian.", {
+			limit: Number(err.body.limit),
 		}),
 	);
 	return true;

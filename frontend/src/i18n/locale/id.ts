@@ -5,8 +5,8 @@ export default {
 		"Anda telah mencapai batas catatan — tingkatkan untuk menambahkan lebih banyak.",
 	"Changes can't be saved: your account can't sync right now.":
 		"Perubahan tidak dapat disimpan: akun Anda tidak dapat disinkronkan saat ini.",
-	"Folder too large to rename here ({count} items). Rename it in Obsidian.":
-		"Folder terlalu besar untuk diganti namanya di sini ({count} item). Ganti namanya di Obsidian.",
+	"Folder too large to rename here (more than {limit} items). Rename it in Obsidian.":
+		"Folder terlalu besar untuk diganti namanya di sini (lebih dari {limit} item). Ganti namanya di Obsidian.",
 	"A note with that name already exists.": "Catatan dengan nama itu sudah ada.",
 	"A folder with that name already exists.": "Folder dengan nama itu sudah ada.",
 	"A file with that name already exists.": "File dengan nama tersebut sudah ada.",

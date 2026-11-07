@@ -5,8 +5,8 @@ export default {
 		"Tu as atteint ta limite de notes — passe à un abonnement supérieur pour en avoir plus.",
 	"Changes can't be saved: your account can't sync right now.":
 		"Les modifications ne peuvent pas être enregistrées : ton compte ne peut pas se synchroniser actuellement.",
-	"Folder too large to rename here ({count} items). Rename it in Obsidian.":
-		"Le dossier est trop volumineux pour être renommé ici ({count} éléments). Renomme-le dans Obsidian.",
+	"Folder too large to rename here (more than {limit} items). Rename it in Obsidian.":
+		"Le dossier est trop volumineux pour être renommé ici (plus de {limit} éléments). Renomme-le dans Obsidian.",
 	"A note with that name already exists.": "Une note avec ce nom existe déjà.",
 	"A folder with that name already exists.": "Un dossier avec ce nom existe déjà.",
 	"A file with that name already exists.": "Un fichier avec ce nom existe déjà.",

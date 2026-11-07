@@ -559,8 +559,8 @@ describe("useRenameFolder", () => {
 		post.mockRejectedValue(
 			new ApiError(422, "folder_too_large", undefined, {
 				error: "folder_too_large",
-				count: 512,
 				limit: 200,
+				over_limit: true,
 			}),
 		);
 
@@ -571,7 +571,7 @@ describe("useRenameFolder", () => {
 
 		expect(toast.error).toHaveBeenCalledTimes(1);
 		expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe(
-			"Folder too large to rename here (512 items). Rename it in Obsidian.",
+			"Folder too large to rename here (more than 200 items). Rename it in Obsidian.",
 		);
 	});
 });
@@ -2143,8 +2143,8 @@ describe("useBatchMoveFolders", () => {
 		post.mockRejectedValue(
 			new ApiError(422, "folder_too_large", undefined, {
 				error: "folder_too_large",
-				count: 300,
 				limit: 200,
+				over_limit: true,
 			}),
 		);
 
@@ -2155,7 +2155,7 @@ describe("useBatchMoveFolders", () => {
 
 		expect(toast.error).toHaveBeenCalledTimes(1);
 		expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe(
-			"Folder too large to rename here (300 items). Rename it in Obsidian.",
+			"Folder too large to rename here (more than 200 items). Rename it in Obsidian.",
 		);
 	});
 });

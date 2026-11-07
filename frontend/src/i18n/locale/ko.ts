@@ -5,8 +5,8 @@ export default {
 		"노트 제한에 도달했습니다. 더 많은 노트를 사용하려면 업그레이드하세요.",
 	"Changes can't be saved: your account can't sync right now.":
 		"변경 사항을 저장할 수 없습니다. 현재 계정 동기화가 되지 않습니다.",
-	"Folder too large to rename here ({count} items). Rename it in Obsidian.":
-		"여기에서 폴더 이름을 변경할 수 없습니다 ({count} 항목). Obsidian에서 변경하세요.",
+	"Folder too large to rename here (more than {limit} items). Rename it in Obsidian.":
+		"여기에서 폴더 이름을 변경할 수 없습니다 (항목이 {limit}개 초과). Obsidian에서 이름을 변경하세요.",
 	"A note with that name already exists.": "해당 이름의 노트가 이미 존재합니다.",
 	"A folder with that name already exists.": "해당 이름의 폴더가 이미 존재합니다.",
 	"A file with that name already exists.": "해당 이름의 파일이 이미 존재합니다.",
