@@ -35,10 +35,11 @@ defmodule Engram.DataMigrations.FileTimes do
   NULLed (only those notes) and `ReconcileNotePayloads` is queued for its
   user, which rewrites only unstamped notes' points.
 
-  v2 re-walks for the rounding fix (`version/0`). A pass first asks every
-  cluster node for `FileTime.twin_rounding/0` (`Readiness.peers_report/4`,
-  the gate `CompressionGate` uses); while any node is older (it floors) or
-  unreachable, the pass walks nothing, resets the walks and stays open. `enabled?/0` is the
+  v2 re-walked for the rounding fix, v3 for exact rounding (`version/0`).
+  A pass first asks every cluster node for `FileTime.twin_rounding/0`
+  (`Readiness.peers_report/4`, the gate `CompressionGate` uses) and needs
+  2 (exact); while any node is older (it floors, or rounds the float
+  product) or unreachable, the pass walks nothing, resets the walks and stays open. `enabled?/0` is the
   `file_times_backfill` service override (default on). Re-verified daily
   (`reverify?/0`): a 0.75-or-older node that joins after close floors
   twins again, and nothing else finds a 1 us drift. Contract bumps
@@ -74,12 +75,14 @@ defmodule Engram.DataMigrations.FileTimes do
   @impl true
   def name, do: "file_times"
 
-  # v2: `FileTime.to_at/1` rounds to the microsecond. 0.74 and 0.75
-  # floored, leaving desktop sub-millisecond values one microsecond low
-  # about half the time (5 prod rows), and about a quarter of millisecond
-  # values dated 2004-2005 or past 2038-01-19. The re-walk rewrites them.
+  # v2: `FileTime.to_at/1` rounds to the microsecond (0.74 and 0.75
+  # floored). v3: it rounds the double's exact value, not the float
+  # product `t * 1e6` (v2 took the tie 1792348622211396.5 up, though the
+  # double is exactly ...2113964557...). Against the exact rounding, 0.75's
+  # floor is 1 us low on 4 of 12 sampled prod desktop values and v2 1 us
+  # off on 1 of them. The re-walk rewrites every twin that differs.
   @impl true
-  def version, do: 2
+  def version, do: 3
 
   @impl true
   def reverify?, do: true
@@ -102,7 +105,7 @@ defmodule Engram.DataMigrations.FileTimes do
   # `batch:` overrides the window size, `max_fixed:` the per-walk cap.
   # `fleet:` overrides the `Readiness.peers_report/4` collaborators.
   def run_pass(opts) do
-    case Readiness.peers_report(FileTime, :twin_rounding, 1, fleet_opts(opts)) do
+    case Readiness.peers_report(FileTime, :twin_rounding, 2, fleet_opts(opts)) do
       :ok -> walk_tables(opts)
       blocked -> wait_for_fleet(blocked)
     end
