@@ -2220,14 +2220,9 @@ defmodule Engram.Vector.Qdrant do
     %{
       query: %{recommend: %{positive: point_ids, strategy: "average_vector"}},
       using: "dense",
-      # Added to, never replacing, the note scope's own `must_not`.
-      filter:
-        Map.update(
-          build_tenant_filter(search_opts),
-          :must_not,
-          has_ids(point_ids),
-          &(&1 ++ has_ids(point_ids))
-        ),
+      # The source points under a top-level `must_not`. The note scope puts
+      # its own `must_not` inside its per-point `should`, never at the top.
+      filter: Map.put(build_tenant_filter(search_opts), :must_not, has_ids(point_ids)),
       limit: Keyword.get(search_opts, :limit, 5),
       with_payload: false
     }
