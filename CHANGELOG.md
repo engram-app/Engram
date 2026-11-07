@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.76.0](https://github.com/engram-app/Engram/compare/0.75.0...0.76.0) (2026-11-07)
+
+
+### Features
+
+* **file-time:** R25 read switch to *_at twins ([#2474](https://github.com/engram-app/Engram/issues/2474)) ([74ac19e](https://github.com/engram-app/Engram/commit/74ac19ec70e4efff86763f3de0adde4bd983dada))
+* **notes:** R8(b1) writers put body values directly ([#2472](https://github.com/engram-app/Engram/issues/2472)) ([364ec31](https://github.com/engram-app/Engram/commit/364ec31cecb9bc9282bc33a930bc31b82ab81bbe))
+* **search:** note-id reader for the immutable chunk index (R1) ([#2433](https://github.com/engram-app/Engram/issues/2433)) ([016763d](https://github.com/engram-app/Engram/commit/016763d0d3bbbd74a6ab0109bfb239c7b77477be))
+
+
+### Bug Fixes
+
+* **attachments:** revive and re-point in one txn ([#2473](https://github.com/engram-app/Engram/issues/2473)) ([17bafc9](https://github.com/engram-app/Engram/commit/17bafc99e345255f0915e11e03a66e694caae695))
+* **file-time:** round the exact double, FileTimes v3 ([#2484](https://github.com/engram-app/Engram/issues/2484)) ([d7961b8](https://github.com/engram-app/Engram/commit/d7961b8413293f241501cf6c656970998a2a8611))
+
 ## [0.75.0](https://github.com/engram-app/Engram/compare/0.74.0...0.75.0) (2026-11-06)
 
 
