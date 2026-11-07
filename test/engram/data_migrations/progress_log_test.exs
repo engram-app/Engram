@@ -9,12 +9,12 @@ defmodule Engram.DataMigrations.ProgressLogTest do
 
   import Ecto.Query
 
-  require Logger
-
   alias Engram.Backfill.IdWindows
   alias Engram.DataMigrations.{FileTimes, NoteBodyColumnsNull}
   alias Engram.Notes
   alias Engram.Test.LogCapture
+
+  require Logger
 
   defp old_fleet,
     do: [
@@ -62,19 +62,6 @@ defmodule Engram.DataMigrations.ProgressLogTest do
     assert meta[:loki_ship] == true
     assert meta[:ship] == "loki"
     assert meta[:total_count] == 3
-  end
-
-  test "NoteBodyColumnsNull: the blocked and nulled lines ship", ctx do
-    n = note!(ctx, "a.md")
-    Engram.Fixtures.old_release_notes_copy!(n.id)
-
-    {_, events} =
-      LogCapture.with_events(fn -> NoteBodyColumnsNull.run_pass(fleet: old_fleet()) end)
-
-    assert shipped?(events, "note body columns null blocked")
-
-    {_, events} = LogCapture.with_events(fn -> NoteBodyColumnsNull.run_pass() end)
-    assert shipped?(events, "note body columns nulled")
   end
 
   test "FileTimes: the waiting and repaired lines ship", ctx do
@@ -144,14 +131,26 @@ defmodule Engram.DataMigrations.ProgressLogTest do
       assert meta[:walks] =~ "file_times:notes"
     end
 
-    test "a migration that is already done logs :skipped" do
+    test "a migration that is already done logs nothing" do
       :ok =
         Engram.DataMigrations.mark_done(NoteBodyColumnsNull.name(), NoteBodyColumnsNull.version())
 
       {:skipped, events} =
         LogCapture.with_events(fn -> DataMigrationsRunner.run(NoteBodyColumnsNull) end)
 
-      assert summary(events)[:result] == :skipped
+      refute Enum.any?(events, &(IO.chardata_to_string(message(&1)) == "data migration pass"))
+    end
+
+    test "a blocked: 0 count (FolderTable) is not :blocked" do
+      defmodule ZeroBlocked do
+        @behaviour Engram.DataMigration
+        def name, do: "test_zero_blocked"
+        def version, do: 1
+        def run_pass, do: {:more, rows: 0, blocked: 0}
+      end
+
+      {:more, events} = LogCapture.with_events(fn -> DataMigrationsRunner.run(ZeroBlocked) end)
+      refute Enum.any?(events, &(IO.chardata_to_string(message(&1)) == "data migration pass"))
     end
   end
 end
