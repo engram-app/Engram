@@ -164,28 +164,11 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   end
 
   @doc """
-  Enqueues a chain for every user with an unstamped indexed note, found by
-  one walk over the notes primary key in fixed id windows
-  (`Engram.Backfill.IdWindows.all/2`), the stale predicate applied only
-  inside each window: bounded rows READ per statement at any fleet size.
-  Returns how many users. The ledger pass uses the budgeted, resumable form
-  (`queue_window/2` under `IdWindows.heal_pass/4`).
-  """
-  @spec enqueue_missing() :: non_neg_integer()
-  def enqueue_missing do
-    unstamped()
-    |> select([note: n], n.user_id)
-    |> IdWindows.all()
-    |> Enum.uniq()
-    |> then(&TenantScan.enqueue_users(__MODULE__, &1))
-  end
-
-  @doc """
-  One id window of the ledger's walk (`IdWindows.heal_pass/4`): queues the
+  One id window of the ledger's walk (`IdWindows.heal_pass/4`,
+  `NotePayloadStamps`): queues the
   users whose notes in `ids` are unstamped or behind the version. Returns
   `{users queued, false}`; any queued makes the walk dirty.
   """
-  @spec queue_window([Ecto.UUID.t()], map()) :: {non_neg_integer(), false}
   def queue_window(ids, %{repo: repo}) do
     users =
       unstamped()

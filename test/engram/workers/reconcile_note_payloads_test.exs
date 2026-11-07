@@ -631,7 +631,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     test "with the version at the baseline the sweep writes no n", ctx do
       ServiceConfig.put_override(:payload_version, PayloadV6.baseline())
       pre_n(ctx)
-      assert ReconcileNotePayloads.enqueue_missing() == 0
+      assert queued_users() == 0
 
       no_embed()
       assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
@@ -643,7 +643,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       %{ids: ids, passed: passed} = ctx
       pre_n(ctx)
       no_dek(ctx)
-      assert ReconcileNotePayloads.enqueue_missing() == 1
+      assert queued_users() == 1
 
       no_embed()
       assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
@@ -660,7 +660,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       assert payload_versions(ctx) == [6, 6]
 
       # Converged: nothing left to select, nothing more written.
-      assert ReconcileNotePayloads.enqueue_missing() == 0
+      assert queued_users() == 0
       assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
       assert length(Agent.get(ctx.store, & &1.batches)) == 1
     end
@@ -701,7 +701,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       end
 
       Agent.update(ctx.store, &%{&1 | batches: []})
-      assert ReconcileNotePayloads.enqueue_missing() == 1
+      assert queued_users() == 1
 
       no_embed()
       assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
@@ -710,7 +710,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       assert Agent.get(ctx.store, & &1.batches) == []
       assert Enum.all?(payload_versions(ctx), &is_nil/1)
       # Still in view of the sweep: nothing claims the new shape was written.
-      assert ReconcileNotePayloads.enqueue_missing() == 1
+      assert queued_users() == 1
     end
 
     test "points already holding the payload are only stamped", ctx do
@@ -973,10 +973,10 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           skip_tenant_check: true
         )
 
-      assert ReconcileNotePayloads.enqueue_missing() == 0
+      assert queued_users() == 0
       # And back on the baseline code, the newer stamp is still not behind.
       ServiceConfig.put_override(:payload_version, PayloadV6.baseline())
-      assert ReconcileNotePayloads.enqueue_missing() == 0
+      assert queued_users() == 0
     end
   end
 
@@ -988,6 +988,18 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   # A v5 point a rotation left on the retired key. `u` is the tenant id, not
   # an HMAC, so a rotation never changes it.
   defp retired_v5(ctx), do: %{"u" => FilterId.uuid(ctx.user.id), "y" => "b2xk"}
+
+  # What one whole walk of the ledger's id windows queues
+  # (`ReconcileNotePayloads.queue_window/2`): users with a note to heal.
+  defp queued_users do
+    {:ok, queued} =
+      Engram.Backfill.IdWindows.reduce_all(Note, 0, fn ids, ctx, acc ->
+        {n, false} = ReconcileNotePayloads.queue_window(ids, ctx)
+        {:cont, acc + n}
+      end)
+
+    queued
+  end
 
   defp reload(note),
     do: Repo.one!(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
