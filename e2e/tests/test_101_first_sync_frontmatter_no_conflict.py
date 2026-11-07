@@ -24,7 +24,11 @@ from __future__ import annotations
 
 import pytest
 
-from helpers.frontmatter_first_sync import DRIFTING_SHAPES, first_sync_shapes
+from helpers.frontmatter_first_sync import (
+    DRIFTING_SHAPES,
+    first_sync_shapes,
+    three_way_gaps,
+)
 
 
 @pytest.mark.asyncio
@@ -36,12 +40,19 @@ async def test_first_sync_frontmatter_raises_no_conflicts(vault_a, cdp_a, api_sy
         f"\ntest_101 conflict-copies={result.conflict_copies} "
         f"| rewritten-on-disk={sorted(result.rewritten)}"
     )
-    # Guard against a vacuous pass: if the codecs ever round-trip these shapes
-    # byte-for-byte, nothing is rewritten and the drift branch is unreachable.
-    assert result.rewritten, (
-        "no note was rewritten on disk, so this run never reached the codec "
-        "mismatch the conflict assertion fences. Pick new THREE-WAY shapes "
-        "(see docs/context/frontmatter-first-sync-drift-e2e.md)."
+    # Guard against a vacuous pass, on the FIXTURE, not on a plugin rewrite.
+    # Since Engram-obsidian#683 the plugin keeps the user's frontmatter bytes
+    # when they mean the same, so nothing is rewritten on disk: that is the
+    # #1928 fix, not a vacuous run. What makes this run meaningful is that the
+    # drift is real: raw bytes, the plugin's re-emit and the backend's re-emit
+    # all differ for every shape. Holds for a plugin before #683 too, which
+    # still rewrites (then the rewrite must match the pinned plugin re-emit).
+    gaps = three_way_gaps(result, DRIFTING_SHAPES)
+    assert gaps == [], (
+        "these shapes are not a three-way raw/plugin/backend disagreement, so "
+        "they cannot reach the drift branch this test fences. Pick new shapes "
+        "(see docs/context/frontmatter-first-sync-drift-e2e.md):\n"
+        + "\n".join(gaps)
     )
     assert result.conflict_copies == [], (
         f"first sync of untouched notes wrote {len(result.conflict_copies)} "

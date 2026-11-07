@@ -40,7 +40,7 @@ async def test_mcp_rest_obsidian_agree(vault_b, cdp_b, api_sync):
     assert "v1 via MCP" in wait_for_delivery(vault_b, PATH, api_sync, timeout=RT_TIMEOUT)
 
     # Hop 2: REST edit → Obsidian receives live.
-    api_sync.create_note(PATH, "# Orchestra\nv2 via REST")
+    api_sync.create_note(PATH, "# Orchestra\nv2 via REST", overwrite=True)
     wait_for_content(vault_b, PATH, "v2 via REST", timeout=RT_TIMEOUT)
 
     # Hop 3: Obsidian edit → server, read back via REST and MCP.

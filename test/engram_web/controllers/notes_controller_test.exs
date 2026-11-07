@@ -3,6 +3,10 @@ defmodule EngramWeb.NotesControllerTest do
 
   setup :authed_api_conn
 
+  # The Obsidian plugin's push. It reports its version, so it may replace a
+  # note without base_hash; a bare API-key caller may not (#2480).
+  defp as_plugin(conn), do: put_req_header(conn, "x-plugin-version", "9.9.9")
+
   # ---------------------------------------------------------------------------
   # POST /notes
   # ---------------------------------------------------------------------------
@@ -42,7 +46,11 @@ defmodule EngramWeb.NotesControllerTest do
 
       assert %{"updated" => 1} = json_response(conn2, 200)
 
-      conn3 = post(conn, "/api/notes", %{path: "Test/B.md", content: "# b2", mtime: 4.0})
+      conn3 =
+        conn
+        |> as_plugin()
+        |> post("/api/notes", %{path: "Test/B.md", content: "# b2", mtime: 4.0})
+
       assert %{"note" => %{"ctime" => 3.5, "version" => 2}} = json_response(conn3, 200)
     end
 
@@ -79,7 +87,10 @@ defmodule EngramWeb.NotesControllerTest do
     test "upserts an existing note and increments version", %{conn: conn} do
       post(conn, "/api/notes", %{path: "Test/File.md", content: "# v1", mtime: 1_000.0})
 
-      conn2 = post(conn, "/api/notes", %{path: "Test/File.md", content: "# v2", mtime: 2_000.0})
+      conn2 =
+        conn
+        |> as_plugin()
+        |> post("/api/notes", %{path: "Test/File.md", content: "# v2", mtime: 2_000.0})
 
       assert %{"note" => note} = json_response(conn2, 200)
       assert note["version"] == 2
@@ -220,7 +231,9 @@ defmodule EngramWeb.NotesControllerTest do
       post(conn, "/api/notes", %{path: "Test/Match.md", content: "# v1", mtime: 1_000.0})
 
       conn2 =
-        post(conn, "/api/notes", %{
+        conn
+        |> as_plugin()
+        |> post("/api/notes", %{
           path: "Test/Match.md",
           content: "# v2",
           mtime: 2_000.0,
@@ -247,7 +260,11 @@ defmodule EngramWeb.NotesControllerTest do
     test "allows upsert without version param (backwards compatible)", %{conn: conn} do
       post(conn, "/api/notes", %{path: "Test/NoVer.md", content: "# v1", mtime: 1_000.0})
 
-      conn2 = post(conn, "/api/notes", %{path: "Test/NoVer.md", content: "# v2", mtime: 2_000.0})
+      conn2 =
+        conn
+        |> as_plugin()
+        |> post("/api/notes", %{path: "Test/NoVer.md", content: "# v2", mtime: 2_000.0})
+
       assert %{"note" => note} = json_response(conn2, 200)
       assert note["version"] == 2
     end
@@ -667,10 +684,13 @@ defmodule EngramWeb.NotesControllerTest do
     test "permits updates to existing notes after cap is hit", %{conn: conn, user: user} do
       insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => 1})
 
-      post(conn, "/api/notes", %{path: "A.md", content: "# A v1", mtime: 1.0})
+      v1 = conn |> post("/api/notes", %{path: "A.md", content: "# A v1", mtime: 1.0})
+      base = json_response(v1, 200)["note"]["content_hash"]
 
       # Updating A is fine — only NEW notes are gated
-      conn2 = post(conn, "/api/notes", %{path: "A.md", content: "# A v2", mtime: 2.0})
+      conn2 =
+        post(conn, "/api/notes", %{path: "A.md", content: "# A v2", mtime: 2.0, base_hash: base})
+
       assert %{"note" => _} = json_response(conn2, 200)
     end
   end
@@ -781,12 +801,14 @@ defmodule EngramWeb.NotesControllerTest do
     test "POST /api/notes for an EXISTING path → 200 (update allowed)",
          %{conn: conn, user: user, vault: vault} do
       _note = Engram.Fixtures.insert_note!(user, vault, %{path: "Editable.md"})
+      {:ok, current} = Engram.Notes.get_note(user, vault, "Editable.md")
 
       conn =
         post(conn, ~p"/api/notes", %{
           "path" => "Editable.md",
           "content" => "# edited",
-          "mtime" => 2_000.0
+          "mtime" => 2_000.0,
+          "base_hash" => current.content_hash
         })
 
       assert %{"note" => _} = json_response(conn, 200)

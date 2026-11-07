@@ -35,7 +35,8 @@ defmodule EngramWeb.Schemas.UpsertNoteRequest do
         nullable: true,
         description:
           "Compare-and-swap guard: the content_hash you last read for this note. " <>
-            "If the note changed since, the write returns 409 instead of merging."
+            "If the note changed since, the write returns 409 instead of merging. " <>
+            "Required with an API key to replace an existing note (409 without it)."
       },
       title: %Schema{type: :string, nullable: true},
       folder: %Schema{type: :string, nullable: true},

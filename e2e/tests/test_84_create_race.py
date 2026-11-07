@@ -15,14 +15,15 @@ Pass bar (the incident's regression surface):
   2. the RECEIVE path on the racing device stays alive: a subsequent API edit
      must arrive on BOTH devices (this is what cross-wiring kills).
 
-Deliberately NOT asserted: which racer's content wins. A REST create with no
-base_hash is by contract a full-content overwrite, so the second blind create
-replacing the first is current designed behavior (the CAS gate covers pushes
-that DECLARE a base). Whether create-vs-create should conflict-copy instead
-is a filed design question, not this test's bar.
+Deliberately NOT asserted: which racer's content wins. Since Engram#2480 an
+API-key create with no base_hash may NOT replace an existing note: if the
+plugin's create lands first, the API create gets 409 and the plugin's note
+stands; if the API create lands first, the plugin's push merges as before.
+Both are correct race outcomes, so the API leg accepts 200 or 409.
 """
 
 import asyncio
+import time
 import uuid
 
 import pytest
@@ -51,12 +52,27 @@ async def test_create_race_adopts_winner_and_receives(vault_a, vault_b, cdp_a, c
     # The race: an API writer (the MCP/web stand-in) and plugin A create the
     # same path concurrently. push_file_now drives the real pushFile path —
     # mint, push, adopt — while the API create mints the server's own id.
-    # Flake surface (accepted): create_note raises on non-2xx, so a transient
-    # 429/5xx on the API leg aborts the gather as an ERROR rather than a
-    # controlled assert. By contract the blind create cannot 409; if this
-    # errors in CI, suspect rate-limit starvation, not the race itself.
+    # The API leg is a blind create (no base_hash). If plugin A's create lands
+    # first, the server refuses it with 409 (Engram#2480: an API key must not
+    # replace a note it never read), and A's note stands. Either outcome is a
+    # correct race result, so the leg accepts 200 or 409. Any other status
+    # (a transient 429/5xx) still fails the gather: suspect rate-limit
+    # starvation, not the race itself.
+    def api_create() -> int:
+        resp = api_sync.session.post(
+            f"{api_sync.base_url}/notes",
+            json={
+                "path": path,
+                "content": f"# Raced\n\napi-content-{unique}\n",
+                "mtime": time.time(),
+            },
+            timeout=10,
+        )
+        assert resp.status_code in (200, 409), f"API create: {resp.status_code} {resp.text[:200]}"
+        return resp.status_code
+
     await asyncio.gather(
-        asyncio.to_thread(api_sync.create_note, path, f"# Raced\n\napi-content-{unique}\n"),
+        asyncio.to_thread(api_create),
         cdp_a.push_file_now(path, f"# Raced\n\nplugin-content-{unique}\n"),
     )
 
@@ -70,7 +86,7 @@ async def test_create_race_adopts_winner_and_receives(vault_a, vault_b, cdp_a, c
     # announce under the winner id and never materialize on A (delivery
     # latency masked it until a full pull; the live window stayed silent).
     followup = f"followup-edit-{unique}"
-    api_sync.create_note(path, f"# Raced\n\n{followup}\n")
+    api_sync.create_note(path, f"# Raced\n\n{followup}\n", overwrite=True)
     api_sync.wait_for_note_content(path, followup)
 
     a_content = wait_for_content(vault_a, path, followup)

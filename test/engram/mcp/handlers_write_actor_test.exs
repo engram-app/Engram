@@ -7,9 +7,9 @@ defmodule Engram.MCP.HandlersWriteActorTest do
 
   import Ecto.Query
 
-  alias Engram.MCP.Handlers
   alias Engram.{Notes, Repo}
   alias Engram.Notes.Revision
+  alias Engram.Test.McpOverwrite
 
   setup do
     user = insert(:user)
@@ -22,7 +22,7 @@ defmodule Engram.MCP.HandlersWriteActorTest do
   test "write_note records as mcp", %{user: u, vault: v} do
     {:ok, note} = Notes.upsert_note(u, v, %{"path" => "m.md", "content" => "mine"}, actor: "api")
 
-    Handlers.handle("write_note", u, v, %{"path" => "m.md", "content" => "the AI's"})
+    McpOverwrite.write_note(u, v, %{"path" => "m.md", "content" => "the AI's"})
 
     {:ok, open} =
       Repo.with_tenant(u.id, fn ->

@@ -167,7 +167,7 @@ async def test_rapid_api_edits_final_content_arrives(vault_b, cdp_a, cdp_b, api_
 
     # Fire 5 rapid edits (no sleep between them)
     for i in range(1, 6):
-        api_sync.create_note(path, f"# Rapid Edit\nVersion {i} of 5")
+        api_sync.create_note(path, f"# Rapid Edit\nVersion {i} of 5", overwrite=True)
 
     # Final content should arrive
     t0 = time.monotonic()

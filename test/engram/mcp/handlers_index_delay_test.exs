@@ -12,6 +12,7 @@ defmodule Engram.MCP.HandlersIndexDelayTest do
 
   alias Engram.MCP.Handlers
   alias Engram.{Notes, Repo}
+  alias Engram.Test.McpOverwrite
   alias Engram.Workers.EmbedNote
 
   setup do
@@ -50,7 +51,7 @@ defmodule Engram.MCP.HandlersIndexDelayTest do
   end
 
   defp mcp_write(u, v, path, content) do
-    {:ok, _, _} = Handlers.handle("write_note", u, v, %{"path" => path, "content" => content})
+    {:ok, _, _} = McpOverwrite.write_note(u, v, %{"path" => path, "content" => content})
     dispatch()
   end
 

@@ -44,6 +44,31 @@ DRIFTING_SHAPES = {
     "obsidian-cssclasses": "---\ncssclasses: \n---\n",
 }
 
+# The plugin codec's re-emit of each shape's frontmatter block (eemeli `yaml`
+# via `emitFrontmatter`), measured with the plugin's own codec. Pinned because
+# the plugin no longer writes it to disk (Engram-obsidian#683 keeps the user's
+# bytes when they mean the same), so a run cannot always observe it. A run on
+# a plugin that still rewrites checks the pin against what it wrote. To
+# re-measure: docs/context/frontmatter-first-sync-drift-e2e.md section 1.
+PLUGIN_EMIT = {
+    "wikilink-and-empty": 'up: "[[Home]]"\nstatus: null\n',
+    "hashtag-and-flow-list": 'tag: "#project"\ntags:\n  - a\n  - b\n',
+    "wikilink-and-quoted-title": 'up: "[[Home]]"\ntitle: Hello\n',
+    "colon-and-comment": 'title: "Meeting: kickoff"\n',
+    "aliases-flow-wikilinks": 'aliases:\n  - "[[Alpha]]"\n  - "[[Beta]]"\n',
+    "tilde-null": "status: null\n",
+    "yes-string": "answer: yes\n",
+    "obsidian-cssclasses": "cssclasses: null\n",
+}
+
+
+def fm_block(text: str) -> str | None:
+    """The frontmatter block between the fences, or None if there is none."""
+    if not text.startswith("---\n"):
+        return None
+    end = text.find("\n---", 3)
+    return None if end == -1 else text[4 : end + 1]
+
 
 @dataclass
 class FirstSyncResult:
@@ -51,6 +76,9 @@ class FirstSyncResult:
     written: dict[str, str]
     conflict_copies: list[str]
     rewritten: dict[str, str]
+    # The server's rendering of each note (`GET /notes`), i.e. the backend
+    # codec's re-emit of the doc the plugin pushed.
+    server: dict[str, str]
 
 
 async def first_sync_shapes(
@@ -122,8 +150,32 @@ async def first_sync_shapes(
         if p.startswith(prefix) and "(conflict" in p
     )
     rewritten = {}
+    server = {}
     for rel, original in written.items():
         now = Path(vault, rel).read_text(encoding="utf-8")
         if now != original:
             rewritten[rel] = now
-    return FirstSyncResult(prefix, written, copies, rewritten)
+        server[rel] = api_sync.get_note(rel)["content"]
+    return FirstSyncResult(prefix, written, copies, rewritten, server)
+
+
+def three_way_gaps(result: FirstSyncResult, shapes: dict[str, str]) -> list[str]:
+    """Shapes whose raw, plugin and backend frontmatter do NOT all differ.
+
+    A drift copy needs all three renderings to disagree; a shape where any two
+    agree cannot reach the drift branch, so a pass over it proves nothing.
+    """
+    gaps = []
+    for rel, original in result.written.items():
+        name = rel.split("/", 1)[1].removesuffix(".md")
+        raw = fm_block(shapes[name])
+        plugin = PLUGIN_EMIT[name]
+        backend = fm_block(result.server[rel])
+        if len({raw, plugin, backend}) != 3:
+            gaps.append(f"{name}: raw={raw!r} plugin={plugin!r} backend={backend!r}")
+        # Keep the pin honest whenever the plugin shows its re-emit on disk.
+        if rel in result.rewritten and fm_block(result.rewritten[rel]) != plugin:
+            gaps.append(
+                f"{name}: plugin wrote {fm_block(result.rewritten[rel])!r}, pinned {plugin!r}"
+            )
+    return gaps

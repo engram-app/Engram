@@ -128,15 +128,26 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     Engram.DataCase.clear_request_caches()
 
     conn
-    |> call_tool("write_note", %{"path" => "a.md", "content" => "# A\n\nwarm\n"})
+    |> call_tool("write_note", %{
+      "path" => "a.md",
+      "content" => "# A\n\nwarm\n",
+      "base_hash" => hash_of(user, "# A\n\n## Body\n\nbody text\n")
+    })
     |> tool_ok!()
 
     EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
+    # Replacing needs the hash of what it replaces (#2480), taken up front.
+    base = hash_of(user, "# A\n\nwarm\n")
+
     {_, qs} =
       QueryRecorder.record(fn ->
         conn
-        |> call_tool("write_note", %{"path" => "a.md", "content" => "# A\n\nfanned\n"})
+        |> call_tool("write_note", %{
+          "path" => "a.md",
+          "content" => "# A\n\nfanned\n",
+          "base_hash" => base
+        })
         |> tool_ok!()
       end)
 
@@ -527,6 +538,134 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     end
   end
 
+  # #2480 review: REST checked base_hash against the stored row, not the text
+  # GET serves. A script whose GET included a live (un-checkpointed) edit got
+  # a false 409, and the 409's row hash, which never saw the edit, passed.
+  test "REST POST with the GET hash writes while a live edit sits in the tail", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    {id, doc} = base_doc(user, vault)
+    land_tail(user, vault, id, doc, &(&1 <> "LIVEEDIT\n"))
+
+    got = conn |> get("/api/notes/a.md") |> json_response(200)
+    assert got["content"] =~ "LIVEEDIT"
+
+    conn
+    |> post("/api/notes", %{
+      path: "a.md",
+      content: got["content"] <> "SCRIPT\n",
+      mtime: 2.0,
+      base_hash: got["content_hash"]
+    })
+    |> json_response(200)
+
+    text = text_of(user, vault, "a.md")
+    assert count(text, "LIVEEDIT") == 1, inspect(text)
+    assert count(text, "SCRIPT") == 1, inspect(text)
+  end
+
+  # Review round 3: a 409 on a tailed note rebuilt the served view three times
+  # (base check, retry check, conflict body). It is built once per write now.
+  test "a REST 409 on a tailed note builds the served view once", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    {id, doc} = base_doc(user, vault)
+    land_tail(user, vault, id, doc, &(&1 <> "LIVEEDIT\n"))
+    ref = make_ref()
+    test = self()
+
+    :telemetry.attach(
+      "409-rebuild-#{inspect(ref)}",
+      [:engram, :notes, :read_rebuild],
+      fn _, _, _, _ -> send(test, {:rebuilt, ref}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach("409-rebuild-#{inspect(ref)}") end)
+
+    conn
+    |> post("/api/notes", %{path: "a.md", content: "x\n", mtime: 2.0, base_hash: "deadbeef"})
+    |> json_response(409)
+
+    assert_received {:rebuilt, ^ref}
+    refute_received {:rebuilt, ^ref}
+  end
+
+  test "REST 409 hands back the GET view, whose hash then writes", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    {_text, before} = read_note(conn)
+    {id, doc} = base_doc(user, vault)
+    land_tail(user, vault, id, doc, &(&1 <> "LIVEEDIT\n"))
+
+    stale =
+      conn
+      |> post("/api/notes", %{
+        path: "a.md",
+        content: "# A\n\nscript\n",
+        mtime: 2.0,
+        base_hash: before["content_hash"]
+      })
+      |> json_response(409)
+
+    got = conn |> get("/api/notes/a.md") |> json_response(200)
+    assert stale["server_note"]["content"] =~ "LIVEEDIT"
+    assert stale["server_note"]["content_hash"] == got["content_hash"]
+
+    # Missing base: same 409 body.
+    missing =
+      conn
+      |> post("/api/notes", %{path: "a.md", content: "x\n", mtime: 2.0})
+      |> json_response(409)
+
+    assert missing["server_note"]["content_hash"] == got["content_hash"]
+    assert count(text_of(user, vault, "a.md"), "LIVEEDIT") == 1
+  end
+
+  # #2480 review round 2: GET serves the ROW, not the tail projection, for a
+  # non-markdown path and for a projection current_note/3 distrusts (a tail
+  # that empties a non-empty note). The base check hashed the projection, so
+  # the GET hash never matched and re-read-and-retry 409ed forever.
+  # (A .canvas is not markdown, so it keeps main's behaviour: #2497.)
+  for {name, path} <- [{"a tail that empties the note", "a.md"}] do
+    test "REST POST with the GET hash writes over #{name}", ctx do
+      %{conn: conn, user: user, vault: vault} = ctx
+      path = unquote(path)
+      {id, doc} = base_doc(user, vault, path)
+      land_tail(user, vault, id, doc, fn _ -> "" end)
+
+      got = conn |> get("/api/notes/#{path}") |> json_response(200)
+
+      conn
+      |> post("/api/notes", %{
+        path: path,
+        content: "replaced by script",
+        mtime: 2.0,
+        base_hash: got["content_hash"]
+      })
+      |> json_response(200)
+    end
+
+    test "MCP write_note with the get_notes hash writes over #{name}", ctx do
+      %{conn: conn, user: user, vault: vault} = ctx
+      path = unquote(path)
+      {id, doc} = base_doc(user, vault, path)
+      land_tail(user, vault, id, doc, fn _ -> "" end)
+
+      [note] =
+        conn
+        |> call_tool("get_notes", %{"paths" => [path]})
+        |> tool_ok!()
+        |> json_response(200)
+        |> get_in(["result", "structuredContent", "notes"])
+
+      conn
+      |> call_tool("write_note", %{
+        "path" => path,
+        "content" => "replaced by agent",
+        "base_hash" => note["content_hash"]
+      })
+      |> tool_ok!()
+    end
+  end
+
   test "write_note with a fresh base_hash writes across a checkpoint of the same text", ctx do
     %{conn: conn, user: user, vault: vault} = ctx
     {id, doc} = base_doc(user, vault)
@@ -560,14 +699,21 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     assert body["result"]["_meta"]["engram.page/error_code"] == "version_conflict"
   end
 
-  test "write_note without base_hash replaces the note as before", ctx do
+  # #2480: a blind replace from a stale read silently reverted another
+  # client's edit, so replacing an existing note now needs a base_hash.
+  test "write_note without base_hash refuses to replace an existing note", ctx do
     %{conn: conn, user: user, vault: vault} = ctx
+    before = text_of(user, vault, "a.md")
 
-    conn
-    |> call_tool("write_note", %{"path" => "a.md", "content" => "# A\n\nreplaced\n"})
-    |> tool_ok!()
+    body =
+      conn
+      |> call_tool("write_note", %{"path" => "a.md", "content" => "# A\n\nreplaced\n"})
+      |> json_response(200)
 
-    assert text_of(user, vault, "a.md") == "# A\n\nreplaced\n"
+    assert body["result"]["isError"], inspect(body)
+    assert result_text(body) =~ "get_notes"
+    assert body["result"]["_meta"]["engram.page/error_code"] == "version_conflict"
+    assert text_of(user, vault, "a.md") == before
   end
 end
 

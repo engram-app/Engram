@@ -25,10 +25,12 @@ defmodule EngramWeb.NotesController do
     summary: "Create or update a note",
     description:
       "Creates a note or updates the existing one at the same path. Updates are merged " <>
-        "convergently (CRDT) with the stored content. Optionally pass `base_hash` — the " <>
+        "convergently (CRDT) with the stored content. Pass `base_hash` — the " <>
         "`content_hash` you last read — for compare-and-swap semantics: if the note changed " <>
         "since that read, the write returns 409 with the current server note instead of " <>
-        "merging. Notes over 10MB are rejected with 413, and exceeding the plan's note cap " <>
+        "merging. With an API key, replacing an existing note REQUIRES `base_hash`: without " <>
+        "one the write returns the same 409 and changes nothing (creating a new note needs " <>
+        "none). Notes over 10MB are rejected with 413, and exceeding the plan's note cap " <>
         "returns 402.",
     tags: ["Notes"],
     request_body:
@@ -61,11 +63,17 @@ defmodule EngramWeb.NotesController do
       actor = EngramWeb.WriteActor.for_conn(conn)
       surface = EngramWeb.RequestMeta.surface(conn.assigns)
 
+      opts = [
+        actor: actor,
+        surface: surface,
+        require_base: EngramWeb.WriteActor.requires_base?(conn)
+      ]
+
       # One transaction: the write, its job inserts and the response's links
       # read. Rendered inside it, sent after it commits.
       result =
         in_write_txn(user, fn user ->
-          case Notes.upsert_note(user, vault, params, actor: actor, surface: surface) do
+          case Notes.upsert_note(user, vault, params, opts) do
             {:ok, note} -> {:ok, note_json(note, user)}
             {:error, :version_conflict, server} -> {:conflict, note_json(server, user)}
             other -> other

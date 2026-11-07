@@ -878,6 +878,17 @@ defmodule Engram.MCP.Tools do
         "hash would name the whole note, not the part returned."
   }
 
+  # The optional compare-and-swap guard edit_note and append_to_note take
+  # (#2480). write_note's own is required to replace, so it says so itself.
+  @edit_base_hash_prop %{
+    "type" => "string",
+    "description" =>
+      "Optional content_hash from your get_notes read of this note. If the note changed " <>
+        "since, nothing is written and you get a version_conflict: call get_notes again " <>
+        "and retry with the new content_hash. Pass it when your change depends on what " <>
+        "you read."
+  }
+
   defp get_note_def do
     %{
       name: "get_note",
@@ -1070,9 +1081,10 @@ defmodule Engram.MCP.Tools do
           "To add text without touching existing content use append_to_note. To change one " <>
           "passage, or one heading's section, use edit_note. To create a " <>
           "note with no risk of overwriting an existing one use create_note; create_note " <>
-          "takes a title and picks the folder, not a path. When replacing a note you read, " <>
-          "pass its content_hash from get_notes as base_hash: if the user edited it since, " <>
-          "the write is refused instead of erasing their edit.",
+          "takes a title and picks the folder, not a path. Replacing a note that exists " <>
+          "REQUIRES base_hash: read it with get_notes and pass its content_hash. Without " <>
+          "one, or if the note changed since your read, nothing is written and you get a " <>
+          "version_conflict, so another client's edit is never erased.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -1084,9 +1096,9 @@ defmodule Engram.MCP.Tools do
           "base_hash" => %{
             "type" => "string",
             "description" =>
-              "content_hash from your get_notes read of this note. If the note changed " <>
-                "since, nothing is written and you get a version_conflict: read it again " <>
-                "and retry. Omit only to overwrite whatever the note holds."
+              "content_hash from your get_notes read of this note. Required when the note " <>
+                "exists; omit only to create a new note. If the note changed since, nothing " <>
+                "is written and you get a version_conflict: read it again and retry."
           }
         },
         "required" => ["path", "content"]
@@ -1120,7 +1132,8 @@ defmodule Engram.MCP.Tools do
             "default" => "end",
             "description" =>
               "end (default) appends; start inserts at the top, after any frontmatter"
-          }
+          },
+          "base_hash" => @edit_base_hash_prop
         },
         "required" => ["path", "text"]
       },
@@ -1149,7 +1162,8 @@ defmodule Engram.MCP.Tools do
           "it (first occurrence by default); mode replace_section replaces everything under " <>
           "one heading; mode insert_section adds content under a heading, at the start or " <>
           "end of that section, keeping what is there. Fails without writing if the text or " <>
-          "heading is not found, or if expected_replacements does not match. To add text at " <>
+          "heading is not found, if expected_replacements does not match, or if base_hash is " <>
+          "given and the note changed since that read. To add text at " <>
           "the top or bottom of the note use append_to_note. To rewrite the whole note use write_note.",
       inputSchema: %{
         "type" => "object",
@@ -1206,7 +1220,8 @@ defmodule Engram.MCP.Tools do
             "description" =>
               "insert_section only: start (directly under the heading) or end (default; after " <>
                 "the section's last line, including its subsections)"
-          }
+          },
+          "base_hash" => @edit_base_hash_prop
         },
         "required" => ["path", "mode"]
       },

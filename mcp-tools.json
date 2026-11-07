@@ -971,12 +971,12 @@
         "readOnlyHint": false,
         "title": "Write Note"
       },
-      "description": "Replace a note's entire content, or create the note if it does not exist. Saves, indexes for search, and syncs to Obsidian. Overwrites whatever the note held. To add text without touching existing content use append_to_note. To change one passage, or one heading's section, use edit_note. To create a note with no risk of overwriting an existing one use create_note; create_note takes a title and picks the folder, not a path. When replacing a note you read, pass its content_hash from get_notes as base_hash: if the user edited it since, the write is refused instead of erasing their edit.",
+      "description": "Replace a note's entire content, or create the note if it does not exist. Saves, indexes for search, and syncs to Obsidian. Overwrites whatever the note held. To add text without touching existing content use append_to_note. To change one passage, or one heading's section, use edit_note. To create a note with no risk of overwriting an existing one use create_note; create_note takes a title and picks the folder, not a path. Replacing a note that exists REQUIRES base_hash: read it with get_notes and pass its content_hash. Without one, or if the note changed since your read, nothing is written and you get a version_conflict, so another client's edit is never erased.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "base_hash": {
-            "description": "content_hash from your get_notes read of this note. If the note changed since, nothing is written and you get a version_conflict: read it again and retry. Omit only to overwrite whatever the note holds.",
+            "description": "content_hash from your get_notes read of this note. Required when the note exists; omit only to create a new note. If the note changed since, nothing is written and you get a version_conflict: read it again and retry.",
             "type": "string"
           },
           "content": {
@@ -1032,6 +1032,10 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "base_hash": {
+            "description": "Optional content_hash from your get_notes read of this note. If the note changed since, nothing is written and you get a version_conflict: call get_notes again and retry with the new content_hash. Pass it when your change depends on what you read.",
+            "type": "string"
+          },
           "path": {
             "description": "Full path for the note",
             "type": "string"
@@ -1095,10 +1099,14 @@
         "readOnlyHint": false,
         "title": "Edit Note"
       },
-      "description": "Change part of an existing note. mode replace_text finds exact text and replaces it (first occurrence by default); mode replace_section replaces everything under one heading; mode insert_section adds content under a heading, at the start or end of that section, keeping what is there. Fails without writing if the text or heading is not found, or if expected_replacements does not match. To add text at the top or bottom of the note use append_to_note. To rewrite the whole note use write_note.",
+      "description": "Change part of an existing note. mode replace_text finds exact text and replaces it (first occurrence by default); mode replace_section replaces everything under one heading; mode insert_section adds content under a heading, at the start or end of that section, keeping what is there. Fails without writing if the text or heading is not found, if expected_replacements does not match, or if base_hash is given and the note changed since that read. To add text at the top or bottom of the note use append_to_note. To rewrite the whole note use write_note.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "base_hash": {
+            "description": "Optional content_hash from your get_notes read of this note. If the note changed since, nothing is written and you get a version_conflict: call get_notes again and retry with the new content_hash. Pass it when your change depends on what you read.",
+            "type": "string"
+          },
           "content": {
             "description": "replace_section: new content for under the heading; insert_section: content to add",
             "type": "string"

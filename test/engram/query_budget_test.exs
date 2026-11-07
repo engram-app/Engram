@@ -72,6 +72,9 @@ defmodule Engram.QueryBudgetTest do
     "mcp get_notes" => 4,
     # Three paths, the same four: the notes come in one statement.
     "mcp get_notes 3 paths" => 4,
+    # 20 non-markdown paths cost what 20 markdown ones do: the batch reads no
+    # per-note CRDT state (#2486 round 6 removed a per-note state read).
+    "mcp get_notes 20 canvas paths" => 4,
     # begin, enter, the page (rows + budget), commit; one resolve chunk:
     # begin, enter, tail rows, commit.
     "catch-up page" => 8,
@@ -100,7 +103,10 @@ defmodule Engram.QueryBudgetTest do
     #  transaction (R6, -2): it replaced four post-write Oban queries (the
     #  EmbedNote unique check + scheduled_at replace, the ExtractNoteLinks and
     #  FinalizeRevision unique checks), which the dispatcher job now runs.
-    "mcp write_note update" => 12,
+    # Replacing now needs a base_hash (#2480), so the write is append_to_note's
+    # optimistic read-modify-write: +1, the locked re-read of the row the
+    # base was checked against. The plugin's REST push below still costs 12.
+    "mcp write_note update" => 13,
     # As write_note, with 4 the unlocked read and 5 the locked re-read of the
     # optimistic read-modify-write (Task 7 ruling F1) instead of the tail read
     # (the tail rides in the read statement).
@@ -118,7 +124,9 @@ defmodule Engram.QueryBudgetTest do
     # rows are read at all), notes rows, attachments rows, commit.
     "GET sync/manifest" => 6,
     "GET notes/*path" => 5,
-    # As "mcp write_note update" (1-11), plus the response's note_links read.
+    # The plugin's push: rotation lock, begin, enter, note row, crdt tail, seq
+    # bump, UPDATE, revision touch, outbox INSERT + pg_notify, commit, plus
+    # the response's note_links read.
     "POST notes update" => 12,
     # Rotation lock, begin, enter, path lookup, notes cap (usage_meters),
     # path-collision probe, seq bump, INSERT, the inserted row's re-read,
@@ -276,6 +284,24 @@ defmodule Engram.QueryBudgetTest do
       end)
     end
 
+    test "mcp get_notes 20 canvas paths", %{conn: conn, user: user, vault: vault} do
+      paths = for i <- 1..20, do: "Boards/b#{i}.canvas"
+
+      for p <- paths do
+        {:ok, _} =
+          Engram.Notes.upsert_note(
+            user,
+            vault,
+            %{"path" => p, "content" => ~s({"nodes":[],"edges":[]}), "mtime" => 1_000.0},
+            actor: "api"
+          )
+      end
+
+      measure("mcp get_notes 20 canvas paths", true, fn ->
+        conn |> call_tool("get_notes", %{"paths" => paths}) |> tool_ok!()
+      end)
+    end
+
     test "mcp get_notes 3 paths", %{conn: conn} do
       paths = ["Work/Existing.md", "Work/Other.md", "Missing.md"]
 
@@ -289,14 +315,24 @@ defmodule Engram.QueryBudgetTest do
       assert text =~ "Note not found: Missing.md"
     end
 
-    test "mcp write_note update", %{conn: conn} do
-      call_tool(conn, "write_note", %{"path" => "Work/New.md", "content" => "# New\n\nhello\n"})
+    test "mcp write_note update", %{conn: conn, user: user} do
+      bodies = ["# New\n\nhello\n", "# New\n\nv1\n", "# New\n\nv2\n"]
+      call_tool(conn, "write_note", %{"path" => "Work/New.md", "content" => hd(bodies)})
+
+      # Replacing needs the base_hash of the text it replaces (#2480). Hashed
+      # up front so the measured call counts only the write's own queries.
+      bases = Enum.map(bodies, &elem(Engram.Notes.content_hash(user, &1), 1))
+      Process.put(:qb_writes, Enum.zip(tl(bodies), bases))
 
       measure("mcp write_note update", true, fn ->
+        [{body, base} | rest] = Process.get(:qb_writes)
+        Process.put(:qb_writes, rest)
+
         conn
         |> call_tool("write_note", %{
           "path" => "Work/New.md",
-          "content" => "# New\n\nv#{System.unique_integer()}\n"
+          "content" => body,
+          "base_hash" => base
         })
         |> tool_ok!()
       end)
@@ -405,9 +441,12 @@ defmodule Engram.QueryBudgetTest do
       end)
     end
 
+    # The Obsidian plugin's push (it reports its version, so it needs no
+    # base_hash, #2480): the hot REST write.
     test "POST notes update", %{conn: conn} do
       measure("POST notes update", true, fn ->
         conn
+        |> put_req_header("x-plugin-version", "9.9.9")
         |> post("/api/notes", %{
           path: "Work/Existing.md",
           content: "# E\n\nv#{System.unique_integer()}",
