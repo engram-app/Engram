@@ -70,6 +70,7 @@ defmodule Engram.DataCase do
       # this, one test marking IndexVersions done (the runner's perform does,
       # on an empty DB) turns off the version sweeps in every later test.
       Engram.DataMigrations.reset_cache()
+      Engram.Cache.clear_local(:folder_hash_gate)
       reset_rebuild_gate()
     end
   end
