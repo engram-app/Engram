@@ -27,7 +27,8 @@ defmodule Engram.Vector.FilterRoundtripTest do
     ServiceConfig.put_override(:qdrant_url, qdrant_url())
 
     col =
-      "engram_rt_#{System.get_env("MIX_TEST_PARTITION")}_#{System.unique_integer([:positive])}"
+      "engram_rt_#{System.get_env("MIX_TEST_PARTITION")}_#{System.unique_integer([:positive])}_" <>
+        Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
 
     :ok = Qdrant.ensure_collection(col, @dims)
 
@@ -204,7 +205,15 @@ defmodule Engram.Vector.FilterRoundtripTest do
   test "without the n index: path alone, no 400; ensure_collection turns the n arm on",
        %{col: col} do
     {:ok, %{status: 200}} = Req.delete("#{qdrant_url()}/collections/#{col}/index/n?wait=true")
-    on_exit(fn -> Qdrant.ensure_collection(col, @dims) end)
+    # Restore the index even if an assertion below fails (`on_exit` runs in
+    # another process, so it needs the URL override again). The collection
+    # is this module's own and is dropped at module exit regardless.
+    url = qdrant_url()
+
+    on_exit(fn ->
+      ServiceConfig.put_override(:qdrant_url, url)
+      Qdrant.ensure_collection(col, @dims)
+    end)
 
     refute Qdrant.n_filterable?(col)
 
