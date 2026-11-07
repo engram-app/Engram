@@ -32,11 +32,11 @@ defmodule Engram.Workers.ReconcileNotePayloads do
       persisted cursor (`Engram.Maintenance.Cursor`), each user's notes in
       fixed id windows, selecting only stamped notes behind the version;
       each v5 point without `n` gets `%{"n" => note}` MERGED (never a key
-      deleted), in pages capped at what the window has left and charged
-      with their real size. No DEK, no decrypt, no upsert, no embedder call.
-      Then the notes are stamped with the version (compare-and-set on the
-      hash), not one holding legacy v3 points (they never get `n`, and have
-      no `u` for an `n` search). A held window stores the cursor and the job
+      deleted), and a legacy v3 point the whole identity (`u`, `v`, `n`),
+      in pages capped at what the window has left and charged with their
+      real size. No DEK, no decrypt, no upsert, no embedder call. Then the
+      notes are stamped with the version (compare-and-set on the hash). A
+      held window stores the cursor and the job
       queues itself again at the window's edge: one wake a window for the
       fleet, never one per user. A lap that reaches the last user ends the
       job; the hourly ledger queues it again while anyone is behind. A
@@ -697,9 +697,11 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   end
 
   # One window: its notes behind the version, their points' payloads, `n`
-  # merged onto those without it (paced per page), then the notes stamped,
-  # not one holding legacy v3 points (those never get `n`): each of those is
-  # counted (`legacy_v3`, with its v3 points in `legacy_v3_points`).
+  # merged onto those without it (paced per page), then the notes stamped. A
+  # legacy v3 point (no `u`) gets the whole identity payload (`u`, `v`, `n`)
+  # merged instead: R3a never rewrites a reused point, so nothing else would
+  # ever give it `n` (design (g)1). Notes holding v3 points are still counted
+  # (`legacy_v3`, their v3 points in `legacy_v3_points`).
   defp n_window(user, ids, counts) do
     {notes, points} = n_batch(user.id, ids)
 
@@ -724,14 +726,11 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   defp stamp_or_count(note, points, stored, counts) do
     counts = bump(counts, :checked)
+    stamp_version(note, hash: note.payload_hash)
 
     case v3_points(note, points, stored) do
-      0 ->
-        stamp_version(note, hash: note.payload_hash)
-        counts
-
-      v3 ->
-        counts |> bump(:legacy_v3) |> Map.update!(:legacy_v3_points, &(&1 + v3))
+      0 -> counts
+      v3 -> counts |> bump(:legacy_v3) |> Map.update!(:legacy_v3_points, &(&1 + v3))
     end
   end
 
@@ -740,7 +739,12 @@ defmodule Engram.Workers.ReconcileNotePayloads do
       Repo.with_tenant(user_id, fn ->
         notes =
           n_behind()
-          |> select([note: n], %{id: n.id, user_id: n.user_id, payload_hash: n.payload_hash})
+          |> select([note: n], %{
+            id: n.id,
+            user_id: n.user_id,
+            vault_id: n.vault_id,
+            payload_hash: n.payload_hash
+          })
           |> IdWindows.by_id(ids)
           |> Repo.all()
 
@@ -768,8 +772,14 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     for note <- notes,
         id <- Map.get(points, note.id, []),
         point = stored[id],
-        point != nil and v5?(point) and not Map.has_key?(point, @n_key),
-        do: {id, %{@n_key => FilterId.uuid(to_string(note.id))}}
+        point != nil and not Map.has_key?(point, @n_key),
+        do: {id, n_payload(note, point)}
+  end
+
+  defp n_payload(note, point) do
+    if v5?(point),
+      do: %{@n_key => FilterId.uuid(to_string(note.id))},
+      else: Indexing.identity_payload(note)
   end
 
   # Page by page, each page capped at what the bucket has left this window
