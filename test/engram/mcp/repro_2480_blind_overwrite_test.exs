@@ -44,6 +44,20 @@ defmodule Engram.MCP.Repro2480BlindOverwriteTest do
     note["content_hash"]
   end
 
+  # A live edit in the CRDT tail, not yet checkpointed into the row: get_notes
+  # serves row + tail, so the row's own content_hash is older than the view.
+  defp land_tail!(u, v, path, line) do
+    {:ok, row} = Notes.get_note(u, v, path)
+    {:ok, state} = Engram.Crypto.decrypt_crdt_state(row, u)
+    {:ok, doc} = CrdtBridge.doc_from_state(state)
+    {:ok, sv} = Yex.encode_state_vector(doc)
+    text = Yex.Doc.get_text(doc, CrdtBridge.text_name())
+    CrdtBridge.diff_into_text(text, Yex.Text.to_string(text) <> line)
+    {:ok, upd} = Yex.encode_state_as_update(doc, sv)
+    st = %{user_id: u.id, vault_id: v.id, note_id: row.id}
+    _ = CrdtPersistence.update_v1(st, upd, row.id, doc)
+  end
+
   defp assert_conflict({:error, {:version_conflict, msg}}), do: assert(msg =~ "get_notes")
 
   # Client 2's read, then client 1's edit_note replace_section.
@@ -441,16 +455,7 @@ defmodule Engram.MCP.Repro2480BlindOverwriteTest do
     user: u,
     vault: v
   } do
-    {:ok, row} = Notes.get_note(u, v, @path)
-    {:ok, state} = Engram.Crypto.decrypt_crdt_state(row, u)
-    {:ok, doc} = CrdtBridge.doc_from_state(state)
-    {:ok, sv} = Yex.encode_state_vector(doc)
-    text = Yex.Doc.get_text(doc, CrdtBridge.text_name())
-    CrdtBridge.diff_into_text(text, Yex.Text.to_string(text) <> "LIVE\n")
-    {:ok, upd} = Yex.encode_state_as_update(doc, sv)
-    st = %{user_id: u.id, vault_id: v.id, note_id: row.id}
-    _ = CrdtPersistence.update_v1(st, upd, row.id, doc)
-
+    land_tail!(u, v, @path, "LIVE\n")
     base = read_hash(u, v)
 
     assert {:ok, _, %{"content_hash" => hash}} =
@@ -461,5 +466,45 @@ defmodule Engram.MCP.Repro2480BlindOverwriteTest do
              })
 
     assert hash == read_hash(u, v)
+  end
+
+  # Re-saving unchanged content over a pending tail is a no-op: the reply's
+  # content_hash must still be the one get_notes serves (not the row's older
+  # one), and nothing is broadcast because nothing changed. Review of #2518.
+  for {shape, seed, line} <- [
+        {"plain", @v0, "LIVE\n"},
+        {"frontmatter-only", "---\ntags: [a]\n---\n", "LIVE\n"},
+        {"CRLF", "# A\r\n\r\nline\r\n", "LIVE\r\n"}
+      ] do
+    test "a no-op rewrite over a live tail edit returns get_notes' hash (#{shape})", %{
+      user: u,
+      vault: v
+    } do
+      path = "Noop.md"
+
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"path" => path, "content" => unquote(seed)}, actor: "api")
+
+      land_tail!(u, v, path, unquote(line))
+      {:ok, _, %{"notes" => [seen]}} = Handlers.handle("get_notes", u, v, %{"paths" => [path]})
+      EngramWeb.Endpoint.subscribe("sync:#{u.id}:#{v.id}")
+
+      assert {:ok, _, %{"content_hash" => hash}} =
+               Handlers.handle("write_note", u, v, %{
+                 "path" => path,
+                 "content" => seen["content"],
+                 "base_hash" => seen["content_hash"]
+               })
+
+      assert hash == read_hash(u, v, path)
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_changed"}, 100
+
+      assert {:ok, _, _} =
+               Handlers.handle("write_note", u, v, %{
+                 "path" => path,
+                 "content" => "second\n",
+                 "base_hash" => hash
+               })
+    end
   end
 end
