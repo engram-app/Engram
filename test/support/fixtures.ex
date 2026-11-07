@@ -619,12 +619,15 @@ defmodule Engram.Fixtures do
 
     case Keyword.fetch(opts, :role) do
       {:ok, role} ->
-        Engram.Repo.query!("SELECT set_config('role', $1, false)", [role])
+        # SESSION AUTHORIZATION, not SET ROLE: a role reset lands back on
+        # this role, not the suite's superuser (rls-enforcement-testing-traps
+        # trap 6). In the sandbox transaction, so `LOCAL` lasts the run.
+        Engram.Repo.query!("SET LOCAL SESSION AUTHORIZATION #{role}")
 
         try do
           mod.complete_split(Engram.Repo)
         after
-          Engram.Repo.query!("RESET ROLE")
+          Engram.Repo.query!("SET LOCAL SESSION AUTHORIZATION DEFAULT")
         end
 
       :error ->

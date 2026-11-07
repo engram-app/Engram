@@ -208,4 +208,48 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
     assert log =~ "may not decrypt"
     assert read!(u, v, "owned.md") == "owned text"
   end
+
+  # Review HIGH-1: release B writes only the nonce on `notes`, so an edited
+  # note keeps an OLD notes ciphertext under its NEW nonce, while the body
+  # holds the new envelope. The repair must keep the body (its prefix
+  # matches the notes nonce), not rebuild it from the stale copy.
+  test "a body row owned by another user after a release-B edit keeps the newer body",
+       %{user: u, vault: v} do
+    note = write!(u, v, "edited.md", "first text")
+    Engram.Fixtures.old_release_notes_copy!(note.id)
+    write!(u, v, "edited.md", "second text")
+    foreign_body!(note)
+    assert read!(u, v, "edited.md") == nil
+
+    Engram.Fixtures.complete_split!()
+    assert read!(u, v, "edited.md") == "second text"
+  end
+
+  # Prod's migrator owns the tables but is no superuser, so FORCE RLS binds
+  # it and the foreign body row is invisible: only the repair's NO FORCE
+  # lets it reach the row. The suite's role bypasses RLS, so this runs the
+  # split as a NOSUPERUSER NOBYPASSRLS role that owns `note_bodies` (DDL in
+  # the sandbox, rolled back). Without the NO FORCE / FORCE pair the UPDATE
+  # is filtered, not rejected (RLS trap 1), and the note still reads nil.
+  test "the owner repair reaches the row as a non-superuser owner of note_bodies",
+       %{user: u, vault: v} do
+    note = write!(u, v, "owned.md", "owned text")
+    foreign_body!(note)
+
+    Repo.query!("CREATE ROLE r8c_migrator NOSUPERUSER NOBYPASSRLS NOINHERIT")
+
+    Repo.query!(
+      "GRANT SELECT, INSERT, UPDATE ON users, notes, note_bodies, note_index_state TO r8c_migrator"
+    )
+
+    Repo.query!("ALTER TABLE note_bodies OWNER TO r8c_migrator")
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+        assert :ok = Engram.Fixtures.complete_split!(role: "r8c_migrator")
+      end)
+
+    refute log =~ "still read with no body"
+    assert read!(u, v, "owned.md") == "owned text"
+  end
 end

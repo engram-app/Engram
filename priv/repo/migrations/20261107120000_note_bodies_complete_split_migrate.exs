@@ -42,14 +42,16 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   Nothing else heals it, so the check repairs it: for those notes only, in
   one transaction with `note_bodies` under `NO FORCE ROW LEVEL SECURITY`
   (the documented bypass; ACCESS EXCLUSIVE on `note_bodies`, restored by
-  FORCE or the rollback), a note whose `notes` copy is present (the null
-  batch never clears such a row) gets its body rebuilt from that copy, as
-  the insert builds it (the CRDT state kept when the copy has none), and a
-  note without one gets its body row handed back to its owner, with a
-  warning that the bytes may not decrypt. A note's envelopes are bound to
-  its own id (AAD) and its owner's key, so bytes written for it decrypt
-  once the row is the owner's again. A note still unreadable after that
-  logs a warning. Never a raise: a raising migration blocks every boot
+  FORCE or the rollback), the body row goes back to the note's owner. Per
+  column the body bytes are kept when they hold the envelope under the
+  `notes` nonce (the copy or newer: release B writes only the nonce on
+  `notes`, so a copy can be stale under a newer nonce), rebuilt from the
+  `notes` copy only when they do not (or are NULL) and a copy exists, and
+  otherwise kept unverified. A note's envelopes are bound to its own id
+  (AAD) and its owner's key, so bytes written for it decrypt once the row is
+  the owner's again. Each path is logged with the note ids; the repair
+  repeats until the user has no such note, and a note still unreadable after
+  that logs a warning. Never a raise: a raising migration blocks every boot
   (zero operator action).
 
   Prod (2026-11-07): 0 notes without a body row and 0 body rows under
@@ -110,35 +112,57 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   ORDER BY n.id LIMIT #{@window}
   """
 
-  # The repair, RLS bypassed on `note_bodies`: rebuild from the `notes`
-  # copy where it is present, else hand the row back to the owner.
-  @from_copy """
-  INSERT INTO note_bodies (note_id, user_id, key_version, content_ct, crdt_ct, crdt_head)
-    SELECT n.id, n.user_id,
-      CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END,
-      #{merged.("content_ciphertext", "content_nonce")},
-      #{merged.("crdt_state_ciphertext", "crdt_state_nonce")},
-      CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$'
-        THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END
-    FROM notes n
-    WHERE n.id = ANY($1::uuid[]) AND n.user_id = $2 AND n.kind = 'note'
-      AND n.content_ciphertext IS NOT NULL
-  ON CONFLICT (note_id) DO UPDATE SET
-    user_id = EXCLUDED.user_id,
-    key_version = EXCLUDED.key_version,
-    content_ct = EXCLUDED.content_ct,
-    crdt_ct = COALESCE(EXCLUDED.crdt_ct, note_bodies.crdt_ct),
-    crdt_head = EXCLUDED.crdt_head
-  """
+  # True when body column `body` holds the envelope under the `notes` nonce
+  # (its 13-byte nonce field; for a pre-nonce row, the copy's first 13
+  # bytes): the in-step test of the null batch and the write fences.
+  in_step = fn body, ct, nonce ->
+    """
+    (b.#{body} IS NOT NULL AND substring(b.#{body} FROM 1 FOR 13) = substring((CASE
+      WHEN n.#{nonce} IS NULL THEN n.#{ct}
+      WHEN length(n.#{nonce}) = 13 THEN n.#{nonce}
+      ELSE '\\x00'::bytea || n.#{nonce} END) FROM 1 FOR 13))
+    """
+  end
 
-  @to_owner """
+  c_ok = in_step.("content_ct", "content_ciphertext", "content_nonce")
+  s_ok = in_step.("crdt_ct", "crdt_state_ciphertext", "crdt_state_nonce")
+  c_copy = merged.("content_ciphertext", "content_nonce")
+  s_copy = merged.("crdt_state_ciphertext", "crdt_state_nonce")
+
+  head =
+    "CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$' " <>
+      "THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END"
+
+  # The repair, RLS bypassed on `note_bodies`: the row goes back to the
+  # note's owner. Per column, the body is kept when it holds the envelope
+  # under the `notes` nonce (it is the copy or newer: release B writes only
+  # the nonce on `notes`, so the copy can be stale under a newer nonce), and
+  # rebuilt from the `notes` copy only when it does not (or is NULL) and a
+  # copy exists; else kept as it is, which may not decrypt. The head follows
+  # the CRDT state it was computed from. Returns each note's path per column:
+  # `body`, `copy` or `unverified`.
+  path = fn ok, copy ->
+    "CASE WHEN #{ok} THEN 'body' WHEN #{copy} IS NOT NULL THEN 'copy' ELSE 'unverified' END"
+  end
+
+  @repair """
+  WITH r AS (
+    SELECT n.id, n.user_id,
+      CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END AS key_version,
+      #{path.(c_ok, c_copy)} AS c_path,
+      #{path.(s_ok, s_copy)} AS s_path,
+      CASE WHEN #{c_ok} THEN b.content_ct ELSE COALESCE(#{c_copy}, b.content_ct) END AS content_ct,
+      CASE WHEN #{s_ok} THEN b.crdt_ct ELSE COALESCE(#{s_copy}, b.crdt_ct) END AS crdt_ct,
+      CASE WHEN #{s_ok} OR #{s_copy} IS NULL THEN b.crdt_head ELSE #{head} END AS crdt_head
+    FROM notes n JOIN note_bodies b ON b.note_id = n.id
+    WHERE n.id = ANY($1::uuid[]) AND b.note_id = ANY($1::uuid[]) AND n.user_id = $2
+      AND n.kind = 'note' AND b.user_id <> n.user_id
+  )
   UPDATE note_bodies b SET
-    user_id = n.user_id,
-    key_version = CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END
-  FROM notes n
-  WHERE b.note_id = n.id AND n.id = ANY($1::uuid[]) AND n.user_id = $2
-    AND b.user_id <> n.user_id
-  RETURNING b.note_id::text
+    user_id = r.user_id, key_version = r.key_version,
+    content_ct = r.content_ct, crdt_ct = r.crdt_ct, crdt_head = r.crdt_head
+  FROM r WHERE b.note_id = r.id
+  RETURNING b.note_id::text, r.c_path, r.s_path
   """
 
   def up, do: complete_split(repo())
@@ -162,21 +186,27 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
 
   defp user!(repo, user_id) do
     walk(repo, user_id, <<0::128>>)
+    check(repo, user_id, left(repo, user_id))
+  end
+
+  # Repairs until no note of the user reads with no body, or a repair makes
+  # no progress (a note with no body row at all: none after the walk).
+  defp check(_repo, _user_id, []), do: :ok
+
+  defp check(repo, user_id, ids) do
+    repair(repo, user_id, ids)
 
     case left(repo, user_id) do
-      [] ->
-        :ok
-
-      ids ->
-        repair(repo, user_id, ids)
-
+      ^ids ->
         # A warning, never a raise: a raising migration blocks every boot.
-        with [_ | _] = still <- left(repo, user_id) do
-          Logger.warning("note_bodies split incomplete: notes still read with no body",
-            user_id: Ecto.UUID.load!(user_id),
-            note_ids: Enum.map(still, &Ecto.UUID.load!/1)
-          )
-        end
+        Logger.warning("note_bodies split incomplete: notes still read with no body",
+          category: :data,
+          user_id: Ecto.UUID.load!(user_id),
+          note_ids: Enum.map(ids, &Ecto.UUID.load!/1)
+        )
+
+      rest ->
+        check(repo, user_id, rest)
     end
   end
 
@@ -186,22 +216,25 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
 
   # Only for a user with a note under a foreign body row (prod: none).
   defp repair(repo, user_id, ids) do
-    handed_back =
+    rows =
       tenant(repo, user_id, fn ->
         repo.query!("ALTER TABLE note_bodies NO FORCE ROW LEVEL SECURITY")
-        repo.query!(@from_copy, [ids, user_id])
-        %{rows: rows} = repo.query!(@to_owner, [ids, user_id])
+        %{rows: rows} = repo.query!(@repair, [ids, user_id])
         repo.query!("ALTER TABLE note_bodies FORCE ROW LEVEL SECURITY")
-        Enum.map(rows, &hd/1)
+        rows
       end)
 
-    if handed_back != [] do
+    rows
+    |> Enum.group_by(fn [_id, c, s] -> {c, s} end, &hd/1)
+    |> Enum.each(fn {{c, s}, note_ids} ->
       Logger.warning(
-        "note_bodies split: body rows handed back to their owner, no notes copy; the bytes may not decrypt",
+        "note_bodies split: body rows handed back to their owner " <>
+          "(content from #{c}, CRDT state from #{s}; unverified may not decrypt)",
+        category: :data,
         user_id: Ecto.UUID.load!(user_id),
-        note_ids: handed_back
+        note_ids: note_ids
       )
-    end
+    end)
   end
 
   defp walk(repo, user_id, after_id) do

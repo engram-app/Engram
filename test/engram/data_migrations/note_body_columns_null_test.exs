@@ -376,21 +376,31 @@ defmodule Engram.DataMigrations.NoteBodyColumnsNullTest do
 
       %{rows: [[[plan]]]} = Repo.query!("EXPLAIN (FORMAT JSON) " <> Null.null_sql(), [ids])
 
+      nodes = plan_nodes(plan["Plan"])
+      rels = ~w(notes note_bodies)
+      refute Enum.any?(nodes, &(&1["Node Type"] == "Seq Scan" and &1["Relation Name"] in rels))
+
+      # Every read of either table is index-driven: an Index (Only) Scan, or
+      # a Bitmap Heap Scan over a Bitmap Index Scan (the planner picks by
+      # stats; both are bounded).
       scans =
-        for n <- plan_nodes(plan["Plan"]),
-            n["Relation Name"] in ~w(notes note_bodies),
-            n["Node Type"] != "ModifyTable",
-            do:
-              {n["Relation Name"], n["Node Type"], n["Index Cond"] || n["Recheck Cond"],
-               n["Plan Rows"]}
+        for n <- nodes, n["Relation Name"] in rels, n["Node Type"] != "ModifyTable" do
+          assert n["Node Type"] in ["Index Scan", "Index Only Scan", "Bitmap Heap Scan"],
+                 inspect(n["Node Type"])
 
-      assert Enum.any?(scans, &match?({"note_bodies", _, _, _}, &1)), inspect(scans)
+          if n["Node Type"] == "Bitmap Heap Scan",
+            do: assert(Enum.map(n["Plans"] || [], & &1["Node Type"]) == ["Bitmap Index Scan"])
 
-      for {rel, type, cond, rows} = scan <- scans do
-        refute type == "Seq Scan", inspect(scan)
-        assert rows <= 200, inspect(scan)
-        assert cond =~ "ANY" or (rel == "notes" and cond == "(id = c.id)"), inspect(scan)
-      end
+          cond = n["Index Cond"] || n["Recheck Cond"] || ""
+          assert n["Plan Rows"] <= 200, inspect({n["Relation Name"], n["Plan Rows"]})
+          {n["Relation Name"], cond}
+        end
+
+      # The body rows by the window's ids, not only through the join.
+      assert Enum.any?(scans, fn {rel, cond} -> rel == "note_bodies" and cond =~ "ANY" end),
+             inspect(scans)
+
+      for {"notes", cond} <- scans, do: assert(cond =~ "ANY" or cond =~ "c.id", cond)
     end
 
     defp plan_nodes(node), do: [node | Enum.flat_map(node["Plans"] || [], &plan_nodes/1)]
