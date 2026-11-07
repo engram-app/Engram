@@ -11,6 +11,7 @@ defmodule Engram.MCP.BaseHashShapes2480Test do
   import Ecto.Query, only: [from: 2]
 
   alias Engram.Notes.CrdtBridge
+  alias Engram.Notes.CrdtPersistence
   alias Engram.Notes.CrdtRegistry
   alias Yex.Sync.SharedDoc
 
@@ -55,7 +56,7 @@ defmodule Engram.MCP.BaseHashShapes2480Test do
     CrdtBridge.diff_into_text(text, edit.(Yex.Text.to_string(text)))
     {:ok, upd} = Yex.encode_state_as_update(doc, sv)
     st = %{user_id: user.id, vault_id: vault.id, note_id: note_id}
-    _ = Engram.Notes.CrdtPersistence.update_v1(st, upd, note_id, doc)
+    _ = CrdtPersistence.update_v1(st, upd, note_id, doc)
     doc
   end
 
@@ -109,7 +110,7 @@ defmodule Engram.MCP.BaseHashShapes2480Test do
         )
       end)
 
-    _ = Engram.Notes.CrdtPersistence.apply_tail_rows(doc, user, row.id, ids)
+    _ = CrdtPersistence.apply_tail_rows(doc, user, row.id, ids)
 
     :ok =
       Engram.Notes.CrdtCheckpoint.checkpoint(user.id, vault.id, row.id, doc,
@@ -327,40 +328,228 @@ defmodule Engram.MCP.BaseHashShapes2480Test do
     assert text_of(u, v, "a.md") =~ "LIVE"
   end
 
-  for {name, path, base} <- [
-        {:canvas_tail, "b.canvas", ~s({"nodes":[],"edges":[]})},
-        {:md_partial_replay, "a.md", @body},
-        {:txt_tail, "c.txt", "plain text\n"}
-      ] do
-    test "#{name}: REST served-row base keeps the hidden live edit", ctx do
+  defp read_note(conn, path) do
+    [note] =
+      conn
+      |> call_tool("get_notes", %{"paths" => [path]})
+      |> json_response(200)
+      |> get_in(["result", "structuredContent", "notes"])
+
+    note
+  end
+
+  defp count(t, s), do: length(String.split(t, s)) - 1
+
+  # A writer that derives its text from its read, the realistic agent or
+  # script, keeps every live edit exactly once: one the read showed (the
+  # canonical view projects .canvas and .txt docs too) and one it hid (a
+  # partial replay serves the row; the write then merges relative to the
+  # snapshot, which still projects to that row).
+  for {name, path} <- [canvas_tail: "b.canvas", md_partial_replay: "a.md", txt_tail: "c.txt"] do
+    test "#{name}: a REST write derived from the GET keeps the live edit once", ctx do
       %{conn: conn, user: u, vault: v} = ctx
       shape(unquote(name), u, v, unquote(path))
       got = conn |> get("/api/notes/#{unquote(path)}") |> json_response(200)
-      refute got["content"] =~ "LIVE"
 
       resp =
         post(conn, "/api/notes", %{
           path: unquote(path),
-          content: unquote(base) <> "SCRIPT\n",
+          content: got["content"] <> "SCRIPT\n",
           mtime: 2.0,
           base_hash: got["content_hash"]
         })
 
       assert resp.status == 200, inspect(resp.resp_body)
       t = text_of(u, v, unquote(path))
-      assert t =~ "LIVE", inspect(t)
+      assert count(t, "LIVE") == 1, inspect(t)
       assert t =~ "SCRIPT", inspect(t)
     end
 
-    test "#{name}: MCP served-row base keeps the hidden live edit", ctx do
+    test "#{name}: an MCP write derived from get_notes keeps the live edit once", ctx do
+      %{conn: conn, user: u, vault: v} = ctx
+      shape(unquote(name), u, v, unquote(path))
+      note = read_note(conn, unquote(path))
+      ok = mcp_write(conn, unquote(path), note["content"] <> "AGENT\n", note["content_hash"])
+      refute ok["result"]["isError"], inspect(ok)
+      t = text_of(u, v, unquote(path))
+      assert count(t, "LIVE") == 1, inspect(t)
+      assert t =~ "AGENT", inspect(t)
+    end
+  end
+
+  # -- Round-4 review probes --
+
+  # edit_note and append_to_note with the get_notes hash, on every shape
+  # whose doc and row could disagree.
+  for {name, path, find} <- [
+        {:canvas_tail, "b.canvas", "nodes"},
+        {:txt_tail, "c.txt", "plain text"},
+        {:md_partial_replay, "a.md", "body text"},
+        {:md_tail_empties, "a.md", "body text"},
+        {:md_uppercase_ext_tail, "A.MD", "body text"}
+      ] do
+    test "#{name}: edit_note with the read's base keeps the live edit", ctx do
       %{conn: conn, user: u, vault: v} = ctx
       shape(unquote(name), u, v, unquote(path))
       h = get_notes_hash(conn, unquote(path))
-      ok = mcp_write(conn, unquote(path), unquote(base) <> "AGENT\n", h)
+
+      r =
+        conn
+        |> call_tool("edit_note", %{
+          "path" => unquote(path),
+          "mode" => "replace_text",
+          "find" => unquote(find),
+          "replace" => "EDITED",
+          "base_hash" => h
+        })
+        |> json_response(200)
+
+      t = text_of(u, v, unquote(path))
+      refute r["result"]["isError"], inspect(r)
+      assert t =~ "EDITED"
+      if unquote(name) != :md_tail_empties, do: assert(count(t, "LIVE") == 1, inspect(t))
+    end
+
+    test "#{name}: append_to_note with the read's base keeps the live edit", ctx do
+      %{conn: conn, user: u, vault: v} = ctx
+      shape(unquote(name), u, v, unquote(path))
+      h = get_notes_hash(conn, unquote(path))
+
+      r =
+        conn
+        |> call_tool("append_to_note", %{
+          "path" => unquote(path),
+          "text" => "APPENDED",
+          "base_hash" => h
+        })
+        |> json_response(200)
+
+      t = text_of(u, v, unquote(path))
+      refute r["result"]["isError"], inspect(r)
+      assert t =~ "APPENDED"
+      if unquote(name) != :md_tail_empties, do: assert(count(t, "LIVE") == 1, inspect(t))
+    end
+  end
+
+  # Round-4 finding 1: a stale base whose content equals the current text was
+  # a 200 that doubled the tail edit. It is the writer's own retry: a no-op.
+  test "REST stale base with content equal to the current text writes nothing", ctx do
+    %{conn: conn, user: u, vault: v} = ctx
+    shape(:md_tail_edit, u, v, "a.md")
+    got = conn |> get("/api/notes/a.md") |> json_response(200)
+
+    post(conn, "/api/notes", %{
+      path: "a.md",
+      content: got["content"],
+      mtime: 2.0,
+      base_hash: "deadbeef"
+    })
+    |> json_response(200)
+
+    assert count(text_of(u, v, "a.md"), "LIVE") == 1
+  end
+
+  test "REST stale base with content equal to a .txt's current text writes nothing", ctx do
+    %{conn: conn, user: u, vault: v} = ctx
+    shape(:txt_tail, u, v, "c.txt")
+
+    post(conn, "/api/notes", %{
+      path: "c.txt",
+      content: "plain text\nLIVE\n",
+      mtime: 2.0,
+      base_hash: "deadbeef"
+    })
+    |> json_response(200)
+
+    assert count(text_of(u, v, "c.txt"), "LIVE") == 1
+  end
+
+  # A tail edit that lands during the (locked) rebuild is kept.
+  for {name, path} <- [txt_tail: "c.txt", canvas_tail: "b.canvas"] do
+    test "#{name}: a tail edit during the rebuild is kept", ctx do
+      %{conn: conn, user: u, vault: v} = ctx
+      shape(unquote(name), u, v, unquote(path))
+      note = read_note(conn, unquote(path))
+      {:ok, row} = Engram.Notes.get_note(u, v, unquote(path))
+      {:ok, doc} = CrdtBridge.doc_from_state(snapshot_of(u, row))
+      calls = :counters.new(1, [])
+
+      rebuild = fn _cur ->
+        :counters.add(calls, 1, 1)
+        if :counters.get(calls, 1) == 1, do: land_tail(u, v, row.id, doc, &(&1 <> "LIVE2\n"))
+        note["content"] <> "AGENT\n"
+      end
+
+      _ =
+        Engram.MCP.Handlers.rmw_upsert(u, v, unquote(path), rebuild,
+          base_hash: note["content_hash"]
+        )
+
+      t = text_of(u, v, unquote(path))
+      assert t =~ "AGENT"
+      assert t =~ "LIVE2"
+    end
+  end
+
+  test "canvas live room: an MCP write derived from get_notes keeps the room edit", ctx do
+    %{conn: conn, user: u, vault: v} = ctx
+    put!(u, v, "b.canvas", ~s({"nodes":[],"edges":[]}))
+    type_into_room(u, v, "b.canvas", &(&1 <> "LIVE"))
+    note = read_note(conn, "b.canvas")
+    ok = mcp_write(conn, "b.canvas", note["content"] <> "AGENT\n", note["content_hash"])
+    refute ok["result"]["isError"]
+    t = text_of(u, v, "b.canvas")
+    assert count(t, "LIVE") == 1 and t =~ "AGENT", inspect(t)
+  end
+
+  # Round-4 finding 2: after a structural checkpoint folded live edits into
+  # the snapshot, a base from a read before it deleted them. The canonical
+  # view now projects every file type, so the read saw those edits; a write
+  # derived from it keeps them, and a read older than a later edit refuses.
+  for {name, path} <- [txt_tail: "c.txt", md_uppercase_ext_tail: "A.MD"] do
+    test "#{name}: a write from a read before a checkpoint keeps the live edit", ctx do
+      %{conn: conn, user: u, vault: v} = ctx
+      shape(unquote(name), u, v, unquote(path))
+      note = read_note(conn, unquote(path))
+      assert note["content"] =~ "LIVE"
+      checkpoint!(u, v, unquote(path))
+      ok = mcp_write(conn, unquote(path), note["content"] <> "AGENT\n", note["content_hash"])
       refute ok["result"]["isError"], inspect(ok)
       t = text_of(u, v, unquote(path))
-      assert t =~ "LIVE", inspect(t)
-      assert t =~ "AGENT", inspect(t)
+      assert count(t, "LIVE") == 1 and t =~ "AGENT", inspect(t)
     end
+
+    test "#{name}: a read older than a later live edit refuses, before or after a checkpoint",
+         ctx do
+      %{conn: conn, user: u, vault: v} = ctx
+      shape(unquote(name), u, v, unquote(path))
+      note = read_note(conn, unquote(path))
+      {:ok, row} = Engram.Notes.get_note(u, v, unquote(path))
+      {:ok, doc} = CrdtBridge.doc_from_state(snapshot_of(u, row))
+      CrdtPersistence.apply_tail_rows(doc, u, row.id, tail_of(u, row.id))
+      land_tail(u, v, row.id, doc, &(&1 <> "LIVE2\n"))
+      checkpoint!(u, v, unquote(path))
+
+      r = mcp_write(conn, unquote(path), note["content"] <> "AGENT\n", note["content_hash"])
+      assert r["result"]["isError"], inspect(r)
+
+      rest =
+        post(conn, "/api/notes", %{
+          path: unquote(path),
+          content: note["content"] <> "SCRIPT\n",
+          mtime: 2.0,
+          base_hash: note["content_hash"]
+        })
+
+      assert rest.status == 409
+      t = text_of(u, v, unquote(path))
+      assert t =~ "LIVE" and t =~ "LIVE2", inspect(t)
+    end
+  end
+
+  defp tail_of(user, note_id) do
+    Engram.Repo.with_tenant!(user.id, fn ->
+      Engram.Repo.all(from(l in Engram.Notes.CrdtUpdateLog, where: l.note_id == ^note_id))
+    end)
   end
 end
