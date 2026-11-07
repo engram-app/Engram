@@ -405,6 +405,54 @@ defmodule Engram.Vector.QdrantTest do
     end
   end
 
+  describe "per-note filters' n probe" do
+    # A failed probe is not a "no": cached, it would keep the per-note
+    # filters path-only for a minute and miss R3a points (no `p`).
+    test "a failed n-index check is not cached; the next call uses the n arm", %{
+      bypass: bypass
+    } do
+      ServiceConfig.put_override(:qdrant_note_id_filter, true)
+      col = "n_probe_#{System.unique_integer([:positive])}"
+      note_id = "33333333-3333-3333-3333-333333333333"
+      {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+      Bypass.stub(bypass, "GET", "/collections/#{col}", fn conn ->
+        case Agent.get_and_update(calls, &{&1, &1 + 1}) do
+          0 ->
+            Plug.Conn.send_resp(conn, 500, ~s({"status":{"error":"boom"}}))
+
+          _ ->
+            info = %{"status" => "green", "payload_schema" => %{"n" => %{"data_type" => "uuid"}}}
+
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(200, Jason.encode!(%{result: info, status: "ok"}))
+        end
+      end)
+
+      test_pid = self()
+
+      Bypass.stub(bypass, "POST", "/collections/#{col}/points/count", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:count_filter, Jason.decode!(body)["filter"]})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": {"count": 0}}))
+      end)
+
+      by_id = %{"key" => "n", "match" => %{"value" => Engram.Vector.FilterId.uuid(note_id)}}
+
+      assert {:ok, 0} = Qdrant.count_by_note(col, "7", "9", note_id, "oldp==")
+      assert_received {:count_filter, first}
+      refute inspect(first) =~ inspect(by_id)
+
+      assert {:ok, 0} = Qdrant.count_by_note(col, "7", "9", note_id, "oldp==")
+      assert_received {:count_filter, %{"must" => must}}
+      assert Enum.any?(must, &match?(%{"should" => [^by_id, _]}, &1))
+    end
+  end
+
   describe "search/3" do
     test "returns search results", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
