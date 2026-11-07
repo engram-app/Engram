@@ -6,6 +6,7 @@ defmodule Engram.Search.NameTermsTest do
   test says otherwise: a hit can only come from the leg.
   """
   use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Engram.RlsCase
 
@@ -311,48 +312,49 @@ defmodule Engram.Search.NameTermsTest do
 
     test "a term with more than 500 live postings reads 500", ctx do
       {:ok, fk} = Crypto.dek_filter_key(ctx.user)
-      [common, _zebra] = dims = NameTerms.dims(["common zebra"], fk)
+      [alpha, _] = a_dims = NameTerms.dims(["alpha zebra"], fk)
+      [beta, _] = b_dims = NameTerms.dims(["beta yak"], fk)
 
-      # `fillers` live notes posted on `common` only, then the target (UUIDv7
-      # ids: the fillers precede it in posting order), in a vault of its own.
-      insert(:user_limit_override, user: ctx.user, key: "vaults_cap", value: %{"v" => -1})
+      # Live fillers posted on `alpha` (499) and `beta` (501) only, then the
+      # targets: UUIDv7 ids, so every filler precedes them in posting order.
+      postings!(ctx.user, ctx.vault, alpha, 499)
+      postings!(ctx.user, ctx.vault, beta, 501)
+      a = write!(ctx.user, ctx.vault, "alpha zebra.md")
+      b = write!(ctx.user, ctx.vault, "beta yak.md")
+      for n <- [a, b], do: :ok = NameTerms.on_note_written(ctx.user, n)
+      hits = &tenant(ctx.user, fn -> NameTerms.hits([ctx.vault.id], &1, 0) end)
+      {aid, bid} = {a.id, b.id}
 
-      ranked = fn fillers ->
-        {:ok, vault, _} =
-          Engram.Vaults.register_vault(ctx.user, "P#{fillers}", Ecto.UUID.generate())
+      # 499 + the target = 500 `alpha` postings: both terms read, it ranks first.
+      assert [{^aid, 2} | _] = hits.(a_dims)
 
-        postings!(ctx.user, vault, common, fillers)
-        target = write!(ctx.user, vault, "common zebra.md")
-        :ok = NameTerms.on_note_written(ctx.user, target)
-        hits = tenant(ctx.user, fn -> NameTerms.hits([vault.id], dims, 0) end)
-        {target.id, hits}
-      end
-
-      # 499 + the target = 500 `common` postings: both terms read, it ranks first.
-      {tid, hits} = ranked.(499)
-      assert [{^tid, 2} | _] = hits
-
-      # 501 fillers: `common`'s 500 stop before the target; only `zebra` counts.
-      {tid, hits} = ranked.(501)
-      refute Enum.any?(hits, &match?({^tid, 2}, &1))
-      assert length(hits) == 50
+      # 501 fillers: `beta`'s 500 stop before the target; only `yak` counts.
+      b_hits = hits.(b_dims)
+      refute Enum.any?(b_hits, &match?({^bid, 2}, &1))
+      assert length(b_hits) == 50
     end
 
     test "folder postings have their own budget", ctx do
       {:ok, fk} = Crypto.dek_filter_key(ctx.user)
-      [dim] = NameTerms.dims(["Notes"], fk)
+      [dim] = NameTerms.dims(["Zanzibar"], fk)
       # 600 notes' postings on the same word, before the folder's in time.
       postings!(ctx.user, ctx.vault, dim, 600)
-      note = write!(ctx.user, ctx.vault, "Notes/inside.md")
+      note = write!(ctx.user, ctx.vault, "Zanzibar/inside.md")
       point = indexed!(ctx.user, note)
 
       assert [_folder] = tenant(ctx.user, fn -> NameTerms.hits([ctx.vault.id], [dim], 1) end)
-      assert point in Enum.map(NameTerms.recall(ctx.user, {:vault, ctx.vault}, "notes"), & &1.id)
+
+      assert point in Enum.map(
+               NameTerms.recall(ctx.user, {:vault, ctx.vault}, "zanzibar"),
+               & &1.id
+             )
     end
 
     test "a folder reaches at most 50 notes, newest first", ctx do
       notes = for i <- 1..60, do: write!(ctx.user, ctx.vault, "Bulk/n#{i}.md")
-      [folder] = Repo.all(from(f in Folder, where: f.user_id == ^ctx.user.id), skip_tenant_check: true)
+
+      [folder] =
+        Repo.all(from(f in Folder, where: f.user_id == ^ctx.user.id), skip_tenant_check: true)
 
       got = tenant(ctx.user, fn -> NameTerms.under_folders([ctx.vault.id], [folder.id]) end)
 
@@ -361,6 +363,8 @@ defmodule Engram.Search.NameTermsTest do
 
     test "a move keeps the basename and writes no name terms", ctx do
       note = write!(ctx.user, ctx.vault, "A/x.md")
+      # The target folder exists already: creating it would write its terms.
+      write!(ctx.user, ctx.vault, "B/other.md")
       :ok = NameTerms.on_note_written(ctx.user, note)
       before = {rows(note.id), stamp(note.id)}
 
@@ -388,7 +392,9 @@ defmodule Engram.Search.NameTermsTest do
 
   describe "query plans (index-bounded)" do
     setup ctx do
-      for i <- 1..50, do: indexed!(ctx.user, write!(ctx.user, ctx.vault, "P#{rem(i, 5)}/n#{i}.md"))
+      for i <- 1..50,
+          do: indexed!(ctx.user, write!(ctx.user, ctx.vault, "P#{rem(i, 5)}/n#{i}.md"))
+
       :ok
     end
 
@@ -416,8 +422,17 @@ defmodule Engram.Search.NameTermsTest do
           )
         )
 
-      plan = QueryPlan.generic_plan(sql, analyze: ["notes"])
+      plan =
+        QueryPlan.generic_plan(sql,
+          analyze: ["notes"],
+          fresh: true,
+          bitmapscan: false,
+          all_visible: true
+        )
+
+      # Read backward in id order: no sort, at most 50 entries per folder.
       assert plan =~ "using notes_folder_ref_live_id on", plan
+      refute plan =~ "Sort", plan
     end
   end
 
@@ -447,6 +462,7 @@ defmodule Engram.Search.NameTermsTest do
       for i <- 1..3, do: write!(ctx.user, ctx.vault, "n#{i}.md")
 
       :ok = perform_job(BackfillNameTerms, %{"table" => "notes", "hop_ms" => 0, "pause_ms" => 0})
+
       assert [%{args: %{"after" => after_id, "table" => "notes"}}] =
                all_enqueued(worker: BackfillNameTerms)
 
@@ -519,7 +535,9 @@ defmodule Engram.Search.NameTermsTest do
 
       read = fn tenant ->
         as_prod_role(fn ->
-          {:ok, hits} = Repo.with_tenant(tenant, fn -> NameTerms.hits([ctx.vault.id], dims, 0) end)
+          {:ok, hits} =
+            Repo.with_tenant(tenant, fn -> NameTerms.hits([ctx.vault.id], dims, 0) end)
+
           hits
         end)
       end
@@ -536,7 +554,7 @@ defmodule Engram.Search.NameTermsTest do
       Engram.Fixtures.insert_notes!(
         user,
         vault,
-        for(i <- 1..n, do: %{"path" => "filler/f#{i}.md", "content" => "x"})
+        for(i <- 1..n, do: %{"path" => "filler/#{dim}-#{i}.md", "content" => "x"})
       )
 
     rows =

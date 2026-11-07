@@ -27,6 +27,10 @@ defmodule Engram.SearchTest do
 
   describe "search/4" do
     test "returns results from Qdrant", %{bypass: bypass, user: user, vault: vault} do
+      # Qdrant's own scores: the S1 name leg would also rank this note (its
+      # filename is the query) and RRF-fuse it, doubling the score.
+      Engram.ServiceConfig.put_override(:name_terms_search, false)
+
       Engram.MockEmbedder
       |> expect(:embed_texts, fn ["iron panel"], _opts ->
         {:ok, [List.duplicate(0.1, 3)]}

@@ -594,8 +594,10 @@ defmodule Engram.Folders.FolderRefReleaseTest do
             all_visible: true
           )
 
-        # Exact name (" on" ends it): not `notes_folder_ref_live_id` (S1).
-        assert plan =~ "Index Only Scan using notes_folder_ref_live on", plan
+        # Since S1 two covering indexes serve this at equal cost and the planner
+        # picks either by statistics (seen both ways): `notes_folder_ref_live`
+        # or its superset `notes_folder_ref_live_id` (the old one drops in S6).
+        assert plan =~ ~r/Index Only Scan using notes_folder_ref_live(_id)? on/, plan
       end
     end
 

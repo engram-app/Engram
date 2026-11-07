@@ -784,6 +784,9 @@ defmodule Engram.Search do
     end
   end
 
+  defp ranked_hits(legs, user, search_opts, within, keep),
+    do: post_filtered(legs, user, search_opts, within, keep, 1)
+
   # Whether a note id is inside a resolved `{:ids | :exclude, ids}` scope.
   defp scope_member({kind, ids}) do
     ids = MapSet.new(ids)
@@ -804,9 +807,6 @@ defmodule Engram.Search do
       _ -> []
     end
   end
-
-  defp ranked_hits(legs, user, search_opts, within, keep),
-    do: post_filtered(legs, user, search_opts, within, keep, 1)
 
   defp post_filtered(legs, user, search_opts, within, keep, round) do
     limit = Keyword.fetch!(search_opts, :limit)

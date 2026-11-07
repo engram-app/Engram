@@ -203,15 +203,15 @@ defmodule Engram.Search.NameTerms do
   # In a transaction, a failed statement aborts it: isolate ours.
   defp savepoint(fun) do
     if Repo.in_transaction?() do
-      Repo.query!("SAVEPOINT s1_terms")
+      _ = Repo.query!("SAVEPOINT s1_terms")
 
       try do
         result = fun.()
-        Repo.query!("RELEASE SAVEPOINT s1_terms")
+        _ = Repo.query!("RELEASE SAVEPOINT s1_terms")
         result
       rescue
         e ->
-          Repo.query!("ROLLBACK TO SAVEPOINT s1_terms")
+          _ = Repo.query!("ROLLBACK TO SAVEPOINT s1_terms")
           reraise e, __STACKTRACE__
       end
     else
@@ -279,7 +279,12 @@ defmodule Engram.Search.NameTerms do
           {non_neg_integer(), Ecto.UUID.t() | nil, non_neg_integer()}
   def sweep_orphans(repo, after_id) do
     refs =
-      from(r in Row, distinct: true, order_by: r.ref_id, limit: 500, select: {r.ref_id, r.ref_kind})
+      from(r in Row,
+        distinct: true,
+        order_by: r.ref_id,
+        limit: 500,
+        select: {r.ref_id, r.ref_kind}
+      )
       |> then(fn q -> if after_id, do: where(q, [r], r.ref_id > ^after_id), else: q end)
       |> repo.all()
 
@@ -302,7 +307,13 @@ defmodule Engram.Search.NameTerms do
   defp live_ids(_repo, _schema, []), do: []
 
   defp live_ids(repo, Note, ids),
-    do: repo.all(from(n in Note, where: n.id in ^ids and n.kind == "note" and is_nil(n.deleted_at), select: n.id))
+    do:
+      repo.all(
+        from(n in Note,
+          where: n.id in ^ids and n.kind == "note" and is_nil(n.deleted_at),
+          select: n.id
+        )
+      )
 
   defp live_ids(repo, Folder, ids),
     do: repo.all(from(f in Folder, where: f.id in ^ids and is_nil(f.deleted_at), select: f.id))
@@ -466,7 +477,7 @@ defmodule Engram.Search.NameTerms do
   end
 
   @doc "The live refs of `schema` whose terms are stale: the stale partial indexes' predicate."
-  @spec stale_query(module()) :: Ecto.Query.t()
+  @spec stale_query(Note | Folder) :: Ecto.Query.t()
   def stale_query(schema),
     do: from(r in schema) |> live(schema) |> stale_only(:stale, hmac_col(schema))
 
@@ -755,23 +766,31 @@ defmodule Engram.Search.NameTerms do
   # Per dim: `{postings scanned, live ref ids}` (the query `hits/3` runs;
   # its plan test reads it).
   def hits_query(vault_ids, dims, kind) do
-    {schema, live} =
+    {schema, on} =
       if kind == @note,
-        do: {Note, dynamic([n: n], n.kind == "note" and is_nil(n.deleted_at))},
-        else: {Folder, dynamic([n: n], is_nil(n.deleted_at))}
+        do:
+          {Note,
+           dynamic([x: x, n: n], n.id == x.ref_id and n.kind == "note" and is_nil(n.deleted_at))},
+        else: {Folder, dynamic([x: x, n: n], n.id == x.ref_id and is_nil(n.deleted_at))}
 
     from(q in fragment("SELECT unnest(?::int4[]) AS dim", ^dims),
       as: :q,
       inner_lateral_join: x in subquery(scan(vault_ids, kind)),
+      as: :x,
       on: true,
       left_join: n in ^schema,
       as: :n,
-      on: n.id == x.ref_id and ^live,
+      on: ^on,
       group_by: field(q, :dim),
       select:
         {count(x.ref_id),
          type(
-           fragment("coalesce((array_agg(?) FILTER (WHERE ? IS NOT NULL))[1:?], '{}')", x.ref_id, n.id, ^@postings),
+           fragment(
+             "coalesce((array_agg(?) FILTER (WHERE ? IS NOT NULL))[1:?], '{}')",
+             x.ref_id,
+             n.id,
+             ^@postings
+           ),
            {:array, Ecto.UUID}
          )}
     )
@@ -802,11 +821,12 @@ defmodule Engram.Search.NameTerms do
   def under_folders(vault_ids, folders) do
     tree = descendants(vault_ids, folders)
 
-    from(f in fragment(
-           "SELECT * FROM unnest(?::uuid[], ?::uuid[]) AS t(id, vault_id)",
-           type(^Enum.map(tree, &elem(&1, 0)), {:array, Ecto.UUID}),
-           type(^Enum.map(tree, &elem(&1, 1)), {:array, Ecto.UUID})
-         ),
+    from(
+      f in fragment(
+        "SELECT * FROM unnest(?::uuid[], ?::uuid[]) AS t(id, vault_id)",
+        type(^Enum.map(tree, &elem(&1, 0)), {:array, Ecto.UUID}),
+        type(^Enum.map(tree, &elem(&1, 1)), {:array, Ecto.UUID})
+      ),
       as: :f,
       inner_lateral_join: n in subquery(newest_in_folder()),
       on: true,
@@ -857,7 +877,8 @@ defmodule Engram.Search.NameTerms do
         kids =
           Repo.all(
             from(f in Folder,
-              where: f.vault_id in ^vault_ids and f.parent_id in ^parents and is_nil(f.deleted_at),
+              where:
+                f.vault_id in ^vault_ids and f.parent_id in ^parents and is_nil(f.deleted_at),
               limit: ^left,
               select: {f.id, f.vault_id}
             )
@@ -869,8 +890,6 @@ defmodule Engram.Search.NameTerms do
 
   # %{note_id => point id of its first chunk}: one `chunks_note_id_position`
   # probe per note (LIMIT 1), never the note's other chunks.
-  defp first_points([]), do: %{}
-
   defp first_points(note_ids) do
     first =
       from(c in Chunk,

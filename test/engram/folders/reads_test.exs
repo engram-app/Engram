@@ -588,13 +588,29 @@ defmodule Engram.Folders.ReadsTest do
         )
 
       assert_index!(all, ~r/octet_length\(.*\) > 16/, "notes_unresolved_folder")
-      # Exact name (" on" ends it): not `notes_folder_ref_live_id` (S1).
-      assert_index!(all, ~r/GROUP BY .*folder_ref_id/s, "notes_folder_ref_live on")
+      # Since S1 two covering indexes serve this at equal cost and the planner
+      # picks either by statistics (seen both ways): `notes_folder_ref_live` or
+      # its superset `notes_folder_ref_live_id` (the old one drops in S6).
+      assert_index!(
+        all,
+        ~r/GROUP BY .*folder_ref_id/s,
+        ~r/Index Only Scan using notes_folder_ref_live(_id)? on/
+      )
+
       # The page fetches the row, so any reference index serves it
       # (`notes_folder_ref`, `_live` or S1's `_live_id`).
-      assert_index!(all, ~r/folder_ref_id" = (ANY|\$)/, ~r/using notes_folder_ref(_live|_live_id)? on/)
+      assert_index!(
+        all,
+        ~r/folder_ref_id" = (ANY|\$)/,
+        ~r/(using|Scan on) notes_folder_ref(_live|_live_id)? /
+      )
+
       # The root page: a NULL reference that is not drift.
-      assert_index!(all, ~r/coalesce\(octet_length/, ~r/using notes_folder_ref(_live|_live_id)? on/)
+      assert_index!(
+        all,
+        ~r/coalesce\(octet_length/,
+        ~r/(using|Scan on) notes_folder_ref(_live|_live_id)? /
+      )
     end
 
     test "the scan's marker arm and the attachments' stale arm", %{user: u, vault: v} do
