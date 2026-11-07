@@ -25,7 +25,7 @@ defmodule Engram.DataMigrations.NoteNameTest do
   end
 
   defp note!(user, vault, path) do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => path, "content" => "# T\n\nbody"})
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => path, "content" => "# T\n\nbody"}, actor: "api")
     note
   end
 

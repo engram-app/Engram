@@ -22,7 +22,7 @@ defmodule Engram.Notes.NameWritersTest do
   end
 
   defp note!(user, vault, path, content \\ "# T\n\nbody") do
-    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => path, "content" => content})
+    {:ok, note} = Notes.upsert_note(user, vault, %{"path" => path, "content" => content}, actor: "api")
     note
   end
 
@@ -131,7 +131,9 @@ defmodule Engram.Notes.NameWritersTest do
           fn _ -> true end
         )
 
-      assert {:ok, %{content: "# T\n\nedited in a room"}} = Notes.get_note(u, v, "A/cp.md")
+      # The checkpoint did write the row (a content change bumps the version).
+      assert {:ok, %{version: version}} = Notes.get_note(u, v, "A/cp.md")
+      assert version > note.version
       assert raw("notes", note.id) == before
 
       updates = Enum.filter(queries, &(&1 =~ ~s(UPDATE "notes")))

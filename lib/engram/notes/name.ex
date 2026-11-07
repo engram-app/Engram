@@ -29,19 +29,14 @@ defmodule Engram.Notes.Name do
   @version <<1>>
   @name_domain "note-name\0"
   @ci_domain "note-name-ci\0"
-  @columns [:name_ciphertext, :name_nonce, :name_hmac, :name_ci_hmac, :name_stamp]
   @tables [:notes, :attachments]
 
-  @doc "The name columns, in `keys/6` order."
-  @spec columns() :: [atom()]
-  def columns, do: @columns
-
   @doc "The version byte every `name_stamp` ends with."
-  @spec version() :: binary()
+  @spec version() :: <<_::8>>
   def version, do: @version
 
   @doc "The stamp of a name derived from the ciphertext under `nonce`."
-  @spec stamp(binary()) :: binary()
+  @spec stamp(binary()) :: nonempty_binary()
   def stamp(nonce) when is_binary(nonce), do: nonce <> @version
 
   @doc "The name of `path`: its last segment."

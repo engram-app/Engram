@@ -12,7 +12,9 @@ defmodule Engram.Repo.Migrations.IndexNamesExpand do
       folder and casefolded name (`(vault_id, folder_ref_id, name_ci_hmac)`).
       NOT unique: rows the previous release wrote carry no name yet, and drift
       rows may already collide. S3 builds the unique twin after a duplicate
-      check.
+      check. Partial on `name_ci_hmac IS NOT NULL`: an unnamed row has no
+      place in it, and a lookup by folder alone (the `folders_release_refs`
+      trigger) keeps planning on the `*_folder_ref_live` indexes.
     * `attachments_folder_ref_live_id`: a folder's live attachments in id
       order (`(vault_id, folder_ref_id, id)`, INCLUDE `user_id` for the RLS
       policy), so the old-client feed view can page them by id.
@@ -34,9 +36,11 @@ defmodule Engram.Repo.Migrations.IndexNamesExpand do
 
   @indexes [
     {"notes_folder_name_ci",
-     "ON notes (vault_id, folder_ref_id, name_ci_hmac) WHERE deleted_at IS NULL AND kind = 'note'"},
+     "ON notes (vault_id, folder_ref_id, name_ci_hmac) " <>
+       "WHERE deleted_at IS NULL AND kind = 'note' AND name_ci_hmac IS NOT NULL"},
     {"attachments_folder_name_ci",
-     "ON attachments (vault_id, folder_ref_id, name_ci_hmac) WHERE deleted_at IS NULL"},
+     "ON attachments (vault_id, folder_ref_id, name_ci_hmac) " <>
+       "WHERE deleted_at IS NULL AND name_ci_hmac IS NOT NULL"},
     {"attachments_folder_ref_live_id",
      "ON attachments (vault_id, folder_ref_id, id) INCLUDE (user_id) WHERE deleted_at IS NULL"},
     {"folders_vault_seq", "ON folders (vault_id, seq) WHERE seq IS NOT NULL"}
