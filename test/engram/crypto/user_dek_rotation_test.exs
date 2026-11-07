@@ -21,6 +21,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
   alias Engram.Notes.FrontmatterKey
   alias Engram.Notes.FrontmatterKeys
   alias Engram.Notes.NoteAttr
+  alias Engram.Notes.NoteBody
   alias Engram.Repo
   alias Engram.Test.LogCapture
   alias Engram.Vector.FilterId
@@ -862,7 +863,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         Repo.with_tenant(user.id, fn ->
           %Engram.Notes.Note{}
           |> Ecto.Changeset.cast(attrs, Map.keys(attrs))
-          |> Repo.insert!()
+          |> Engram.Fixtures.insert_note_row!()
         end)
 
       note
@@ -1707,7 +1708,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         from(n in Engram.Notes.Note,
           where: n.user_id == ^user.id and n.path_hmac == ^path_hmac
         )
-        |> Engram.Notes.NoteBody.select_note()
+        |> NoteBody.select_note()
         |> Repo.one!(skip_tenant_check: true)
 
       assert raw.dek_version == 2,
@@ -1730,7 +1731,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         from(n in Engram.Notes.Note,
           where: n.user_id == ^user.id and n.path_hmac == ^new_path_hmac
         )
-        |> Engram.Notes.NoteBody.select_note()
+        |> NoteBody.select_note()
         |> Repo.one!(skip_tenant_check: true)
 
       # If rotation skipped the row, decrypt would fail under the new DEK.
@@ -2548,7 +2549,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         from(n in Engram.Notes.Note,
           where: n.user_id == ^user.id and n.path_hmac == ^path_hmac
         )
-        |> Engram.Notes.NoteBody.select_note()
+        |> NoteBody.select_note()
         |> Repo.one!(skip_tenant_check: true)
 
       # Overwrite content_ciphertext with 16 bytes of zeroes. AES-GCM auth-tag
@@ -2777,7 +2778,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         from(n in Engram.Notes.Note,
           where: n.user_id == ^user.id and n.path_hmac == ^path_hmac
         )
-        |> Engram.Notes.NoteBody.select_note()
+        |> NoteBody.select_note()
         |> Repo.one!(skip_tenant_check: true)
 
       # Corrupt the note to trigger the "decrypt failed under both DEKs" raise.

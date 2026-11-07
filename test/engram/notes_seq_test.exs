@@ -23,9 +23,9 @@ defmodule Engram.NotesSeqTest do
   defp all_rows(user, vault) do
     {:ok, rows} =
       Engram.Repo.with_tenant(user.id, fn ->
-        Engram.from(n in Engram.Notes.Note, where: n.vault_id == ^vault.id)
+        Ecto.Query.from(n in Engram.Notes.Note, where: n.vault_id == ^vault.id)
         |> Engram.Notes.NoteBody.select_note()
-        |> Repo.all()
+        |> Engram.Repo.all()
       end)
 
     rows

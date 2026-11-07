@@ -147,6 +147,12 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       tail_id = seed_index_tail!(u, v, @big <> "index tail")
 
       before = reload(Note, id: note.id)
+
+      notes_head_before =
+        Repo.one!(from(r in Note, where: r.id == ^note.id, select: r.crdt_head),
+          skip_tenant_check: true
+        )
+
       assert byte_size(before.content_nonce) == 12
       assert byte_size(before.crdt_state_nonce) == 12
 
@@ -177,8 +183,15 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       assert {n.title_ciphertext, n.path_ciphertext, n.dek_version} ==
                {before.title_ciphertext, before.path_ciphertext, before.dek_version}
 
-      assert before.crdt_head == "warm"
-      assert is_nil(n.crdt_head)
+      # The `notes` head column, where the trigger acts (reads take the
+      # body's head).
+      assert notes_head_before == "warm"
+
+      assert is_nil(
+               Repo.one!(from(r in Note, where: r.id == ^n.id, select: r.crdt_head),
+                 skip_tenant_check: true
+               )
+             )
 
       tail = reload(CrdtUpdateLog, note_id: note.id)
       assert byte_size(tail.update_nonce) == 13

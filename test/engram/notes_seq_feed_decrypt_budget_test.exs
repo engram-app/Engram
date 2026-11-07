@@ -9,7 +9,7 @@ defmodule Engram.NotesSeqFeedDecryptBudgetTest do
   """
   use Engram.DataCase, async: false
 
-  import Ecto.Query, only: [from: 2]
+  import Ecto.Query, only: [select: 2]
 
   alias Engram.{Notes, Vaults}
   alias Engram.Notes.Note
