@@ -996,20 +996,20 @@ jobs:
               sh -c "$2"
           }
 
-          run_mix dev  "mix deps.compile" >/tmp/deps-dev.log 2>&1 &
+          run_mix dev  "mix deps.compile" >"$RUNNER_TEMP/deps-dev.log" 2>&1 &
           dpid_dev=$!
-          run_mix test "mix deps.compile" >/tmp/deps-test.log 2>&1 &
+          run_mix test "mix deps.compile" >"$RUNNER_TEMP/deps-test.log" 2>&1 &
           dpid_test=$!
           drc_dev=0; drc_test=0
           wait "$dpid_dev"  || drc_dev=$?
           wait "$dpid_test" || drc_test=$?
           if [ "$drc_dev" -ne 0 ] || [ "$drc_test" -ne 0 ]; then
-            echo "::group::deps.compile :dev output";  cat /tmp/deps-dev.log;  echo "::endgroup::"
-            echo "::group::deps.compile :test output"; cat /tmp/deps-test.log; echo "::endgroup::"
+            echo "::group::deps.compile :dev output";  cat "$RUNNER_TEMP/deps-dev.log";  echo "::endgroup::"
+            echo "::group::deps.compile :test output"; cat "$RUNNER_TEMP/deps-test.log"; echo "::endgroup::"
             echo "deps.compile failed (dev=$drc_dev test=$drc_test)" >&2
             exit 1
           fi
-          run_mix dev  "mix compile --warnings-as-errors --no-deps-check" >/tmp/compile-dev.log 2>&1 &
+          run_mix dev  "mix compile --warnings-as-errors --no-deps-check" >"$RUNNER_TEMP/compile-dev.log" 2>&1 &
           pid_dev=$!
           # Both envs build the NIF and copy it into priv/native/, and rustler
           # deletes the destination before copying. Sharing one priv/, the
@@ -1018,7 +1018,7 @@ jobs:
           # `cargo rustc`, which cargo rejects. :test gets its own copy of
           # priv/ (4 MB); :dev's .so in the real priv/ is what gets cached.
           rm -rf "$RUNNER_TEMP/priv-test" && cp -a priv "$RUNNER_TEMP/priv-test"
-          run_mix test "mix compile --warnings-as-errors --no-deps-check" "-v $RUNNER_TEMP/priv-test:/app/priv" >/tmp/compile-test.log 2>&1 &
+          run_mix test "mix compile --warnings-as-errors --no-deps-check" "-v $RUNNER_TEMP/priv-test:/app/priv" >"$RUNNER_TEMP/compile-test.log" 2>&1 &
           pid_test=$!
           # Capture exit codes WITHOUT aborting under `set -e`. A bare
           # `wait "$pid"; rc=$?` lets a failing wait trip `set -e` and kill the
@@ -1028,8 +1028,8 @@ jobs:
           rc_dev=0; rc_test=0
           wait "$pid_dev"  || rc_dev=$?
           wait "$pid_test" || rc_test=$?
-          echo "::group::Compile :dev output";  cat /tmp/compile-dev.log;  echo "::endgroup::"
-          echo "::group::Compile :test output"; cat /tmp/compile-test.log; echo "::endgroup::"
+          echo "::group::Compile :dev output";  cat "$RUNNER_TEMP/compile-dev.log";  echo "::endgroup::"
+          echo "::group::Compile :test output"; cat "$RUNNER_TEMP/compile-test.log"; echo "::endgroup::"
           [ "$rc_dev" -eq 0 ] && [ "$rc_test" -eq 0 ]
 
   version-check:
@@ -2880,10 +2880,10 @@ jobs:
           # file and this CI runner. On large specs that surfaces as pure
           # key-ordering "drift" with identical content. Normalizing both sides
           # with sort_keys compares meaning, not insertion order.
-          MIX_ENV=test mix openapi.spec.json --spec EngramWeb.ApiSpec --pretty=true /tmp/openapi.generated.json
-          python3 -c "import json,sys; json.dump(json.load(open(sys.argv[1])), open(sys.argv[2],'w'), sort_keys=True, indent=2)" openapi.json /tmp/openapi.committed.norm.json
-          python3 -c "import json,sys; json.dump(json.load(open(sys.argv[1])), open(sys.argv[2],'w'), sort_keys=True, indent=2)" /tmp/openapi.generated.json /tmp/openapi.generated.norm.json
-          if ! diff -u /tmp/openapi.committed.norm.json /tmp/openapi.generated.norm.json; then
+          MIX_ENV=test mix openapi.spec.json --spec EngramWeb.ApiSpec --pretty=true "$RUNNER_TEMP/openapi.generated.json"
+          python3 -c "import json,sys; json.dump(json.load(open(sys.argv[1])), open(sys.argv[2],'w'), sort_keys=True, indent=2)" openapi.json "$RUNNER_TEMP/openapi.committed.norm.json"
+          python3 -c "import json,sys; json.dump(json.load(open(sys.argv[1])), open(sys.argv[2],'w'), sort_keys=True, indent=2)" "$RUNNER_TEMP/openapi.generated.json" "$RUNNER_TEMP/openapi.generated.norm.json"
+          if ! diff -u "$RUNNER_TEMP/openapi.committed.norm.json" "$RUNNER_TEMP/openapi.generated.norm.json"; then
             echo "::error::openapi.json is stale. Run: mix openapi.spec.json --spec EngramWeb.ApiSpec --pretty=true openapi.json"
             exit 1
           fi
@@ -3442,27 +3442,27 @@ jobs:
           mix deps.audit \
             --format=json \
             --ignore-advisory-ids GHSA-rhv4-8758-jx7v,GHSA-g2wm-735q-3f56 \
-            > /tmp/audit.json 2> /tmp/audit.err
+            > "$RUNNER_TEMP/audit.json" 2> "$RUNNER_TEMP/audit.err"
           MIX_EXIT=$?
           set -e
 
           echo "mix exit code: $MIX_EXIT"
-          echo "stdout bytes: $(wc -c < /tmp/audit.json)"
-          if [ -s /tmp/audit.err ]; then
+          echo "stdout bytes: $(wc -c < "$RUNNER_TEMP/audit.json")"
+          if [ -s "$RUNNER_TEMP/audit.err" ]; then
             echo "--- stderr ---"
-            cat /tmp/audit.err
+            cat "$RUNNER_TEMP/audit.err"
             echo "--- end stderr ---"
           fi
 
-          if [ ! -s /tmp/audit.json ]; then
+          if [ ! -s "$RUNNER_TEMP/audit.json" ]; then
             echo "::error::mix deps.audit produced no stdout (exit=$MIX_EXIT) — see stderr above"
             exit 2
           fi
 
           python3 <<'PY'
-          import json, sys
+          import json, os, sys
 
-          with open("/tmp/audit.json") as f:
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "audit.json")) as f:
               data = json.load(f)
           vulns = data.get("vulnerabilities", [])
 
@@ -4048,29 +4048,38 @@ jobs:
         if: steps.gate.outputs.proceed == 'true'
         run: mix compile
 
+      - name: Per-runner temp paths
+        if: steps.gate.outputs.proceed == 'true'
+        # Runners on one host share /tmp, so a fixed /tmp file is clobbered by
+        # a concurrent job. RUNNER_TEMP is per runner and per job. Set once
+        # here (runner.temp is not available in a job-level env: block).
+        run: |
+          echo "NEW_MIGRATIONS=$RUNNER_TEMP/new-migrations.txt" >> "$GITHUB_ENV"
+          echo "DROPS=$RUNNER_TEMP/drops.txt" >> "$GITHUB_ENV"
+
       - name: List new migrations
         if: steps.gate.outputs.proceed == 'true'
         id: list
         run: |
           git fetch -q --depth=1 origin main || true
           BASE_REF="origin/main" \
-            bash priv/repo/list_new_migrations.sh > /tmp/new-migrations.txt
-          if [ ! -s /tmp/new-migrations.txt ]; then
+            bash priv/repo/list_new_migrations.sh > "$NEW_MIGRATIONS"
+          if [ ! -s "$NEW_MIGRATIONS" ]; then
             echo "::error::migration drops detected but no migrations newer than base ref"
             exit 1
           fi
           echo "New migrations on this PR:"
-          sed 's/^/  /' /tmp/new-migrations.txt
+          sed 's/^/  /' "$NEW_MIGRATIONS"
 
       - name: Extract dropped identifiers
         if: steps.gate.outputs.proceed == 'true'
         id: drops
         run: |
-          : > /tmp/drops.txt
+          : > "$DROPS"
           while IFS= read -r f; do
-            mix engram.migration_drops "priv/repo/migrations/$f" >> /tmp/drops.txt
-          done < /tmp/new-migrations.txt
-          if [ ! -s /tmp/drops.txt ]; then
+            mix engram.migration_drops "priv/repo/migrations/$f" >> "$DROPS"
+          done < "$NEW_MIGRATIONS"
+          if [ ! -s "$DROPS" ]; then
             echo "::notice::No extractable drops found in the new migrations."
             echo "::notice::Possible reasons:"
             echo "::notice::  - Every drop in this PR is bypassed via # safety_assured: (legitimate; auditor trusts justification)"
@@ -4078,14 +4087,14 @@ jobs:
             echo "::notice::Reviewer: confirm intent on this PR before merging."
             exit 0
           fi
-          if grep -q '^rawsql ' /tmp/drops.txt; then
+          if grep -q '^rawsql ' "$DROPS"; then
             echo "::error::A migration drops a column or table with raw SQL in execute/1, which this gate cannot check against lib/:"
-            grep '^rawsql ' /tmp/drops.txt | sed 's/^/  /'
+            grep '^rawsql ' "$DROPS" | sed 's/^/  /'
             echo "::error::Use Ecto's remove/drop so the reference check can see it, or add a top-of-file '# safety_assured: \"reason\"' comment."
             exit 1
           fi
           echo "Dropped identifiers this PR introduces:"
-          sed 's/^/  /' /tmp/drops.txt
+          sed 's/^/  /' "$DROPS"
 
       - name: Grep lib/ for surviving references
         if: steps.gate.outputs.proceed == 'true'
@@ -4133,7 +4142,7 @@ jobs:
               echo "::error::lib/ still references dropped identifier '$name':"
               printf '%s\n' "$hits" | sed 's/^/  /'
             fi
-          done < /tmp/drops.txt
+          done < "$DROPS"
 
           if [ "$fail" -eq 1 ]; then
             echo "::error::A migration cannot drop identifiers while lib/ still uses them: the previous release is still running mid-deploy."
