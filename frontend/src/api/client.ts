@@ -393,7 +393,7 @@ export class ApiError extends Error {
 		public status: number,
 		message: string,
 		public retryAfterS?: number,
-		/** The parsed JSON error body, for codes that carry fields (e.g. `count`). */
+		/** The parsed JSON error body, for codes that carry fields (e.g. `limit`, `over_limit`). */
 		public body: Record<string, unknown> = {},
 	) {
 		super(message);

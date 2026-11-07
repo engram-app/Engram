@@ -114,11 +114,54 @@ defmodule Engram.Folders.OpSizeCapTest do
     {result, queries} = QueryRecorder.record(fn -> Folders.rename(u, v, "A", "B") end)
 
     assert result == {:error, {:folder_too_large, 2}}
-    # One bounded notes count (limit + 1 = 3 rows at most); the attachment
-    # count never runs.
+    # The folder row A takes 1 of limit + 1 = 3, so one notes count LIMIT 2;
+    # the attachment count never runs.
     assert [%{sql: sql, params: params}] = Enum.filter(queries, &(&1.sql =~ ~r/count\(/i))
     assert sql =~ ~r/LIMIT/i
-    assert 3 in params
+    assert 2 in params
+  end
+
+  test "empty subfolders count: their rows and markers move under the lock too", %{
+    user: u,
+    vault: v
+  } do
+    {:ok, _} = Notes.create_folder_markers(u, v, ["A" | for(i <- 1..30, do: "A/s#{i}")])
+    before = snapshot(u, v)
+
+    assert {:error, {:folder_too_large, 2}} = Folders.rename(u, v, "A", "B")
+    assert snapshot(u, v) == before
+  end
+
+  test "refusing a 5,000-folder subtree reads at most limit + 1 folder rows", %{
+    user: u,
+    vault: v
+  } do
+    {:ok, _} =
+      Repo.with_tenant(u.id, fn ->
+        Engram.Folders.Rows.ensure_all(u, v.id, for(i <- 1..5_000, do: "A/f#{i}"))
+      end)
+
+    {result, queries} = QueryRecorder.record(fn -> Folders.rename(u, v, "A", "B") end)
+
+    assert result == {:error, {:folder_too_large, 2}}
+    # The walk is the only read of folder rows, LIMITed to 3; no count runs.
+    assert [%{sql: sql, params: params}] =
+             Enum.filter(queries, &(&1.sql =~ ~r/folder_subtree/))
+
+    assert sql =~ ~r/LIMIT/i and 3 in params
+    refute sql =~ ~r/ORDER BY/i
+    assert counts(queries) == 0
+  end
+
+  test "a batch move selecting a parent and its child counts the child once", %{
+    user: u,
+    vault: v
+  } do
+    {:ok, %{folders: markers}} = Notes.create_folder_markers(u, v, ["A", "A/B"])
+    {:ok, _} = Notes.create_folder_marker(u, v, "Dst")
+
+    assert {:ok, _} =
+             Folders.batch_move(u, v, Enum.map(markers, & &1.id), {:path, "Dst"})
   end
 
   test "drift in another folder does not refuse a small folder", %{user: u, vault: v} do
@@ -140,6 +183,8 @@ defmodule Engram.Folders.OpSizeCapTest do
     user: u,
     vault: v
   } do
+    # Two is its folder row, a note and an attachment: exactly the cap.
+    ServiceConfig.put_override(:folder_op_max_rows, 3)
     put_note(u, v, "One/x.md")
     put_note(u, v, "Two/x.md")
     put_att(u, v, "Two/a.png")

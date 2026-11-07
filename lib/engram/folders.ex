@@ -233,10 +233,11 @@ defmodule Engram.Folders do
   # Interim cap (#2492): a rename or move holds the vault lock for its whole
   # subtree, so one over `:folder_op_max_rows` (a `ServiceConfig` runtime
   # override, default in config.exs) is refused before any lock, claim or
-  # scan. No decrypt, and each count reads at most limit + 1 matching index
-  # entries, stopping once the running sum is over:
+  # scan. No decrypt, and every read is bounded by what is left of limit + 1,
+  # stopping once the running sum is over:
   #
-  #   * notes and attachments placed by reference in the subtree's rows;
+  #   * the subtree's folder rows (an unordered, LIMITed walk), one item each;
+  #   * notes and attachments placed by reference in those rows;
   #   * drift notes (`Drift.notes_unresolved/0`) whose folder key is one of
   #     those rows' paths, and stale attachments (`Drift.attachments_stale/0`)
   #     whose reference still names one of them. Scoped to the subtree, so
@@ -245,7 +246,11 @@ defmodule Engram.Folders do
   # ponytail: drift in a folder with no row yet, and a stale attachment with
   # a NULL reference, are not counted (the readers place those by decrypting
   # the vault's drift, which would double a rename's decrypt budget); both
-  # are 0 in steady state and the drain heals them.
+  # are 0 in steady state and the drain heals them. A stale attachment whose
+  # old reference names a subtree row but whose path is elsewhere counts
+  # though it does not move (high, only inside drift). The count is READ
+  # COMMITTED, before the lock: uploads landing in between can take a rename
+  # a few rows past the cap.
   defp refuse_too_large(user, vault, folders) do
     limit = ServiceConfig.get(:folder_op_max_rows)
 
@@ -256,7 +261,7 @@ defmodule Engram.Folders do
 
   defp over_limit?(user, vault, folders, limit) do
     Repo.with_tenant!(user.id, fn ->
-      refs = Rows.subtree_refs(user, vault.id, folders)
+      refs = Rows.subtree_refs(user, vault.id, outermost(folders), limit: limit + 1)
       ids = for %{id: id} <- refs, do: id
       hmacs = for %{full_path_hmac: h} when is_binary(h) <- refs, do: h
       notes = from(n in Notes.scoped_live(user, vault), where: n.kind == "note")
@@ -277,12 +282,19 @@ defmodule Engram.Folders do
         by_ref.(from(a in atts, where: ^Drift.attachments_stale()))
       ]
 
-      # `left`: how many more rows would put the subtree over the limit.
-      Enum.reduce_while(arms, limit + 1, fn arm, left ->
-        left = left - arm.(left)
-        if left <= 0, do: {:halt, 0}, else: {:cont, left}
-      end) == 0
+      # `left`: how many more items would put the subtree over the limit. Each
+      # folder row is one (it and its marker move under the lock); the walk
+      # alone over the limit refuses before any count runs.
+      Enum.reduce_while(arms, limit + 1 - length(refs), fn arm, left ->
+        if left <= 0, do: {:halt, 0}, else: {:cont, left - arm.(left)}
+      end) <= 0
     end)
+  end
+
+  # A batch selecting a folder and one inside it walks the inner one once.
+  defp outermost(folders) do
+    folders = Enum.uniq(folders)
+    Enum.reject(folders, fn f -> Enum.any?(folders, &String.starts_with?(f, &1 <> "/")) end)
   end
 
   # `keys`: what the query filters on; none means no rows, so no statement.
