@@ -32,16 +32,22 @@ defmodule Engram.Notes.VaultScanCache do
   """
   @spec read(map(), map(), atom(), (-> term()), (term() -> term())) :: term()
   def read(user, vault, what, raw, finish) do
-    # One snapshot: the seq and the rows it is cached under agree.
-    {seq, found} =
-      Repo.with_tenant_snapshot!(user.id, fn ->
-        seq = Vaults.raw_current_seq(vault.id)
+    # A hit is the seq read alone (one statement, no snapshot needed). A miss
+    # re-reads the seq with the rows in ONE snapshot
+    # (`Repo.with_tenant_snapshot!/2`), so the rows are cached under the seq
+    # they were read at: two more round trips on a miss, one fewer on a hit.
+    seq0 = Repo.with_tenant!(user.id, fn -> Vaults.raw_current_seq(vault.id) end)
 
-        case get(vault.id, seq, what) do
-          {:ok, value} -> {seq, {:hit, value}}
-          :miss -> {seq, {:rows, raw.()}}
-        end
-      end)
+    {seq, found} =
+      case get(vault.id, seq0, what) do
+        {:ok, value} ->
+          {seq0, {:hit, value}}
+
+        :miss ->
+          Repo.with_tenant_snapshot!(user.id, fn ->
+            {Vaults.raw_current_seq(vault.id), {:rows, raw.()}}
+          end)
+      end
 
     case found do
       {:hit, value} ->

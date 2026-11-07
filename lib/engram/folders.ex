@@ -67,13 +67,12 @@ defmodule Engram.Folders do
   # `with_tenant` sets and tears down `app.current_tenant` per call. Because the
   # legs run sequentially (not nested under one another), they don't clobber
   # each other's tenant key.
-  # The vault seq lock comes FIRST (`Vaults.lock_seq!/1`, the lock every note
-  # and attachment writer takes, and `FolderTable`'s heal too:
-  # `Vaults.lock_user_vaults_nowait!/2`), so no heal commits between the
-  # notes leg's scan and its writes: the scan runs inline in this transaction
-  # (`Repo.with_tenant_snapshot!/2` cannot raise its isolation). Cost: the
-  # vault's other writers wait for the whole rename, scan included, not only
-  # its writes.
+  # The vault's folder-write lock comes FIRST (`Vaults.lock_folder_writes!/1`,
+  # an advisory lock only `FolderTable`'s heal also takes), so no heal commits
+  # between the notes leg's scan and its writes: the scan runs inline in this
+  # transaction (`Repo.with_tenant_snapshot!/2` cannot raise its isolation).
+  # Ordinary writers never take it, so the vault seq lock is still taken at
+  # the first write, as before: this adds no hold time on the vault row.
   defp atomic(user, vault, fun) do
     # Defer cascade broadcasts until AFTER the outer transaction resolves.
     # Each leg's per-item broadcast routes through `Sync.Broadcast.emit/3`,
@@ -91,9 +90,7 @@ defmodule Engram.Folders do
     # after BOTH legs have moved their rows, inside this transaction (#2468).
     Broadcast.deferred(fn ->
       Repo.transaction_after_commit(fn ->
-        # `:none` (a vault the tenant cannot see) locks nothing: there is
-        # nothing of its to protect, and the legs refuse it as before.
-        _ = Repo.with_tenant!(user.id, fn -> Vaults.lock_seq(vault.id) end)
+        :ok = Vaults.lock_folder_writes!(vault.id)
 
         case Rows.with_deferred_retires(fun) do
           {:ok, result} -> result

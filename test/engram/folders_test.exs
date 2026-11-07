@@ -437,16 +437,18 @@ defmodule Engram.FoldersTest do
         {{:ok, %{attachments: ^n}}, queries} =
           Engram.QueryRecorder.record(fn -> Folders.rename(user, vault, from, to) end)
 
-        {queries |> Engram.QueryRecorder.transactions() |> Enum.map(&length/1) |> Enum.max(),
-         queries}
+        txns = Engram.QueryRecorder.transactions(queries)
+        {txns |> Enum.map(&length/1) |> Enum.max(), length(txns), queries}
       end
 
-      {one, _} = largest.("One", "Uno", 1)
-      {thirty, queries} = largest.("Docs", "Archive", 30)
+      {one, one_txns, _} = largest.("One", "Uno", 1)
+      {thirty, thirty_txns, queries} = largest.("Docs", "Archive", 30)
 
-      assert thirty == one,
-             "the rename transaction ran #{thirty} statements for 30 attachments, " <>
-               "#{one} for 1\n" <> Engram.QueryRecorder.format(queries)
+      # The same statements in the rename transaction, and the same number of
+      # transactions: neither a statement nor a transaction per attachment.
+      assert {thirty, thirty_txns} == {one, one_txns},
+             "30 attachments: #{thirty} statements in #{thirty_txns} transactions; " <>
+               "1: #{one} in #{one_txns}\n" <> Engram.QueryRecorder.format(queries)
 
       assert att_paths(user, vault) ==
                Enum.sort(["Uno/f.png", "Warmed/f.png" | for(i <- 1..30, do: "Archive/f#{i}.png")])

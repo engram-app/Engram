@@ -200,12 +200,17 @@ defmodule Engram.Repo do
 
   Nested (`in_transaction?/0` true): the isolation of a transaction can only
   be set by its first statement, so `fun` runs inline in the caller's
-  transaction and under its rules. Every such caller today is a folder write
-  (`Engram.Folders` rename, batch move) that takes the vault seq lock first,
-  the lock `DataMigrations.FolderTable`'s heal also takes
-  (`Vaults.lock_user_vaults_nowait!/2`), so no heal commits in between. The
-  test sandbox runs every transaction as a savepoint, so there `fun` runs at
-  READ COMMITTED (`Engram.Repo.SnapshotTest` covers the real top level).
+  transaction and under its rules. The folder writes (`Engram.Folders`
+  rename, batch move) take the vault's folder-write lock first
+  (`Vaults.lock_folder_writes!/1`), which `DataMigrations.FolderTable`'s heal
+  also takes, so no heal commits in between. The MCP request transaction
+  nests the folder listings too: they stay correct at READ COMMITTED (one
+  statement for the counts, drift read before rows, stale before placed).
+
+  The test sandbox runs every transaction as a savepoint, so there `fun` runs
+  at READ COMMITTED and read-write: READ ONLY is enforced in prod only, and a
+  write added inside a snapshot block passes the suite and raises `25006` in
+  prod (`Engram.Repo.SnapshotTest` covers the real top level).
   """
   @spec with_tenant_snapshot!(Ecto.UUID.t(), (-> result)) :: result when result: term()
   def with_tenant_snapshot!(tenant_id, fun) do
