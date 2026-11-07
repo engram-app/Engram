@@ -22,9 +22,21 @@ defmodule Engram.KeywordIndex.Stopwords do
 
   @set MapSet.new(@words)
 
+  # What the tokenizer leaves of an English contraction after the
+  # apostrophe ("alex's" -> "alex", "s"; "don't" -> "don", "t").
+  @contraction_fragments ~w(s t d ll re ve m)
+
   @doc "The list, lowercase."
   @spec words() :: [String.t()]
   def words, do: @words
+
+  @doc """
+  The tokens an apostrophe splits off a contraction: #{Enum.join(~w(s t d ll re ve m), ", ")}.
+  Kept apart from `words/0`: only the name leg drops them, and only after
+  an apostrophe (a lone "s" or "2" elsewhere is a real word).
+  """
+  @spec contraction_fragments() :: [String.t()]
+  def contraction_fragments, do: @contraction_fragments
 
   @doc """
   `text`'s words (the keyword tokenizer's raw tokens: NFKC, lowercase) with
