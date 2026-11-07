@@ -7036,14 +7036,14 @@ defmodule Engram.Notes do
         from(n in live,
           where: n.kind == "note",
           where: ^directly_in(user, vault, folder, dek),
-          select: 1
+          select: %{id: n.id}
         )
 
       markers =
         from(n in live,
           where: n.kind == "folder",
           where: ^Keys.eq(:folder, target_hmac),
-          select: 1
+          select: %{id: n.id}
         )
 
       Repo.one(from(u in subquery(union_all(notes, ^markers)), select: true, limit: 1)) == true
