@@ -551,29 +551,6 @@ describe("useRenameFolder", () => {
 			result.current.mutateAsync({ old_path: "a", new_path: "b" }),
 		).rejects.toMatchObject({ status: 409 });
 	});
-
-	// #2492: the server refuses a rename over its folder-op cap; the toast
-	// names the size and the way out, not a bare "Rename failed."
-	it("a folder_too_large 422 toasts the size and points to Obsidian", async () => {
-		vi.mocked(toast.error).mockClear();
-		post.mockRejectedValue(
-			new ApiError(422, "folder_too_large", undefined, {
-				error: "folder_too_large",
-				limit: 200,
-				over_limit: true,
-			}),
-		);
-
-		const { result } = renderHook(() => useRenameFolder(), { wrapper });
-		await act(async () => {
-			await result.current.mutateAsync({ old_path: "a", new_path: "b" }).catch(() => {});
-		});
-
-		expect(toast.error).toHaveBeenCalledTimes(1);
-		expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe(
-			"Folder too large to rename here (more than 200 items). Rename it in Obsidian.",
-		);
-	});
 });
 
 describe("useDeleteNote", () => {
@@ -2133,30 +2110,6 @@ describe("useBatchMoveFolders", () => {
 
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
-	});
-
-	it("a folder_too_large 422 toasts the size, not 'Batch move failed.'", async () => {
-		vi.mocked(toast.error).mockClear();
-		seedRawFolders({
-			folders: [{ id: "7", parent_id: null, name: "src", count: 0 }],
-		});
-		post.mockRejectedValue(
-			new ApiError(422, "folder_too_large", undefined, {
-				error: "folder_too_large",
-				limit: 200,
-				over_limit: true,
-			}),
-		);
-
-		const { result } = renderHook(() => useBatchMoveFolders(), { wrapper });
-		await act(async () => {
-			await result.current.mutateAsync({ ids: ["7"], target_parent: "dst" }).catch(() => {});
-		});
-
-		expect(toast.error).toHaveBeenCalledTimes(1);
-		expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe(
-			"Folder too large to rename here (more than 200 items). Rename it in Obsidian.",
-		);
 	});
 });
 
