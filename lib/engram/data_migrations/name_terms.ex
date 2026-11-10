@@ -91,10 +91,11 @@ defmodule Engram.DataMigrations.NameTerms do
     Cursor.put(@last_walk, %{"fixed" => fixed, "at" => DateTime.to_iso8601(DateTime.utc_now())})
   end
 
-  # The last complete walk fixed nothing and is under a day old: a walk
-  # handles every stale row it reads (healed or skipped), so what is still
-  # stale was written after it. Close the ledger and leave that to the
-  # drain, which only runs once the ledger is done.
+  # The last complete walk fixed nothing and is under a day old: what is
+  # still stale was written after it, or was deferred on a transient key
+  # error (`Crypto.key_outcome/1` `:later`). Close the ledger and leave it
+  # to the drain, which only runs once the ledger is done and retries those
+  # users' stale rows each tick.
   defp fruitless_walk? do
     with %{"fixed" => 0, "at" => at} <- Cursor.get(@last_walk),
          {:ok, at, _} <- DateTime.from_iso8601(at) do

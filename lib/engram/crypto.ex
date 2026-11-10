@@ -231,6 +231,29 @@ defmodule Engram.Crypto do
   def transient_dek_error?(reason), do: reason in @transient_dek_errors
 
   @doc """
+  What a background job does with a user whose DEK it could not load
+  (`nil` = the user row is gone, else `get_dek/1`'s error): `:park` when
+  no retry can ever succeed, `:later` otherwise. Pure, so callers and tests
+  share one mapping.
+
+  Parks: a missing user, `:no_dek`, and a wrapped blob no provider reads
+  (`:unrecognised_blob`, `:malformed_wrapped_blob`). Everything else is
+  `:later`: a provider throttle, outage or denial (`:kms_*`), a load timeout
+  or contention (`:dek_load_timeout`, `:dek_load_contended`), and
+  `:invalid_wrapping`, an authentication failure that a missed
+  `MASTER_KEY_VERSION` bump also gives for every user until the operator
+  fixes it (docs/context/encryption-operations.md, the M4 footgun).
+  """
+  @spec key_outcome(nil | {:error, term()}) :: :park | :later
+  def key_outcome(nil), do: :park
+
+  def key_outcome({:error, reason})
+      when reason in [:no_dek, :unrecognised_blob, :malformed_wrapped_blob],
+      do: :park
+
+  def key_outcome({:error, _reason}), do: :later
+
+  @doc """
   Returns the plaintext DEK for a user, unwrapping via the provider if not cached.
   """
   @spec get_dek(User.t()) :: {:ok, <<_::256>>} | {:error, term()}

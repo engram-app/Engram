@@ -46,7 +46,13 @@ defmodule Engram.Search.NameTerms do
   exactly those rows: the backfill chain heals them, the drain heals what an
   older node writes after the ledger closed. A folder rename leaves its
   child notes' basenames, and so their stamps, alone. A name that never
-  decrypts is stamped `<<0>> <> hmac` and leaves the index.
+  decrypts, or whose owner's key can never load (`Crypto.key_outcome/1`), is
+  stamped `<<0>> <> hmac` and leaves the index; a transient key failure
+  leaves the ref stale, so the next walk or the drain retries it. A user
+  stuck on `:later` is retried by the drain every tick within its caps, so
+  a key that is truly broken but reports `:invalid_wrapping` shows as a
+  steady `[:engram, :name_terms, :deferred]` rate (alerted by engram-infra
+  #1808).
 
   Accepted (ranking only): a previous-release content edit that changes only
   the H1 title keeps the old title terms until this release's next index
@@ -544,9 +550,11 @@ defmodule Engram.Search.NameTerms do
   @doc """
   One id window of `Note` or `Folder` (`Engram.Backfill.IdWindows`): rewrites
   the terms of every stale live ref in it (the stale-index predicate), each
-  under its owner's current key. Every stale row is handled: a row whose
-  owner's key does not load, for any reason, is skipped and stamped, so a
-  walk always empties the stale index. Returns the rows handled. `ctx.repo`
+  under its owner's current key. A row whose owner's key can never load
+  (`Crypto.key_outcome/1` `:park`: no user, no DEK, an unreadable wrapped
+  blob) is skipped and stamped out of the stale index; on any other key
+  failure (a throttle, a timeout, a wrong master key) the rows stay stale
+  and uncounted, for the next pass. Returns the rows handled. `ctx.repo`
   is the scope's (maintenance on the fleet).
   """
   @spec heal_window(module(), [Ecto.UUID.t()], map()) :: non_neg_integer()
@@ -557,7 +565,8 @@ defmodule Engram.Search.NameTerms do
     |> Enum.reduce(0, fn {user_id, rows}, fixed ->
       case user_keys(repo, user_id) do
         {:ok, dek, fk} -> fixed + rewrite(repo, schema, user_id, dek, fk, rows)
-        {:skip, reason} -> fixed + skip(repo, schema, user_id, rows, reason)
+        {:park, reason} -> fixed + skip(repo, schema, user_id, rows, reason)
+        {:later, reason} -> fixed + later(user_id, rows, reason)
       end
     end)
   end
@@ -664,18 +673,21 @@ defmodule Engram.Search.NameTerms do
     )
   end
 
-  # One skip path: any failure to load the key (no user, no DEK, a corrupt
-  # wrapped key) skips that user's rows, so the walk never leaves them stale.
+  # `Crypto.key_outcome/1` decides: a key that can never load parks the
+  # user's rows (stamped out of the stale index); any other failure leaves
+  # them stale for the next pass.
   defp user_keys(repo, user_id) do
     with %{} = user <- repo.get(Engram.Accounts.User, user_id),
          {:ok, dek} <- Crypto.get_dek(user) do
       {:ok, dek, Crypto.dek_filter_key_from_bytes(dek)}
     else
-      {:error, :no_dek} -> {:skip, :no_dek}
-      nil -> {:skip, :no_dek}
-      _ -> {:skip, :dek_error}
+      failed -> {Crypto.key_outcome(failed), reason(failed)}
     end
   end
+
+  defp reason(nil), do: :no_user
+  defp reason({:error, reason}) when is_atom(reason), do: reason
+  defp reason({:error, _}), do: :dek_error
 
   # Decrypt, then write the readable refs and stamp the unreadable ones out
   # of the stale index. Returns the refs handled.
@@ -707,7 +719,7 @@ defmodule Engram.Search.NameTerms do
   end
 
   # Rows that can never be processed (a name that does not decrypt, a user
-  # whose key does not load) are stamped `<<0>> <> hmac`: out of the stale index, so the
+  # whose key can never load) are stamped `<<0>> <> hmac`: out of the stale index, so the
   # ledger can close, until a writer renames them. Logged and counted
   # (`[:engram, :name_terms, :skipped]`).
   defp skip(_repo, _schema, _user_id, [], _reason), do: 0
@@ -727,6 +739,26 @@ defmodule Engram.Search.NameTerms do
     )
 
     length(rows)
+  end
+
+  # A transient key failure: rows untouched (still stale, so the next walk or
+  # the drain retries them) and not counted as fixed. Counted
+  # (`[:engram, :name_terms, :deferred]`) and logged.
+  defp later(user_id, rows, reason) do
+    :telemetry.execute([:engram, :name_terms, :deferred], %{count: length(rows)}, %{
+      reason: reason
+    })
+
+    Logger.warning(
+      "name_terms: refs deferred, key did not load",
+      Metadata.with_category(:warning, :search,
+        user_id: user_id,
+        reason_label: reason,
+        total_count: length(rows)
+      )
+    )
+
+    0
   end
 
   # Note: {path, title}; folder: [segment].

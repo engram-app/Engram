@@ -12,6 +12,7 @@ defmodule Engram.Search.NameTermsTest do
 
   alias Engram.Bookkeeping.Drain
   alias Engram.Crypto
+  alias Engram.Crypto.DekCache
   alias Engram.Crypto.UserDekRotation
   alias Engram.DataMigrations
   alias Engram.DataMigrations.NameTerms, as: Ledger
@@ -24,6 +25,7 @@ defmodule Engram.Search.NameTermsTest do
   alias Engram.Search.NameTerms
   alias Engram.Search.NameTerms.Row
   alias Engram.ServiceConfig
+  alias Engram.StalledDekLoad
   alias Engram.Workers.BackfillNameTerms
 
   defmodule ScopeFilter do
@@ -717,7 +719,7 @@ defmodule Engram.Search.NameTermsTest do
         Ecto.UUID.dump!(ctx.user.id)
       ])
 
-      Engram.Crypto.DekCache.invalidate(ctx.user.id)
+      DekCache.invalidate(ctx.user.id)
 
       run_chain!()
 
@@ -737,21 +739,59 @@ defmodule Engram.Search.NameTermsTest do
       assert rows(note.id) != []
     end
 
-    test "a user whose DEK fails to load for any other reason is skipped and stamped", ctx do
+    test "a wrapped key no provider can read is skipped and stamped, and the ledger closes",
+         ctx do
       note = write!(ctx.user, ctx.vault, "Corrupt.md")
 
-      # A wrapped key that does not unwrap: not :no_dek, an unexpected error.
+      # Not a blob shape any provider reads: permanent (:unrecognised_blob).
       Repo.query!("UPDATE users SET encrypted_dek = $2 WHERE id = $1", [
         Ecto.UUID.dump!(ctx.user.id),
-        :crypto.strong_rand_bytes(60)
+        <<5, 5, 5, 5, 5, 5, 5, 5, 5, 5>>
       ])
 
-      Engram.Crypto.DekCache.invalidate(ctx.user.id)
+      DekCache.invalidate(ctx.user.id)
 
       run_chain!()
 
       assert <<0, _::binary>> = stamp(note.id)
       assert :done = Ledger.run_pass()
+    end
+
+    test "a transient key error leaves the rows stale and unstamped; a later pass heals them",
+         ctx do
+      note = write!(ctx.user, ctx.vault, "Throttled.md")
+      {:ok, dek} = Crypto.get_dek(ctx.user)
+      token = StalledDekLoad.stall!(ctx.user.id)
+
+      run_chain!()
+
+      assert stamp(note.id) == nil
+      assert rows(note.id) == []
+
+      # The key loads again: the drain retries the still-stale rows.
+      _ = DekCache.put_if_claimed(ctx.user.id, token, dek)
+      :ok = DataMigrations.mark_done(Ledger.name(), Ledger.version())
+      assert %{name_terms: 1} = Drain.run()
+      assert <<1, _::binary>> = stamp(note.id)
+      assert rows(note.id) != []
+    end
+
+    test "only a missing user, a missing DEK or an unreadable blob parks" do
+      assert Crypto.key_outcome(nil) == :park
+
+      for reason <- [:no_dek, :unrecognised_blob, :malformed_wrapped_blob],
+          do: assert(Crypto.key_outcome({:error, reason}) == :park)
+
+      for reason <- [
+            :invalid_wrapping,
+            :kms_throttled,
+            :kms_access_denied,
+            :kms_key_not_found,
+            :dek_load_timeout,
+            :dek_load_contended,
+            {:kms_decrypt_failed, :econnrefused}
+          ],
+          do: assert(Crypto.key_outcome({:error, reason}) == :later)
     end
 
     test "the kill switch stops a running chain at its next window", ctx do
