@@ -384,7 +384,8 @@ defmodule Engram.IndexingHugeNotesTest do
       # chunk is keyword-only by design, so only prose sentinels must be in a
       # dense input.
       embedded = dir |> embedded_texts() |> word_set()
-      prose = prose_words(content, path)
+      chunks = Engram.Parsers.Markdown.parse(content, path)
+      prose = prose_words(chunks)
 
       prose_sentinels = Enum.filter(sentinels, &MapSet.member?(prose, &1))
 
@@ -406,16 +407,15 @@ defmodule Engram.IndexingHugeNotesTest do
       # The deepest sentinel with a dense input (a canvas has none).
       case prose_sentinels |> Enum.filter(&MapSet.member?(embedded, &1)) |> List.last() do
         nil -> :ok
-        deep -> assert Search.snippet(input_holding(dir, deep, headings), deep) =~ deep
+        deep -> assert Search.snippet(input_holding(dir, deep, chunks), deep) =~ deep
       end
     end
   end
 
   defp word_set(text), do: text |> String.split(~r/[^a-z]+/) |> MapSet.new()
 
-  defp prose_words(content, path) do
-    content
-    |> Engram.Parsers.Markdown.parse(path)
+  defp prose_words(chunks) do
+    chunks
     |> Enum.filter(&(&1.kind == "prose"))
     |> Enum.map_join("\n", & &1.text)
     |> word_set()
@@ -545,19 +545,25 @@ defmodule Engram.IndexingHugeNotesTest do
     end
   end
 
-  # The chunk text (prefix dropped) of the dense input holding `word`. A
-  # note with no title and no heading has no prefix (R3c: the file name is
-  # not a title), so its input is the chunk text alone.
-  defp input_holding(dir, word, prefixed?) do
+  # The chunk text (prefix dropped) of the dense input holding `word`.
+  # Whether an input has a prefix is per chunk, not per note (R3c): a chunk
+  # with no title and no heading above it, such as a code fence before the
+  # first heading, has none. So the prefix is the chunker's own: the longest
+  # of the parsed chunks' prefixes (`embed_text` minus `text`, lead line
+  # included) the input starts with, or none. A merged group's input opens
+  # with its first member's prefix.
+  defp input_holding(dir, word, chunks) do
     input =
       dir |> embedded_texts() |> String.split("\n\u0000\n") |> Enum.find(&(&1 =~ word))
 
-    if prefixed? do
-      [_prefix, text] = String.split(input, "\n\n", parts: 2)
-      text
-    else
-      input
-    end
+    prefix =
+      chunks
+      |> Enum.map(&binary_part(&1.embed_text, 0, byte_size(&1.embed_text) - byte_size(&1.text)))
+      |> Enum.uniq()
+      |> Enum.filter(&(&1 != "" and String.starts_with?(input, &1)))
+      |> Enum.max_by(&byte_size/1, fn -> "" end)
+
+    binary_part(input, byte_size(prefix), byte_size(input) - byte_size(prefix))
   end
 
   # ---------------------------------------------------------------------------
