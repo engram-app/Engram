@@ -23,9 +23,12 @@ defmodule Engram.Repo.Migrations.DropNotesSetFolderRefTriggersContract do
   restored note; a soft delete returns before the probe.
 
   `DROP TRIGGER` takes ACCESS EXCLUSIVE on `notes` for a catalog change
-  only: no scan, no rewrite, under `lock_timeout` 5s (the boot migrator
-  retries). Rerun-safe (`IF EXISTS`). Calls no app module (N-1 gate). Down
-  restores the release C function and both triggers.
+  only: no scan, no rewrite, under `lock_timeout` 5s. Nothing retries a lock
+  timeout: the migration raises, the task exits at boot, ECS replaces it,
+  and repeated failures trip the circuit breaker and roll the deploy back.
+  Rerun-safe (`IF EXISTS`), so a replacement task starts clean. Calls no
+  app module (N-1 gate). Down restores the release C function and both
+  triggers.
   """
 
   @set_ref """
