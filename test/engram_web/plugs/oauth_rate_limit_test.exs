@@ -112,6 +112,23 @@ defmodule EngramWeb.Plugs.OAuthRateLimitTest do
     assert authorize().status == 429
   end
 
+  # The consent page fetches this on the way to approval, so everyone behind
+  # one network address connecting the same client shares it.
+  test "the 11th client lookup in a minute from one IP passes" do
+    client_id = Ecto.UUID.generate()
+    for _ <- 1..10, do: client_lookup(client_id)
+
+    refute client_lookup(client_id).status == 429
+  end
+
+  test "client lookup allows #{@authorize_limit} per IP and refuses the next" do
+    for _ <- 1..@authorize_limit, do: refute(client_lookup(Ecto.UUID.generate()).status == 429)
+
+    assert client_lookup(Ecto.UUID.generate()).status == 429
+  end
+
+  defp client_lookup(client_id), do: get(build_conn(), "/api/oauth/clients/#{client_id}")
+
   defp authorize do
     get(build_conn(), "/oauth/authorize", %{"client_id" => Ecto.UUID.generate()})
   end

@@ -41,6 +41,10 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
   end
 
+  pipeline :rate_limit_oauth_clients do
+    plug EngramWeb.Plugs.OAuthRateLimit
+  end
+
   pipeline :rate_limit_device_auth do
     plug EngramWeb.Plugs.DeviceAuthRateLimit
   end
@@ -650,9 +654,9 @@ defmodule EngramWeb.Router do
   # OAuth public client metadata — surfaces `client_name` to the SPA
   # consent UI without exposing it in the redirect URL bar. Public
   # because client_id is itself public (returned by DCR); client_name
-  # is non-secret. Rate-limited per IP to deter enumeration.
+  # is non-secret. Rate-limited per IP across all ids to deter enumeration.
   scope "/api/oauth", EngramWeb do
-    pipe_through [:api, :rate_limit_auth]
+    pipe_through [:api, :rate_limit_oauth_clients]
 
     get "/clients/:client_id", OAuthClientsController, :show
   end

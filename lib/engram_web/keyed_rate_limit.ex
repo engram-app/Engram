@@ -37,6 +37,7 @@ defmodule EngramWeb.KeyedRateLimit do
 
   @type kind :: :ip | :client | :secret
   @type config :: %{
+          optional(:route) => ([String.t()] -> [String.t()]),
           policy: %{String.t() => {kind(), pos_integer()}},
           default: {kind(), pos_integer()},
           prefix: String.t(),
@@ -47,8 +48,9 @@ defmodule EngramWeb.KeyedRateLimit do
   @spec check(Plug.Conn.t(), config()) :: :ok | {:deny, String.t(), non_neg_integer()}
   def check(conn, config) do
     # The ROUTED path: `/oauth/token/` reaches the same action as
-    # `/oauth/token`, so it must draw from the same bucket.
-    path = "/" <> Enum.join(conn.path_info, "/")
+    # `/oauth/token`, so it must draw from the same bucket. `:route` folds a
+    # path with a parameter in it onto one policy entry.
+    path = "/" <> Enum.join(Map.get(config, :route, & &1).(conn.path_info), "/")
     {kind, limit} = Map.get(config.policy, path, config.default)
     ip = client_ip(conn)
 

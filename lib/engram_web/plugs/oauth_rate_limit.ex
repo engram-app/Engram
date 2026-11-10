@@ -21,6 +21,8 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
     * `/oauth/authorize`: per IP, #{300}/min. A browser navigation that checks
       no credential, so there is nothing to brute-force and the limit is only
       a flood ceiling. Everyone behind one network address shares it.
+    * `/api/oauth/clients/:client_id`: per IP across all ids, the same policy.
+      The consent page's next request; answers public client metadata only.
 
   The client id is attacker-supplied, so it is hashed into the key (bounded
   length) and never logged.
@@ -39,11 +41,16 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
   alias EngramWeb.KeyedRateLimit
   alias EngramWeb.Plugs.Halt
 
+  # The two steps a browser takes to reach consent: one number, so one cannot
+  # be left behind to throttle the other.
+  @consent_path_policy {:ip, 300}
+
   @policy %{
     "/oauth/token" => {:client, 300},
     "/oauth/revoke" => {:client, 300},
     "/oauth/register" => {:ip, 60},
-    "/oauth/authorize" => {:ip, 300}
+    "/oauth/authorize" => @consent_path_policy,
+    "/api/oauth/clients" => @consent_path_policy
   }
   @default_policy {:ip, 10}
 
@@ -55,7 +62,8 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
       default: @default_policy,
       prefix: "oauth",
       purpose: :oauth,
-      credential: &client_id/1
+      credential: &client_id/1,
+      route: &route/1
     }
 
     case KeyedRateLimit.check(conn, config) do
@@ -63,6 +71,10 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
       {:deny, path, retry_after_ms} -> deny(conn, path, retry_after_ms)
     end
   end
+
+  # Every client id shares one bucket, or inventing ids would dodge the limit.
+  defp route(["api", "oauth", "clients", _client_id]), do: ~w(api oauth clients)
+  defp route(path_info), do: path_info
 
   defp client_id(conn) do
     case Plug.BasicAuth.parse_basic_auth(conn) do

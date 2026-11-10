@@ -123,7 +123,7 @@ defmodule EngramWeb.Plugs.RateLimitTest do
       end
     end
 
-    for path <- ~w(/api/auth/bootstrap /api/auth/invite/some-token /api/oauth/clients/some-id) do
+    for path <- ~w(/api/auth/bootstrap /api/auth/invite/some-token) do
       test "GET #{path} stays at #{@strict_limit} per IP" do
         for _ <- 1..@strict_limit, do: refute(get(build_conn(), unquote(path)).status == 429)
 
