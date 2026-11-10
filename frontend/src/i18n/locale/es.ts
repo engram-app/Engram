@@ -228,8 +228,8 @@ export default {
 	"Wait before swapping devices, or upgrade.":
 		"Espera antes de cambiar de dispositivo, o actualiza.",
 	"Daily AI search limit reached": "Límite diario de búsquedas con IA alcanzado",
-	"Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
-		"Tu plan gratuito incluye 20 búsquedas con IA por día, compartidas entre la aplicación web, el plugin de Obsidian y los clientes de MCP. Actualiza para tener búsquedas ilimitadas.",
+	"Your Free plan includes 50 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
+		"Tu plan gratuito incluye 50 búsquedas de IA por día, compartidas entre la aplicación web, el plugin Obsidian y los clientes MCP. Actualiza para obtener búsquedas ilimitadas.",
 	"Free plan: text attachments only": "Plan gratuito: solo adjuntos de texto",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"Tu plan gratuito puede adjuntar archivos de texto (.md, .txt, .csv, .html, código). Actualiza para adjuntar imágenes, audio, video, PDFs y documentos de oficina.",
@@ -285,10 +285,10 @@ export default {
 	"Your current plan": "Tu plan actual",
 	"You're on this plan": "Estás en este plan",
 	Popular: "Popular",
-	"2,000 notes · 20 AI searches a day · 1 vault":
-		"2.000 notas · 20 búsquedas con IA al día · 1 bóveda",
+	"2,000 notes · 50 AI searches a day · 1 vault":
+		"2.000 notas · 50 búsquedas con IA al día · 1 bóveda",
 	"2,000 notes, all searchable": "2000 notas, todas buscables",
-	"20 AI searches a day": "20 búsquedas de IA al día",
+	"50 AI searches a day": "50 búsquedas de IA al día",
 	"1 vault": "1 bóveda",
 	"1 GB attachments": "1 GB de adjuntos",
 	"2 devices": "2 dispositivos",

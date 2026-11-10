@@ -219,8 +219,8 @@ export default {
 	"Device swap cooldown active": "Tempoh pendinginan pertukaran peranti sedang aktif",
 	"Wait before swapping devices, or upgrade.": "Tunggu sebelum menukar peranti, atau tingkatkan.",
 	"Daily AI search limit reached": "Had carian AI harian telah dicapai",
-	"Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
-		"Pelan percuma anda termasuk 20 carian AI sehari, yang dikongsi merentasi aplikasi web, plugin Obsidian, dan klien MCP. Tingkatkan untuk had yang tidak terhad.",
+	"Your Free plan includes 50 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
+		"Pelan percuma anda termasuk 50 carian AI sehari, yang dikongsi merentasi aplikasi web, plugin Obsidian, dan klien MCP. Tingkatkan untuk penggunaan tanpa had.",
 	"Free plan: text attachments only": "Pelan percuma: Hanya lampiran teks",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"Pelan percuma anda boleh melampirkan fail teks (.md, .txt, .csv, .html, kod). Tingkatkan untuk melampirkan gambar, audio, video, PDF, dan dokumen pejabat.",
@@ -277,9 +277,9 @@ export default {
 	"Your current plan": "Pelan anda sekarang",
 	"You're on this plan": "Anda menggunakan pelan ini",
 	Popular: "Popular",
-	"2,000 notes · 20 AI searches a day · 1 vault": "2,000 nota · 20 carian AI sehari · 1 peti nota",
+	"2,000 notes · 50 AI searches a day · 1 vault": "2,000 nota · 50 carian AI sehari · 1 peti nota",
 	"2,000 notes, all searchable": "2,000 nota, semua boleh dicari",
-	"20 AI searches a day": "20 carian AI sehari",
+	"50 AI searches a day": "50 carian AI sehari",
 	"1 vault": "1 peti nota",
 	"1 GB attachments": "1 GB lampiran",
 	"2 devices": "2 peranti",

@@ -69,7 +69,7 @@ defmodule EngramWeb.BillingUsageTest do
     # The budget lives in the cluster-synced ETS counter, which has no
     # read-without-spend API — asking how much is left must not cost any. The
     # cap is still published so the UI can name the limit in an upgrade prompt.
-    assert usage(conn)["usage"]["ai_searches"] == %{"used" => nil, "limit" => 20}
+    assert usage(conn)["usage"]["ai_searches"] == %{"used" => nil, "limit" => 50}
   end
 
   # Compat shim: plugins before the cap removal render a "Notes searchable"

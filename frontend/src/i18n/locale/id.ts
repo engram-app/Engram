@@ -218,8 +218,8 @@ export default {
 	"Wait before swapping devices, or upgrade.":
 		"Tunggu sebelum berpindah perangkat, atau lakukan upgrade.",
 	"Daily AI search limit reached": "Batas pencarian AI harian tercapai",
-	"Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
-		"Paket Gratis Anda mencakup 20 pencarian AI per hari, yang dibagi untuk aplikasi web, plugin Obsidian, dan klien MCP. Lakukan upgrade untuk pencarian tanpa batas.",
+	"Your Free plan includes 50 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
+		"Paket Gratis Anda mencakup 50 pencarian AI per hari, yang dibagi untuk aplikasi web, plugin Obsidian, dan klien MCP. Tingkatkan untuk pencarian tanpa batas.",
 	"Free plan: text attachments only": "Paket Gratis: hanya lampiran teks",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"Paket Gratis Anda dapat melampirkan file teks (.md, .txt, .csv, .html, kode). Lakukan upgrade untuk melampirkan gambar, audio, video, PDF, dan dokumen office.",
@@ -276,10 +276,10 @@ export default {
 	"Your current plan": "Paket langganan Anda saat ini",
 	"You're on this plan": "Anda menggunakan paket ini",
 	Popular: "Populer",
-	"2,000 notes · 20 AI searches a day · 1 vault":
-		"2.000 catatan · 20 pencarian AI per hari · 1 vault",
+	"2,000 notes · 50 AI searches a day · 1 vault":
+		"2.000 catatan · 50 pencarian AI per hari · 1 vault",
 	"2,000 notes, all searchable": "2.000 catatan, semuanya dapat dicari",
-	"20 AI searches a day": "20 pencarian AI per hari",
+	"50 AI searches a day": "50 pencarian AI per hari",
 	"1 vault": "1 vault",
 	"1 GB attachments": "1 GB lampiran",
 	"2 devices": "2 perangkat",

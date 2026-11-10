@@ -54,6 +54,10 @@ defmodule EngramWeb.FreeTierSearchCapRouteTest do
     })
   end
 
+  defp mcp_text(conn) do
+    json_response(mcp_search(conn), 200)["result"]["content"] |> hd() |> Map.get("text")
+  end
+
   test "REST refuses with a 402 naming the key", %{conn: conn, user: user} do
     cap!(user, 1)
 
@@ -88,6 +92,65 @@ defmodule EngramWeb.FreeTierSearchCapRouteTest do
     text = json_response(mcp_search(conn), 200)["result"]["content"] |> hd() |> Map.get("text")
 
     assert text =~ "ai_searches_per_day"
+  end
+
+  # The allowance as shipped: no override, so a wrong `LimitKeys` number or a
+  # gate that stopped running both fail here.
+  describe "the shipped Free allowance" do
+    @free_allowance 50
+
+    # A real 200 on every allowed search: an unreachable Qdrant answers 500,
+    # which would pass for "not refused" without proving the search ran.
+    setup do
+      bypass = Bypass.open()
+      Engram.QdrantStub.stub_retrieve(bypass)
+      Engram.QdrantStub.stub_healthy(bypass)
+      Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+
+      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(Engram.QdrantStub.batch(c, %{"result" => []}))
+        )
+      end)
+
+      :ok
+    end
+
+    test "REST allows #{@free_allowance} searches and refuses the next", %{conn: conn} do
+      for _ <- 1..@free_allowance, do: assert(rest_search(conn).status == 200)
+
+      body = json_response(rest_search(conn), 402)
+      assert body["error"] == "limit_exceeded"
+      assert body["limit_key"] == "ai_searches_per_day"
+      assert body["limit"] == @free_allowance
+      assert Map.has_key?(body, "upgrade_url")
+    end
+
+    test "MCP allows #{@free_allowance} searches and refuses the next", %{conn: conn} do
+      for _ <- 1..@free_allowance do
+        refute json_response(mcp_search(conn), 200)["result"]["isError"]
+      end
+
+      text = mcp_text(conn)
+      assert text =~ "ai_searches_per_day"
+      refute text =~ "unavailable"
+    end
+
+    for tier <- ~w(starter pro) do
+      test "#{tier} stays unmetered past the Free allowance", %{conn: conn, user: user} do
+        insert(:subscription, user: user, tier: unquote(tier), status: "active")
+        Engram.Cache.evict(:subscription, user.id)
+        Engram.Billing.EntitlementCache.evict_all()
+
+        assert Engram.Billing.cap(user, :ai_searches_per_day) == nil
+
+        for _ <- 1..(@free_allowance + 1), do: assert(rest_search(conn).status == 200)
+        refute json_response(mcp_search(conn), 200)["result"]["isError"]
+      end
+    end
   end
 
   test "create_note still succeeds on a spent budget", %{conn: conn, user: user, vault: vault} do

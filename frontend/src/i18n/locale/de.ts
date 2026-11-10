@@ -228,8 +228,8 @@ export default {
 	"Device swap cooldown active": "Geräte-Wechsel-Zeitlimit aktiv",
 	"Wait before swapping devices, or upgrade.": "Warte, bevor du Geräte wechselst, oder upgrade.",
 	"Daily AI search limit reached": "Tägliches AI-Suchlimit erreicht",
-	"Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
-		"Dein kostenloses Konto beinhaltet 20 AI-Suchen pro Tag, die für die Web-App, das Obsidian-Plugin und MCP-Clients gelten. Upgrade für unbegrenzte Suchen.",
+	"Your Free plan includes 50 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
+		"Dein kostenloses Abonnement beinhaltet 50 KI-Suchen pro Tag, die für die Web-App, das Obsidian-Plugin und die MCP-Clients gelten. Upgrade für unbegrenzte Nutzung.",
 	"Free plan: text attachments only": "Kostenloses Konto: Nur Text-Anhänge",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"Dein kostenloses Konto kann Textdateien (.md, .txt, .csv, .html, Code) anhängen. Upgrade, um Bilder, Audio, Video, PDFs und Office-Dokumente anzuhängen.",
@@ -285,9 +285,9 @@ export default {
 	"Your current plan": "Dein aktueller Plan",
 	"You're on this plan": "Du nutzt diesen Plan",
 	Popular: "Beliebt",
-	"2,000 notes · 20 AI searches a day · 1 vault": "2.000 Notizen · 20 KI-Suchen pro Tag · 1 Vault",
+	"2,000 notes · 50 AI searches a day · 1 vault": "2.000 Notizen · 50 KI-Suchen pro Tag · 1 Vault",
 	"2,000 notes, all searchable": "2.000 Notizen, alle durchsuchbar",
-	"20 AI searches a day": "20 KI-Suchen pro Tag",
+	"50 AI searches a day": "50 KI-Suchen pro Tag",
 	"1 vault": "1 Vault",
 	"1 GB attachments": "1 GB Anhänge",
 	"2 devices": "2 Geräte",

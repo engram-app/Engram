@@ -71,6 +71,6 @@ are not counted; they are tiny (a few dozen tokens per edit).
 ## Limits the sim needs
 
 `grant.sql` lifts, for these accounts only: `notes_cap` (whale), 
-`ai_searches_per_day` (Free: 20), `concurrent_devices` and
+`ai_searches_per_day` (Free: 50), `concurrent_devices` and
 `obsidian_connections_cap` (Free: 2). The per-IP `/auth/device*` bucket
 (10/min) is shared by the whole sim, so OAuth refresh is capped at 0.12/s.

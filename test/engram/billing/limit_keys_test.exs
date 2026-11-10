@@ -62,7 +62,7 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:concurrent_devices, :free) == 2
       assert LimitKeys.default_for(:device_swap_cooldown_hours, :free) == 24
       # One AI meter, replacing six. See the note on the key in `LimitKeys`.
-      assert LimitKeys.default_for(:ai_searches_per_day, :free) == 20
+      assert LimitKeys.default_for(:ai_searches_per_day, :free) == 50
       assert LimitKeys.default_for(:ai_searches_per_day, :starter) == nil
       assert LimitKeys.default_for(:ai_searches_per_day, :pro) == nil
       assert LimitKeys.default_for(:reranker_enabled, :free) == false

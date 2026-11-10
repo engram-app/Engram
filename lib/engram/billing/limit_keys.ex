@@ -164,9 +164,10 @@ defmodule Engram.Billing.LimitKeys do
     # retrieval", which is how `external_ai_searches_per_day` went unenforced
     # on the entire MCP transport for months (#1527).
     #
-    # Rolling, not calendar-daily: `Engram.Usage.DailyCap` is a token bucket
-    # with continuous refill (capacity = allowance, refill = allowance/86_400
-    # per second), so there is no midnight cliff and no cron.
+    # Fixed window, not rolling: `Engram.Search.spend_search_budget` hits a
+    # Hammer bucket keyed by `div(now, 24h)`, so the window is epoch-aligned,
+    # the allowance resets at 00:00 UTC for everyone, and a user can spend it
+    # on both sides of that boundary.
     #
     # Replaces SIX keys that metered one user-visible concept through two
     # mechanisms: `external_ai_searches_per_day` (15) and
@@ -181,7 +182,7 @@ defmodule Engram.Billing.LimitKeys do
     # Burst and DoS defence is `EngramWeb.Plugs.PreAuthRateLimit` (600/min on
     # the shared pipeline), which is what the conversation meter was
     # approximating badly on a daily axis.
-    ai_searches_per_day: %{type: :integer, defaults: %{free: 20, starter: nil, pro: nil}},
+    ai_searches_per_day: %{type: :integer, defaults: %{free: 50, starter: nil, pro: nil}},
     # Grant-shaped, like every other boolean here: `true` == this user is
     # EXEMPT from the free-tier inactivity dunning. Was `inactivity_warn_60_days`
     # (free: true), which is the same inverted shape that broke attachments —

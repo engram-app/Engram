@@ -35,7 +35,7 @@ const TABLE: Record<LimitReason, LimitCopy> = {
 	ai_searches_per_day_exceeded: {
 		title: msg("Daily AI search limit reached"),
 		body: msg(
-			"Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.",
+			"Your Free plan includes 50 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.",
 		),
 	},
 	attachment_must_be_text: {

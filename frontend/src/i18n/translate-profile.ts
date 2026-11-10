@@ -167,7 +167,7 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
 	// cs read {folder} as a vault ("ve skladu", 2026-10-18).
 	"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 	// ja joined the items with 、 and dropped the separators (2026-10-18).
-	"2,000 notes · 20 AI searches a day · 1 vault":
+	"2,000 notes · 50 AI searches a day · 1 vault":
 		"Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 	// ja replaced the separator with 。 (2026-10-24).
 	"14-day money-back guarantee · cancel anytime":

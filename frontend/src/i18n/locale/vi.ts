@@ -213,8 +213,8 @@ export default {
 	"Device swap cooldown active": "Chế độ chờ chuyển đổi thiết bị đang hoạt động",
 	"Wait before swapping devices, or upgrade.": "Chờ trước khi chuyển đổi thiết bị, hoặc nâng cấp.",
 	"Daily AI search limit reached": "Giới hạn tìm kiếm AI hàng ngày đã đạt",
-	"Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
-		"Gói miễn phí của bạn bao gồm 20 lượt tìm kiếm AI mỗi ngày, được chia sẻ trên ứng dụng web, tiện ích Obsidian và các ứng dụng MCP. Nâng cấp để có số lượt tìm kiếm không giới hạn.",
+	"Your Free plan includes 50 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
+		"Gói miễn phí của bạn bao gồm 50 lượt tìm kiếm AI mỗi ngày, được chia sẻ trên ứng dụng web, tiện ích Obsidian và các ứng dụng MCP. Nâng cấp để có số lượt không giới hạn.",
 	"Free plan: text attachments only": "Gói miễn phí: chỉ hỗ trợ tệp văn bản",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"Gói miễn phí của bạn có thể đính kèm các tệp văn bản (.md, .txt, .csv, .html, code). Nâng cấp để đính kèm hình ảnh, âm thanh, video, PDF và tài liệu văn phòng.",
@@ -271,10 +271,10 @@ export default {
 	"Your current plan": "Gói hiện tại của bạn",
 	"You're on this plan": "Bạn đang sử dụng gói này",
 	Popular: "Phổ biến",
-	"2,000 notes · 20 AI searches a day · 1 vault":
-		"2.000 ghi chú · 20 lượt tìm kiếm AI mỗi ngày · 1 kho lưu trữ",
+	"2,000 notes · 50 AI searches a day · 1 vault":
+		"2.000 ghi chú · 50 lượt tìm kiếm AI mỗi ngày · 1 kho lưu trữ",
 	"2,000 notes, all searchable": "2.000 ghi chú, tất cả đều có thể tìm kiếm",
-	"20 AI searches a day": "20 lượt tìm kiếm AI mỗi ngày",
+	"50 AI searches a day": "50 lượt tìm kiếm AI mỗi ngày",
 	"1 vault": "1 kho lưu trữ",
 	"1 GB attachments": "1 GB tệp đính kèm",
 	"2 devices": "2 thiết bị",

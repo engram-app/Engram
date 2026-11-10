@@ -24,7 +24,7 @@ defmodule Engram.Billing.CapabilitiesTest do
     # #1974: API access is every tier's; there is no write flag any more.
     assert caps.limits["api_rps_cap"] == 30
     refute Map.has_key?(caps.limits, "api_write_enabled")
-    assert caps.limits["ai_searches_per_day"] == 20
+    assert caps.limits["ai_searches_per_day"] == 50
   end
 
   test "resolves paid-tier limits when the user has an entitling subscription" do

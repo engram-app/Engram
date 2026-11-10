@@ -223,8 +223,8 @@ export default {
 	"Wait before swapping devices, or upgrade.":
 		"Cihazları değiştirmeden veya yükseltmeden önce bekleyin.",
 	"Daily AI search limit reached": "Günlük yapay zeka arama sınırına ulaşıldı",
-	"Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
-		"Ücretsiz planınız, web uygulaması, Obsidian eklentisi ve MCP istemciler arasında paylaşılan günde 20 yapay zeka araması içerir. Sınırsız kullanım için yükseltin.",
+	"Your Free plan includes 50 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
+		"Ücretsiz planınızda, web uygulaması, Obsidian eklentisi ve MCP istemciler arasında paylaşılan günde 50 AI araması bulunur. Sınırsız kullanım için yükseltin.",
 	"Free plan: text attachments only": "Ücretsiz plan: Sadece metin ekleri",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"Ücretsiz planınızla metin dosyaları (.md, .txt, .csv, .html, kod) ekleyebilirsiniz. Resim, ses, video, PDF ve ofis belgeleri eklemek için yükseltin.",
@@ -280,10 +280,10 @@ export default {
 	"Your current plan": "Mevcut aboneliğiniz",
 	"You're on this plan": "Şu paketi kullanıyorsunuz",
 	Popular: "Popüler",
-	"2,000 notes · 20 AI searches a day · 1 vault":
-		"2.000 not · Günde 20 yapay zeka sorgusu · 1 kasa",
+	"2,000 notes · 50 AI searches a day · 1 vault":
+		"2.000 not · Günde 50 yapay zeka sorgusu · 1 kasa",
 	"2,000 notes, all searchable": "2.000 not, hepsi aranabilir",
-	"20 AI searches a day": "Günde 20 yapay zeka sorgusu",
+	"50 AI searches a day": "Günde 50 AI araması",
 	"1 vault": "1 kasa",
 	"1 GB attachments": "1 GB ek",
 	"2 devices": "2 cihaz",

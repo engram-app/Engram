@@ -75,10 +75,10 @@ interface PlanCardProps {
 export const FREE_TIER: FreeTierCopy = {
 	name: msg("Free"),
 	price: "$0",
-	summary: msg("2,000 notes · 20 AI searches a day · 1 vault"),
+	summary: msg("2,000 notes · 50 AI searches a day · 1 vault"),
 	features: [
 		msg("2,000 notes, all searchable"),
-		msg("20 AI searches a day"),
+		msg("50 AI searches a day"),
 		msg("1 vault"),
 		msg("1 GB attachments"),
 		msg("2 devices"),
