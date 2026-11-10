@@ -54,6 +54,7 @@ branch vanish  8 20261107200000_vanish.exs    # closed; fetch fails (shim below)
 # Our own PR's pull ref is stale with an OLD name for the version; it must
 # be skipped, not flagged against ourselves.
 branch selfold 5 20261107140000_old_name.exs
+branch basedup 11 20261101000000_dup.exs      # reuses the BASE version
 branch mine    - 20261107140000_mine.exs
 
 # Fake gh: open-PR list rows (what --jq yields) and per-PR state.
@@ -62,7 +63,8 @@ cat > "$TMP/bin/gh" <<'SH'
 #!/usr/bin/env bash
 case "$1 $2" in
   "pr list") cat "$GH_PRS" ;;
-  "pr view") awk -v n="$3" '$1 == n { print $2 }' "$GH_STATES" ;;
+  "pr view") [ "$3" = 12 ] && { echo "HTTP 502" >&2; exit 1; }
+    awk -v n="$3" '$1 == n { print $2 }' "$GH_STATES" ;;
   *) exit 2 ;;
 esac
 SH
@@ -99,6 +101,12 @@ git commit -qm rename
 out=$(run renamer '1\tother\tfalse') && fail "renamed-in migration not cross-checked: $out"
 grep -q 'also used by PR #1' <<<"$out" || fail "renamed-in collision not named: $out"
 
+# EDITING an existing migration is not adding one: only added files are
+# cross-checked, even when another PR reuses the edited file's version.
+git switch -q -c editor main
+echo "# edited" >> "$D/20261101000000_base.exs" && git commit -qam edit
+out=$(run editor '11\tbasedup\tfalse') || fail "edited (not added) migration flagged: $out"
+
 # Clean branch: renumbered.
 git switch -q -c clean main && mig "$D/20261107180000_clean.exs" && git add -A && git commit -qm clean
 
@@ -111,6 +119,14 @@ grep -q '::error::PR #7 (lagging) is open but its head could not be fetched' <<<
 out=$(run clean '1\tother\tfalse' '8\tvanish\tfalse' '10\tx%y\tfalse') ||
   fail "closed PRs with vanished refs failed the gate: $out"
 grep -q '::warning::PR #10 (x%25y) is closed' <<<"$out" || fail "branch name not escaped: $out"
+
+# A gh failure on the state lookup is a visible error, not a silent abort.
+out=$(run clean '12\tghfail\tfalse') && fail "gh pr view failure passed: $out"
+grep -q '::error::Could not read the state of PR #12' <<<"$out" || fail "gh pr view failure not reported: $out"
+
+# A PR list that hits the cap may be truncated: fail rather than skip PRs.
+out=$(PR_LIST_LIMIT=2 run clean '1\tother\tfalse' '2\tstacked\tfalse') && fail "truncated PR list passed: $out"
+grep -q '::error::gh pr list returned 2 PRs' <<<"$out" || fail "truncated PR list not reported: $out"
 
 # Same version already on main under another name.
 git switch -q main && mig "$D/20261107140000_main.exs" Main && git add -A && git commit -qm m && git push -q origin main

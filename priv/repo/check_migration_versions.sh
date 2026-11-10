@@ -91,9 +91,14 @@ cmd_open_prs() {
   # lag a fresh push. A URL with credentials does not match the insteadOf
   # prefix, so it reads GitHub itself (docs/context/ci-runner-network-and-disk-gotchas.md).
   local url=${PR_FETCH_URL:-https://x-access-token:${GH_TOKEN:-}@github.com/${GH_REPO:?GH_REPO unset}.git}
-  prs=$(gh pr list --state open --limit 500 \
+  local limit=${PR_LIST_LIMIT:-500}
+  prs=$(gh pr list --state open --limit "$limit" \
     --json number,headRefName,isCrossRepository \
     --jq '.[] | [.number, .headRefName, .isCrossRepository] | @tsv')
+  if [ "$(grep -c . <<<"$prs")" -ge "$limit" ]; then
+    echo "::error::gh pr list returned $limit PRs, its cap; the list may be truncated, so some open PRs would go unchecked. Raise PR_LIST_LIMIT in priv/repo/check_migration_versions.sh."
+    return 1
+  fi
   local nums=() names=() refspecs=() targets=("main" "origin/main")
   while IFS=$'\t' read -r num branch fork; do
     [ -n "$num" ] || continue
@@ -114,7 +119,10 @@ cmd_open_prs() {
       targets+=("PR #$num" "refs/migration-guard/$num")
       continue
     fi
-    state=$(gh pr view "$num" --json state --jq .state)
+    if ! state=$(gh pr view "$num" --json state --jq .state); then
+      echo "::error::Could not read the state of PR #$num ($branch) after its head failed to fetch (gh error above). Re-run this job."
+      return 1
+    fi
     if [ "$state" = OPEN ]; then
       fail=1
       echo "::error::PR #$num ($branch) is open but its head could not be fetched, so its migrations cannot be checked. Re-run this job."
