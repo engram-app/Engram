@@ -1,6 +1,8 @@
 defmodule EngramWeb.NotesControllerTest do
   use EngramWeb.ConnCase, async: true
 
+  import Ecto.Query, only: [from: 2]
+
   setup :authed_api_conn
 
   # The Obsidian plugin's push. It reports its version, so it may replace a
@@ -692,6 +694,50 @@ defmodule EngramWeb.NotesControllerTest do
         post(conn, "/api/notes", %{path: "A.md", content: "# A v2", mtime: 2.0, base_hash: base})
 
       assert %{"note" => _} = json_response(conn2, 200)
+    end
+  end
+
+  # A base_hash says "I am editing the version I read". With no live note at the
+  # path (a folder rename moved it), that edit has nothing to apply to: it must
+  # be refused, not turned into a create that resurrects the old folder (E7).
+  describe "POST /notes with base_hash at a path renamed away" do
+    test "409 stale_base, no new row, the moved note unchanged",
+         %{conn: conn, user: user, vault: vault} do
+      seeded = post(conn, "/api/notes", %{path: "A/sub/n.md", content: "# n v1", mtime: 1.0})
+      %{"id" => id, "content_hash" => base} = json_response(seeded, 200)["note"]
+
+      assert {:ok, 1} = Engram.Notes.rename_folder(user, vault, "A", "B")
+
+      stale =
+        post(conn, "/api/notes", %{
+          path: "A/sub/n.md",
+          content: "# n v2",
+          mtime: 2.0,
+          base_hash: base
+        })
+
+      assert json_response(stale, 409) == %{"conflict" => true, "reason" => "stale_base"}
+      assert json_response(get(conn, "/api/notes/A/sub/n.md"), 404)
+
+      moved = json_response(get(conn, "/api/notes/B/sub/n.md"), 200)
+      assert moved["id"] == id
+      assert moved["content"] == "# n v1"
+      assert moved["content_hash"] == base
+
+      live =
+        Engram.Repo.aggregate(
+          from(n in Engram.Notes.Note,
+            where: n.vault_id == ^vault.id and n.kind == "note" and is_nil(n.deleted_at)
+          ),
+          :count
+        )
+
+      assert live == 1
+    end
+
+    test "control: no base_hash at a never-used path still creates", %{conn: conn} do
+      created = post(conn, "/api/notes", %{path: "Fresh/new.md", content: "# new", mtime: 1.0})
+      assert %{"note" => %{"path" => "Fresh/new.md", "version" => 1}} = json_response(created, 200)
     end
   end
 
