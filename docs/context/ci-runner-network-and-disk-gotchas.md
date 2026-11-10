@@ -1,6 +1,6 @@
 # Context Doc: CI runner network and disk gotchas
 
-_Last verified: 2026-11-05_
+_Last verified: 2026-11-07_
 
 **Trigger:** "Checkout plugin" slow (minutes) or hung until cancelled; CI
 Postgres "unhealthy" or "Wait for DB + ecto setup" fails on a `gamingpc-*`
@@ -8,7 +8,9 @@ runner; e2e-browser `Failed to sign in ... Too Many Requests`; marketing lychee
 `https://sentry.io/privacy/ Connection refused`, Sentry release or source-map
 upload fails on `gamingpc-*`/`minipc-*`; a job ends `failure` with a
 step still `in_progress` and no log; engram-infra `main` red from
-`bin/assert-main-tip.sh`; plugin release-please PR red on intermediate pushes.
+`bin/assert-main-tip.sh`; plugin release-please PR red on intermediate pushes;
+a step reads a file another job overwrote (`JSONDecodeError` at char 0, empty
+or truncated output).
 
 Runners: `runner-*`, `fastraid-*`, and `gamingpc-*` VMs (the gaming PC VMs share
 one disk). All runners share one NAT IP to GitHub. Git traffic to
@@ -157,3 +159,34 @@ green.
 **Fix.** None. Not a blocker; judge the PR by its final head.
 
 **How found.** Comparing failing run SHAs against the PR's current head.
+
+## 8. Runners on one host share /tmp
+
+**Symptom.** Run 42375623594 (PR #2526, lint job, `mix deps.audit` step):
+`JSONDecodeError: Expecting value: line 1 column 1 (char 0)` reading
+`/tmp/audit.json`, though mix exited 0.
+
+**Cause.** `runner-1` and `runner-2` are two runner services on the same
+`github-runner` host and share its `/tmp`. runner-2 wrote a valid 35-byte
+`{"pass":true,"vulnerabilities":[]}`; runner-1's concurrent lint job ran
+`> /tmp/audit.json`, truncating it before runner-2's python read it. Any fixed
+`/tmp/<name>` written in one command and read in a later one has this race.
+
+**Fix.** Use `$RUNNER_TEMP/<name>` (per runner, per job, wiped after the job).
+Converted in verify.yml: deps.audit json/err, the prebuild-mix deps/compile
+logs, the OpenAPI drift files, and migration-gates' new-migrations and drops
+lists. All run in the host shell; the compile logs are host-side redirects of
+`docker run` output, so no mount is needed. A file shared by several steps is
+set once via `$GITHUB_ENV` (`runner.temp` is not available in a job-level
+`env:`, which is why `PREV_DIR` uses `run_id` instead).
+
+**Left as is.** `/tmp/.X*-lock` (Xvfb owns those paths), the
+`*_PREFIX`/`PREV_DIR` paths (already run-scoped), and
+`/tmp/obsidian-stderr-<name>-<pid>.log` and
+`/tmp/xvfb-stderr-<display>-<pid>.log` (pid-unique, written by
+`e2e/helpers/obsidian.py`), and the `find /tmp -name '.ff*.node' -mmin +60
+-delete` sweeps (host-wide cleanup of stale files, not a write-then-read).
+
+**How found.** Comparing the lint job logs of both runners in the same window:
+runner-2 logged `stdout bytes: 35`, then the decode error, while runner-1's
+deps.audit was writing the same path.
