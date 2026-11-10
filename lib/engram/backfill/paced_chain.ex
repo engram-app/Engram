@@ -14,13 +14,17 @@ defmodule Engram.Backfill.PacedChain do
 
   alias Engram.Backfill.{IdWindows, Throttle}
 
+  # The pause between windows of every paced chain: the one knob.
+  @pause_ms 250
+
   @type cursor :: IdWindows.cursor()
 
   @doc """
   Walks `schema` from `from` (nil: the start). `step.(ids, ctx, acc)` heals
   one window and returns the new `acc`. After each window `stop?.(acc)` is
   asked: true ends the hop with `{:stopped, cursor, acc}` (the cursor of that
-  window); otherwise the walk sleeps `:pause_ms` (default 0) and goes on.
+  window); otherwise the walk sleeps `:pause_ms` (default `pause_ms/0`) and
+  goes on.
   `{:walked, acc}` when the table ended first.
 
   `:continue?` (a 0-arity fun, default always true) is asked BEFORE each
@@ -44,7 +48,7 @@ defmodule Engram.Backfill.PacedChain do
   def walk(schema, from, acc, step, opts) do
     stop? = Keyword.fetch!(opts, :stop?)
     continue? = Keyword.get(opts, :continue?, fn -> true end)
-    pause = Keyword.get(opts, :pause_ms, 0)
+    pause = Keyword.get(opts, :pause_ms, @pause_ms)
     wait = waiter(pause, Keyword.get(opts, :writes_per_s), Keyword.get(opts, :writes))
 
     fun = fn ids, ctx, {_state, at, acc} ->
@@ -83,6 +87,10 @@ defmodule Engram.Backfill.PacedChain do
       Throttle.wait_ms(started, writes.(acc), per_s, if(stop, do: 0, else: pause), Throttle.now_ms())
     end
   end
+
+  @doc "The default pause between windows (ms)."
+  @spec pause_ms() :: non_neg_integer()
+  def pause_ms, do: @pause_ms
 
   @doc "A hop deadline `ms` from now, for `past?/1`."
   @spec deadline(number()) :: number()

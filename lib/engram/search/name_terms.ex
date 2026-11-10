@@ -501,7 +501,7 @@ defmodule Engram.Search.NameTerms do
   compare-and-set read (the row was just inserted under that hmac).
   """
   def stamp(hmac), do: <<@version>> <> hmac
-  defp unreadable_stamp(hmac), do: <<0>> <> hmac
+  defp unreadable_stamp(hmac), do: Engram.Crypto.NameKeys.unreadable(hmac)
 
   defp drop(repo, kind, pairs) do
     if MapSet.size(pairs) > 0 do

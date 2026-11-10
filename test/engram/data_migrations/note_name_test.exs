@@ -81,7 +81,7 @@ defmodule Engram.DataMigrations.NoteNameTest do
 
   # Hops until the chain ends; returns how it ended and how many hops it took.
   defp run_chain(args \\ %{}, opts \\ [], hops \\ 1) do
-    case BackfillNoteNames.hop(args, opts) do
+    case BackfillNoteNames.hop(args, Keyword.put_new(opts, :pause_ms, 0)) do
       {:next, args} when hops < 100 -> run_chain(args, opts, hops + 1)
       other -> {other, hops}
     end
@@ -170,7 +170,9 @@ defmodule Engram.DataMigrations.NoteNameTest do
     assert DateTime.compare(job.scheduled_at, DateTime.utc_now()) == :gt
   end
 
-  test "a row that never decrypts keeps the ledger open and stops the chain", %{
+  # Review F6(a): one unreadable row must not hold the ledger (and the S3
+  # read switch) open forever. Red before: the chain stopped, never done.
+  test "a row that never decrypts is parked, and the ledger still closes", %{
     user: u,
     vault: v
   } do
@@ -182,12 +184,116 @@ defmodule Engram.DataMigrations.NoteNameTest do
       Ecto.UUID.dump!(bad.id)
     ])
 
-    # One walk fixes the good row, the next finds only the bad one: stop, so
-    # an unreadable row costs one walk per runner pass, never a hot loop.
-    assert {:stopped, 2} = run_chain()
+    # Walk 1 names the good row and parks the bad one; walk 2 is clean.
+    assert {:done, 2} = run_chain()
     assert name_of(u, "notes", good.id) == "good.md"
     assert name_of(u, "notes", bad.id) == nil
+
+    %{rows: [[stamp, nonce]]} =
+      Repo.query!("SELECT name_stamp, path_nonce FROM notes WHERE id = $1", [
+        Ecto.UUID.dump!(bad.id)
+      ])
+
+    assert stamp == Engram.Crypto.NameKeys.unreadable(Name.stamp(nonce))
+    assert DataMigrations.done?(NoteName.name(), NoteName.version())
+  end
+
+  test "a user mid DEK rotation is left, never parked, and holds the ledger open", %{
+    user: u,
+    vault: v
+  } do
+    note = note!(u, v, "L/l.md")
+    n_minus_1_insert!()
+
+    Repo.query!("UPDATE users SET dek_rotation_locked_at = now() WHERE id = $1", [
+      Ecto.UUID.dump!(u.id)
+    ])
+
+    assert {:stopped, 1} = run_chain()
+    assert name_of(u, "notes", note.id) == nil
     refute DataMigrations.done?(NoteName.name(), NoteName.version())
+
+    Repo.query!("UPDATE users SET dek_rotation_locked_at = NULL WHERE id = $1", [
+      Ecto.UUID.dump!(u.id)
+    ])
+
+    assert {:done, _} = run_chain()
+    assert name_of(u, "notes", note.id) == "l.md"
+  end
+
+  # Review F6(b): no walk starts, and the ledger never closes, while a node
+  # that does not write names is in the cluster.
+  test "an older node in the cluster blocks the walk and the close", %{user: u, vault: v} do
+    note = note!(u, v, "F/f.md")
+    n_minus_1_insert!()
+
+    behind = [
+      peers: fn -> [:"old@10.0.0.9"] end,
+      multicall: fn _peers -> [{:error, {:exception, :undef, []}}] end
+    ]
+
+    assert :stopped = BackfillNoteNames.hop(%{}, fleet: behind, pause_ms: 0)
+    assert name_of(u, "notes", note.id) == nil
+    refute DataMigrations.done?(NoteName.name(), NoteName.version())
+
+    assert {:done, _} = run_chain()
+  end
+
+  test "trashed notes and rename tombstones are named too; markers are not", %{
+    user: u,
+    vault: v
+  } do
+    trashed = note!(u, v, "T/trashed.md")
+    note!(u, v, "T/old.md")
+    {:ok, _} = Notes.rename_note(u, v, "T/old.md", "T/new.md")
+    :deleted = Notes.delete_note_reporting(u, v, "T/trashed.md")
+    {:ok, marker} = Notes.create_folder_marker(u, v, "Empty/Deep")
+    n_minus_1_insert!()
+
+    assert {:done, _} = run_chain()
+
+    assert name_of(u, "notes", trashed.id) == "trashed.md"
+
+    %{rows: tombs} =
+      Repo.query!(
+        "SELECT id FROM notes WHERE user_id = $1 AND deleted_at IS NOT NULL AND kind = 'note' AND id <> $2",
+        [Ecto.UUID.dump!(u.id), Ecto.UUID.dump!(trashed.id)]
+      )
+
+    assert [[tomb]] = tombs
+    assert name_of(u, "notes", Ecto.UUID.load!(tomb)) == "old.md"
+
+    # The marker stays unnamed and did not hold the ledger open.
+    assert %{rows: [[nil, nil]]} =
+             Repo.query!("SELECT name_ciphertext, name_stamp FROM notes WHERE id = $1", [
+               Ecto.UUID.dump!(marker.id)
+             ])
+  end
+
+  # A concurrent rename wins: a fix lands only while the row still holds the
+  # nonce it was derived from.
+  test "the write is a compare-and-set on the source nonce", %{user: u, vault: v} do
+    note = note!(u, v, "C/cas.md")
+    n_minus_1_insert!()
+    {:ok, dek} = Crypto.get_dek(u)
+    {:ok, fk} = Crypto.dek_filter_key(u)
+    stale_src = :crypto.strong_rand_bytes(12)
+
+    fix = %{
+      id: note.id,
+      src: stale_src,
+      cols: Name.keys(:notes, dek, fk, note.id, "C/cas.md", stale_src)
+    }
+
+    assert 0 = BackfillNoteNames.write(:notes, Repo, [fix])
+    assert name_of(u, "notes", note.id) == nil
+
+    %{rows: [[src]]} =
+      Repo.query!("SELECT path_nonce FROM notes WHERE id = $1", [Ecto.UUID.dump!(note.id)])
+
+    fix = %{fix | src: src, cols: Name.keys(:notes, dek, fk, note.id, "C/cas.md", src)}
+    assert 1 = BackfillNoteNames.write(:notes, Repo, [fix])
+    assert name_of(u, "notes", note.id) == "cas.md"
   end
 
   test "the kill switch stops the chain and the runner pass", %{user: u, vault: v} do

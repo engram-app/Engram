@@ -71,6 +71,35 @@ unresolved by construction (the stored hash classifies it), so
 Markers never carry a reference; one is "resolved" when a live row sits at its
 path hash.
 
+## Row names (O(1) folder rename plan, Engram#2523)
+
+S2 (expand) adds each row's own name next to its folder reference, so a later
+stage can derive a path from the folder chain plus the name:
+
+- `notes` / `attachments`: `name_ciphertext`, `name_nonce`, `name_hmac`,
+  `name_ci_hmac`, `name_stamp` (`Engram.Notes.Name.keys/6`, written by the
+  notes path builder and `Engram.Attachments.path_attrs/4`).
+- `folders`: `name_ci_hmac`, `name_stamp` (`Engram.Folders.Folder.name_keys/3`),
+  plus `seq` and `notes_cascaded`, unwritten until S5.
+- A name is current only while `name_stamp` equals
+  `Engram.Crypto.NameKeys.stamp/1` of its source nonce (`path_nonce`, or the
+  folder's `name_nonce`). The `NoteName` ledger fills and heals the rest.
+
+S2 builds NO index on these columns: the backfill sets them on every row, and
+an indexed column turns each of those updates into a non-HOT one that adds an
+entry to every index on the table. Each index ships with the stage that first
+reads it, built CONCURRENTLY on filled data:
+
+| Index | Shape | Owner |
+|---|---|---|
+| notes by folder and name | UNIQUE `(vault_id, folder_ref_id, name_ci_hmac)` live notes, after a duplicate check | S3 (by-path read switch) |
+| attachments by folder and name | UNIQUE `(vault_id, folder_ref_id, name_ci_hmac)` live attachments, after a duplicate check | S3 |
+| attachments by folder in id order | `(vault_id, folder_ref_id, id) INCLUDE (user_id)` live | S5 (old-client feed view) |
+| folders by structural seq | `(vault_id, seq) WHERE seq IS NOT NULL` | S5 (first writer of `seq`) |
+
+The notes `(vault_id, folder_ref_id, id)` index is S1's
+(`20261107160300`).
+
 ## Gotchas
 
 - `Attachments.scan_under/4` is the one attachment scan for folder operations.

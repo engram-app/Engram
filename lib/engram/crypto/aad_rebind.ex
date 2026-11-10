@@ -262,18 +262,27 @@ defmodule Engram.Crypto.AadRebind do
       {count, _} =
         from(n in Note, where: n.id == ^id and n.dek_version == ^legacy_version)
         |> Repo.update_all(
-          set: [
-            content_nonce: content_n,
-            title_ciphertext: title_ct,
-            title_nonce: title_n,
-            path_ciphertext: path_ct,
-            path_nonce: path_n,
-            folder_ciphertext: folder_ct,
-            folder_nonce: folder_n,
-            tags_ciphertext: tags_ct,
-            tags_nonce: tags_n,
-            dek_version: @target_version
-          ]
+          set:
+            [
+              content_nonce: content_n,
+              title_ciphertext: title_ct,
+              title_nonce: title_n,
+              path_ciphertext: path_ct,
+              path_nonce: path_n,
+              folder_ciphertext: folder_ct,
+              folder_nonce: folder_n,
+              tags_ciphertext: tags_ct,
+              tags_nonce: tags_n,
+              dek_version: @target_version
+            ] ++
+              Engram.Notes.Name.keys(
+                :notes,
+                dek,
+                Crypto.dek_filter_key_from_bytes(dek),
+                id,
+                path,
+                path_n
+              )
         )
 
       if count == 1 do

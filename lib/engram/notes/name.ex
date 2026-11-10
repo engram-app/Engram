@@ -23,21 +23,26 @@ defmodule Engram.Notes.Name do
   """
 
   alias Engram.Crypto
-  alias Engram.Crypto.Envelope
+  alias Engram.Crypto.{Envelope, NameKeys}
 
-  # Bump to make every stamp stale (a change to what a name is).
-  @version <<1>>
   @name_domain "note-name\0"
   @ci_domain "note-name-ci\0"
   @tables [:notes, :attachments]
 
-  @doc "The version byte every `name_stamp` ends with."
-  @spec version() :: <<_::8>>
-  def version, do: @version
+  @doc "The version byte every `name_stamp` ends with (`NameKeys.version/0`)."
+  defdelegate version, to: NameKeys
 
-  @doc "The stamp of a name derived from the ciphertext under `nonce`."
-  @spec stamp(binary()) :: nonempty_binary()
-  def stamp(nonce) when is_binary(nonce), do: nonce <> @version
+  @doc "The stamp of a name derived from the ciphertext under `nonce` (`NameKeys.stamp/1`)."
+  defdelegate stamp(nonce), to: NameKeys
+
+  @doc """
+  This build's name-writer level: every path writer stamps names. The
+  capability `Engram.DataMigrations.NoteName.fleet_ready?/1` asks every
+  cluster node for (`Readiness.peers_report/4`); an older build has no such
+  function and counts as behind.
+  """
+  @spec writer_level() :: 1
+  def writer_level, do: 1
 
   @doc "The name of `path`: its last segment."
   @spec of_path(String.t()) :: String.t()
@@ -50,11 +55,10 @@ defmodule Engram.Notes.Name do
   @doc """
   `name_ci_hmac`: the casefolded key two names that differ only by case share
   (Obsidian on macOS and Windows treats them as one file), the lowercasing
-  `Engram.Links` uses.
+  `Engram.Links` uses (`NameKeys.ci_hmac/3`).
   """
   @spec ci_hmac(binary(), String.t()) :: binary()
-  def ci_hmac(filter_key, name),
-    do: Crypto.hmac_field(filter_key, @ci_domain <> String.downcase(name))
+  def ci_hmac(filter_key, name), do: NameKeys.ci_hmac(filter_key, @ci_domain, name)
 
   @doc """
   The name columns of the `table` row `row_id` at `path`, whose path
@@ -72,7 +76,7 @@ defmodule Engram.Notes.Name do
       name_nonce: nonce,
       name_hmac: hmac(filter_key, name),
       name_ci_hmac: ci_hmac(filter_key, name),
-      name_stamp: stamp(path_nonce)
+      name_stamp: NameKeys.stamp(path_nonce)
     ]
   end
 

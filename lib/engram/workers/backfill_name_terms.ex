@@ -39,7 +39,6 @@ defmodule Engram.Workers.BackfillNameTerms do
   alias Engram.Search.NameTerms
 
   @hop_ms 30_000
-  @pause_ms 250
   @max_hops 500
   @held_s 60
   @tables %{"notes" => Note, "folders" => Folder}
@@ -84,7 +83,7 @@ defmodule Engram.Workers.BackfillNameTerms do
         fn ids, ctx, n -> n + NameTerms.heal_window(@tables[table], ids, ctx) end,
         [
           stop?: fn n -> Throttle.now_ms() > deadline or n - fixed0 >= max_rows end,
-          pause_ms: Map.get(args, "pause_ms", @pause_ms),
+          pause_ms: Map.get(args, "pause_ms", PacedChain.pause_ms()),
           writes: &(&1 - fixed0),
           writes_per_s: Ledger.writes_per_s(),
           # The kill switch is read per window, so it stops a running chain.

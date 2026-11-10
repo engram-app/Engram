@@ -16,10 +16,12 @@ defmodule Engram.DataMigrations.NoteName do
   nothing and left nothing (the completion check of
   `docs/context/data-migrations-ledger.md`; no fleet-wide EXISTS).
 
-  A row that never decrypts keeps the ledger open: the chain stops after a
-  walk that found only such rows, and the next hourly pass starts one more
-  walk (one cheap walk an hour, never a hot loop), until the 7-day stuck alert
-  asks a human.
+  A row that never decrypts (or whose owner has no key) is parked: stamped
+  unreadable for its current ciphertext, logged and counted, so it cannot
+  hold the ledger open. Rows of a user mid DEK rotation are left; the chain
+  stops after a walk that left only such rows and the next hourly pass starts
+  another. A walk starts, and the ledger closes, only while every cluster node
+  writes names (`fleet_ready?/1`).
 
   Not re-verified: once done, a previous-release write (a rollback) leaves a
   stamp mismatch that S3's readers distrust (they decrypt the path instead).
@@ -31,8 +33,10 @@ defmodule Engram.DataMigrations.NoteName do
   """
   @behaviour Engram.DataMigration
 
+  alias Engram.Cluster.Readiness
   alias Engram.DataMigrations
   alias Engram.Logger.Metadata
+  alias Engram.Notes.Name
   alias Engram.Workers.BackfillNoteNames
 
   require Logger
@@ -66,6 +70,32 @@ defmodule Engram.DataMigrations.NoteName do
       true ->
         {:ok, _} = Oban.insert(BackfillNoteNames.new(%{}))
         {:more, chains: 1}
+    end
+  end
+
+  @doc """
+  True while every cluster node writes names (`Name.writer_level/0`, through
+  `Engram.Cluster.Readiness.peers_report/4`, the gate `FileTimes` and
+  `CompressionGate` use): a walk starts, and the ledger closes, only then, so
+  no older node in a rolling deploy can add unnamed rows behind the closing
+  walk. `fleet` overrides the gate's collaborators (tests). No `:global.sync/0`
+  (as `FileTimes`): a sync stalls on a partition.
+  """
+  @spec fleet_ready?(keyword()) :: boolean()
+  def fleet_ready?(fleet \\ []) do
+    opts = Keyword.merge([sync: fn -> :ok end], fleet)
+
+    case Readiness.peers_report(Name, :writer_level, 1, opts) do
+      :ok ->
+        true
+
+      {reason, node} ->
+        Logger.info(
+          "note name backfill waiting for the fleet",
+          Metadata.with_category(:info, :oban, reason: reason, peer: inspect(node))
+        )
+
+        false
     end
   end
 

@@ -32,12 +32,12 @@ defmodule Engram.Folders.Folder do
   """
   @spec name_ci_hmac(binary(), String.t()) :: binary()
   def name_ci_hmac(filter_key, segment),
-    do: Engram.Crypto.hmac_field(filter_key, @ci_domain <> String.downcase(segment))
+    do: Engram.Crypto.NameKeys.ci_hmac(filter_key, @ci_domain, segment)
 
   @doc """
   The name hashes of a row whose `name_ciphertext` encrypts `segment` under
   `name_nonce`: `name_hmac`, `name_ci_hmac` and the `name_stamp` that says the
-  second was computed from that ciphertext (`Engram.Notes.Name.stamp/1`; a
+  second was computed from that ciphertext (`Engram.Crypto.NameKeys.stamp/1`; a
   writer that renames without it, the previous release, leaves a mismatch the
   `NoteName` ledger heals). Every folder name writer splices these in.
   """
@@ -46,7 +46,7 @@ defmodule Engram.Folders.Folder do
     do: [
       name_hmac: name_hmac(filter_key, segment),
       name_ci_hmac: name_ci_hmac(filter_key, segment),
-      name_stamp: Engram.Notes.Name.stamp(name_nonce)
+      name_stamp: Engram.Crypto.NameKeys.stamp(name_nonce)
     ]
 
   @type t :: %__MODULE__{}
