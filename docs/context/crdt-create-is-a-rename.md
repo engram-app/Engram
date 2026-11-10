@@ -93,6 +93,37 @@ can reuse). It does not:
 The relocate leg was the only gap, because it is the only one that reached the
 row through a path the REST equivalent does not share.
 
+## The REST mirror image: a by-path EDIT is not a create (E7, 2026-11-10)
+
+`POST /api/notes` finds its row by PATH only (`lookup_and_write/2`). A folder
+rename repaths rows in place, so the old path then holds no live row and no
+tombstone. A client still editing at the old path missed, fell through
+`upsert_pathless/1` to `insert_new_note`, and got a 200 with a NEW id: a
+duplicate note, and the renamed-away folder reappeared. Pre-existing since at
+least 0.78.1; found by the release C staging probe.
+
+The client had sent `base_hash`, which means "I am editing the version I
+read". `do_update_note` checks it only when a row exists. The fix is one
+clause in `upsert_pathless/1`: no live row by path or id AND a `base_hash`
+means `{:error, :stale_base}`, which REST renders as
+`409 {conflict: true, reason: "stale_base"}` (the controller's
+`conflict_reason/2`, shared with `recently_deleted` and `concurrent_edit`).
+MCP `write_note` with `base_hash` already answered "re-read" on a miss via
+`rmw_note/5`, and pops `base_hash` before `upsert_note`, so it is unaffected.
+
+What did not change:
+- A write WITHOUT `base_hash` at a missing path still creates (that is a create).
+- The plugin pushes with its `id`: a live row elsewhere is still `:id_collision`,
+  and a tombstone still resurrects or answers `recently_deleted`. Only an
+  offline-queue replay carrying an id the server never knew plus a stored
+  `serverHash` now 409s; its conflict branch re-pushes with `force`, which sends
+  no `base_hash` and creates as before.
+
+Test: `test/engram_web/controllers/notes_controller_test.exs`, describe
+"POST /notes with base_hash at a path renamed away".
+
+The durable fix is by-id REST writes, so an edit follows the note across renames.
+
 ## Related
 - `crdt-identity-authority.md` — why the map is the authority
 - Engram #1400 (this bug), #1146 (the epic), Engram-obsidian#431 (the client that arms it)

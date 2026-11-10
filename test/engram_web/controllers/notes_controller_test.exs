@@ -725,19 +725,19 @@ defmodule EngramWeb.NotesControllerTest do
       assert moved["content_hash"] == base
 
       live =
-        Engram.Repo.aggregate(
-          from(n in Engram.Notes.Note,
-            where: n.vault_id == ^vault.id and n.kind == "note" and is_nil(n.deleted_at)
-          ),
-          :count
+        from(n in Engram.Notes.Note,
+          where: n.vault_id == ^vault.id and n.kind == "note" and is_nil(n.deleted_at)
         )
 
-      assert live == 1
+      assert {:ok, 1} =
+               Engram.Repo.with_tenant(user.id, fn -> Engram.Repo.aggregate(live, :count) end)
     end
 
     test "control: no base_hash at a never-used path still creates", %{conn: conn} do
       created = post(conn, "/api/notes", %{path: "Fresh/new.md", content: "# new", mtime: 1.0})
-      assert %{"note" => %{"path" => "Fresh/new.md", "version" => 1}} = json_response(created, 200)
+
+      assert %{"note" => %{"path" => "Fresh/new.md", "version" => 1}} =
+               json_response(created, 200)
     end
   end
 

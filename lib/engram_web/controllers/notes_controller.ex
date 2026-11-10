@@ -30,8 +30,10 @@ defmodule EngramWeb.NotesController do
         "since that read, the write returns 409 with the current server note instead of " <>
         "merging. With an API key, replacing an existing note REQUIRES `base_hash`: without " <>
         "one the write returns the same 409 and changes nothing (creating a new note needs " <>
-        "none). Notes over 10MB are rejected with 413, and exceeding the plan's note cap " <>
-        "returns 402.",
+        "none). A `base_hash` write to a path that holds no note (renamed or deleted since " <>
+        "the read) returns 409 `{conflict: true, reason: \"stale_base\"}` and creates " <>
+        "nothing: re-read the note where it lives now. Notes over 10MB are rejected with " <>
+        "413, and exceeding the plan's note cap returns 402.",
     tags: ["Notes"],
     request_body:
       {"Note to upsert", "application/json", Schemas.UpsertNoteRequest, required: true},
@@ -108,7 +110,12 @@ defmodule EngramWeb.NotesController do
           # Delete-wins: a create at a path deleted seconds ago, identical
           # content — a stale re-push racing an explicit delete. Refuse so the
           # delete stands; the client converges by dropping its local copy.
-          conn |> put_status(409) |> json(%{conflict: true, reason: "recently_deleted"})
+          conflict_reason(conn, "recently_deleted")
+
+        # A base_hash edit with no live note at the path (renamed away or
+        # gone): nothing was written; re-read and retry.
+        {:error, :stale_base} ->
+          conflict_reason(conn, "stale_base")
 
         # The note was deleted while this write was losing its snapshot fence
         # (#1335). Without this clause it falls to the catch-all and answers 500
@@ -263,7 +270,7 @@ defmodule EngramWeb.NotesController do
   # Delete-wins: append-as-create races an explicit delete of the same path.
   # Refuse cleanly (409); format_errors/1 expects a changeset.
   defp append_response(conn, _user, _path, {_, {:error, :recently_deleted}}),
-    do: conn |> put_status(409) |> json(%{conflict: true, reason: "recently_deleted"})
+    do: conflict_reason(conn, "recently_deleted")
 
   # The 3-tuple: `{:error, changeset}` does not match it. Same body shape
   # upsert/2 returns, so the client has one conflict contract.
@@ -281,7 +288,7 @@ defmodule EngramWeb.NotesController do
   # A legacy row's tail kept appearing under the lock: nothing was written and
   # a retry reads it. Same retryable 409 shape as recently_deleted.
   defp append_response(conn, _user, _path, {_, {:error, :stale_tail}}),
-    do: conn |> put_status(409) |> json(%{conflict: true, reason: "concurrent_edit"})
+    do: conflict_reason(conn, "concurrent_edit")
 
   # Append-as-create past the plan's notes cap: upsert/2's 402.
   defp append_response(conn, _user, _path, {_, {:error, {:notes_cap_reached, limit, current}}}),
@@ -831,6 +838,11 @@ defmodule EngramWeb.NotesController do
 
   defp too_large(conn),
     do: conn |> put_status(413) |> json(%{error: "note exceeds maximum size of 10MB"})
+
+  # The one 409 body for a write refused with no server note to hand back.
+  # Nothing was written; `reason` tells the client how to converge.
+  defp conflict_reason(conn, reason),
+    do: conn |> put_status(409) |> json(%{conflict: true, reason: reason})
 
   # Delegate to the bounded, total error classifier. The single is_atom clause
   # this replaced raised FunctionClauseError on the very %Ecto.Changeset{} /
