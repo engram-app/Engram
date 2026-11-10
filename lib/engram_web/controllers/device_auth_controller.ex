@@ -7,6 +7,9 @@ defmodule EngramWeb.DeviceAuthController do
 
   require Logger
 
+  # First, so a refused guess costs nothing further and every attempt counts.
+  plug EngramWeb.Plugs.UserCodeRateLimit when action in [:authorize]
+
   # Fail the link at the moment the user clicks "connect", not later with a
   # silent socket refusal. This route sits on the user-scoped pipeline (it must
   # stay reachable for vault creation), so it does not inherit

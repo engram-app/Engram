@@ -41,6 +41,10 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
   end
 
+  pipeline :rate_limit_device_auth do
+    plug EngramWeb.Plugs.DeviceAuthRateLimit
+  end
+
   # Shared auth / abuse / onboarding / rate-limit stack for authenticated API
   # endpoints. Used by BOTH the vault-scoped REST scope and the MCP scope so a
   # new security control can't be added to one and silently missed on the other.
@@ -112,8 +116,8 @@ defmodule EngramWeb.Router do
 
     # Keyed per client on token/revoke and per IP elsewhere (#1974): vendor
     # backends share IPs, so a per-IP token limit refused every user of a
-    # connector at once. Tagged `purpose: :oauth`; the 429 is deliberately
-    # unlogged, so the metric tag is the whole signal (#1643).
+    # connector at once. Tagged `purpose: :oauth`; the metric tag is what
+    # alerts, the request log carries the 429 line (#1643).
     plug EngramWeb.Plugs.OAuthRateLimit
 
     # Not all of this pipeline answers JSON. `GET /oauth/authorize` renders
@@ -358,11 +362,16 @@ defmodule EngramWeb.Router do
   end
 
   scope "/api", EngramWeb do
-    # Device flow — unauthenticated, rate limited
-    pipe_through [:api, :rate_limit_auth]
+    # Device flow: unauthenticated, limited per credential so people sharing
+    # one network address do not share a bucket.
+    pipe_through [:api, :rate_limit_device_auth]
     post "/auth/device", DeviceAuthController, :start
     post "/auth/device/token", DeviceAuthController, :token
     post "/auth/token/refresh", DeviceAuthController, :refresh
+  end
+
+  scope "/api", EngramWeb do
+    pipe_through [:api, :rate_limit_auth]
 
     # Self-host install census collector (SaaS only; self-host answers 404).
     post "/telemetry/ping", InstallPingController, :create

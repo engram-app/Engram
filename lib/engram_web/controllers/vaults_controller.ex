@@ -10,6 +10,9 @@ defmodule EngramWeb.VaultsController do
 
   action_fallback EngramWeb.FallbackController
 
+  # `?user_code=` reports whether a device user code is valid.
+  plug EngramWeb.Plugs.UserCodeRateLimit when action in [:index]
+
   @zero_counts %{notes: 0, attachments: 0}
 
   # ── index ──────────────────────────────────────────────────────────────────

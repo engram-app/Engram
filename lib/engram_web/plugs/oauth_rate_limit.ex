@@ -18,66 +18,49 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
       exhaust ChatGPT for everybody (review of #1974).
     * `/oauth/register`: per IP, #{60}/min. Vendor backends register per
       connecting user; 10/min refused them.
-    * `/oauth/authorize`: per IP, #{10}/min. A browser navigation; the strict
-      limit stays on the unauthenticated brute-force surface.
+    * `/oauth/authorize`: per IP, #{300}/min. A browser navigation that checks
+      no credential, so there is nothing to brute-force and the limit is only
+      a flood ceiling. Everyone behind one network address shares it.
 
   The client id is attacker-supplied, so it is hashed into the key (bounded
   length) and never logged.
 
   A 429 on `/oauth/token` carries `Retry-After` and an RFC 6749 §5.2-shaped
   body (`temporarily_unavailable`), which OAuth client libraries understand;
-  the bare `rate_limited` body looked like an unknown error. A 429 is not
-  logged (unbounded volume behind a bounded refusal); the `:oauth` purpose tag
-  on `engram_prom_ex_rate_limiter_hit_total` is the signal (#1643).
+  the bare `rate_limited` body looked like an unknown error. This plug writes
+  no log of its own, but `EngramWeb.RequestLogger` ships one line per refused
+  request to Loki (`GET 429`, with `route=EngramWeb.OAuthAuthorizeController#show`
+  on authorize). The `:oauth` purpose tag on
+  `engram_prom_ex_rate_limiter_hit_total` is what alerts (#1643).
 
-  Overrides: test builds read `:rate_limit_override` (primary bucket) and
-  `:oauth_ip_rate_limit_override` (coarse IP bucket); other builds read
-  `:rate_limit_auth_override` for both (CI containers), like `RateLimit`.
+  The buckets, ceiling and overrides are `EngramWeb.KeyedRateLimit`.
   """
 
+  alias EngramWeb.KeyedRateLimit
   alias EngramWeb.Plugs.Halt
 
-  @period_ms 60_000
   @policy %{
     "/oauth/token" => {:client, 300},
     "/oauth/revoke" => {:client, 300},
     "/oauth/register" => {:ip, 60},
-    "/oauth/authorize" => {:ip, 10}
+    "/oauth/authorize" => {:ip, 300}
   }
   @default_policy {:ip, 10}
-  @ip_coarse_limit 3_000
-
-  @is_test_build Application.compile_env(:engram, :env, :prod) == :test
 
   def init(opts), do: opts
 
   def call(conn, _opts) do
-    # The ROUTED path: `/oauth/token/` reaches the same action as
-    # `/oauth/token`, so it must draw from the same bucket.
-    path = "/" <> Enum.join(conn.path_info, "/")
-    {kind, limit} = Map.get(@policy, path, @default_policy)
-    ip = conn |> EngramWeb.RemoteIp.resolve() |> :inet.ntoa() |> to_string()
+    config = %{
+      policy: @policy,
+      default: @default_policy,
+      prefix: "oauth",
+      purpose: :oauth,
+      credential: &client_id/1
+    }
 
-    # The client bucket first, the IP bucket only for what it allows: a
-    # request the client bucket refuses must not also drain the bucket every
-    # other client on that IP shares (third review of #1974).
-    with :ok <- hit(primary_key(kind, conn, path, ip), primary_limit(limit)),
-         :ok <- coarse_ip(kind, path, ip) do
-      conn
-    else
-      {:deny, retry_after_ms} -> deny(conn, path, retry_after_ms)
-    end
-  end
-
-  defp coarse_ip(:client, path, ip), do: hit("oauth:ip:#{path}:#{ip}", coarse_limit())
-  defp coarse_ip(:ip, _path, _ip), do: :ok
-
-  defp primary_key(:ip, _conn, path, ip), do: "oauth:ip:#{path}:#{ip}"
-
-  defp primary_key(:client, conn, path, ip) do
-    case client_id(conn) do
-      nil -> "oauth:ip:#{path}:#{ip}:anon"
-      id -> "oauth:client:#{path}:#{digest(id)}:#{ip}"
+    case KeyedRateLimit.check(conn, config) do
+      :ok -> conn
+      {:deny, path, retry_after_ms} -> deny(conn, path, retry_after_ms)
     end
   end
 
@@ -94,15 +77,6 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
     end
   end
 
-  defp digest(id), do: :crypto.hash(:sha256, id) |> Base.url_encode64(padding: false)
-
-  defp hit(key, limit) do
-    case EngramWeb.RateLimiter.hit(key, @period_ms, limit, :oauth) do
-      {:allow, _count} -> :ok
-      {:deny, retry_after_ms} -> {:deny, retry_after_ms}
-    end
-  end
-
   defp deny(conn, "/oauth/token", retry_after_ms) do
     seconds = Halt.retry_after_seconds(retry_after_ms)
 
@@ -115,17 +89,4 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
   end
 
   defp deny(conn, _path, retry_after_ms), do: Halt.rate_limited(conn, retry_after_ms)
-
-  if @is_test_build do
-    defp primary_limit(default), do: Application.get_env(:engram, :rate_limit_override) || default
-
-    defp coarse_limit,
-      do: Application.get_env(:engram, :oauth_ip_rate_limit_override) || @ip_coarse_limit
-  else
-    defp primary_limit(default),
-      do: Application.get_env(:engram, :rate_limit_auth_override) || default
-
-    defp coarse_limit,
-      do: Application.get_env(:engram, :rate_limit_auth_override) || @ip_coarse_limit
-  end
 end

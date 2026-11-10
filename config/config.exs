@@ -632,6 +632,10 @@ config :engram, :folder_create_rate_limit, limit: 120, period_ms: 60_000
 # share. The SPA calls it once per "Try again". Keyed per user.
 config :engram, :checkout_transaction_rate_limit, limit: 10, period_ms: 60_000
 
+# Attempts to test a device user code, per signed-in user
+# (EngramWeb.Plugs.UserCodeRateLimit). A person typing a code makes a handful.
+config :engram, :user_code_rate_limit, limit: 20, period_ms: 60_000
+
 # ex_aws HTTP client: Req (first-party in ex_aws 2.7). Req uses its own default
 # Finch pool, so the backend carries no hackney dependency. :req_opts sets the
 # per-request timeout, mirroring the old adapter's 30s recv_timeout. Req handles

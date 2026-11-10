@@ -63,12 +63,8 @@ defmodule EngramWeb.Plugs.RateLimitTest do
     end
   end
 
-  # A 429 on the OAuth pipeline is a vendor that cannot connect, and it is the
-  # one refusal on that path deliberately left unlogged: /oauth/* is
-  # unauthenticated, so one line per over-limit attempt is unbounded log volume
-  # behind a bounded refusal — the same trade `Engram.OAuth.Cimd` already makes
-  # for `:rate_limited`. The metric tag is what makes it attributable instead
-  # (#1643).
+  # A 429 on the OAuth pipeline is a vendor that cannot connect. The metric tag
+  # is what makes it attributable and what alerts (#1643).
   describe "purpose tagging" do
     setup do
       handler = "rate-limit-purpose-#{System.unique_integer([:positive])}"
@@ -100,6 +96,39 @@ defmodule EngramWeb.Plugs.RateLimitTest do
       build_conn() |> post("/api/auth/device", %{client_id: "test_client"})
 
       assert_receive {:hit, %{purpose: :http, result: :allow}}
+    end
+  end
+
+  # The limits as shipped, through the real router. Every other test here runs
+  # under the low override, which would hide a wrong number in the pipeline.
+  describe "shipped auth limits" do
+    @strict_limit 10
+    @body %{email: "nobody@example.test", password: "wrong-password", token: "fake_token"}
+
+    setup do
+      Application.delete_env(:engram, :rate_limit_override)
+      :ok
+    end
+
+    # None of these is gated by a high-entropy secret (or has no need of a
+    # higher limit), so they must not ride along with the device routes.
+    for path <- ~w(/api/auth/login /api/auth/register /api/auth/refresh /api/auth/logout
+                   /api/auth/password/reset /api/telemetry/ping /api/auth/clear-cache) do
+      test "#{path} stays at #{@strict_limit} per IP" do
+        for _ <- 1..@strict_limit do
+          refute post(build_conn(), unquote(path), @body).status == 429
+        end
+
+        assert post(build_conn(), unquote(path), @body).status == 429
+      end
+    end
+
+    for path <- ~w(/api/auth/bootstrap /api/auth/invite/some-token /api/oauth/clients/some-id) do
+      test "GET #{path} stays at #{@strict_limit} per IP" do
+        for _ <- 1..@strict_limit, do: refute(get(build_conn(), unquote(path)).status == 429)
+
+        assert get(build_conn(), unquote(path)).status == 429
+      end
     end
   end
 
