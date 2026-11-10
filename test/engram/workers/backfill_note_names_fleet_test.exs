@@ -30,6 +30,14 @@ defmodule Engram.Workers.BackfillNoteNamesFleetTest do
     Application.put_env(:engram, :maintenance_repo_enabled, true)
     on_exit(fn -> Application.delete_env(:engram, :maintenance_repo_enabled) end)
 
+    # Committed fixtures commit their side effects too: the writes enqueue
+    # Oban jobs outside the sandbox. Every job past this id is ours and goes
+    # on exit, or later tests in the partition (the queue-depth poll's) see it.
+    jobs_before =
+      Sandbox.unboxed_run(Repo, fn ->
+        Repo.one(from(j in Oban.Job, select: max(j.id))) || 0
+      end)
+
     made =
       Sandbox.unboxed_run(Repo, fn ->
         for i <- 1..2 do
@@ -66,6 +74,7 @@ defmodule Engram.Workers.BackfillNoteNamesFleetTest do
         end
 
         Repo.query!("DELETE FROM data_migrations WHERE name = 'note_name'")
+        Repo.delete_all(from(j in Oban.Job, where: j.id > ^jobs_before))
       end)
     end)
 
