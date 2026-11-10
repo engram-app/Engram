@@ -229,7 +229,7 @@ defmodule Engram.Workers.BackfillNoteNames do
       in_tx(repo, user_id, fn ->
         _ = repo.query!("SET LOCAL lock_timeout = '2s'", [])
         stale = repo.all(IdWindows.by_id(stale(table), ids))
-        locked = lock(table, repo, stale)
+        locked = unheld(table, repo, stale)
         {fixes, parks, left} = derive(table, locked)
         written = write(table, repo, fixes) + park(table, repo, parks)
 
@@ -245,9 +245,9 @@ defmodule Engram.Workers.BackfillNoteNames do
 
   # The stale rows nobody else holds: a row a user's write has locked is
   # skipped, never waited on.
-  defp lock(_table, _repo, []), do: []
+  defp unheld(_table, _repo, []), do: []
 
-  defp lock(table, repo, rows) do
+  defp unheld(table, repo, rows) do
     ids = Enum.map(rows, & &1.id)
 
     held =

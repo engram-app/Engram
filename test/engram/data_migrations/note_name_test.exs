@@ -285,14 +285,19 @@ defmodule Engram.DataMigrations.NoteNameTest do
       cols: Name.keys(:notes, dek, fk, note.id, "C/cas.md", stale_src)
     }
 
-    assert 0 = BackfillNoteNames.write(:notes, Repo, [fix])
+    assert {:ok, 0} =
+             Repo.with_tenant(u.id, fn -> BackfillNoteNames.write(:notes, Repo, [fix]) end)
+
     assert name_of(u, "notes", note.id) == nil
 
     %{rows: [[src]]} =
       Repo.query!("SELECT path_nonce FROM notes WHERE id = $1", [Ecto.UUID.dump!(note.id)])
 
     fix = %{fix | src: src, cols: Name.keys(:notes, dek, fk, note.id, "C/cas.md", src)}
-    assert 1 = BackfillNoteNames.write(:notes, Repo, [fix])
+
+    assert {:ok, 1} =
+             Repo.with_tenant(u.id, fn -> BackfillNoteNames.write(:notes, Repo, [fix]) end)
+
     assert name_of(u, "notes", note.id) == "cas.md"
   end
 
