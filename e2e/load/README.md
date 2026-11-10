@@ -72,5 +72,6 @@ are not counted; they are tiny (a few dozen tokens per edit).
 
 `grant.sql` lifts, for these accounts only: `notes_cap` (whale), 
 `ai_searches_per_day` (Free: 50), `concurrent_devices` and
-`obsidian_connections_cap` (Free: 2). The per-IP `/auth/device*` bucket
-(10/min) is shared by the whole sim, so OAuth refresh is capped at 0.12/s.
+`obsidian_connections_cap` (Free: 2). `/auth/device` is 300/min per IP, shared
+by the whole sim. Device polling and token refresh are 30/min per credential,
+and the sim paces OAuth refresh at 0.12/s.

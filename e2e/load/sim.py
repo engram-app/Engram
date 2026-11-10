@@ -386,8 +386,8 @@ def provision(acct: Account, clerk: ClerkClient, run_id: str) -> None:
         acct.s(vault=False).get(f"{acct.api}/me", timeout=30).json()["user"]["id"]
     )
     revoke_device_families(acct, clerk)  # families a crashed earlier run left behind
-    # OAuth device family for refresh rotation. /auth/device* shares a
-    # 10/min per-IP bucket (rate_limit_auth), so pace and retry.
+    # OAuth device family for refresh rotation. /auth/device is 300/min per
+    # IP and polling is 30/min per device code, so pace and retry.
     d = post_retry(
         requests.Session(),
         f"{acct.api}/auth/device",
@@ -1146,7 +1146,7 @@ def main() -> int:
             if op == "oauth_refresh":
                 rate = min(
                     rate, 0.12
-                )  # /auth/token/refresh shares a 10/min per-IP bucket; one sim = one IP
+                )  # /auth/token/refresh is 30/min per token; keeps the sim's pace
             stop.wait(min(30.0, rng.expovariate(rate)))
             if stop.is_set() or time.time() >= end:
                 return
