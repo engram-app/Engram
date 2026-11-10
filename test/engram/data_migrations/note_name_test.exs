@@ -251,6 +251,25 @@ defmodule Engram.DataMigrations.NoteNameTest do
       refute DataMigrations.done?(NoteName.name(), NoteName.version())
     end
 
+    # A user stuck on `:later` keeps the ledger open; what bounds the cost is
+    # one full walk a day (`WalkMemo`, S1's rule), not one per hourly pass.
+    test "after a walk that fixed nothing, no new walk starts for a day", %{user: u} do
+      Engram.StalledDekLoad.stall!(u.id)
+      assert {:stopped, 1} = run_chain()
+
+      assert {:more, _} = NoteName.run_pass()
+      assert [] = all_enqueued(worker: BackfillNoteNames)
+
+      Repo.query!(
+        "UPDATE maintenance_cursors SET cursor = jsonb_set(cursor, '{at}', to_jsonb($1::text)) " <>
+          "WHERE name = 'note_name:last_walk'",
+        [DateTime.utc_now() |> DateTime.add(-25 * 3600) |> DateTime.to_iso8601()]
+      )
+
+      assert {:more, _} = NoteName.run_pass()
+      assert [_] = all_enqueued(worker: BackfillNoteNames)
+    end
+
     # Red before N1: `:invalid_wrapping` (a master key that does not open
     # the wrap) parked the rows forever.
     test "a wrap the master key does not open defers, never parks", %{user: u, note: note} do

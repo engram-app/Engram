@@ -18,9 +18,13 @@ defmodule Engram.DataMigrations.NoteName do
 
   A row that never decrypts (or whose owner has no key) is parked: stamped
   unreadable for its current ciphertext, logged and counted, so it cannot
-  hold the ledger open. Rows of a user mid DEK rotation are left; the chain
-  stops after a walk that left only such rows and the next hourly pass starts
-  another. A walk starts, and the ledger closes, only while every cluster node
+  hold the ledger open. Rows whose owner's key does not load for a reason
+  that can pass (`Crypto.key_outcome/1` `:later`: a rotation, KMS, a wrap the
+  master key does not open) are deferred and keep the ledger OPEN: done must
+  mean named, and S3's read switch waits on it. The chain stops after a walk
+  that fixed nothing, and the next full walk waits a day
+  (`Engram.Backfill.WalkMemo`, shared with `NameTerms`), so a stuck user costs
+  one walk a day, never one an hour; the 7-day stuck alert asks a human. A walk starts, and the ledger closes, only while every cluster node
   writes names (`fleet_ready?/1`).
 
   Not re-verified: once done, a previous-release write (a rollback) leaves a
@@ -33,6 +37,7 @@ defmodule Engram.DataMigrations.NoteName do
   """
   @behaviour Engram.DataMigration
 
+  alias Engram.Backfill.WalkMemo
   alias Engram.Cluster.Readiness
   alias Engram.DataMigrations
   alias Engram.Logger.Metadata
@@ -42,6 +47,7 @@ defmodule Engram.DataMigrations.NoteName do
   require Logger
 
   @max_rows 500
+  @last_walk "note_name:last_walk"
 
   @impl true
   def name, do: "note_name"
@@ -66,6 +72,11 @@ defmodule Engram.DataMigrations.NoteName do
 
       DataMigrations.jobs_in_flight?(BackfillNoteNames) ->
         {:more, chains: 1}
+
+      # The last walk handled nothing it found (every stale row deferred):
+      # no new walk for a day, the ledger stays open (`WalkMemo`).
+      WalkMemo.fruitless?(@last_walk) ->
+        {:more, chains: 0, waiting: 1}
 
       true ->
         {:ok, _} = Oban.insert(BackfillNoteNames.new(%{}))
@@ -98,6 +109,10 @@ defmodule Engram.DataMigrations.NoteName do
         false
     end
   end
+
+  @doc "Records a complete chain walk that fixed `fixed` rows (`WalkMemo`)."
+  @spec walked(non_neg_integer()) :: :ok
+  def walked(fixed), do: WalkMemo.walked(@last_walk, fixed)
 
   @doc "Rows a chain hop fixes at most: the `note_name_backfill_max_rows` override."
   @spec max_rows() :: pos_integer()

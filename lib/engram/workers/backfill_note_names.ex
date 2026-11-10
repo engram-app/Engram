@@ -44,9 +44,9 @@ defmodule Engram.Workers.BackfillNoteNames do
   A walk spans hops (the cursor is in the args, so a hop may run on any node).
   At the end of the last table: a walk that fixed or parked rows starts a new
   walk; a walk that fixed nothing and left nothing marks the ledger done; a
-  walk that only left rows stops the chain (the next hourly runner pass starts
-  a new one). A walk starts, and the ledger closes, only while every cluster
-  node writes names (`NoteName.fleet_ready?/1`, `Readiness.peers_report/4`),
+  walk that only left rows stops the chain and is recorded
+  (`NoteName.walked/1`), so the next full walk waits a day. A walk starts,
+  and the ledger closes, only while every cluster node writes names (`NoteName.fleet_ready?/1`, `Readiness.peers_report/4`),
   so no older node can add unnamed rows behind the closing walk's cursor. The
   kill switch is read before every window: off stops the hop at once, with no
   successor.
@@ -174,7 +174,12 @@ defmodule Engram.Workers.BackfillNoteNames do
   defp finish(%{walk_fixed: true} = st, _fleet),
     do: {{:next, %{"t" => 0, "from" => nil, "fixed" => false, "left" => false}}, st}
 
-  defp finish(%{walk_left: true} = st, _fleet), do: {:stopped, st}
+  # Fixed nothing, left rows: record it, so the ledger waits a day before the
+  # next full walk (`NoteName.run_pass/0`).
+  defp finish(%{walk_left: true} = st, _fleet) do
+    :ok = NoteName.walked(0)
+    {:stopped, st}
+  end
 
   # A clean walk closes the ledger only if no older node joined meanwhile.
   defp finish(st, fleet) do
