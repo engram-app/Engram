@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.79.0](https://github.com/engram-app/Engram/compare/0.78.1...0.79.0) (2026-11-10)
+
+
+### Features
+
+* **folders:** R9 folder hash read switch + write-stop prep ([#2508](https://github.com/engram-app/Engram/issues/2508)) ([ec33dc6](https://github.com/engram-app/Engram/commit/ec33dc6cc87a5cf49335d3474cd644162ba3f026))
+* **notes:** R8(c) complete the body split before boot, drop the unsplit fallback ([#2505](https://github.com/engram-app/Engram/issues/2505)) ([080e3af](https://github.com/engram-app/Engram/commit/080e3af6140b68a4026d5eadd346901efaa4a5be))
+* **qdrant:** report legacy v3 notes the n backfill skips ([#2509](https://github.com/engram-app/Engram/issues/2509)) ([850983e](https://github.com/engram-app/Engram/commit/850983ebf65f9270dcab15c14937cca5f0be5a41))
+
+
+### Bug Fixes
+
+* **ci:** per-runner temp files instead of shared /tmp ([#2531](https://github.com/engram-app/Engram/issues/2531)) ([7e0c093](https://github.com/engram-app/Engram/commit/7e0c093e741a8cca76d5530cb325288287e9438d))
+* **folders:** cap web/MCP folder rename and batch move size (interim, [#2492](https://github.com/engram-app/Engram/issues/2492)) ([#2504](https://github.com/engram-app/Engram/issues/2504)) ([885761f](https://github.com/engram-app/Engram/commit/885761fa3fc95529f0bbcf6b675a4b3bc3f579e4))
+* **folders:** remove the folder operation size cap ([#2525](https://github.com/engram-app/Engram/issues/2525)) ([52dccce](https://github.com/engram-app/Engram/commit/52dcccec2cb673eeac70512dc36250b65545f91e))
+* **mcp:** describe base_hash on edit_note and append_to_note ([#2516](https://github.com/engram-app/Engram/issues/2516)) ([5f8d3c4](https://github.com/engram-app/Engram/commit/5f8d3c41b12c759e8de59c8d031f006c1ddef74c)), closes [#2506](https://github.com/engram-app/Engram/issues/2506)
+
 ## [0.78.1](https://github.com/engram-app/Engram/compare/0.78.0...0.78.1) (2026-11-07)
 
 
