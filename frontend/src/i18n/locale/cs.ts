@@ -54,9 +54,18 @@ export default {
 	"That password is too long.": "Toto heslo je příliš dlouhé.",
 	"This invite link is invalid or has already been used.":
 		"Tento odkaz pro pozvání je neplatný nebo již byl použit.",
+	"Enter the setup token from the server log.": "Zadejte aktivační token z protokolu serveru.",
+	"That setup token is not valid. Use the newest one in the server log.":
+		"Tento aktivační token není platný. Použijte nejnovější token z protokolu serveru.",
 	"Registration not available for this auth provider":
 		"Registrace není dostupná pro tohoto poskytovatele ověřování",
 	"Registration failed": "Registrace selhala",
+	"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.":
+		"Tento první účet se stává administrátorem. Po registraci může každý, kdo má odkaz, vytvořit účet. Spravujte členy pozvánky a režim registrace v Nastavení → Správa.",
+	"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.":
+		"Tento první účet se stává administrátorem. Po registraci nikdo další nemůže vytvořit účet, dokud to neumožníte. Spravujte členy pozvánky a režim registrace v Nastavení → Správa.",
+	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
+		"Tento první účet se stává administrátorem. Po registraci budou nové účty vyžadovat odkaz pro pozvánku. Spravujte členy pozvánky a režim registrace v Nastavení → Správa.",
 	"Passwords do not match": "Hesla se neshodují",
 	Loading: "Načítání",
 	"Sign-ups are closed": "Registrace je uzavřena",
@@ -69,14 +78,15 @@ export default {
 	"Set up your instance": "Nastavte vaši instanci",
 	"Create your account": "Vytvořte svůj účet",
 	"Welcome — you're setting up this instance.": "Vítejte – nastavujete tuto instanci.",
-	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
-		"Tento první účet se stává administrátorem. Po registraci budou nové účty vyžadovat odkaz pro pozvánku. Spravujte členy pozvánky a režim registrace v Nastavení → Správa.",
 	"You've been invited ({label}) — finish below to join.":
 		"Byli jste pozváni ({label}) – dokončete níže, abyste se připojili.",
 	"You've been invited — finish below to join.":
 		"Byli jste pozváni – dokončete níže, abyste se připojili.",
 	"This invite link is invalid, expired, or already used.":
 		"Tento odkaz pro pozvání je neplatný vypršel nebo již byl použit.",
+	"Setup token": "Aktivační token",
+	"Printed in the Engram server log when it started.":
+		"Vytištěn v Engram protokolu serveru při spuštění.",
 	"Confirm password": "Potvrďte heslo",
 	"Creating account…": "Vytváří se účet…",
 	"Create account": "Vytvořit účet",

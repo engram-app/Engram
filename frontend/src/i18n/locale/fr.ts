@@ -54,9 +54,19 @@ export default {
 	"That password is too long.": "Ce mot de passe est trop long.",
 	"This invite link is invalid or has already been used.":
 		"Ce lien d'invitation n'est pas valide ou a déjà été utilisé.",
+	"Enter the setup token from the server log.":
+		"Saisis le jeton de configuration depuis le journal du serveur.",
+	"That setup token is not valid. Use the newest one in the server log.":
+		"Ce jeton de configuration n'est pas valide. Utilise le plus récent dans le journal du serveur.",
 	"Registration not available for this auth provider":
 		"L'inscription n'est pas disponible pour ce fournisseur d'authentification",
 	"Registration failed": "L'inscription a échoué",
+	"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.":
+		"Ce premier compte devient l'administrateur. Après l'inscription, toute personne ayant le lien peut créer un compte. Gère les membres, les invitations et le mode d'inscription dans Paramètres → Administration.",
+	"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.":
+		"Ce premier compte devient l'administrateur. Après l'inscription, personne d'autre ne peut créer un compte tant que tu ne le permets pas. Gère les membres, les invitations et le mode d'inscription dans Paramètres → Administration.",
+	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
+		"Ce premier compte devient l'administrateur. Après l'inscription, les nouveaux comptes auront besoin d'un lien d'invitation. Gère les membres, les invitations et le mode d'inscription dans Paramètres → Administration.",
 	"Passwords do not match": "Les mots de passe ne correspondent pas",
 	Loading: "Chargement",
 	"Sign-ups are closed": "Les inscriptions sont fermées",
@@ -69,14 +79,15 @@ export default {
 	"Set up your instance": "Configure ton instance",
 	"Create your account": "Crée ton compte",
 	"Welcome — you're setting up this instance.": "Bienvenue — tu configures cette instance.",
-	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
-		"Ce premier compte devient l'administrateur. Après l'inscription, les nouveaux comptes auront besoin d'un lien d'invitation. Gère les membres, les invitations et le mode d'inscription dans Paramètres → Administration.",
 	"You've been invited ({label}) — finish below to join.":
 		"Tu as été invité({label}) — termine ci-dessous pour rejoindre.",
 	"You've been invited — finish below to join.":
 		"Tu as été invité — termine ci-dessous pour rejoindre.",
 	"This invite link is invalid, expired, or already used.":
 		"Ce lien d'invitation n'est pas valide, a expiré ou a déjà été utilisé.",
+	"Setup token": "Jeton de configuration",
+	"Printed in the Engram server log when it started.":
+		"Affiché dans le Engram journal du serveur au démarrage.",
 	"Confirm password": "Confirme ton mot de passe",
 	"Creating account…": "Création du compte…",
 	"Create account": "Créer un compte",

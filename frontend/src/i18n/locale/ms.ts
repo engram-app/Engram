@@ -54,9 +54,18 @@ export default {
 	"That password is too long.": "Kata laluan itu terlalu panjang.",
 	"This invite link is invalid or has already been used.":
 		"Pautan jemputan ini tidak sah atau sudah digunakan.",
+	"Enter the setup token from the server log.": "Masukkan token persediaan dari log pelayan.",
+	"That setup token is not valid. Use the newest one in the server log.":
+		"Token persediaan itu tidak sah. Gunakan yang terbaru dalam log pelayan.",
 	"Registration not available for this auth provider":
 		"Pendaftaran tidak tersedia untuk penyedia pengesahan ini",
 	"Registration failed": "Pendaftaran gagal",
+	"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.":
+		"Akaun pertama ini menjadi pentadbir. Selepas pendaftaran, sesiapa sahaja yang mempunyai pautan boleh mencipta akaun. Urus ahli, jemputan dan mod pendaftaran di Tetapan → Pentadbiran.",
+	"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.":
+		"Akaun pertama ini menjadi pentadbir. Selepas pendaftaran, tiada sesiapa lagi boleh mencipta akaun sehingga anda membenarkannya. Urus ahli, jemputan dan mod pendaftaran di Tetapan → Pentadbiran.",
+	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
+		"Akaun pertama ini menjadi pentadbir. Selepas pendaftaran, akaun baharu memerlukan pautan jemputan. Urus ahli, jemputan dan mod pendaftaran di Tetapan → Pentadbiran.",
 	"Passwords do not match": "Kata laluan tidak sepadan",
 	Loading: "Sedang memuat",
 	"Sign-ups are closed": "Pendaftaran ditutup",
@@ -70,14 +79,15 @@ export default {
 	"Create your account": "Buat akaun anda",
 	"Welcome — you're setting up this instance.":
 		"Selamat datang — anda sedang mengkonfigurasikan perkhidmatan ini.",
-	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
-		"Akaun pertama ini menjadi pentadbir. Selepas pendaftaran, akaun baharu memerlukan pautan jemputan. Urus ahli, jemputan dan mod pendaftaran di Tetapan → Pentadbiran.",
 	"You've been invited ({label}) — finish below to join.":
 		"Anda telah dijemput ({label}) — lengkapkan di bawah untuk menyertai.",
 	"You've been invited — finish below to join.":
 		"Anda telah dijemput — lengkapkan di bawah untuk menyertai.",
 	"This invite link is invalid, expired, or already used.":
 		"Pautan jemputan ini tidak sah, tamat tempoh, atau sudah digunakan.",
+	"Setup token": "Token persediaan",
+	"Printed in the Engram server log when it started.":
+		"Dicetak dalam log Engram pelayan semasa ia bermula.",
 	"Confirm password": "Sahkan kata laluan",
 	"Creating account…": "Menjana akaun…",
 	"Create account": "Jana akaun",

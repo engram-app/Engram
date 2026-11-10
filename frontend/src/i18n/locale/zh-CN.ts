@@ -49,8 +49,17 @@ export default {
 	"That password is too short.": "密码太短。",
 	"That password is too long.": "密码太长。",
 	"This invite link is invalid or has already been used.": "邀请链接无效或已使用。",
+	"Enter the setup token from the server log.": "输入服务器日志中的设置令牌。",
+	"That setup token is not valid. Use the newest one in the server log.":
+		"该设置令牌无效。请使用服务器日志中的最新令牌。",
 	"Registration not available for this auth provider": "无法使用此认证方式注册",
 	"Registration failed": "注册失败",
+	"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.":
+		"首次创建的账号将成为管理员。注册后，拥有链接的人都可以创建账号。在“设置”→“管理”中管理成员、邀请和注册模式。",
+	"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.":
+		"首次创建的账号将成为管理员。注册后，除非您允许，否则其他人无法创建账号。在“设置”→“管理”中管理成员、邀请和注册模式。",
+	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
+		"第一个账号将成为管理员。注册后，新账号需要邀请链接。在“设置”→“管理”中管理成员、邀请和注册模式。",
 	"Passwords do not match": "密码不匹配",
 	Loading: "加载中",
 	"Sign-ups are closed": "停止接受注册",
@@ -63,12 +72,12 @@ export default {
 	"Set up your instance": "配置你的实例",
 	"Create your account": "创建你的账号",
 	"Welcome — you're setting up this instance.": "欢迎 — 正在配置此实例。",
-	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
-		"第一个账号将成为管理员。注册后，新账号需要邀请链接。在“设置”→“管理”中管理成员、邀请和注册模式。",
 	"You've been invited ({label}) — finish below to join.":
 		"你已被邀请 ({label}) — 点击下方完成加入。",
 	"You've been invited — finish below to join.": "你已被邀请 — 点击下方完成加入。",
 	"This invite link is invalid, expired, or already used.": "此邀请链接无效、已过期或已使用。",
+	"Setup token": "设置令牌",
+	"Printed in the Engram server log when it started.": "启动时，会在 Engram 服务器日志中打印。",
 	"Confirm password": "确认密码",
 	"Creating account…": "创建账号中…",
 	"Create account": "创建账号",

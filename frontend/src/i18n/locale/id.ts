@@ -54,9 +54,18 @@ export default {
 	"That password is too long.": "Kata sandi terlalu panjang.",
 	"This invite link is invalid or has already been used.":
 		"Tautan undangan ini tidak valid atau sudah digunakan.",
+	"Enter the setup token from the server log.": "Masukkan token pengaturan dari log server.",
+	"That setup token is not valid. Use the newest one in the server log.":
+		"Token pengaturan tersebut tidak valid. Gunakan yang terbaru di log server.",
 	"Registration not available for this auth provider":
 		"Pendaftaran tidak tersedia untuk penyedia autentikasi ini",
 	"Registration failed": "Pendaftaran gagal",
+	"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.":
+		"Akun pertama ini menjadi administrator. Setelah pendaftaran, siapa pun dengan tautan dapat membuat akun. Kelola anggota undangan dan mode pendaftaran di Pengaturan → Administrasi.",
+	"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.":
+		"Akun pertama ini menjadi administrator. Setelah pendaftaran, tidak ada orang lain yang dapat membuat akun sampai Anda mengizinkannya. Kelola anggota undangan dan mode pendaftaran di Pengaturan → Administrasi.",
+	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
+		"Akun pertama ini akan menjadi administrator. Setelah pendaftaran, akun baru akan memerlukan tautan undangan. Kelola anggota, undangan, dan mode pendaftaran di Pengaturan → Administrasi.",
 	"Passwords do not match": "Kata sandi tidak cocok",
 	Loading: "Memuat",
 	"Sign-ups are closed": "Pendaftaran ditutup",
@@ -70,14 +79,14 @@ export default {
 	"Create your account": "Buat akun Anda",
 	"Welcome — you're setting up this instance.":
 		"Selamat datang — Anda sedang mengkonfigurasi instans ini.",
-	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
-		"Akun pertama ini akan menjadi administrator. Setelah pendaftaran, akun baru akan memerlukan tautan undangan. Kelola anggota, undangan, dan mode pendaftaran di Pengaturan → Administrasi.",
 	"You've been invited ({label}) — finish below to join.":
 		"Anda telah diundang ({label}) — selesaikan di bawah untuk bergabung.",
 	"You've been invited — finish below to join.":
 		"Anda telah diundang — selesaikan di bawah untuk bergabung.",
 	"This invite link is invalid, expired, or already used.":
 		"Tautan undangan ini tidak valid, kedaluwarsa, atau sudah digunakan.",
+	"Setup token": "Token pengaturan",
+	"Printed in the Engram server log when it started.": "Dicetak di log server Engram saat dimulai.",
 	"Confirm password": "Konfirmasi kata sandi",
 	"Creating account…": "Membuat akun…",
 	"Create account": "Buat akun",

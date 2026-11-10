@@ -55,9 +55,19 @@ export default {
 	"That password is too long.": "Essa senha é muito longa.",
 	"This invite link is invalid or has already been used.":
 		"Este link de convite é inválido ou já foi usado.",
+	"Enter the setup token from the server log.":
+		"Insira o token de configuração do log do servidor.",
+	"That setup token is not valid. Use the newest one in the server log.":
+		"Esse token de configuração não é válido. Use o mais recente do log do servidor.",
 	"Registration not available for this auth provider":
 		"Registro não disponível para este provedor de autenticação",
 	"Registration failed": "Registro falhou",
+	"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.":
+		"Essa primeira conta se torna a administradora. Após o cadastro, qualquer pessoa com o link pode criar uma conta. Gerencie membros, convites e o modo de registro em Configurações → Administração.",
+	"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.":
+		"Essa primeira conta se torna a administradora. Após o cadastro, ninguém mais poderá criar uma conta até que você permita. Gerencie membros, convites e o modo de registro em Configurações → Administração.",
+	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
+		"Esta primeira conta se torna a administradora. Após o cadastro, novas contas precisarão de um link de convite. Gerencie membros, convites e o modo de registro em Configurações → Administração.",
 	"Passwords do not match": "As senhas não coincidem",
 	Loading: "Carregando",
 	"Sign-ups are closed": "As inscrições estão fechadas",
@@ -71,14 +81,15 @@ export default {
 	"Create your account": "Crie sua conta",
 	"Welcome — you're setting up this instance.":
 		"Bem-vindo — você está configurando esta instância.",
-	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
-		"Esta primeira conta se torna a administradora. Após o cadastro, novas contas precisarão de um link de convite. Gerencie membros, convites e o modo de registro em Configurações → Administração.",
 	"You've been invited ({label}) — finish below to join.":
 		"Você foi convidado ({label}) — finalize abaixo para participar.",
 	"You've been invited — finish below to join.":
 		"Você foi convidado — finalize abaixo para participar.",
 	"This invite link is invalid, expired, or already used.":
 		"Este link de convite é inválido, expirou ou já foi usado.",
+	"Setup token": "Token de configuração",
+	"Printed in the Engram server log when it started.":
+		"Impresso no log do servidor Engram quando ele foi iniciado.",
 	"Confirm password": "Confirmar senha",
 	"Creating account…": "Criando conta…",
 	"Create account": "Criar conta",

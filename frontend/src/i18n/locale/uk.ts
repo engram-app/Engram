@@ -55,9 +55,18 @@ export default {
 	"That password is too long.": "Цей пароль занадто довгий.",
 	"This invite link is invalid or has already been used.":
 		"Цей посилання для запрошення недійсне або вже використане.",
+	"Enter the setup token from the server log.": "Введіть токен активації з журналу сервера.",
+	"That setup token is not valid. Use the newest one in the server log.":
+		"Цей токен активації недійсний. Використовуйте найновіший токен з журналу сервера.",
 	"Registration not available for this auth provider":
 		"Реєстрація недоступна для цього провайдера аутентифікації",
 	"Registration failed": "Реєстрація не вдалася",
+	"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.":
+		"Цей перший обліковий запис стає адміністратором. Після реєстрації будь-хто з посиланням може створити обліковий запис. Керуйте учасниками запрошеннями та режимом реєстрації в розділі Налаштування → Адміністрування.",
+	"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.":
+		"Цей перший обліковий запис стає адміністратором. Після реєстрації ніхто інший не зможе створити обліковий запис, поки ви не дозволите це. Керуйте учасниками запрошеннями та режимом реєстрації в розділі Налаштування → Адміністрування.",
+	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
+		"Цей перший обліковий запис стає адміністратором. Після реєстрації для нових облікових записів буде потрібне посилання-запрошення. Керуйте учасниками запрошеннями та режимом реєстрації в розділі Налаштування → Адміністрування.",
 	"Passwords do not match": "Паролі не збігаються",
 	Loading: "Завантаження",
 	"Sign-ups are closed": "Реєстрація закрита",
@@ -70,14 +79,15 @@ export default {
 	"Set up your instance": "Налаштуйте ваш екземпляр",
 	"Create your account": "Створіть свій обліковий запис",
 	"Welcome — you're setting up this instance.": "Ласкаво просимо — ви налаштовуєте цей екземпляр.",
-	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
-		"Цей перший обліковий запис стає адміністратором. Після реєстрації для нових облікових записів буде потрібне посилання-запрошення. Керуйте учасниками запрошеннями та режимом реєстрації в розділі Налаштування → Адміністрування.",
 	"You've been invited ({label}) — finish below to join.":
 		"Вам було надіслано запрошення ({label}) — завершіть нижче, щоб приєднатися.",
 	"You've been invited — finish below to join.":
 		"Вам було надіслано запрошення — завершіть нижче, щоб приєднатися.",
 	"This invite link is invalid, expired, or already used.":
 		"Цей посилання-запрошення недійсне, закінчилося термін дії або вже використане.",
+	"Setup token": "Токен активації",
+	"Printed in the Engram server log when it started.":
+		"Виводиться в Engram журналі сервера під час запуску.",
 	"Confirm password": "Підтвердіть пароль",
 	"Creating account…": "Створення облікового запису…",
 	"Create account": "Створити обліковий запис",
