@@ -98,15 +98,24 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedExpand do
     ])
   end
 
+  # `timeout: :infinity` on the checkout: without it DBConnection's 15 s
+  # default is a deadline for the WHOLE block (a per-query timeout does not
+  # extend it), and the VALIDATE scan plus a few lock waits can pass 15 s on a
+  # busy table. That raises at boot, every task fails and the deploy rolls
+  # back (the 0.79.0 incident mechanism). The 5 s lock_timeout per statement
+  # is the bound we want; the scan itself takes no lock that blocks writes.
   defp with_lock_timeout(statements) do
-    repo().checkout(fn ->
-      repo().query!("SET lock_timeout = '5s'")
+    repo().checkout(
+      fn ->
+        repo().query!("SET lock_timeout = '5s'")
 
-      try do
-        Enum.each(statements, &repo().query!(&1, [], timeout: :infinity))
-      after
-        repo().query!("RESET lock_timeout")
-      end
-    end)
+        try do
+          Enum.each(statements, &repo().query!(&1, [], timeout: :infinity))
+        after
+          repo().query!("RESET lock_timeout")
+        end
+      end,
+      timeout: :infinity
+    )
   end
 end

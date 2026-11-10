@@ -1,7 +1,7 @@
 defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedTest do
   @moduledoc """
   R8(d): no database object names `notes.content_ciphertext` or
-  `notes.crdt_state_ciphertext` any more (migration 20261107140000), so
+  `notes.crdt_state_ciphertext` any more (migration 20261107140100), so
   release E can drop them without breaking the shape check or the head
   trigger. Before it, a plain drop of the CRDT column failed (the trigger
   depended on it) and a drop of the content column took the whole shape
@@ -110,5 +110,25 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedTest do
              Repo.query("UPDATE notes SET folder_hmac = NULL WHERE id = $1", [marker_id],
                mode: :savepoint
              )
+  end
+
+  # The migration runs at boot. A checkout without `timeout: :infinity` gets
+  # DBConnection's 15 s deadline for the whole block (VALIDATE scan included),
+  # which crashed the 0.79.0 boot. Read the source: the deadline only bites on
+  # a prod-sized table, so a behavioural test here would pass either way.
+  test "the migration's checkout has no 15 s deadline" do
+    {:ok, ast} =
+      "priv/repo/migrations/20261107140100_notes_body_columns_unreferenced_expand.exs"
+      |> File.read!()
+      |> Code.string_to_quoted()
+
+    {_, opts} =
+      Macro.prewalk(ast, [], fn
+        {{:., _, [_, :checkout]}, _, args} = node, acc -> {node, [Enum.drop(args, 1) | acc]}
+        node, acc -> {node, acc}
+      end)
+
+    assert opts != []
+    assert Enum.all?(opts, &(&1 == [[timeout: :infinity]]))
   end
 end
