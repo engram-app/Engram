@@ -33,7 +33,13 @@ defmodule Engram.Repo.Migrations.NoteFolderHashNullablePrepExpand do
   before the VALIDATE scan. One pinned connection, so the `lock_timeout`
   reaches every statement and is reset after. Rerun-safe: a partial run is
   redone from the top. Calls no app module (N-1 gate).
+
+  The checkout's own timeout bounds the whole block, statements included; left
+  unset it inherits DBConnection's 15s, too short for the VALIDATE scan. The
+  `lock_timeout` stays the real bound on lock waits.
   """
+
+  @timeout_ms 120_000
 
   @shape_v3 """
   ALTER TABLE notes ADD CONSTRAINT notes_kind_shape_v3_check CHECK (
@@ -106,7 +112,7 @@ defmodule Engram.Repo.Migrations.NoteFolderHashNullablePrepExpand do
   """
 
   def up do
-    with_lock_timeout([
+    with_lock_timeout(repo(), [
       "ALTER TABLE notes DROP CONSTRAINT IF EXISTS notes_kind_shape_v3_check",
       @shape_v3,
       "ALTER TABLE notes VALIDATE CONSTRAINT notes_kind_shape_v3_check",
@@ -118,7 +124,7 @@ defmodule Engram.Repo.Migrations.NoteFolderHashNullablePrepExpand do
   # Back to the v2 check (NOT VALID: a note a later release wrote without a
   # hash stays readable) and the original function.
   def down do
-    with_lock_timeout([
+    with_lock_timeout(repo(), [
       "ALTER TABLE notes DROP CONSTRAINT IF EXISTS notes_kind_shape_v2_check",
       @shape_v2,
       "ALTER TABLE notes DROP CONSTRAINT IF EXISTS notes_kind_shape_v3_check",
@@ -126,15 +132,20 @@ defmodule Engram.Repo.Migrations.NoteFolderHashNullablePrepExpand do
     ])
   end
 
-  defp with_lock_timeout(statements) do
-    repo().checkout(fn ->
-      repo().query!("SET lock_timeout = '5s'")
+  @doc false
+  # Public for `NoteFolderHashPrepTimeoutTest`.
+  def with_lock_timeout(repo, statements) do
+    repo.checkout(
+      fn ->
+        repo.query!("SET lock_timeout = '5s'")
 
-      try do
-        Enum.each(statements, &repo().query!(&1, [], timeout: :infinity))
-      after
-        repo().query!("RESET lock_timeout")
-      end
-    end)
+        try do
+          Enum.each(statements, &repo.query!(&1, [], timeout: @timeout_ms))
+        after
+          repo.query!("RESET lock_timeout")
+        end
+      end,
+      timeout: @timeout_ms
+    )
   end
 end

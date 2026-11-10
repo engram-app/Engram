@@ -645,6 +645,7 @@ defmodule Engram.Fixtures do
 
     # By name at runtime: migrations are not compiled with the app.
     mod = String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate")
+    repo = Keyword.get(opts, :repo, Engram.Repo)
 
     case Keyword.fetch(opts, :role) do
       {:ok, role} ->
@@ -654,13 +655,13 @@ defmodule Engram.Fixtures do
         Engram.Repo.query!("SET LOCAL SESSION AUTHORIZATION #{role}")
 
         try do
-          mod.complete_split(Engram.Repo)
+          mod.complete_split(repo)
         after
           Engram.Repo.query!("SET LOCAL SESSION AUTHORIZATION DEFAULT")
         end
 
       :error ->
-        mod.complete_split(Engram.Repo)
+        mod.complete_split(repo)
     end
   end
 

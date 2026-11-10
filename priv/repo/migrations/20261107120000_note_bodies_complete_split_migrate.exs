@@ -56,14 +56,27 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   action).
 
   Prod (2026-11-07): 0 notes without a body row and 0 body rows under
-  another owner, so it inserts nothing, takes no table lock, and reads each
-  user's note ids twice (the walk and the check). Rerun-safe; no `down` work (the rows
-  are what every release from 0.76 on writes). Calls no app module.
+  another owner, so it inserts nothing and takes no table lock. Rerun-safe;
+  no `down` work (the rows are what every release from 0.76 on writes).
+  Calls no app module.
+
+  No connection is held across the walk: each window is its own short
+  transaction, with `lock_timeout` set inside it. A `checkout` around every
+  user inherited DBConnection's 15s and crashed boot at 1,637 users.
+
+  A pre-check skips the walk when no note needs anything, but only on a
+  connection that can see every tenant: a superuser or BYPASSRLS role, or one
+  that may `SET ROLE engram_maintenance`, whose `maintenance_all` policies
+  show it every row. Any other role sees no row without a tenant, so the same
+  query would answer "nothing to do" on every database; it walks instead. A
+  pre-check that cannot see costs time, never a body.
   """
 
   require Logger
 
   @window 1_000
+  # One window: 1,000 whole bodies copied at worst, on a self-hoster's disk.
+  @window_timeout_ms 120_000
 
   # The merged layout of one `notes` (ciphertext, nonce) pair, as
   # `NoteBody` built it (from the dropped `notes_sync_body` trigger).
@@ -111,6 +124,32 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   WHERE n.user_id = $1 AND n.kind = 'note'
     AND NOT EXISTS (SELECT 1 FROM note_bodies x WHERE x.note_id = n.id AND x.user_id = n.user_id)
   ORDER BY n.id LIMIT #{@window}
+  """
+
+  # The same question over every user. Only true to its answer on a
+  # connection `@visibility` says can see them all.
+  @any_left """
+  SELECT EXISTS (
+    SELECT 1 FROM notes n
+    WHERE n.kind = 'note'
+      AND NOT EXISTS (SELECT 1 FROM note_bodies x WHERE x.note_id = n.id AND x.user_id = n.user_id)
+  )
+  """
+
+  # Whether this connection bypasses RLS, and whether it can become a role
+  # that a policy shows every row. CASE, not AND: `pg_has_role` raises on an
+  # unknown role and AND does not promise to test the name first.
+  @visibility """
+  SELECT
+    (SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user),
+    CASE WHEN to_regrole('engram_maintenance') IS NULL THEN false
+      ELSE pg_has_role('engram_maintenance', 'SET')
+        AND has_table_privilege('engram_maintenance', 'notes', 'SELECT')
+        AND has_table_privilege('engram_maintenance', 'note_bodies', 'SELECT')
+        AND (SELECT count(*) = 2 FROM pg_policy
+             WHERE polname = 'maintenance_all'
+               AND polrelid IN ('notes'::regclass, 'note_bodies'::regclass))
+    END
   """
 
   # True when body column `body` holds the envelope under the `notes` nonce
@@ -181,16 +220,43 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   @doc false
   # The whole migration on `repo`; public for `SelfHostJumpTest`.
   def complete_split(repo) do
-    repo.checkout(fn ->
-      repo.query!("SET lock_timeout = '5s'")
+    if work_remains?(repo) do
+      %{rows: users} = repo.query!("SELECT id FROM users ORDER BY id")
+      Enum.each(users, fn [user_id] -> user!(repo, user_id) end)
+    end
 
-      try do
-        %{rows: users} = repo.query!("SELECT id FROM users ORDER BY id")
-        Enum.each(users, fn [user_id] -> user!(repo, user_id) end)
-      after
-        repo.query!("RESET lock_timeout")
-      end
-    end)
+    :ok
+  end
+
+  # True unless a connection that can see every tenant found nothing to do.
+  # One anti-join over `notes`, so `timeout: :infinity` on that statement alone.
+  defp work_remains?(repo) do
+    case repo.query!(@visibility).rows do
+      [[true, _]] -> any_left?(repo)
+      [[_, true]] -> any_left_as_maintenance?(repo)
+      _ -> true
+    end
+  end
+
+  defp any_left?(repo) do
+    %{rows: [[any?]]} = repo.query!(@any_left, [], timeout: :infinity)
+    any?
+  end
+
+  # The role is cleared before the transaction ends, like the tenant below.
+  defp any_left_as_maintenance?(repo) do
+    {:ok, any?} =
+      repo.transaction(
+        fn ->
+          repo.query!("SET LOCAL ROLE engram_maintenance")
+          any? = any_left?(repo)
+          repo.query!("SELECT set_config('role', 'none', true)")
+          any?
+        end,
+        timeout: :infinity
+      )
+
+    any?
   end
 
   defp user!(repo, user_id) do
@@ -270,13 +336,20 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   # savepoint).
   defp tenant(repo, user_id, fun) do
     {:ok, result} =
-      repo.transaction(fn ->
-        repo.query!("SELECT set_config('app.current_tenant', $1::uuid::text, true)", [user_id])
+      repo.transaction(
+        fn ->
+          repo.query!(
+            "SELECT set_config('app.current_tenant', $1::uuid::text, true), " <>
+              "set_config('lock_timeout', '5s', true)",
+            [user_id]
+          )
 
-        result = fun.()
-        repo.query!("SELECT set_config('app.current_tenant', '', true)")
-        result
-      end)
+          result = fun.()
+          repo.query!("SELECT set_config('app.current_tenant', '', true)")
+          result
+        end,
+        timeout: @window_timeout_ms
+      )
 
     result
   end
