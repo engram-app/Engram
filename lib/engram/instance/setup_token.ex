@@ -15,6 +15,11 @@ defmodule Engram.Instance.SetupToken do
     * `burn/0` runs inside the claim transaction (`Accounts.create_user_with_password/2`)
       so the row is gone the moment the admin exists.
 
+  A node restart rotates the token, so an operator who already copied one gets
+  `setup_token_invalid` and must use the newest log line. The line is `:info`:
+  with `LOG_LEVEL` at `warning` or above it is hidden, so set `ENGRAM_SETUP_TOKEN`
+  instead (see `docs/context/self-host-setup-token.md`).
+
   `ENGRAM_SETUP_TOKEN` (`config :engram, :setup_token`) replaces the random
   token with a fixed one, for CI, e2e stacks and local dev. Its value is never
   logged. It only matters while bootstrap is pending.
@@ -37,6 +42,10 @@ defmodule Engram.Instance.SetupToken do
   # Same sentinel as the other instance singletons (`Engram.Instance`).
   @singleton_id "00000000-0000-0000-0000-000000000000"
 
+  # Shorter fixed tokens are guessable at the register rate limit; warn, don't refuse
+  # (CI and e2e stacks pin short values on purpose).
+  @min_configured_length 16
+
   # 24 random bytes -> 32 url-safe chars: copy-pasteable, ~192 bits.
   @token_bytes 24
 
@@ -51,6 +60,17 @@ defmodule Engram.Instance.SetupToken do
   end
 
   @doc """
+  Supervisor entry point. Runs `boot/0` synchronously, then returns `:ignore`
+  (no process is kept). Synchronous on purpose: the supervisor does not start
+  the endpoint until the new token is stored, so the previous boot's token can
+  never be accepted by a node that is already serving requests.
+  """
+  def start_link(_arg \\ []) do
+    boot()
+    :ignore
+  end
+
+  @doc """
   Boot hook. Mints (or rotates) the token while bootstrap is pending and logs it
   once; deletes any leftover row otherwise. Never raises: a failure here must not
   stop the node, and the claim simply stays refused until a boot succeeds.
@@ -59,6 +79,7 @@ defmodule Engram.Instance.SetupToken do
     if Engram.Auth.supports_credentials?() do
       if Instance.bootstrap_pending?() do
         configured = configured_token()
+        warn_if_weak(configured)
         {:ok, raw} = mint(configured || generate())
         log_token(raw, configured != nil)
       else
@@ -126,6 +147,16 @@ defmodule Engram.Instance.SetupToken do
     do: @token_bytes |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
 
   defp hash(raw), do: Engram.Crypto.sha256_hex(raw)
+
+  defp warn_if_weak(token) when is_binary(token) and byte_size(token) < @min_configured_length do
+    Logger.warning(
+      "setup token: ENGRAM_SETUP_TOKEN is shorter than #{@min_configured_length} characters " <>
+        "and can be guessed; use a long random value, or unset it to get a generated token",
+      Metadata.with_category(:warning, :boot, [])
+    )
+  end
+
+  defp warn_if_weak(_), do: :ok
 
   defp configured_token do
     case Application.get_env(:engram, :setup_token) do

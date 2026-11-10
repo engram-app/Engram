@@ -113,14 +113,15 @@ defmodule Engram.Application do
   end
 
   # Mints and logs the self-host first-run setup token (Engram.Instance.SetupToken)
-  # while no admin exists. Must start after Engram.Repo; runs once and exits, and
-  # rescues its own failures so it can never stop the boot. Disabled in :test for
+  # while no admin exists. Must start after Engram.Repo; runs synchronously during
+  # startup (so the previous boot's token is rotated before requests are served),
+  # returns :ignore, and rescues its own failures so it can never stop the boot. Disabled in :test for
   # the same sandbox reason as tenancy_guard below; tests call `mint/1` directly.
   defp setup_token_child do
     if Application.get_env(:engram, :setup_token_on_boot, true) do
       %{
         id: :engram_setup_token,
-        start: {Task, :start_link, [&Engram.Instance.SetupToken.boot/0]},
+        start: {Engram.Instance.SetupToken, :start_link, []},
         restart: :temporary
       }
     end

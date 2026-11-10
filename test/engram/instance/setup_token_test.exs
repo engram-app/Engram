@@ -157,9 +157,7 @@ defmodule Engram.Instance.SetupTokenTest do
       # still pending, then lost the lock race. It must NOT silently become a
       # member, skipping the invite_only / closed registration check.
       assert {:error, :claim_lost} =
-               Engram.Accounts.create_user_with_password("b@x.com", "longpassword1",
-                 claim: true
-               )
+               Engram.Accounts.create_user_with_password("b@x.com", "longpassword1", claim: true)
 
       assert Engram.Repo.aggregate(Engram.Accounts.User, :count, skip_tenant_check: true) == 1
     end
