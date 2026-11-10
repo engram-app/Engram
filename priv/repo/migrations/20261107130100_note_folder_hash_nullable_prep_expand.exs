@@ -36,10 +36,12 @@ defmodule Engram.Repo.Migrations.NoteFolderHashNullablePrepExpand do
 
   The checkout's own timeout bounds the whole block, statements included; left
   unset it inherits DBConnection's 15s, too short for the VALIDATE scan. The
-  `lock_timeout` stays the real bound on lock waits.
+  `lock_timeout` stays the real bound on lock waits, and a statement that hits
+  it is retried twice.
   """
 
   @timeout_ms 120_000
+  @lock_retries 2
 
   @shape_v3 """
   ALTER TABLE notes ADD CONSTRAINT notes_kind_shape_v3_check CHECK (
@@ -140,12 +142,23 @@ defmodule Engram.Repo.Migrations.NoteFolderHashNullablePrepExpand do
         repo.query!("SET lock_timeout = '5s'")
 
         try do
-          Enum.each(statements, &repo.query!(&1, [], timeout: @timeout_ms))
+          Enum.each(statements, &run(repo, &1, @lock_retries))
         after
           repo.query!("RESET lock_timeout")
         end
       end,
       timeout: @timeout_ms
     )
+  end
+
+  # Only the statement that failed is retried: one that failed changed nothing,
+  # and starting over would repeat the VALIDATE scan.
+  defp run(repo, statement, retries) do
+    repo.query!(statement, [], timeout: @timeout_ms)
+  rescue
+    e in Postgrex.Error ->
+      if retries > 0 and match?(%{postgres: %{code: :lock_not_available}}, e),
+        do: run(repo, statement, retries - 1),
+        else: reraise(e, __STACKTRACE__)
   end
 end

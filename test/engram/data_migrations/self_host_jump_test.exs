@@ -293,6 +293,64 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
     defdelegate transaction(fun, opts), to: Engram.Repo
   end
 
+  # Fails the body insert with a lock timeout: forever for the user in
+  # `:always`, or the first `:times` calls for anyone. `:persistent_term`, as
+  # a migration runs in its own process.
+  defmodule FlakyRepo do
+    @moduledoc false
+    @key {__MODULE__, :plan}
+
+    def plan(plan) do
+      :persistent_term.put(@key, :counters.new(1, []))
+      :persistent_term.put({__MODULE__, :spec}, plan)
+    end
+
+    defdelegate query!(sql), to: Engram.Repo
+    defdelegate query!(sql, params, opts), to: Engram.Repo
+    defdelegate transaction(fun), to: Engram.Repo
+    defdelegate transaction(fun, opts), to: Engram.Repo
+
+    def query!(sql, [user_id | _] = params) do
+      if String.contains?(sql, "INSERT INTO note_bodies") and fail?(user_id) do
+        raise %Postgrex.Error{
+          postgres: %{
+            code: :lock_not_available,
+            pg_code: "55P03",
+            severity: "ERROR",
+            message: "lock timeout"
+          }
+        }
+      end
+
+      Engram.Repo.query!(sql, params)
+    end
+
+    def query!(sql, params), do: Engram.Repo.query!(sql, params)
+
+    defp fail?(user_id) do
+      counter = :persistent_term.get(@key)
+      spec = :persistent_term.get({__MODULE__, :spec})
+      :counters.add(counter, 1, 1)
+
+      user_id == spec[:always] or :counters.get(counter, 1) <= Keyword.get(spec, :times, 0)
+    end
+  end
+
+  # The real runner, so "not recorded" is what Ecto does with the raise.
+  defmodule FlakyMigration do
+    @moduledoc false
+    use Ecto.Migration
+    @disable_ddl_transaction true
+    @disable_migration_lock true
+
+    def up do
+      mod =
+        String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate")
+
+      mod.complete_split(FlakyRepo)
+    end
+  end
+
   describe "the pre-check and the walk" do
     # What the pre-check would be with no thought for RLS.
     @blind_exists """
@@ -393,6 +451,94 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
       Engram.Fixtures.complete_split!(repo: NoCheckoutRepo)
 
       assert bodies(u) == written
+    end
+
+    test "as a role that cannot see every tenant, nothing to split costs 2 statements a user",
+         %{user: u, vault: v} do
+      _ = write!(u, v, "kept.md", "kept text")
+      migrator!(false)
+      users = 300
+
+      few = statements(fn -> Engram.Fixtures.complete_split!(role: @migrator) end)
+      for _ <- 1..users, do: insert(:user)
+      many = statements(fn -> Engram.Fixtures.complete_split!(role: @migrator) end)
+
+      assert many - few <= 2 * users + 8
+    end
+
+    test "a window that hits a lock timeout is retried", %{user: u, vault: v} do
+      _ = write!(u, v, "retry.md", "retry text")
+      written = bodies(u)
+      pre_split!(u)
+      FlakyRepo.plan(times: 2)
+
+      Engram.Fixtures.complete_split!(repo: FlakyRepo)
+
+      assert bodies(u) == written
+    end
+
+    test "a user that keeps failing: others done, count raised, migration not recorded", %{
+      user: u,
+      vault: v
+    } do
+      _ = write!(u, v, "stuck.md", "stuck text")
+      pre_split!(u)
+
+      {:ok, other} = Engram.Crypto.ensure_user_dek(insert(:user))
+      insert(:user_limit_override, user: other, key: "vaults_cap", value: %{"v" => -1})
+      {:ok, other_vault, _} = Engram.Vaults.register_vault(other, "Other", Ecto.UUID.generate())
+      _ = write!(other, other_vault, "done.md", "done text")
+      written = bodies(other)
+      pre_split!(other)
+
+      Engram.Fixtures.complete_split!(role: nil, only_load: true)
+      FlakyRepo.plan(always: Ecto.UUID.dump!(u.id))
+      version = 99_999_999_999_991
+
+      error =
+        assert_raise RuntimeError, fn ->
+          Ecto.Migrator.up(Repo, version, FlakyMigration, log: false)
+        end
+
+      assert error.message =~ "1 user"
+      refute error.message =~ u.id
+      assert bodies(other) == written
+      assert bodies(u) == []
+
+      assert Repo.query!("SELECT count(*) FROM schema_migrations WHERE version = $1", [version]).rows ==
+               [[0]]
+    end
+
+    test "the walk logs progress on a Loki-shipped boot line, with no user ids", %{
+      user: u,
+      vault: v
+    } do
+      _ = write!(u, v, "log.md", "log text")
+      pre_split!(u)
+      for _ <- 1..250, do: insert(:user)
+      Engram.Fixtures.complete_split!(role: nil, only_load: true)
+
+      mod =
+        String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate")
+
+      Logger.put_module_level(mod, :info)
+      on_exit(fn -> Logger.delete_module_level(mod) end)
+      migrator!(false)
+
+      {_, events} =
+        Engram.Test.LogCapture.with_events(fn ->
+          Engram.Fixtures.complete_split!(role: @migrator)
+        end)
+
+      lines =
+        for %{meta: %{category: :boot} = meta, msg: {:string, text}} <- events do
+          assert meta.loki_ship == true
+          IO.chardata_to_string(text)
+        end
+
+      assert Enum.any?(lines, &(&1 =~ "walk started"))
+      assert Enum.any?(lines, &(&1 =~ "walk finished"))
+      refute Enum.any?(lines, &(&1 =~ u.id))
     end
 
     # CONTROL: this is what makes the tests below able to fail. The suite's
