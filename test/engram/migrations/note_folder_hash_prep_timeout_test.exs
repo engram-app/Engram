@@ -50,7 +50,21 @@ defmodule Engram.Migrations.NoteFolderHashPrepTimeoutTest do
       "priv/repo/migrations/20261107130100_note_folder_hash_nullable_prep_expand.exs"
     )
 
+    Code.require_file(
+      "priv/repo/migrations/20261107130000_note_folder_hash_drop_not_null_expand.exs"
+    )
+
     :ok
+  end
+
+  test "DROP NOT NULL that hits its lock timeout is retried, then gives up" do
+    mod = String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteFolderHashDropNotNullExpand")
+
+    :persistent_term.put({LockedRepo, :left}, 2)
+    assert :ok = mod.drop_not_null(LockedRepo)
+
+    :persistent_term.put({LockedRepo, :left}, 3)
+    assert_raise Postgrex.Error, fn -> mod.drop_not_null(LockedRepo) end
   end
 
   test "the checkout sets its own timeout, longer than the default" do
