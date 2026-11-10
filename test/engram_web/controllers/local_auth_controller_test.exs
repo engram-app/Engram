@@ -602,4 +602,61 @@ defmodule EngramWeb.LocalAuthControllerTest do
       assert user_count() == 1
     end
   end
+
+  describe "POST /api/auth/register: :claim_lost retry" do
+    # Forces the lock race deterministically: right after the controller's token
+    # lookup, close the claim window, so the request reaches the bootstrap lock
+    # as a claim with bootstrap already complete.
+    defp lose_claim_after_token_check do
+      id = "claim-lost-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        id,
+        [:engram, :repo, :query],
+        fn _event, _m, meta, _c ->
+          if String.contains?(to_string(meta[:query]), "instance_setup_token") and
+               Engram.Instance.bootstrap_pending?() do
+            {:ok, _} = Engram.Instance.mark_bootstrap_complete()
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+    end
+
+    defp late_register(conn) do
+      post(conn, ~p"/api/auth/register", %{
+        setup_token: @setup_token,
+        email: "late@x.com",
+        password: "longpassword1"
+      })
+    end
+
+    defp total_users,
+      do: Engram.Repo.aggregate(Engram.Accounts.User, :count, skip_tenant_check: true)
+
+    test "loser re-runs the mode check: closed -> 403, no user created", %{conn: conn} do
+      {:ok, _} = Engram.Instance.set_registration_mode("closed")
+      lose_claim_after_token_check()
+
+      assert json_response(late_register(conn), 403)["error"] == "registration_closed"
+      assert total_users() == 0
+    end
+
+    test "loser re-runs the mode check: invite_only without invite -> 403", %{conn: conn} do
+      {:ok, _} = Engram.Instance.set_registration_mode("invite_only")
+      lose_claim_after_token_check()
+
+      assert json_response(late_register(conn), 403)["error"] == "invite_required"
+      assert total_users() == 0
+    end
+
+    test "loser in open mode registers as a member, never admin", %{conn: conn} do
+      {:ok, _} = Engram.Instance.set_registration_mode("open")
+      lose_claim_after_token_check()
+
+      assert json_response(late_register(conn), 201)["user"]["role"] == "member"
+    end
+  end
 end

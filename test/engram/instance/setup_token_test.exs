@@ -147,6 +147,31 @@ defmodule Engram.Instance.SetupTokenTest do
     end
   end
 
+  describe "env token normalization" do
+    test "an ENGRAM_SETUP_TOKEN with a trailing newline or space still matches the typed token" do
+      Application.put_env(:engram, :setup_token, "fixed-ci-token-abcdefgh\n ")
+
+      boot_log()
+
+      assert SetupToken.valid?("fixed-ci-token-abcdefgh")
+      assert SetupToken.valid?("  fixed-ci-token-abcdefgh\n")
+    end
+  end
+
+  describe "failed mint at boot" do
+    test "invalidates the previous boot's token instead of leaving it valid" do
+      {:ok, _} = SetupToken.mint("previous-boot-token-abcdefgh")
+      assert SetupToken.valid?("previous-boot-token-abcdefgh")
+
+      # Make the next mint's upsert fail (DDL is transactional: undone by the sandbox).
+      Engram.Repo.query!("ALTER TABLE instance_setup_token RENAME COLUMN token_hash TO th")
+      capture_log([level: :warning], fn -> assert SetupToken.boot() == :ok end)
+      Engram.Repo.query!("ALTER TABLE instance_setup_token RENAME COLUMN th TO token_hash")
+
+      refute SetupToken.valid?("previous-boot-token-abcdefgh")
+    end
+  end
+
   describe "claim re-check inside the bootstrap lock" do
     test "a request admitted as the claim is refused if another claim won first" do
       {:ok, _} = SetupToken.mint("claim-token-abcdefgh")
