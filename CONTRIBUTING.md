@@ -100,10 +100,12 @@ mix phx.server   # http://localhost:4000
 Register, log in, create an API key, push a note, search:
 
 ```bash
-# Register
+# Register. The first account on a fresh instance becomes the admin and needs the
+# one-time setup token: copy it from the "first-run setup" line in the server log,
+# or pin one with ENGRAM_SETUP_TOKEN (16+ characters). Later accounts omit it.
 curl -X POST http://localhost:4000/api/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"email": "you@example.com", "password": "your-password"}'
+  -d '{"email": "you@example.com", "password": "your-password", "setup_token": "<token>"}'
 
 # Login → JWT
 TOKEN=$(curl -s -X POST http://localhost:4000/api/auth/login \

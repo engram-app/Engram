@@ -66,6 +66,21 @@ example file without clearing your shell value, so an inline value still applies
 Every e2e register call sends the token, because any of them may be the first
 signup on a fresh stack. After the claim the backend ignores it.
 
+A restart also rotates it. An operator who copied a token before the restart gets
+403 `setup_token_invalid`: use the newest `first-run setup` line. The line is
+logged at `:info`, so `LOG_LEVEL=warning` or `error` hides it; set
+`ENGRAM_SETUP_TOKEN` (16+ characters, shorter logs a warning) when you log at
+that level.
+
+The mint runs synchronously in the supervision tree (`SetupToken.start_link/1`
+returns `:ignore`), so the previous boot's token is already replaced before the
+endpoint accepts requests.
+
+The claim is re-checked inside the advisory lock (`create_user_with_password/3`
+with `claim: true`). A request that passed the token check but lost the race
+gets `:claim_lost` and goes back through the registration-mode check, so it is
+never a second admin and never a member that skipped `invite_only` / `closed`.
+
 Multi-node self-host: each booting node rotates the token, so only the token
 from the most recent boot works. Set `ENGRAM_SETUP_TOKEN` if that gets in the way.
 
