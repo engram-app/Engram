@@ -90,6 +90,9 @@ defmodule Engram.Instance.SetupToken do
     :ok
   rescue
     e ->
+      # A token from the previous boot must not outlive a failed rotation.
+      burn_quietly()
+
       Logger.warning(
         "setup token: could not mint the first-run setup token; " <>
           "registering the admin will be refused until the next boot succeeds",
@@ -119,11 +122,9 @@ defmodule Engram.Instance.SetupToken do
 
   @doc "True when `candidate` matches the stored token. Constant-time compare."
   def valid?(candidate) when is_binary(candidate) do
-    candidate = String.trim(candidate)
-
     case Repo.get(Row, @singleton_id, skip_tenant_check: true) do
-      %Row{token_hash: stored} when candidate != "" ->
-        Plug.Crypto.secure_compare(hash(candidate), stored)
+      %Row{token_hash: stored} ->
+        normalize(candidate) != "" and Plug.Crypto.secure_compare(hash(candidate), stored)
 
       _ ->
         false
@@ -146,7 +147,18 @@ defmodule Engram.Instance.SetupToken do
   defp generate,
     do: @token_bytes |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
 
-  defp hash(raw), do: Engram.Crypto.sha256_hex(raw)
+  # The ONE normalizer, applied on both sides (typed candidate and stored token,
+  # whether generated or from ENGRAM_SETUP_TOKEN): a trailing newline from an
+  # env_file or a pasted secret must not lock the operator out.
+  defp normalize(raw), do: String.trim(raw)
+
+  defp hash(raw), do: raw |> normalize() |> Engram.Crypto.sha256_hex()
+
+  defp burn_quietly do
+    burn()
+  rescue
+    _ -> :ok
+  end
 
   defp warn_if_weak(token) when is_binary(token) and byte_size(token) < @min_configured_length do
     Logger.warning(
