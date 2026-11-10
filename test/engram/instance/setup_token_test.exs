@@ -117,6 +117,59 @@ defmodule Engram.Instance.SetupTokenTest do
     end
   end
 
+  describe "start_link/1 (the supervised boot child)" do
+    test "mints synchronously and returns :ignore, so no stale token outlives startup" do
+      {:ok, _} = SetupToken.mint("previous-boot-token-abcdefgh")
+
+      assert SetupToken.start_link([]) == :ignore
+
+      # Rotated by the time start_link returns: the supervisor does not move on
+      # (and the endpoint does not start) while the old token is still valid.
+      refute SetupToken.valid?("previous-boot-token-abcdefgh")
+      assert Engram.Repo.aggregate(SetupToken.Row, :count, skip_tenant_check: true) == 1
+    end
+  end
+
+  describe "ENGRAM_SETUP_TOKEN strength" do
+    test "warns when the configured token is shorter than 16 characters" do
+      Application.put_env(:engram, :setup_token, "weak-tok")
+
+      log = boot_log()
+
+      assert log =~ "shorter than 16"
+      refute log =~ "weak-tok"
+    end
+
+    test "does not warn for a token of 16 or more characters" do
+      Application.put_env(:engram, :setup_token, "0123456789abcdef")
+
+      refute boot_log() =~ "shorter than 16"
+    end
+  end
+
+  describe "claim re-check inside the bootstrap lock" do
+    test "a request admitted as the claim is refused if another claim won first" do
+      {:ok, _} = SetupToken.mint("claim-token-abcdefgh")
+      {:ok, winner} = Engram.Accounts.create_user_with_password("a@x.com", "longpassword1")
+      assert winner.role == "admin"
+
+      # Second request passed the controller's token check while bootstrap was
+      # still pending, then lost the lock race. It must NOT silently become a
+      # member, skipping the invite_only / closed registration check.
+      assert {:error, :claim_lost} =
+               Engram.Accounts.create_user_with_password("b@x.com", "longpassword1",
+                 claim: true
+               )
+
+      assert Engram.Repo.aggregate(Engram.Accounts.User, :count, skip_tenant_check: true) == 1
+    end
+
+    test "a request admitted as the claim becomes admin while the window is open" do
+      assert {:ok, %{role: "admin"}} =
+               Engram.Accounts.create_user_with_password("a@x.com", "longpassword1", claim: true)
+    end
+  end
+
   test "the admin claim transaction burns the token" do
     {:ok, _} = SetupToken.mint("claim-token-abcdefgh")
 
