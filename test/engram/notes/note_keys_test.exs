@@ -93,13 +93,20 @@ defmodule Engram.Notes.NoteKeysTest do
     :ok = Notes.delete_note(u, v, "gone.md")
     {:ok, _} = Notes.create_folder_marker(u, v, "Marked")
 
-    for _ <- 1..1000 do
+    # Half the decoys are tombstones, so the tombstone partial indexes are big
+    # enough that selectivity picks between them too. With "gone.md" as the
+    # vault's ONLY tombstone, the (vault_id, path_hmac) and (vault_id, path_id)
+    # tombstone indexes both estimated one row and cost the same, so the pick
+    # was a tie that index size could tip: notes_vault_path_tombstone_index
+    # won once in CI (#2530's partition layout), never on main or locally.
+    for i <- 1..1000 do
       insert(:note,
         user: u,
         vault: v,
         path_hmac: :crypto.strong_rand_bytes(32),
         folder_hmac: :crypto.strong_rand_bytes(32),
-        basename_hmac: :crypto.strong_rand_bytes(32)
+        basename_hmac: :crypto.strong_rand_bytes(32),
+        deleted_at: if(rem(i, 2) == 0, do: DateTime.utc_now())
       )
     end
 

@@ -61,7 +61,10 @@ defmodule Engram.ServiceConfig.Overrides do
     file_times_backfill: :boolean,
     note_body_columns_null: :boolean,
     # The null batch's per-pass cap (rows), to slow it without a deploy.
-    note_body_columns_null_max_fixed: {:integer, 1..1_000_000}
+    note_body_columns_null_max_fixed: {:integer, 1..1_000_000},
+    # Markdown content writes as Yjs ops (`Notes.CrdtWrite`, #2519). Off: the
+    # snapshot path.
+    crdt_write_apply_text: :boolean
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})

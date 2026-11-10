@@ -51,15 +51,20 @@ defmodule Engram.Notes.CrdtDeliver do
 
   Takes ids, or the writer's `%User{}` and the full `%Note{}` row it just
   committed, which then is not read back.
+
+  `delta:` the Yjs update the write authored (`Notes.CrdtWrite`). A live room
+  then gets exactly those ops, the same bytes the committed snapshot holds,
+  instead of the stored snapshot.
   """
   @spec deliver_out(
           String.t() | Accounts.User.t(),
           String.t(),
           String.t(),
           String.t() | Note.t(),
-          String.t()
+          String.t(),
+          keyword()
         ) :: :ok
-  def deliver_out(user, vault_id, path, note, content)
+  def deliver_out(user, vault_id, path, note, content, opts \\ [])
       when is_binary(content) do
     # CRDT manages MARKDOWN content only — the plugin's routeModify enrolls only
     # `.md` into Yjs (the doc sync type is "markdown"; canvas and other types
@@ -69,7 +74,11 @@ defmodule Engram.Notes.CrdtDeliver do
     # the user's next real edit as an echo — silently dropping the write. Those
     # files sync via the legacy push path, so only deliver/announce for `.md`.
     if CrdtBridge.markdown_path?(path) do
-      push_to_live_room(user, note, content)
+      case Keyword.get(opts, :delta) do
+        delta when is_binary(delta) -> push_delta_to_live_room(id_of(note), delta)
+        nil -> push_to_live_room(user, note, content)
+      end
+
       # fanout_idle ALWAYS runs, even when a live room exists. It is NOT redundant
       # with the room's `update_v1`: `update_v1` broadcasts a DELTA (converges a
       # device that already holds the note, via gap-heal), while `fanout_idle`
@@ -199,31 +208,7 @@ defmodule Engram.Notes.CrdtDeliver do
       room ->
         case load_merged_state(user, note) do
           {:ok, state, _seq} when is_binary(state) ->
-            # The apply runs inside the room process (update_doc discards the
-            # fun's return), so failure is signalled back by message. The
-            # message is tagged with a per-call ref: if update_doc TIMES OUT,
-            # the room may run the fun later and send the signal after our
-            # receive already returned — an untagged message would then linger
-            # in this (possibly long-lived channel) process's mailbox and be
-            # consumed by the NEXT deliver for the same note, false-quarantining
-            # a healthy room (#953 retro-review F4). A stale ref never matches.
-            parent = self()
-            ref = make_ref()
-
-            room_apply(room, note_id, fn doc ->
-              if apply_state(doc, state, note_id) == :apply_failed do
-                send(parent, {ref, :crdt_deliver_apply_failed})
-              end
-
-              :ok
-            end)
-
-            receive do
-              {^ref, :crdt_deliver_apply_failed} ->
-                quarantine_room(room, note_id, :apply_update_failed)
-            after
-              0 -> :ok
-            end
+            push_update(room, note_id, state)
 
           {:ok, nil, _seq} when content == "" ->
             # Empty content on a room with NO persisted CRDT state is ambiguous:
@@ -245,6 +230,47 @@ defmodule Engram.Notes.CrdtDeliver do
             # and the room must not survive: see quarantine_room/3.
             quarantine_room(room, note_id, reason)
         end
+    end
+  end
+
+  # `Notes.CrdtWrite`'s step 1: the write's own ops into a live room, if one
+  # exists (non-creating lookup: a write never starts a room). They are the
+  # bytes the committed snapshot already holds, encoded once, so the room's
+  # `update_v1` tail row is a subset of the stored state (the #846 invariant)
+  # and observers get one frame for the write. No state read: the write is
+  # never copied into the room as a snapshot.
+  defp push_delta_to_live_room(note_id, delta) do
+    case CrdtRegistry.lookup(note_id) do
+      nil -> :ok
+      room -> push_update(room, note_id, delta)
+    end
+  end
+
+  # Applies `update` inside the room process (update_doc discards the fun's
+  # return), so failure is signalled back by message. The message is tagged
+  # with a per-call ref: if update_doc TIMES OUT, the room may run the fun
+  # later and send the signal after our receive already returned. An untagged
+  # message would then linger in this (possibly long-lived channel) process's
+  # mailbox and be consumed by the NEXT deliver for the same note,
+  # false-quarantining a healthy room (#953 retro-review F4). A stale ref never
+  # matches.
+  defp push_update(room, note_id, update) do
+    parent = self()
+    ref = make_ref()
+
+    room_apply(room, note_id, fn doc ->
+      if apply_state(doc, update, note_id) == :apply_failed do
+        send(parent, {ref, :crdt_deliver_apply_failed})
+      end
+
+      :ok
+    end)
+
+    receive do
+      {^ref, :crdt_deliver_apply_failed} ->
+        quarantine_room(room, note_id, :apply_update_failed)
+    after
+      0 -> :ok
     end
   end
 

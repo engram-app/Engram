@@ -53,6 +53,34 @@ you must synchronize on the room text converging AND the tail row landing
 before issuing the next REST write, or the race window closes and the test
 passes vacuously.
 
+### The ops path (#2519 step 1, behind `:crdt_write_apply_text`, default off)
+
+`Notes.CrdtWrite.apply_text/4` replaces the snapshot merge for markdown
+updates: the incoming text is hunk-diffed (`Native.text_hunks/2`, line diff
+plus per-block trim) into the doc the writer read, the stored snapshot is that
+doc's state (the existing fenced row update), and post-commit the same delta
+bytes, not the snapshot, go into a live room (`deliver_out(..., delta:)`).
+Still one encoder per change. Traps:
+
+- **Never call a room while holding the note row lock.** The room's append
+  resets `notes.crdt_head` on that row, so room and writer wait on each
+  other. A plain no-base push holds no lock until its row UPDATE, so it diffs
+  INSIDE the room (the room's doc holds edits whose append has not landed; a
+  push that echoes one would otherwise insert it twice). An rmw locks first,
+  so it diffs the stored doc and the room merges the delta.
+- **A writer with a base must not diff against the room.** Its text was
+  derived from the stored view; diffing it against the room deletes room
+  edits it never saw.
+- **Do not rescue inside the write's transaction.** `CrdtCheckpoint` rescues
+  everything (right for a room exit); run inside a request transaction it let
+  a half-written row commit (new `notes` nonce over the old `note_bodies`
+  ciphertext). The ops path writes through the fenced update, which rescues
+  only the lost-fence case.
+- **The single-span diff is itself a doubling source.** A rewrite of lines 2
+  and 200 deletes and re-inserts 3-199, so a concurrent edit on line 100
+  comes back next to the old text. `crdt_write_test.exs` "an edit on line 100
+  landing after the read survives" goes red if the ops path uses it.
+
 ## Remaining single-encoder hazard
 
 A client that seeds its ydoc from disk while the server already has state injects a
