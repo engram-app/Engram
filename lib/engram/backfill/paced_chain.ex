@@ -89,7 +89,7 @@ defmodule Engram.Backfill.PacedChain do
   end
 
   @doc "The default pause between windows (ms)."
-  @spec pause_ms() :: non_neg_integer()
+  @spec pause_ms() :: 250
   def pause_ms, do: @pause_ms
 
   @doc "A hop deadline `ms` from now, for `past?/1`."
