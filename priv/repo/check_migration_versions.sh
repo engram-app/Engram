@@ -10,6 +10,14 @@
 # Each PR is green alone, so only a cross-branch check sees it (PRs #2513 and
 # #2521 both added 20261107140000_*.exs).
 #
+# When two PRs collide, BOTH go red. After renumbering one, re-run the other's
+# CI (a re-run re-fetches the open PRs).
+#
+# Same file name on two branches counts as one migration (stacked PRs). Two
+# independent PRs adding the SAME name with different content are not flagged
+# here: git reports an add/add conflict, and after a rebase the
+# migrations-immutable check fires on the edited file.
+#
 # Usage (from the repo root):
 #   check_migration_versions.sh tree [DIR]
 #       every *.exs in DIR (default priv/repo/migrations) has a unique version.
@@ -17,17 +25,26 @@
 #       no version this branch ADDS since BASE appears under a different file
 #       name in any REF's tree. Same name = same migration (stacked PRs).
 #   check_migration_versions.sh open-prs BASE
-#       `cross` against origin/main and every other open, same-repo PR head,
-#       fetched in ONE git fetch. Fork or vanished branches warn, not fail.
+#       `cross` against origin/main and every other open PR's
+#       refs/pull/<n>/head (covers forks, outlives branch deletion), fetched
+#       from GitHub directly in one fetch, per-ref on failure. A ref that
+#       cannot be fetched FAILS if its PR is still open, warns if it closed.
 #       Needs gh auth (GH_TOKEN) and GH_REPO.
 set -euo pipefail
 
 MIG_DIR="${MIG_DIR:-priv/repo/migrations}"
 
 # stdin: paths, one per line. stdout: "version<TAB>basename", migrations only.
+# Ecto compares versions as integers, so leading zeros are dropped.
 versions() {
-  awk -F/ '$NF ~ /^[0-9]+_.*\.exs$/ { split($NF, p, "_"); print p[1] "\t" $NF }'
+  awk -F/ '$NF ~ /^[0-9]+_.*\.exs$/ {
+    split($NF, p, "_"); v = p[1]; sub(/^0+/, "", v); if (v == "") v = "0"
+    print v "\t" $NF
+  }'
 }
+
+# Workflow-command escaping for annotation text (a branch name is input).
+esc() { local s=${1//'%'/%25}; s=${s//$'\r'/%0D}; printf '%s' "${s//$'\n'/%0A}"; }
 
 cmd_tree() {
   local dir="${1:-$MIG_DIR}" dups
@@ -45,7 +62,7 @@ cmd_tree() {
 cmd_cross() {
   local base=$1; shift
   local added fail=0 label ref hits
-  added=$(git diff --name-only --diff-filter=A "$base" HEAD -- "$MIG_DIR" | versions)
+  added=$(git diff --name-only --no-renames --diff-filter=A "$base" HEAD -- "$MIG_DIR" | versions)
   if [ -z "$added" ]; then
     echo "No migrations added since $base - nothing to cross-check."
     return 0
@@ -60,7 +77,7 @@ cmd_cross() {
     while IFS=$'\t' read -r v ours theirs; do
       [ -n "$v" ] || continue
       fail=1
-      echo "::error file=$MIG_DIR/$ours::Migration version $v is also used by $label ($MIG_DIR/$theirs). Renumber one: Ecto crashes on the duplicate, or silently skips the later one."
+      echo "::error file=$(esc "$MIG_DIR/$ours" | sed 's/:/%3A/g; s/,/%2C/g')::Migration version $v is also used by $(esc "$label") ($(esc "$MIG_DIR/$theirs")). Renumber one: Ecto crashes on the duplicate, or silently skips the later one. Both PRs are red; re-run the other one's CI after renumbering."
     done <<<"$hits"
   done
   [ "$fail" -eq 0 ] && echo "OK - no added migration version collides with main or another open PR."
@@ -68,26 +85,45 @@ cmd_cross() {
 }
 
 cmd_open_prs() {
-  local base=$1 self prs heads num branch fork
+  local base=$1 self prs num branch fork state fail=0
   self=${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}}
+  # The runners rewrite github.com/engram-app/* to a LAN git cache that can
+  # lag a fresh push. A URL with credentials does not match the insteadOf
+  # prefix, so it reads GitHub itself (docs/context/ci-runner-network-and-disk-gotchas.md).
+  local url=${PR_FETCH_URL:-https://x-access-token:${GH_TOKEN:-}@github.com/${GH_REPO:?GH_REPO unset}.git}
   prs=$(gh pr list --state open --limit 500 \
     --json number,headRefName,isCrossRepository \
     --jq '.[] | [.number, .headRefName, .isCrossRepository] | @tsv')
-  heads=$(git ls-remote --heads origin | sed 's#.*refs/heads/##')
-  local targets=("main" "origin/main") refspecs=()
+  local nums=() names=() refspecs=() targets=("main" "origin/main")
   while IFS=$'\t' read -r num branch fork; do
     [ -n "$num" ] || continue
     [ "$branch" = "$self" ] && [ "$fork" = false ] && continue
-    if [ "$fork" = true ] || ! grep -qxF -- "$branch" <<<"$heads"; then
-      echo "::warning::PR #$num ($branch) is from a fork or its branch is gone; not checked for migration version collisions."
+    nums+=("$num") names+=("$branch")
+    refspecs+=("+refs/pull/$num/head:refs/migration-guard/$num")
+  done <<<"$prs"
+  if [ ${#refspecs[@]} -gt 0 ] && ! git fetch -q --no-tags "$url" "${refspecs[@]}" 2>/dev/null; then
+    # One vanished ref aborts a batched fetch; retry each ref alone.
+    for i in "${!nums[@]}"; do
+      git fetch -q --no-tags "$url" "${refspecs[$i]}" 2>/dev/null ||
+        git update-ref -d "refs/migration-guard/${nums[$i]}" 2>/dev/null || true
+    done
+  fi
+  for i in "${!nums[@]}"; do
+    num=${nums[$i]} branch=$(esc "${names[$i]}")
+    if git rev-parse -q --verify "refs/migration-guard/$num^{commit}" >/dev/null; then
+      targets+=("PR #$num" "refs/migration-guard/$num")
       continue
     fi
-    refspecs+=("+refs/heads/$branch:refs/migration-guard/$num")
-    targets+=("PR #$num" "refs/migration-guard/$num")
-  done <<<"$prs"
-  # ponytail: one fetch of every open head; objects are mostly shared with main.
-  [ ${#refspecs[@]} -eq 0 ] || git fetch -q --no-tags origin "${refspecs[@]}"
-  cmd_cross "$base" "${targets[@]}"
+    state=$(gh pr view "$num" --json state --jq .state)
+    if [ "$state" = OPEN ]; then
+      fail=1
+      echo "::error::PR #$num ($branch) is open but its head could not be fetched, so its migrations cannot be checked. Re-run this job."
+    else
+      echo "::warning::PR #$num ($branch) is closed ($state) and its head is gone; skipped."
+    fi
+  done
+  cmd_cross "$base" "${targets[@]}" || fail=1
+  return "$fail"
 }
 
 case "${1:-}" in

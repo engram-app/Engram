@@ -3984,7 +3984,8 @@ jobs:
       # duplicated"); shipped in separate releases, the later one is silently
       # never run. Each PR is green alone (PRs #2513 and #2521 both added
       # 20261107140000_*), so check the tree, then this branch's added
-      # versions against main and every other open PR head (one fetch).
+      # versions against main and every other open PR (refs/pull/<n>/head,
+      # fetched from GitHub directly; an open PR it cannot fetch fails).
       - name: Migration versions unique (tree, main, open PRs)
         env:
           GH_TOKEN: ${{ github.token }}
