@@ -158,16 +158,18 @@ partition stayed green and both passed locally.
   and delete every job past it (`backfill_note_names_fleet_test.exs`).
   Otherwise the queue-depth poll tests (`prom_ex/oban_test.exs`) count the
   leftovers.
-- **A foreign-key action's plan is cached per backend.** Postgres prepares the
-  RI query of an `ON DELETE SET NULL` once per connection. After 5 executions
-  it switches to the generic plan, built under whatever GUCs held then: on a
-  tiny test table that is a seq scan with `enable_seqscan` on. Pool backends
-  outlive tests, so a test that hard-deletes folder rows 5+ times (a vault
-  delete in an `unboxed_run` cleanup counts) poisons that backend. A later plan
-  test that sets `enable_seqscan = off` reads the cached seq scan. Plan and
-  scan-count tests run `DISCARD PLANS` first, so they measure a fresh plan
-  (`folder_ref_release_test.exs`). Committed fixtures avoid folder rows they do
-  not need (root-level paths).
+- **Plan and scan-count tests read cached plans (suspected, not
+  reproduced).** `folder_ref_release_test.exs:546` (a hard folder delete must
+  null references through an index) went red once in that partition: "notes:
+  the SET NULL action seq-scanned". Postgres caches the plans of foreign-key
+  actions and PL/pgSQL statements per backend and switches to a generic plan
+  after 5 runs, and a cached plan ignores a later `SET LOCAL enable_seqscan`.
+  A local repro that ran the action 6 times on one backend still used the
+  index, and 6 seeds of the two files together stayed green, so the cause is
+  unproven. The test now runs `DISCARD PLANS` first (cheap, makes it measure a
+  fresh plan) and the committed fixtures avoid folder rows they do not need
+  (root-level paths). If it goes red again, capture `EXPLAIN` of the RI query
+  in the failing backend before changing anything.
 
 ## Claims about the system carry their evidence
 

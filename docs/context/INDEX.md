@@ -134,7 +134,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Running the ExUnit suite locally against Docker Postgres → `docs/context/local-backend-testing.md`
 - `Vault not registered after 15s` E2E diagnostic ladder — don't just bump the timeout → `docs/context/e2e-vault-registration-diagnostics.md`
 - `Application.put_env` in `async: true` tests is a flake source (fix the mutator, or route the read through `Engram.ServiceConfig` per-process overrides) → `docs/context/exunit-application-env-races.md`
-- A test that commits fixtures (`Sandbox.unboxed_run`) or asserts a plan or scan count, or a test that goes red only in one CI partition (leaked Oban jobs; an RI action's cached generic plan, so `DISCARD PLANS` first) → `docs/context/testing-strategy.md`
+- A test that commits fixtures (`Sandbox.unboxed_run`) or asserts a plan or scan count, or a test that goes red only in one CI partition (leaked Oban jobs; a cached plan can ignore `SET LOCAL enable_seqscan`, so `DISCARD PLANS` first) → `docs/context/testing-strategy.md`
 - Writing a test that proves a query is tenant-scoped (only INSERT raises; the suite connects as a SUPERUSER; use `Engram.RlsCase` + a zero-rows CONTROL test) → `docs/context/rls-enforcement-testing-traps.md`
 - An e2e assertion counts something vault-wide, or a test's failure count refuses to move across product fixes (the e2e vault is session-scoped and shared by ~110 tests) → `docs/context/e2e-session-vault-scoping-trap.md`
 - Several unrelated `e2e-crdt` tests fail in one run (live-binding + seq-gap-heal + orphaned-claim + web-to-obsidian): check whether both Obsidian instances died mid-run before counting N bugs → `docs/context/e2e-simultaneous-failures-obsidian-death.md`
