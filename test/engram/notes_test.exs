@@ -416,6 +416,68 @@ defmodule Engram.NotesTest do
                )
     end
 
+    # E7: a base_hash is an edit. With no live row by path or id there is
+    # nothing to edit, so it must not become a create.
+    test "base_hash at a path a folder rename moved away: stale_base, nothing created",
+         %{user: user, vault: vault} do
+      {:ok, v1} = upsert(user, vault, %{"path" => "A/n.md", "content" => "one"})
+      assert {:ok, 1} = Notes.rename_folder(user, vault, "A", "B")
+
+      assert {:error, :stale_base} =
+               upsert(user, vault, %{
+                 "path" => "A/n.md",
+                 "content" => "one\ntwo",
+                 "base_hash" => v1.content_hash
+               })
+
+      assert {:error, :not_found} = Notes.get_note(user, vault, "A/n.md")
+      assert {:ok, %{id: id, content: "one"}} = Notes.get_note(user, vault, "B/n.md")
+      assert id == v1.id
+    end
+
+    test "no base_hash at a renamed-away path still creates", %{user: user, vault: vault} do
+      {:ok, v1} = upsert(user, vault, %{"path" => "A/n.md", "content" => "one"})
+      assert {:ok, 1} = Notes.rename_folder(user, vault, "A", "B")
+
+      assert {:ok, created} = upsert(user, vault, %{"path" => "A/n.md", "content" => "fresh"})
+      refute created.id == v1.id
+    end
+
+    test "base_hash at a tombstoned path with no id: stale_base, no resurrection",
+         %{user: user, vault: vault} do
+      {:ok, v1} = upsert(user, vault, %{"path" => "gone.md", "content" => "one"})
+      :ok = Notes.delete_note(user, vault, "gone.md")
+
+      assert {:error, :stale_base} =
+               upsert(user, vault, %{
+                 "path" => "gone.md",
+                 "content" => "one\nedited",
+                 "base_hash" => v1.content_hash
+               })
+
+      assert {:error, :not_found} = Notes.get_note(user, vault, "gone.md")
+    end
+
+    # Control: the guard sits below the id lookup, so a base_hash write naming a
+    # TOMBSTONED id still takes the id-keyed rename (resurrect) branch.
+    test "base_hash with a tombstoned id still resurrects it at the new path",
+         %{user: user, vault: vault} do
+      id = UUIDv7.generate()
+      {:ok, v1} = upsert(user, vault, %{"id" => id, "path" => "old.md", "content" => "one"})
+      :ok = Notes.delete_note(user, vault, "old.md")
+
+      assert {:ok, moved} =
+               upsert(user, vault, %{
+                 "id" => id,
+                 "path" => "new.md",
+                 "content" => "one",
+                 "base_hash" => v1.content_hash
+               })
+
+      assert moved.id == id
+      assert moved.path == "new.md"
+    end
+
     test "creates a new note", %{user: user, vault: vault} do
       assert {:ok, note} =
                Notes.upsert_note(
@@ -2996,6 +3058,9 @@ defmodule Engram.NotesTest do
       filter_key |> Engram.Crypto.hmac_field(path) |> Base.encode64()
     end
   end
+
+  defp upsert(user, vault, attrs),
+    do: Notes.upsert_note(user, vault, Map.put(attrs, "mtime", 1.0), actor: "api")
 
   defp count_note_meta(ref, acc \\ 0) do
     receive do
