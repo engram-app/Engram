@@ -49,7 +49,14 @@ defmodule Engram.Workers.BackfillNoteNamesFleetTest do
             Engram.Notes.upsert_note(
               user,
               vault,
-              %{"path" => "F#{i}/n#{i}.md", "content" => "# T\n\nbody"},
+              # Root level on purpose: a note in a folder makes a folder row,
+              # and the on-exit vault delete would hard-delete it, running
+              # the notes ON DELETE SET NULL action on a shared pool backend.
+              # Past five runs Postgres caches that action's generic plan, a
+              # seq scan on a tiny table, and a later test in the partition
+              # that asserts the action uses an index
+              # (folder_ref_release_test) reads the cached plan.
+              %{"path" => "n#{i}.md", "content" => "# T\n\nbody"},
               actor: "api"
             )
 
