@@ -346,6 +346,31 @@ defmodule Engram.DataMigrations.NoteNameTest do
     refute NoteName.fleet_ready?(split)
   end
 
+  # Prod's shape: 3 BEAM nodes (web 2, worker 1), found through
+  # DNS_CLUSTER_QUERY. From the worker, both web peers must be connected (every
+  # discovered A record covered) and answer `Name.writer_level/0`: all on a
+  # name-writing build passes; one older build (no such function), one
+  # unreachable peer, or a discovered peer not connected blocks.
+  test "the fleet gate on prod's 3-node topology" do
+    webs = [:"engram@10.0.1.1", :"engram@10.0.1.2"]
+
+    fleet = fn peers, results ->
+      [
+        role: :worker,
+        query: "engram.internal",
+        resolver: fn _ -> ["10.0.1.1", "10.0.1.2", "10.0.1.3"] end,
+        self_ip: "10.0.1.3",
+        peers: fn -> peers end,
+        multicall: fn _ -> results end
+      ]
+    end
+
+    assert NoteName.fleet_ready?(fleet.(webs, [{:ok, 1}, {:ok, 1}]))
+    refute NoteName.fleet_ready?(fleet.(webs, [{:ok, 1}, {:error, {:exception, :undef, []}}]))
+    refute NoteName.fleet_ready?(fleet.(webs, [{:ok, 1}, {:error, {:erpc, :timeout}}]))
+    refute NoteName.fleet_ready?(fleet.([hd(webs)], [{:ok, 1}]))
+  end
+
   test "trashed notes and rename tombstones are named too; markers are not", %{
     user: u,
     vault: v
