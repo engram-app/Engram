@@ -1530,8 +1530,19 @@
       },
       "Conflict": {
         "properties": {
-          "error": {
-            "example": "version_conflict",
+          "conflict": {
+            "example": true,
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "reason": {
+            "description": "Set when there is no server note to return. `recently_deleted`: the path was deleted seconds ago, drop the local copy. `stale_base`: a `base_hash` write found no note at the path (renamed or deleted), re-read it where it lives now. `concurrent_edit`: retry.",
+            "enum": [
+              "recently_deleted",
+              "stale_base",
+              "concurrent_edit"
+            ],
             "type": "string",
             "x-struct": null,
             "x-validate": null
@@ -1540,6 +1551,9 @@
             "$ref": "#/components/schemas/Note"
           }
         },
+        "required": [
+          "conflict"
+        ],
         "title": "Conflict",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.Conflict",
@@ -4139,6 +4153,16 @@
               }
             },
             "description": "Appended"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conflict"
+                }
+              }
+            },
+            "description": "Nothing written; see `reason`"
           },
           "422": {
             "content": {

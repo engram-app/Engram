@@ -111,8 +111,21 @@ means `{:error, :stale_base}`, which REST renders as
 MCP `write_note` with `base_hash` already answered "re-read" on a miss via
 `rmw_note/5`, and pops `base_hash` before `upsert_note`, so it is unaffected.
 
+What it does NOT cover: a stale by-path write WITHOUT `base_hash` still creates
+a duplicate. Web/JWT writers need no base, and the plugin's REST fallback for
+canvas and oversized notes sends neither id nor base. Only by-id REST writes
+(S4/S5) close that.
+
+One reason code moved: a `base_hash` write with no id at a path deleted seconds
+ago, carrying the deleted content, used to answer `recently_deleted` (the check
+lives in `insert_new_note`). It now answers `stale_base` first. Both mean "write
+nothing, converge"; a client that only handles `recently_deleted` sees a
+generic conflict.
+
 What did not change:
 - A write WITHOUT `base_hash` at a missing path still creates (that is a create).
+- A `base_hash` write naming a TOMBSTONED id still resurrects it (the id-keyed
+  rename); the guard sits below the id lookup.
 - The plugin pushes with its `id`: a live row elsewhere is still `:id_collision`,
   and a tombstone still resurrects or answers `recently_deleted`. Only an
   offline-queue replay carrying an id the server never knew plus a stored
@@ -120,7 +133,9 @@ What did not change:
   no `base_hash` and creates as before.
 
 Test: `test/engram_web/controllers/notes_controller_test.exs`, describe
-"POST /notes with base_hash at a path renamed away".
+"POST /notes with base_hash at a path renamed away", and the `upsert_note/3`
+cases in `test/engram/notes_test.exs` (renamed-away path, tombstone at the path,
+tombstoned id still resurrects, no-base control).
 
 The durable fix is by-id REST writes, so an edit follows the note across renames.
 

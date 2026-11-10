@@ -163,6 +163,7 @@ defmodule EngramWeb.NotesController do
     request_body: {"Path + text", "application/json", Schemas.AppendRequest, required: true},
     responses: [
       ok: {"Appended", "application/json", Schemas.AppendResponse},
+      conflict: {"Nothing written; see `reason`", "application/json", Schemas.Conflict},
       unprocessable_entity: {"Validation error", "application/json", Schemas.Error}
     ]
   )
