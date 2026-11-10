@@ -561,6 +561,13 @@ defmodule Engram.Folders.FolderRefReleaseTest do
         Map.new(rows, fn [t, seq, idx] -> {t, {seq, idx}} end)
       end
 
+      # This backend may already have run the RI action 5+ times (any test
+      # that hard-deletes folders on a pooled connection), which switches it
+      # to a cached generic plan built with seq scans allowed: on tiny test
+      # tables, a seq scan the SET below cannot undo. Drop cached plans so the
+      # action is planned now, under enable_seqscan = off
+      # (docs/context/testing-strategy.md).
+      Repo.query!("DISCARD PLANS")
       Repo.query!("SET LOCAL enable_seqscan = off")
       before = scans.()
       Repo.query!("DELETE FROM folders WHERE id = $1", [dump(row)])

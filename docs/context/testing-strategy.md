@@ -1,6 +1,6 @@
 # Context Doc: Testing Strategy
 
-_Last verified: 2026-10-03_
+_Last verified: 2026-11-10_
 
 ## Status
 Working — ExUnit tests cover business logic and HTTP contract via ConnCase. E2E tests verify real Obsidian sync workflows against Docker stack.
@@ -144,6 +144,30 @@ way, and the mutation also revealed that the sibling cross-user case is
 defended by RLS rather than by the query, so it stays green under the same
 mutation. That distinction is invisible without mutating, and it is the
 difference between two tests and one test plus decoration.
+
+## Committed fixtures and plan tests share the partition's backends
+
+Found on #2535 (2026-11-10): a new test that committed its fixtures turned two
+unrelated tests red later in the same CI partition, while S1's identical
+partition stayed green and both passed locally.
+
+- **Committed fixtures leak their side effects.** A test that writes through
+  `Sandbox.unboxed_run/2` (the fleet tests on the maintenance pool) commits
+  everything those writes cause, including the Oban jobs a note write
+  enqueues. Clean them on exit: record `max(oban_jobs.id)` before the fixtures
+  and delete every job past it (`backfill_note_names_fleet_test.exs`).
+  Otherwise the queue-depth poll tests (`prom_ex/oban_test.exs`) count the
+  leftovers.
+- **A foreign-key action's plan is cached per backend.** Postgres prepares the
+  RI query of an `ON DELETE SET NULL` once per connection. After 5 executions
+  it switches to the generic plan, built under whatever GUCs held then: on a
+  tiny test table that is a seq scan with `enable_seqscan` on. Pool backends
+  outlive tests, so a test that hard-deletes folder rows 5+ times (a vault
+  delete in an `unboxed_run` cleanup counts) poisons that backend. A later plan
+  test that sets `enable_seqscan = off` reads the cached seq scan. Plan and
+  scan-count tests run `DISCARD PLANS` first, so they measure a fresh plan
+  (`folder_ref_release_test.exs`). Committed fixtures avoid folder rows they do
+  not need (root-level paths).
 
 ## Claims about the system carry their evidence
 
