@@ -239,6 +239,18 @@ defmodule Engram.DataMigrations.NoteNameTest do
     assert {:done, _} = run_chain()
   end
 
+  # Review N3: a single-node self-host (no ENGRAM_NODE_ROLE, no
+  # DNS_CLUSTER_QUERY, no peers) must pass the gate, or self-hosters would
+  # never get the backfill. A node that DECLARES a split fleet but sees no
+  # peer waits (blocked, never wrongly closed).
+  test "the fleet gate passes on a lone unclustered node and waits on a lone split-fleet node" do
+    alone = [role: nil, query: nil, peers: fn -> [] end]
+    assert NoteName.fleet_ready?(alone)
+
+    split = [role: :worker, query: nil, peers: fn -> [] end]
+    refute NoteName.fleet_ready?(split)
+  end
+
   test "trashed notes and rename tombstones are named too; markers are not", %{
     user: u,
     vault: v
