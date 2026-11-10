@@ -51,8 +51,9 @@ defmodule Engram.Search.NameTerms do
   leaves the ref stale, so the next walk or the drain retries it. A user
   stuck on `:later` is retried by the drain every tick within its caps, so
   a key that is truly broken but reports `:invalid_wrapping` shows as a
-  steady `[:engram, :name_terms, :deferred]` rate (alerted by engram-infra
-  #1808).
+  steady rate of `engram_prom_ex_search_name_terms_deferred_total`
+  (`[:engram, :name_terms, :deferred]`, exported by `Engram.PromEx.Search`;
+  alerted by engram-infra #1808).
 
   Accepted (ranking only): a previous-release content edit that changes only
   the H1 title keeps the old title terms until this release's next index
@@ -721,7 +722,8 @@ defmodule Engram.Search.NameTerms do
   # Rows that can never be processed (a name that does not decrypt, a user
   # whose key can never load) are stamped `<<0>> <> hmac`: out of the stale index, so the
   # ledger can close, until a writer renames them. Logged and counted
-  # (`[:engram, :name_terms, :skipped]`).
+  # (`[:engram, :name_terms, :skipped]`, exported as
+  # `engram_prom_ex_search_name_terms_skipped_total`).
   defp skip(_repo, _schema, _user_id, [], _reason), do: 0
 
   defp skip(repo, schema, user_id, rows, reason) do
@@ -743,7 +745,8 @@ defmodule Engram.Search.NameTerms do
 
   # A transient key failure: rows untouched (still stale, so the next walk or
   # the drain retries them) and not counted as fixed. Counted
-  # (`[:engram, :name_terms, :deferred]`) and logged.
+  # (`[:engram, :name_terms, :deferred]`, exported as
+  # `engram_prom_ex_search_name_terms_deferred_total`) and logged.
   defp later(user_id, rows, reason) do
     :telemetry.execute([:engram, :name_terms, :deferred], %{count: length(rows)}, %{
       reason: reason

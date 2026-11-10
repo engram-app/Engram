@@ -750,10 +750,22 @@ defmodule Engram.Search.NameTermsTest do
       ])
 
       DekCache.invalidate(ctx.user.id)
+      ref = make_ref()
+      test_pid = self()
+
+      :telemetry.attach(
+        "#{inspect(ref)}",
+        [:engram, :name_terms, :skipped],
+        fn _e, m, meta, _ -> send(test_pid, {ref, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("#{inspect(ref)}") end)
 
       run_chain!()
 
       assert <<0, _::binary>> = stamp(note.id)
+      assert_received {^ref, %{count: 1}, %{reason: :unrecognised_blob}}
       assert :done = Ledger.run_pass()
     end
 
@@ -763,10 +775,27 @@ defmodule Engram.Search.NameTermsTest do
       {:ok, dek} = Crypto.get_dek(ctx.user)
       token = StalledDekLoad.stall!(ctx.user.id)
 
+      ref = make_ref()
+      test_pid = self()
+
+      :telemetry.attach_many(
+        "#{inspect(ref)}",
+        [[:engram, :name_terms, :deferred], [:engram, :name_terms, :skipped]],
+        fn e, m, meta, _ -> send(test_pid, {ref, e, m, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("#{inspect(ref)}") end)
+
       run_chain!()
 
       assert stamp(note.id) == nil
       assert rows(note.id) == []
+
+      assert_received {^ref, [:engram, :name_terms, :deferred], %{count: 1},
+                       %{reason: :dek_load_timeout}}
+
+      refute_received {^ref, [:engram, :name_terms, :skipped], _, _}
 
       # The key loads again: the drain retries the still-stale rows.
       _ = DekCache.put_if_claimed(ctx.user.id, token, dek)
