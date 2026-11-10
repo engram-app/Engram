@@ -81,6 +81,13 @@ with `claim: true`). A request that passed the token check but lost the race
 gets `:claim_lost` and goes back through the registration-mode check, so it is
 never a second admin and never a member that skipped `invite_only` / `closed`.
 
+A failed boot mint (for example a database blip) deletes the previous token, best
+effort, so an old token never stays valid after a rotation that did not happen.
+On multi-node self-host that means a node whose mint errors can delete another
+node's fresh token: claims are then refused until a boot succeeds (restart the
+node, or set `ENGRAM_SETUP_TOKEN`). If the database is down, that delete fails
+too, silently, and the old row is left as it was.
+
 Multi-node self-host: each booting node rotates the token, so only the token
 from the most recent boot works. Set `ENGRAM_SETUP_TOKEN` if that gets in the way.
 
