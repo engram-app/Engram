@@ -28,9 +28,14 @@ defmodule Engram.Workers.BackfillNoteNames do
   Each name is derived from the ciphertext it describes and written with a
   compare-and-set on that ciphertext's nonce (`path_nonce`, or the folder's
   `name_nonce`), so a concurrent rename wins and its row is left for the next
-  walk. A user mid DEK rotation, or whose key fails to load for a transient
-  reason, is left. A row that never decrypts (or whose owner has no key) is
-  stamped `NameKeys.unreadable/1` of its stamp, logged and counted: it leaves
+  walk. Rows whose owner's key does not load are classified by
+  `Crypto.key_outcome/1`: only an owner who is gone, has no key or holds a
+  wrapped key that is provably not one is parked; anything else (a rotation
+  in progress, a KMS error, a load timeout, a wrapping the current master key
+  does not open) is deferred: left untouched, logged and counted
+  (`[:engram, :note_name, :deferred]`), retried by the next walk. A row that
+  never decrypts is stamped `NameKeys.unreadable/1` of its stamp, logged and
+  counted (`[:engram, :note_name, :skipped]`): it leaves
   the stale set, so it cannot hold the ledger open, until a writer gives it a
   fresh ciphertext (the skip path `Engram.Search.NameTerms` uses).
 
@@ -318,26 +323,41 @@ defmodule Engram.Workers.BackfillNoteNames do
           {mine ++ fixes, Enum.map(unread, &elem(&1, 1)) ++ parks, left}
 
         :later ->
+          deferred(table, user_id, length(rows))
           {fixes, parks, true}
 
-        :never ->
+        :park ->
           {fixes, rows ++ parks, left}
       end
     end)
   end
 
-  # `:later` (rotation in progress, a transient key error) leaves the rows;
-  # `:never` (no owner, no key) parks them.
-  defp user_dek(nil), do: :never
-
-  defp user_dek(%User{} = user) do
-    with :ok <- RotationGate.check_user(user),
+  # The owner's DEK, or what to do with their rows when it does not load:
+  # `Crypto.key_outcome/1` (shared with `Engram.Search.NameTerms`) parks only
+  # rows that can never be read (owner gone, no key, a wrapped key that is
+  # provably not one); everything else, a rotation in progress included, is
+  # `:later`: the rows are left untouched and the next walk retries them.
+  defp user_dek(user) do
+    with %User{} <- user,
+         :ok <- RotationGate.check_user(user),
          {:ok, dek} <- Crypto.get_dek(user) do
       {:ok, dek}
     else
-      {:error, :rotation_in_progress} -> :later
-      {:error, reason} -> if Crypto.transient_dek_error?(reason), do: :later, else: :never
+      outcome -> Crypto.key_outcome(outcome)
     end
+  end
+
+  defp deferred(table, user_id, count) do
+    :telemetry.execute([:engram, :note_name, :deferred], %{count: count}, %{table: table})
+
+    Logger.warning(
+      "note name backfill: owner key unavailable, rows deferred",
+      Metadata.with_category(:warning, :crypto,
+        table: table,
+        user_id: user_id,
+        total_count: count
+      )
+    )
   end
 
   defp fix(table, row, dek, fk) do

@@ -221,6 +221,59 @@ defmodule Engram.DataMigrations.NoteNameTest do
     assert name_of(u, "notes", note.id) == "l.md"
   end
 
+  # Review N1: only a provably unreadable key parks rows; a key that fails to
+  # load for any other reason defers them (left untouched, counted, retried).
+  describe "an owner key that does not load" do
+    setup %{user: u, vault: v} do
+      note = note!(u, v, "K/deferred.md")
+      n_minus_1_insert!()
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :note_name, :deferred]])
+      on_exit(fn -> :telemetry.detach(ref) end)
+      %{note: note}
+    end
+
+    defp raw_stamp(id) do
+      %{rows: [[stamp]]} =
+        Repo.query!("SELECT name_stamp FROM notes WHERE id = $1", [Ecto.UUID.dump!(id)])
+
+      stamp
+    end
+
+    test "a stalled load (timeout) defers the rows and holds the ledger open", %{
+      user: u,
+      note: note
+    } do
+      Engram.StalledDekLoad.stall!(u.id)
+
+      assert {:stopped, 1} = run_chain()
+      assert raw_stamp(note.id) == nil
+      assert_received {[:engram, :note_name, :deferred], _ref, %{count: c}, _} when c >= 1
+      refute DataMigrations.done?(NoteName.name(), NoteName.version())
+    end
+
+    # Red before N1: `:invalid_wrapping` (a master key that does not open
+    # the wrap) parked the rows forever.
+    test "a wrap the master key does not open defers, never parks", %{user: u, note: note} do
+      %{rows: [[blob]]} =
+        Repo.query!("SELECT encrypted_dek FROM users WHERE id = $1", [Ecto.UUID.dump!(u.id)])
+
+      <<head::binary-size(14), byte, rest::binary>> = blob
+      bad = head <> <<Bitwise.bxor(byte, 1)>> <> rest
+
+      Repo.query!("UPDATE users SET encrypted_dek = $2 WHERE id = $1", [
+        Ecto.UUID.dump!(u.id),
+        bad
+      ])
+
+      Engram.Crypto.DekCache.invalidate(u.id)
+
+      assert {:stopped, 1} = run_chain()
+      assert raw_stamp(note.id) == nil
+      assert_received {[:engram, :note_name, :deferred], _ref, %{count: c}, _} when c >= 1
+      refute DataMigrations.done?(NoteName.name(), NoteName.version())
+    end
+  end
+
   # Review F6(b): no walk starts, and the ledger never closes, while a node
   # that does not write names is in the cluster.
   test "an older node in the cluster blocks the walk and the close", %{user: u, vault: v} do
