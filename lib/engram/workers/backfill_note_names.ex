@@ -325,14 +325,14 @@ defmodule Engram.Workers.BackfillNoteNames do
           {mine, unread} =
             rows |> Enum.map(&fix(table, &1, dek, fk)) |> Enum.split_with(&is_map/1)
 
-          {mine ++ fixes, Enum.map(unread, &elem(&1, 1)) ++ parks, left}
+          {mine ++ fixes, Enum.map(unread, &{elem(&1, 1), :undecryptable}) ++ parks, left}
 
-        :later ->
-          deferred(table, user_id, length(rows))
+        {:later, reason} ->
+          deferred(table, user_id, length(rows), reason)
           {fixes, parks, true}
 
-        :park ->
-          {fixes, rows ++ parks, left}
+        {:park, reason} ->
+          {fixes, Enum.map(rows, &{&1, reason}) ++ parks, left}
       end
     end)
   end
@@ -342,24 +342,30 @@ defmodule Engram.Workers.BackfillNoteNames do
   # rows that can never be read (owner gone, no key, a wrapped key that is
   # provably not one); everything else, a rotation in progress included, is
   # `:later`: the rows are left untouched and the next walk retries them.
+  # Each with its bounded label (`Crypto.key_reason/1`).
   defp user_dek(user) do
     with %User{} <- user,
          :ok <- RotationGate.check_user(user),
          {:ok, dek} <- Crypto.get_dek(user) do
       {:ok, dek}
     else
-      outcome -> Crypto.key_outcome(outcome)
+      failed -> {Crypto.key_outcome(failed), Crypto.key_reason(failed)}
     end
   end
 
-  defp deferred(table, user_id, count) do
-    :telemetry.execute([:engram, :note_name, :deferred], %{count: count}, %{table: table})
+  # Exported as `engram_prom_ex_search_note_name_deferred_total{reason}`.
+  defp deferred(table, user_id, count, reason) do
+    :telemetry.execute([:engram, :note_name, :deferred], %{count: count}, %{
+      reason: reason,
+      table: table
+    })
 
     Logger.warning(
       "note name backfill: owner key unavailable, rows deferred",
       Metadata.with_category(:warning, :crypto,
         table: table,
         user_id: user_id,
+        reason_label: reason,
         total_count: count
       )
     )
@@ -446,7 +452,15 @@ defmodule Engram.Workers.BackfillNoteNames do
   # the source nonce), logged and counted.
   defp park(_table, _repo, []), do: 0
 
-  defp park(table, repo, rows) do
+  defp park(table, repo, parks) do
+    parks
+    |> Enum.group_by(&elem(&1, 1), &elem(&1, 0))
+    |> Enum.map(fn {reason, rows} -> park(table, repo, rows, reason) end)
+    |> Enum.sum()
+  end
+
+  # Exported as `engram_prom_ex_search_note_name_skipped_total{reason}`.
+  defp park(table, repo, rows, reason) do
     {_ct, nonce_col} = source(table)
     ids = Enum.map(rows, &Ecto.UUID.dump!(&1.id))
     srcs = Enum.map(rows, & &1.nonce)
@@ -466,11 +480,18 @@ defmodule Engram.Workers.BackfillNoteNames do
       )
       |> repo.update_all([])
 
-    :telemetry.execute([:engram, :note_name, :skipped], %{count: n}, %{table: table})
+    :telemetry.execute([:engram, :note_name, :skipped], %{count: n}, %{
+      reason: reason,
+      table: table
+    })
 
     Logger.warning(
-      "note name backfill: rows do not decrypt, parked unnamed",
-      Metadata.with_category(:warning, :crypto, table: table, total_count: n)
+      "note name backfill: rows parked unnamed",
+      Metadata.with_category(:warning, :crypto,
+        table: table,
+        reason_label: reason,
+        total_count: n
+      )
     )
 
     n

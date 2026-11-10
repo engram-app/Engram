@@ -47,7 +47,9 @@ defmodule Engram.PromEx.SearchTest do
 
       for {name, event} <- [
             {:name_terms_skipped, [:engram, :name_terms, :skipped]},
-            {:name_terms_deferred, [:engram, :name_terms, :deferred]}
+            {:name_terms_deferred, [:engram, :name_terms, :deferred]},
+            {:note_name_skipped, [:engram, :note_name, :skipped]},
+            {:note_name_deferred, [:engram, :note_name, :deferred]}
           ] do
         assert [%Telemetry.Metrics.Sum{measurement: :count, tags: [:reason]} = m] =
                  Enum.filter(metrics, &(&1.event_name == event))

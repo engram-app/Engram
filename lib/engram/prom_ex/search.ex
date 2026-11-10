@@ -40,7 +40,11 @@ defmodule Engram.PromEx.Search do
       `engram_prom_ex_search_name_terms_deferred_total`
       (`[:engram, :name_terms, :deferred]`: refs left stale on a transient
       key error, `Engram.Crypto.key_outcome/1` `:later`, retried by the
-      drain). A steady deferred rate is a user whose key keeps failing.
+      drain), and the same pair for the S2 name backfill
+      (`engram_prom_ex_search_note_name_skipped_total` /
+      `_deferred_total`, `[:engram, :note_name, :skipped | :deferred]`,
+      `Engram.Workers.BackfillNoteNames`). A steady deferred rate is a user
+      whose key keeps failing.
 
   Cardinality contract: only the booleans/atoms above. NEVER add
   user_id, vault_id, or the query string.
@@ -64,7 +68,11 @@ defmodule Engram.PromEx.Search do
     {:name_terms_skipped, [:engram, :name_terms, :skipped],
      "Name-terms refs parked for good (never decrypts, key never loads), by reason."},
     {:name_terms_deferred, [:engram, :name_terms, :deferred],
-     "Name-terms refs left stale on a transient key error, retried by the drain, by reason."}
+     "Name-terms refs left stale on a transient key error, retried by the drain, by reason."},
+    {:note_name_skipped, [:engram, :note_name, :skipped],
+     "Note/attachment/folder names parked for good (never decrypts, key never loads), by reason."},
+    {:note_name_deferred, [:engram, :note_name, :deferred],
+     "Note/attachment/folder names left for a later walk on a key that did not load, by reason."}
   ]
 
   @impl true

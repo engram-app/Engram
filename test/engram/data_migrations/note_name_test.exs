@@ -184,8 +184,15 @@ defmodule Engram.DataMigrations.NoteNameTest do
       Ecto.UUID.dump!(bad.id)
     ])
 
+    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :note_name, :skipped]])
+    on_exit(fn -> :telemetry.detach(ref) end)
+
     # Walk 1 names the good row and parks the bad one; walk 2 is clean.
     assert {:done, 2} = run_chain()
+
+    assert_received {[:engram, :note_name, :skipped], ^ref, %{count: 1},
+                     %{reason: :undecryptable, table: :notes}}
+
     assert name_of(u, "notes", good.id) == "good.md"
     assert name_of(u, "notes", bad.id) == nil
 
@@ -227,7 +234,13 @@ defmodule Engram.DataMigrations.NoteNameTest do
     setup %{user: u, vault: v} do
       note = note!(u, v, "K/deferred.md")
       n_minus_1_insert!()
-      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :note_name, :deferred]])
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :note_name, :deferred],
+          [:engram, :note_name, :skipped]
+        ])
+
       on_exit(fn -> :telemetry.detach(ref) end)
       %{note: note}
     end
@@ -247,7 +260,12 @@ defmodule Engram.DataMigrations.NoteNameTest do
 
       assert {:stopped, 1} = run_chain()
       assert raw_stamp(note.id) == nil
-      assert_received {[:engram, :note_name, :deferred], _ref, %{count: c}, _} when c >= 1
+
+      assert_received {[:engram, :note_name, :deferred], _ref, %{count: c},
+                       %{reason: :dek_load_timeout}}
+                      when c >= 1
+
+      refute_received {[:engram, :note_name, :skipped], _, _, _}
       refute DataMigrations.done?(NoteName.name(), NoteName.version())
     end
 
@@ -288,7 +306,12 @@ defmodule Engram.DataMigrations.NoteNameTest do
 
       assert {:stopped, 1} = run_chain()
       assert raw_stamp(note.id) == nil
-      assert_received {[:engram, :note_name, :deferred], _ref, %{count: c}, _} when c >= 1
+
+      assert_received {[:engram, :note_name, :deferred], _ref, %{count: c},
+                       %{reason: :invalid_wrapping}}
+                      when c >= 1
+
+      refute_received {[:engram, :note_name, :skipped], _, _, _}
       refute DataMigrations.done?(NoteName.name(), NoteName.version())
     end
   end

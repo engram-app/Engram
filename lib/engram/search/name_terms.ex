@@ -682,13 +682,9 @@ defmodule Engram.Search.NameTerms do
          {:ok, dek} <- Crypto.get_dek(user) do
       {:ok, dek, Crypto.dek_filter_key_from_bytes(dek)}
     else
-      failed -> {Crypto.key_outcome(failed), reason(failed)}
+      failed -> {Crypto.key_outcome(failed), Crypto.key_reason(failed)}
     end
   end
-
-  defp reason(nil), do: :no_user
-  defp reason({:error, reason}) when is_atom(reason), do: reason
-  defp reason({:error, _}), do: :dek_error
 
   # Decrypt, then write the readable refs and stamp the unreadable ones out
   # of the stale index. Returns the refs handled.
