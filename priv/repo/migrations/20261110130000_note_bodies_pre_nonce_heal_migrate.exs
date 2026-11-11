@@ -28,9 +28,11 @@ defmodule Engram.Repo.Migrations.NoteBodiesPreNonceHealMigrate do
   5s `lock_timeout` and a `statement_timeout` inside the checkout deadline.
   A probe batch still locked out after two retries is walked anyway. A
   window that hits the deadline is halved down to one note; a note too slow
-  even alone is logged and left as it was (R8(e)'s guard counts it), so it
-  cannot block boot. A window still locked out after two retries raises:
-  not recorded, the next boot resumes.
+  even alone is logged and stepped over, and the run raises at the end with
+  the count, as does a window still locked out after two retries: not
+  recorded, the next boot resumes. Recording would leave that note empty
+  for good once R8(e) drops its only bytes (the hotfix's raise, same
+  reason).
 
   Prod (2026-11-10): no body row was ever under another owner, so no note
   is in this state; it runs the probe only (2 statements a user, ~1,637
@@ -96,9 +98,18 @@ defmodule Engram.Repo.Migrations.NoteBodiesPreNonceHealMigrate do
     |> Enum.map(&hd/1)
     |> Enum.chunk_every(@probe_batch)
     |> Enum.flat_map(&probe(repo, &1, @retries))
-    |> Enum.each(&walk(repo, &1, <<0::128>>, @window))
+    |> Enum.reduce(0, &(&2 + walk(repo, &1, <<0::128>>, @window, 0)))
+    |> case do
+      0 ->
+        :ok
+
+      slow ->
+        raise "note_bodies pre-nonce heal: #{slow} note(s) too slow to heal even alone; " <>
+                "not recording this migration, the next boot resumes"
+    end
   end
 
+  # Copied from 20261107120000, not in lib/: the N-1 gate runs this on the old release.
   defp probe(repo, batch, retries) do
     {:ok, needing} =
       repo.transaction(
@@ -130,31 +141,32 @@ defmodule Engram.Repo.Migrations.NoteBodiesPreNonceHealMigrate do
       end
   end
 
-  defp walk(repo, user_id, after_id, size) do
+  # Returns the count of notes too slow to heal even alone.
+  defp walk(repo, user_id, after_id, size, slow) do
     case window(repo, user_id, after_id, size) do
       [[nil, _]] ->
-        :ok
+        slow
 
       [[last, _]] ->
-        walk(repo, user_id, last, size)
+        walk(repo, user_id, last, size, slow)
 
       :too_slow when size > 1 ->
-        walk(repo, user_id, after_id, div(size, 2))
+        walk(repo, user_id, after_id, div(size, 2), slow)
 
       :too_slow ->
         case tenant(repo, user_id, fn -> repo.query!(@next, [user_id, after_id]).rows end) do
           [] ->
-            :ok
+            slow
 
           [[id]] ->
             Logger.warning(
-              "note_bodies pre-nonce heal: a note too slow to heal alone, left (note id: #{Ecto.UUID.load!(id)})",
+              "note_bodies pre-nonce heal: a note too slow to heal even alone (note id: #{Ecto.UUID.load!(id)})",
               category: :data,
               user_id: Ecto.UUID.load!(user_id),
               note_ids: [Ecto.UUID.load!(id)]
             )
 
-            walk(repo, user_id, id, @window)
+            walk(repo, user_id, id, @window, slow + 1)
         end
     end
   end

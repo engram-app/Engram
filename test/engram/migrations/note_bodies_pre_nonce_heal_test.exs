@@ -83,27 +83,75 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealTest do
   end
 
   # Raises what DBConnection raises when a window outlives its deadline, for
-  # any window wider than one note.
+  # any window wider than one note, and for the one holding note `:never`
+  # (every note of the test's user needs healing, so a window of one is the
+  # user's next note).
   defmodule SlowRepo do
     @moduledoc false
     defdelegate query!(sql), to: Engram.Repo
     defdelegate query!(sql, params, opts), to: Engram.Repo
     defdelegate transaction(fun, opts), to: Engram.Repo
 
-    def query!(sql, [_user, _after, size] = params) when size > 1 do
-      if String.contains?(sql, "UPDATE note_bodies"),
+    def query!(sql, [user, after_id, size] = params) do
+      if String.contains?(sql, "UPDATE note_bodies") and too_slow?(user, after_id, size),
         do: raise(DBConnection.ConnectionError, "client timed out"),
         else: Engram.Repo.query!(sql, params)
     end
 
     def query!(sql, params), do: Engram.Repo.query!(sql, params)
+
+    defp too_slow?(_user, _after_id, size) when size > 1, do: true
+
+    defp too_slow?(user, after_id, _size) do
+      Engram.Repo.query!(
+        "SELECT id FROM notes WHERE user_id = $1 AND id > $2 AND kind = 'note' ORDER BY id LIMIT 1",
+        [user, after_id]
+      ).rows == [[:persistent_term.get({__MODULE__, :never}, nil)]]
+    end
+  end
+
+  defmodule SlowMigration do
+    @moduledoc false
+    use Ecto.Migration
+    @disable_ddl_transaction true
+    @disable_migration_lock true
+
+    def up do
+      String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteBodiesPreNonceHealMigrate").heal(
+        SlowRepo
+      )
+    end
   end
 
   test "a window too slow for its deadline is halved down to one note", %{user: u, vault: v} do
+    :persistent_term.put({SlowRepo, :never}, nil)
     notes = for i <- 1..3, do: write!(u, v, "pre#{i}.md", "pre text #{i}")
     Enum.each(notes, &Engram.Fixtures.pre_nonce_null_body!(&1.id))
 
     assert :ok = heal!(SlowRepo)
     for i <- 1..3, do: assert(read!(u, v, "pre#{i}.md") == "pre text #{i}")
+  end
+
+  test "a note too slow even alone: the rest healed, count raised, migration not recorded", %{
+    user: u,
+    vault: v
+  } do
+    [stuck | _] = notes = for i <- 1..3, do: write!(u, v, "pre#{i}.md", "pre text #{i}")
+    Enum.each(notes, &Engram.Fixtures.pre_nonce_null_body!(&1.id))
+    :persistent_term.put({SlowRepo, :never}, Ecto.UUID.dump!(stuck.id))
+    version = 99_999_999_999_993
+
+    error =
+      assert_raise RuntimeError, fn ->
+        Ecto.Migrator.up(Repo, version, SlowMigration, log: false)
+      end
+
+    assert error.message =~ "1 note(s) too slow"
+
+    assert Repo.query!("SELECT count(*) FROM schema_migrations WHERE version = $1", [version]).rows ==
+             [[0]]
+
+    assert read!(u, v, "pre1.md") == nil
+    for i <- 2..3, do: assert(read!(u, v, "pre#{i}.md") == "pre text #{i}")
   end
 end

@@ -369,7 +369,8 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
   # Raises what DBConnection raises when a transaction outlives its checkout
   # deadline (#2545 review MED-2): for a body insert window wider than
   # `:max` notes, or one holding note `:never`. A window with no size
-  # parameter is the old fixed 1,000.
+  # parameter is the old fixed 1,000. The owner repair the same, by its
+  # id list (`:repair_max`, `:repair_never`).
   defmodule SlowRepo do
     @moduledoc false
     @key {__MODULE__, :spec}
@@ -380,6 +381,18 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
     defdelegate query!(sql, params, opts), to: Engram.Repo
     defdelegate transaction(fun), to: Engram.Repo
     defdelegate transaction(fun, opts), to: Engram.Repo
+
+    def query!(sql, [ids, _user_id] = params) when is_list(ids) do
+      spec = :persistent_term.get(@key)
+
+      if String.contains?(sql, "UPDATE note_bodies b SET") and
+           (length(ids) > Keyword.get(spec, :repair_max, 1_000) or spec[:repair_never] in ids) do
+        raise DBConnection.ConnectionError,
+              "client timed out because it checked out the connection"
+      end
+
+      Engram.Repo.query!(sql, params)
+    end
 
     def query!(sql, [user_id, after_id | rest] = params) do
       if String.contains?(sql, "INSERT INTO note_bodies") and
@@ -403,6 +416,21 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
         ).rows
 
       size > Keyword.get(spec, :max, 1_000) or [spec[:never]] in ids
+    end
+  end
+
+  # The real runner over `SlowRepo`, so "not recorded" is what Ecto does.
+  defmodule SlowMigration do
+    @moduledoc false
+    use Ecto.Migration
+    @disable_ddl_transaction true
+    @disable_migration_lock true
+
+    def up do
+      mod =
+        String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate")
+
+      mod.complete_split(SlowRepo)
     end
   end
 
@@ -589,25 +617,58 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
       assert bodies(u) == written
     end
 
-    test "a note too slow even alone is logged and left, the rest done, boot not blocked", %{
+    defp migrate_slow! do
+      Engram.Fixtures.complete_split!(role: nil, only_load: true)
+      version = 99_999_999_999_992
+
+      error =
+        assert_raise RuntimeError, fn ->
+          Ecto.Migrator.up(Repo, version, SlowMigration, log: false)
+        end
+
+      assert Repo.query!("SELECT count(*) FROM schema_migrations WHERE version = $1", [version]).rows ==
+               [[0]]
+
+      error.message
+    end
+
+    test "a note too slow even alone: the rest done, count raised, migration not recorded", %{
       user: u,
       vault: v
     } do
-      import ExUnit.CaptureLog
       for i <- 1..3, do: write!(u, v, "ok#{i}.md", "ok text #{i}")
       stuck = write!(u, v, "stuck.md", "stuck text")
       pre_split!(u)
       SlowRepo.plan(never: Ecto.UUID.dump!(stuck.id))
 
-      log =
-        capture_log([level: :warning], fn ->
-          assert :ok = Engram.Fixtures.complete_split!(repo: SlowRepo)
-        end)
-
-      assert log =~ "too slow"
-      assert log =~ stuck.id
+      assert migrate_slow!() =~ "1 note(s) too slow"
       for i <- 1..3, do: assert(read!(u, v, "ok#{i}.md") == "ok text #{i}")
       assert read!(u, v, "stuck.md") == nil
+    end
+
+    test "an owner repair too slow for its deadline is halved and retried", %{
+      user: u,
+      vault: v
+    } do
+      notes = for i <- 1..3, do: write!(u, v, "owned#{i}.md", "owned text #{i}")
+      Enum.each(notes, &foreign_body!/1)
+      SlowRepo.plan(repair_max: 1)
+
+      assert :ok = Engram.Fixtures.complete_split!(repo: SlowRepo)
+      for i <- 1..3, do: assert(read!(u, v, "owned#{i}.md") == "owned text #{i}")
+    end
+
+    test "an owner repair too slow even alone: the rest done, count raised, not recorded", %{
+      user: u,
+      vault: v
+    } do
+      [stuck | _] = notes = for i <- 1..3, do: write!(u, v, "owned#{i}.md", "owned text #{i}")
+      Enum.each(notes, &foreign_body!/1)
+      SlowRepo.plan(repair_never: Ecto.UUID.dump!(stuck.id))
+
+      assert migrate_slow!() =~ "1 note(s) too slow"
+      assert read!(u, v, "owned1.md") == nil
+      for i <- 2..3, do: assert(read!(u, v, "owned#{i}.md") == "owned text #{i}")
     end
 
     test "the per-user probe sets a lock timeout and retries a batch that hits it", %{
