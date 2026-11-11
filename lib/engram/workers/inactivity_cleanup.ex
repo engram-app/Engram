@@ -4,8 +4,15 @@ defmodule Engram.Workers.InactivityCleanup do
 
   - **60 days inactive** → warning #1 email + stamp `inactivity_warning_60_at`.
   - **80 days inactive** → final-notice email + stamp `inactivity_warning_80_at`.
-  - **90 days inactive** → soft-delete: drop Qdrant points, S3 attachments,
-    set `users.deleted_at`. Clerk identity untouched.
+  - **90 days inactive** → soft-delete: drop Qdrant points, set
+    `users.deleted_at`. Clerk identity untouched. Only once a final notice
+    went out in this idle period and is at least `inactivity_delete_grace_days`
+    old (`Engram.ServiceConfig`, default 10, the "about 10 days" the email
+    promises). A user past the threshold without one (a lapsed paid plan, an
+    `inactivity_delete_days` override below the rungs, a failed send) gets
+    the final notice instead and the grace period runs from its stamp
+    (#2566). Kill switch: `inactivity_soft_delete` (default on); off skips
+    this step and leaves the warnings running.
   - **30 days soft-deleted** → hard-delete: remove user row (cascades to
     notes/vaults/attachments via FK), wipe S3 bucket prefix.
 
@@ -35,6 +42,8 @@ defmodule Engram.Workers.InactivityCleanup do
   @days_80 80
   @days_90 90
   @hard_delete_after_days 30
+  # Matches the final notice's "about 10 days until auto-delete".
+  @default_grace_days 10
 
   # Conservative SQL pre-filter for the soft-delete sweep. Per-user
   # `inactivity_delete_days` is then applied in Elixir; this floor just
@@ -117,6 +126,11 @@ defmodule Engram.Workers.InactivityCleanup do
   end
 
   defp sweep_soft_delete do
+    if Engram.ServiceConfig.get(:inactivity_soft_delete, true) == true,
+      do: sweep_soft_delete_due()
+  end
+
+  defp sweep_soft_delete_due do
     floor_cutoff = days_ago(@soft_delete_sql_floor_days)
     now = DateTime.utc_now()
 
@@ -137,13 +151,39 @@ defmodule Engram.Workers.InactivityCleanup do
           cutoff = DateTime.add(now, -days * 86_400, :second)
 
           if compare_lt?(last_active_at, cutoff),
-            do: per_user(user, :soft_delete, fn -> soft_delete(user) end)
+            do: soft_delete_once_warned(user, last_active_at)
 
         _ ->
           :skip
       end
     end)
   end
+
+  # Never deletes without a final notice sent in THIS idle period (stamped at
+  # or after the last activity: stamps are never cleared when a user comes
+  # back) that has aged past the grace period. One missing gets sent now, as
+  # the 80-day rung would have, so the grace period runs from its stamp. A
+  # user exempt from warnings is never mailed, so never deleted here.
+  defp soft_delete_once_warned(user, last_active_at) do
+    stamp = user.inactivity_warning_80_at
+
+    cond do
+      is_nil(stamp) or compare_lt?(stamp, Utc.to_utc(last_active_at)) ->
+        if warn_enabled?(user), do: per_user(user, :warning_80, fn -> final_notice(user) end)
+
+      compare_lt?(stamp, days_ago(grace_days())) ->
+        per_user(user, :soft_delete, fn -> soft_delete(user) end)
+
+      true ->
+        :in_grace
+    end
+  end
+
+  defp final_notice(user),
+    do: warn(user, @days_80, :inactivity_warning_80_at, &Mailer.send_inactivity_warning_80/1)
+
+  defp grace_days,
+    do: Engram.ServiceConfig.get(:inactivity_delete_grace_days, @default_grace_days)
 
   # Selected through the schemaless "usage_meters" join, so the raw column
   # type decides: NaiveDateTime from `timestamp`, DateTime from `timestamptz`.

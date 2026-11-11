@@ -81,7 +81,11 @@ defmodule Engram.ServiceConfig.Overrides do
     # The `NoteName` backfill (`BackfillNoteNames`): kill switch, rows per hop, rows a second.
     note_name_backfill: :boolean,
     note_name_backfill_max_rows: {:integer, 1..100_000},
-    note_name_backfill_writes_per_s: {:integer, 1..10_000}
+    note_name_backfill_writes_per_s: {:integer, 1..10_000},
+    # `Engram.Workers.InactivityCleanup` (#2566): the soft-delete kill switch
+    # (default on) and the days between the final notice and the delete.
+    inactivity_soft_delete: :boolean,
+    inactivity_delete_grace_days: {:integer, 0..365}
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})
