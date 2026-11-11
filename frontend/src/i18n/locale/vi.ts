@@ -569,8 +569,6 @@ export default {
 		"Một lỗi không mong muốn đã làm hỏng trang này. Thử tải lại. Nếu lỗi vẫn xảy ra, hãy liên hệ với {support}.",
 	"Copied to clipboard": "Đã sao chép vào clipboard",
 	"Could not copy": "Không thể sao chép",
-	"Administration is only available on self-hosted instances.":
-		"Chức năng quản trị chỉ khả dụng trên các phiên bản tự lưu trữ.",
 	"Loading…": "Đang tải…",
 	"You don't have administrator access on this instance.":
 		"Bạn không có quyền quản trị trên phiên bản này.",

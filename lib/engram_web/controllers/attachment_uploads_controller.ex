@@ -33,7 +33,7 @@ defmodule EngramWeb.AttachmentUploadsController do
         "the quota at their declared sizes, at most 4 may be open (429 `too_many_uploads`), " <>
         "and a file over 10,000 parts is 402 `file_too_large` on every plan. Then PUT each " <>
         "part and complete. A storage " <>
-        "backend without multipart support (self-host database storage) returns 501.",
+        "backend without multipart support (database storage) returns 501.",
     tags: ["Attachments"],
     request_body:
       {"File to upload", "application/json", Schemas.AttachmentUploadStartRequest, required: true},

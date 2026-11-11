@@ -623,8 +623,6 @@ export default {
 		"Neočekávaná chyba způsobila, že tato stránka přestala fungovat. Zkuste obnovit stránku. Pokud se to bude opakovat, kontaktujte {support}.",
 	"Copied to clipboard": "Zkopírováno do schránky",
 	"Could not copy": "Nelze zkopírovat",
-	"Administration is only available on self-hosted instances.":
-		"Správa je dostupná pouze u vlastních instalací.",
 	"Loading…": "Načítám…",
 	"You don't have administrator access on this instance.":
 		"Nemáte oprávnění správce v této instanci.",

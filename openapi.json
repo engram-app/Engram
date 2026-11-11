@@ -3320,7 +3320,7 @@
         },
         "properties": {
           "build_sha": {
-            "description": "Commit the running image was built from, baked in at build time. null on local/self-host builds where it was not supplied.",
+            "description": "Commit the running image was built from, baked in at build time. null on builds where it was not supplied.",
             "example": "e998801f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d",
             "nullable": true,
             "type": "string",
@@ -4211,7 +4211,7 @@
     "/api/user/storage": {
       "get": {
         "callbacks": {},
-        "description": "Returns the user's current attachment storage usage and file count alongside the total storage cap and the per-file size limit resolved from their plan. On self-host (limits not enforced) the per-file cap is reported as the Pro ceiling.",
+        "description": "Returns the user's current attachment storage usage and file count alongside the total storage cap and the per-file size limit resolved from their plan. Where limits are not enforced, the per-file cap is reported as the Pro ceiling.",
         "operationId": "account-storage",
         "parameters": [],
         "responses": {
@@ -4901,7 +4901,7 @@
                 }
               }
             },
-            "description": "An item has an executable extension (stored while the self-host bypass was on)"
+            "description": "An item has an executable extension (stored while the executable gate was bypassed)"
           },
           "422": {
             "content": {
@@ -5442,7 +5442,7 @@
     "/api/attachment-uploads": {
       "post": {
         "callbacks": {},
-        "description": "Opens a resumable upload for a file of `size_bytes`, refused up front with the same responses as `POST /api/attachments` (402 plan, size or quota, 415 executable extension, 422 invalid `mime_type`). The user's other open sessions count against the quota at their declared sizes, at most 4 may be open (429 `too_many_uploads`), and a file over 10,000 parts is 402 `file_too_large` on every plan. Then PUT each part and complete. A storage backend without multipart support (self-host database storage) returns 501.",
+        "description": "Opens a resumable upload for a file of `size_bytes`, refused up front with the same responses as `POST /api/attachments` (402 plan, size or quota, 415 executable extension, 422 invalid `mime_type`). The user's other open sessions count against the quota at their declared sizes, at most 4 may be open (429 `too_many_uploads`), and a file over 10,000 parts is 402 `file_too_large` on every plan. Then PUT each part and complete. A storage backend without multipart support (database storage) returns 501.",
         "operationId": "attachment-uploads-start",
         "parameters": [],
         "requestBody": {

@@ -1,3 +1,7 @@
+# NOTE: self-hosting Engram is not available right now. A release started
+# from this file will refuse to boot. Use the hosted service at
+# https://engram.page instead.
+#
 # Engram self-host stack — canonical quickstart.
 #
 #   cp .env.example .env       # fill in the three generated secrets at top

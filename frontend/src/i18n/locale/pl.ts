@@ -622,8 +622,6 @@ export default {
 		"Wystąpił nieoczekiwany błąd, który spowodował awarię tej strony. Spróbuj odświeżyć. Jeśli problem się powtarza, skontaktuj się z {support}.",
 	"Copied to clipboard": "Skopiowano do schowka",
 	"Could not copy": "Nie udało się skopiować",
-	"Administration is only available on self-hosted instances.":
-		"Funkcje administracyjne są dostępne tylko w instancjach działających na własnym serwerze.",
 	"Loading…": "Ładowanie…",
 	"You don't have administrator access on this instance.":
 		"Nie masz uprawnień administratora w tej instancji.",

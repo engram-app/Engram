@@ -602,8 +602,6 @@ export default {
 		"Si è verificato un errore imprevisto che ha interrotto questa pagina. Prova a ricaricare. Se continua a verificarsi, contatta {support}.",
 	"Copied to clipboard": "Copiato negli appunti",
 	"Could not copy": "Impossibile copiare",
-	"Administration is only available on self-hosted instances.":
-		"L'amministrazione è disponibile solo nelle istanze ospitate autonomamente.",
 	"Loading…": "Caricamento…",
 	"You don't have administrator access on this instance.":
 		"Non hai i permessi di amministratore su questa istanza.",

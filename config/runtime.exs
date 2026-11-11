@@ -871,6 +871,11 @@ if url = System.get_env("ENGRAM_FRONTEND_URL") do
 end
 
 if config_env() == :prod do
+  # Self-hosting is temporarily withdrawn: a local-auth (self-host) release
+  # will not boot without ENGRAM_SELFHOST_UNLOCK=true. See
+  # Engram.RuntimeConfig.selfhost_gate!/2.
+  Engram.RuntimeConfig.selfhost_gate!(auth_provider, &System.get_env/1)
+
   # Boot-time guard against shipping a release whose index.html references
   # bundle hashes that don't exist on disk (stale Docker layer cache, etc).
   # See Engram.SpaIntegrity and docs/context/docker-build-cache-pitfalls.md.

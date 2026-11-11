@@ -216,6 +216,32 @@ defmodule Engram.RuntimeConfig do
   end
 
   @doc """
+  Temporary gate on new self-host installs, while self-hosting is withdrawn
+  from public view.
+
+  A prod release running local auth (`AUTH_PROVIDER=local`, the self-host
+  shape and the default) refuses to boot unless `ENGRAM_SELFHOST_UNLOCK=true`.
+  The self-host code paths are untouched; this only stops someone following an
+  old quickstart from standing up an instance. Our own self-host instances, the
+  CI stacks and anyone we hand the flag to set it. Dev and test never call this.
+
+  To bring self-hosting back, delete this function and its call in
+  `config/runtime.exs`.
+  """
+  @spec selfhost_gate!(atom(), (String.t() -> String.t() | nil)) :: :ok
+  def selfhost_gate!(:local, getenv) when is_function(getenv, 1) do
+    if getenv.("ENGRAM_SELFHOST_UNLOCK") == "true" do
+      :ok
+    else
+      raise "Self-hosting Engram is not available right now. Use the hosted " <>
+              "service at https://engram.page. (AUTH_PROVIDER=local needs " <>
+              "ENGRAM_SELFHOST_UNLOCK=true to boot.)"
+    end
+  end
+
+  def selfhost_gate!(_auth_provider, getenv) when is_function(getenv, 1), do: :ok
+
+  @doc """
   Guards against a saas deploy booting with permissive CORS / WebSocket origin
   checks.
 

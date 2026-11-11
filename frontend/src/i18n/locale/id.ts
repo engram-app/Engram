@@ -572,8 +572,6 @@ export default {
 		"Terjadi kesalahan tak terduga pada halaman ini. Coba muat ulang. Jika terus terjadi, hubungi {support}.",
 	"Copied to clipboard": "Disalin ke clipboard",
 	"Could not copy": "Tidak dapat disalin",
-	"Administration is only available on self-hosted instances.":
-		"Administrasi hanya tersedia pada instalasi mandiri.",
 	"Loading…": "Memuat…",
 	"You don't have administrator access on this instance.":
 		"Anda tidak memiliki akses administrator pada instalasi ini.",

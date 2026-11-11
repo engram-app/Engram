@@ -36,11 +36,7 @@ export default function AdminPanel() {
 	// hitting the URL directly should still get a clean denial rather than a
 	// confusing partial page that 403s on every request.
 	if (config.authProvider !== "local") {
-		return (
-			<p className="text-muted-foreground text-sm">
-				{t("Administration is only available on self-hosted instances.")}
-			</p>
-		);
+		return <p className="text-muted-foreground text-sm">{t("Page not found")}</p>;
 	}
 
 	if (isLoading || !me) {

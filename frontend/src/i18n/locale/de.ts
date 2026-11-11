@@ -590,8 +590,6 @@ export default {
 		"Ein unerwarteter Fehler hat diese Seite beschädigt. Versuche es erneut. Wenn es weiterhin auftritt, kontaktiere {support}.",
 	"Copied to clipboard": "In die Zwischenablage kopiert",
 	"Could not copy": "Konnte nicht kopiert werden",
-	"Administration is only available on self-hosted instances.":
-		"Die Administration ist nur auf selbst gehosteten Instanzen verfügbar.",
 	"Loading…": "Lädt…",
 	"You don't have administrator access on this instance.":
 		"Du hast keine Administratorrechte auf dieser Instanz.",
