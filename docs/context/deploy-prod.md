@@ -10,7 +10,7 @@ Two-stage pipeline. Image build lives in this repo; image-tag selection lives in
 
 1. **`build-and-publish-image` job in `verify.yml`** (this repo) — runs on every push to `main` (the former standalone `build-ecr.yml`, since folded into `verify.yml`). Builds the Docker image and pushes to ECR tagged `sha-<7>`. The image sits in ECR; **nothing rolls.**
 
-2. **`deploy-prod.yml`** (this repo), runs only when a `release-v*` git tag is pushed. Job `release-e2e-gate` first dispatches `verify.yml` with `force_full` on the tagged commit and blocks the deploy unless the full-Obsidian e2e jobs pass (emergency override: an annotated tag whose message contains `[skip-release-e2e]`). Job `open-infra-pr` then opens a PR in engram-infra rewriting `engram_image_tag` default to the `sha-<7>` of the tagged commit, and **stops there, it does NOT merge and does NOT enable auto-merge** (#1155; see "Promotion gate" below). Prod does not move until a human merges that PR. The workflow prints the exact command in its step summary.
+2. **`deploy-prod.yml`** (this repo), runs only when a `release-v*` git tag is pushed. Job `release-floor-gate` first refuses a tagged commit below the rollback floor (`docs/context/rollback-floor.md`; defense in depth, the real gate will be engram-infra's `engram-rollback-floor` check, pending in engram-infra#1806). Job `release-e2e-gate` then dispatches `verify.yml` with `force_full` on the tagged commit and blocks the deploy unless the full-Obsidian e2e jobs pass (emergency override: an annotated tag whose message contains `[skip-release-e2e]`). Job `open-infra-pr` then opens a PR in engram-infra rewriting `engram_image_tag` default to the `sha-<7>` of the tagged commit, and **stops there, it does NOT merge and does NOT enable auto-merge** (#1155; see "Promotion gate" below). Prod does not move until a human merges that PR. The workflow prints the exact command in its step summary.
 
 3. **engram-infra `terraform (prod)`** (engram-infra `.github/workflows/ci.yml`, `matrix: env: [staging, prod]`), runs `terraform apply -auto-approve` on push to main. The new image tag flows into `aws_ecs_task_definition.engram`, which is `for_each` over the `web` and `worker` node roles. Both services roll: `engram-saas-prod` (web) and `engram-worker-prod` (Oban worker). One tag, two task-def revisions.
 
@@ -90,6 +90,8 @@ rollback recipe.
 ## Rollback recipe
 
 Rollback is a forward-roll: push a new release tag pointing at the older commit. Same workflow, no special path.
+
+A commit below the rollback floor is refused. In an incident, use the annotated `[allow-below-floor]` tag override in `docs/context/rollback-floor.md`.
 
 ```bash
 # Find the last good commit

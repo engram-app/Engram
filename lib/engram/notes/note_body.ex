@@ -17,7 +17,8 @@ defmodule Engram.Notes.NoteBody do
   retired, so an install may keep dead copies there). R8(e) drops the two
   columns. The nonces and `crdt_head` are still written on `notes` (the
   fences below).
-  Rollback floor: 0.76 (the first release that reads bodies from here).
+  Needs the rollback floor (`Engram.Release.Floor`) at 0.76 or later, the
+  first release that reads bodies from here.
 
   Wave 3 migrate-data (`docs/context/notes-chunks-hyperopt.md` 6.1 step 2):
   every READ of a body column goes through `select_note/2` (or `join/1` +

@@ -18,6 +18,8 @@ name: Deploy prod
 # Rollback recipe (forward-roll — no separate workflow):
 #   git tag release-v0.5.235 <last-known-good-sha-on-main>
 #   git push origin release-v0.5.235
+# A commit below the rollback floor is refused. In an incident, use the
+# annotated [allow-below-floor] override: docs/context/rollback-floor.md.
 #
 # PROMOTION IS MANUAL (#1155). This workflow opens the engram-infra bump PR
 # but does NOT merge it, so staging can be verified before prod moves. The
@@ -38,6 +40,75 @@ permissions:
   contents: read
 
 jobs:
+  # Rollback floor (`Engram.Release.Floor`, docs/context/rollback-floor.md):
+  # fail the deploy of a tag whose commit does not descend from the floor tag
+  # named in MAIN's priv/release_floor (the deployed commit's own copy is
+  # older on a rollback). Fails closed.
+  #
+  # DEFENSE IN DEPTH ONLY. A tag push runs the deploy-prod.yml OF THE TAGGED
+  # COMMIT, so a rollback to a commit from before this job existed runs a
+  # workflow with no floor gate at all. The gate that will see every prod move
+  # is engram-infra's check on the image-bump PR (pending: engram-infra#1806).
+  #
+  # Incident override, the [skip-release-e2e] pattern: an ANNOTATED tag whose
+  # message contains `[allow-below-floor]` deploys below the floor with a
+  # ::warning:: and a step-summary line.
+  #   git tag -a release-v0.5.999 -m "[allow-below-floor] incident: <reason>" <sha>
+  release-floor-gate:
+    runs-on: [self-hosted, linux, x64, isolated]
+    permissions:
+      contents: read
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Checkout (history and tags, for the ancestry check)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check the rollback floor
+        run: |
+          set -euo pipefail
+          msg=$(bash scripts/tag_message.sh "$TAG")
+          allow=false
+          grep -qiF '[allow-below-floor]' <<<"$msg" && allow=true
+          git fetch -q origin main
+          floor=$(git show origin/main:priv/release_floor | tr -d '[:space:]')
+          ALLOW_BELOW_FLOOR="$allow" bash scripts/check_release_floor.sh "$floor" "$GITHUB_SHA"
+
+      # A refused release is otherwise silent: every later job is skipped, so
+      # their failure() notices never run, and release-please pushes these
+      # tags unattended.
+      #
+      # The failure alerts in this file are INLINE on purpose, not a shared
+      # script: they must still post when the job's checkout failed, and a
+      # repo script only exists after a successful checkout. Do not extract
+      # them (test/scripts/deploy_prod_floor_wiring_test.sh fails if you do).
+      - name: Notify rollback floor blocked (alerts)
+        if: failure()
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -uo pipefail
+          [ -n "$WEBHOOK" ] || { echo "No alerts webhook configured, skipping."; exit 0; }
+          CONTENT="**DEPLOY BLOCKED** \`${TAG}\`
+          Rollback floor check FAILED, prod is NOT moving. See docs/context/rollback-floor.md.
+          Tagged by ${ACTOR}
+          ${RUN_URL}"
+          # flags:4 = SUPPRESS_EMBEDS. Discord auto-embeds every URL, so messages
+          # rendered as a stack of preview cards. Links stay clickable without them.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            -H 'User-Agent: engram-ci/1.0 (+https://github.com/engram-app/Engram)' \
+            --max-time 10 \
+            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram CI' '{content:$c,username:$u,flags:4}')" \
+            "$WEBHOOK") || code="000"
+          case "$code" in 2*) echo "Alert sent ($code)";; *) echo "::warning::Discord alert failed (HTTP $code)";; esac
+
   # Real-app proof gate. Before prod moves, run the FULL Obsidian e2e suite
   # (e2e-clerk / e2e-crdt / e2e-browser) against the EXACT commit this
   # release-v* tag points at, and BLOCK the deploy if any of them fail.
@@ -66,6 +137,7 @@ jobs:
   # The bypass is explicit and LOGGED (::warning::). A plain lightweight tag
   # (the normal recipe) has no message, so it can never accidentally bypass.
   release-e2e-gate:
+    needs: release-floor-gate
     runs-on: [self-hosted, linux, x64, isolated]
     permissions:
       contents: read
@@ -78,19 +150,16 @@ jobs:
       TAG: ${{ github.ref_name }}
       HEAD_SHA: ${{ github.sha }}
     steps:
+      - name: Checkout (scripts/tag_message.sh)
+        uses: actions/checkout@v7
+
       - name: Check for emergency override in tag annotation
         id: override
         run: |
           set -euo pipefail
-          # Read the annotated-tag message via the API (no dependence on local
-          # fetch depth). A lightweight tag resolves to a commit object with no
-          # message → no override → gated (the safe default).
-          msg=""
-          obj_type=$(gh api "repos/${GH_REPO}/git/ref/tags/${TAG}" -q '.object.type' 2>/dev/null || echo "")
-          obj_sha=$(gh api "repos/${GH_REPO}/git/ref/tags/${TAG}" -q '.object.sha' 2>/dev/null || echo "")
-          if [ "$obj_type" = "tag" ] && [ -n "$obj_sha" ]; then
-            msg=$(gh api "repos/${GH_REPO}/git/tags/${obj_sha}" -q '.message' 2>/dev/null || echo "")
-          fi
+          # A lightweight tag has no message → no override → gated (the safe
+          # default); scripts/tag_message.sh is the one copy of the lookup.
+          msg=$(bash scripts/tag_message.sh "$TAG")
           if grep -qiF '[skip-release-e2e]' <<<"$msg"; then
             echo "::warning::[skip-release-e2e] found in tag ${TAG} annotation — BYPASSING the full-Obsidian e2e gate. Deploy proceeds WITHOUT real-app proof."
             echo "bypass=true" >> "$GITHUB_OUTPUT"
