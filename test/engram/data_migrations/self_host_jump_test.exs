@@ -195,6 +195,21 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
     assert read!(u, v, "owned.md") == "owned text"
   end
 
+  # #2545 review MED-1: a pre-nonce note (notes nonce NULL, the envelope
+  # merged into the notes ciphertext) under a foreign body row with a NULL
+  # body. The walk's insert copies such a row as it is, so the repair must
+  # too; it once left the body NULL and counted the note done.
+  test "a body row owned by another user, body NULL, pre-nonce notes copy: rebuilt from the copy",
+       %{user: u, vault: v} do
+    note = write!(u, v, "owned.md", "owned text")
+    Engram.Fixtures.pre_nonce_null_body!(note.id)
+    foreign_body!(note)
+    assert read!(u, v, "owned.md") == nil
+
+    Engram.Fixtures.complete_split!()
+    assert read!(u, v, "owned.md") == "owned text"
+  end
+
   # Strictly non-destructive: SQL cannot tell a stale notes copy from a
   # stale body, so existing body bytes are never overwritten. A body that
   # does not match the notes nonce is handed back as it is, with a warning
@@ -351,6 +366,92 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
     end
   end
 
+  # Raises what DBConnection raises when a transaction outlives its checkout
+  # deadline (#2545 review MED-2): for a body insert window wider than
+  # `:max` notes, or one holding note `:never`. A window with no size
+  # parameter is the old fixed 1,000.
+  defmodule SlowRepo do
+    @moduledoc false
+    @key {__MODULE__, :spec}
+
+    def plan(spec), do: :persistent_term.put(@key, spec)
+
+    defdelegate query!(sql), to: Engram.Repo
+    defdelegate query!(sql, params, opts), to: Engram.Repo
+    defdelegate transaction(fun), to: Engram.Repo
+    defdelegate transaction(fun, opts), to: Engram.Repo
+
+    def query!(sql, [user_id, after_id | rest] = params) do
+      if String.contains?(sql, "INSERT INTO note_bodies") and
+           too_slow?(user_id, after_id, List.first(rest, 1_000)) do
+        raise DBConnection.ConnectionError,
+              "client timed out because it checked out the connection"
+      end
+
+      Engram.Repo.query!(sql, params)
+    end
+
+    def query!(sql, params), do: Engram.Repo.query!(sql, params)
+
+    defp too_slow?(user_id, after_id, size) do
+      spec = :persistent_term.get(@key)
+
+      ids =
+        Engram.Repo.query!(
+          "SELECT id FROM notes WHERE user_id = $1 AND id > $2 ORDER BY id LIMIT $3",
+          [user_id, after_id, size]
+        ).rows
+
+      size > Keyword.get(spec, :max, 1_000) or [spec[:never]] in ids
+    end
+  end
+
+  # Records every statement, and refuses the per-user probe with a lock
+  # timeout the first `:times` calls (#2545 review LOW-3).
+  defmodule ProbeLockedRepo do
+    @moduledoc false
+    @key {__MODULE__, :left}
+
+    def plan(times) do
+      :persistent_term.put(@key, :counters.new(1, []))
+      :counters.put(:persistent_term.get(@key), 1, times)
+      :persistent_term.put({__MODULE__, :log}, :ets.new(__MODULE__, [:public, :duplicate_bag]))
+    end
+
+    def log, do: :persistent_term.get({__MODULE__, :log}) |> :ets.tab2list() |> Enum.sort()
+
+    defdelegate transaction(fun), to: Engram.Repo
+    defdelegate transaction(fun, opts), to: Engram.Repo
+
+    def query!(sql), do: query!(sql, [], [])
+    def query!(sql, params), do: query!(sql, params, [])
+
+    def query!(sql, params, opts) do
+      :ets.insert(
+        :persistent_term.get({__MODULE__, :log}),
+        {System.unique_integer([:monotonic]), sql}
+      )
+
+      left = :persistent_term.get(@key)
+
+      if String.starts_with?(String.trim(sql), "SELECT EXISTS") and
+           String.contains?(sql, "n.user_id = $1") and :counters.get(left, 1) > 0 do
+        :counters.sub(left, 1, 1)
+
+        raise %Postgrex.Error{
+          postgres: %{
+            code: :lock_not_available,
+            pg_code: "55P03",
+            severity: "ERROR",
+            message: "lock timeout"
+          }
+        }
+      end
+
+      Engram.Repo.query!(sql, params, opts)
+    end
+  end
+
   describe "the pre-check and the walk" do
     # What the pre-check would be with no thought for RLS.
     @blind_exists """
@@ -474,6 +575,68 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
 
       Engram.Fixtures.complete_split!(repo: FlakyRepo)
 
+      assert bodies(u) == written
+    end
+
+    test "a window too slow for its deadline is halved and retried", %{user: u, vault: v} do
+      for i <- 1..5, do: write!(u, v, "slow#{i}.md", "slow text #{i}")
+      written = bodies(u)
+      pre_split!(u)
+      SlowRepo.plan(max: 2)
+
+      assert :ok = Engram.Fixtures.complete_split!(repo: SlowRepo)
+
+      assert bodies(u) == written
+    end
+
+    test "a note too slow even alone is logged and left, the rest done, boot not blocked", %{
+      user: u,
+      vault: v
+    } do
+      import ExUnit.CaptureLog
+      for i <- 1..3, do: write!(u, v, "ok#{i}.md", "ok text #{i}")
+      stuck = write!(u, v, "stuck.md", "stuck text")
+      pre_split!(u)
+      SlowRepo.plan(never: Ecto.UUID.dump!(stuck.id))
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert :ok = Engram.Fixtures.complete_split!(repo: SlowRepo)
+        end)
+
+      assert log =~ "too slow"
+      assert log =~ stuck.id
+      for i <- 1..3, do: assert(read!(u, v, "ok#{i}.md") == "ok text #{i}")
+      assert read!(u, v, "stuck.md") == nil
+    end
+
+    test "the per-user probe sets a lock timeout and retries a batch that hits it", %{
+      user: u,
+      vault: v
+    } do
+      _ = write!(u, v, "probe.md", "probe text")
+      written = bodies(u)
+      pre_split!(u)
+      ProbeLockedRepo.plan(1)
+
+      assert :ok = Engram.Fixtures.complete_split!(repo: ProbeLockedRepo)
+      assert bodies(u) == written
+
+      sqls = Enum.map(ProbeLockedRepo.log(), &elem(&1, 1))
+      first_probe = Enum.find_index(sqls, &(&1 =~ "SELECT EXISTS" and &1 =~ "n.user_id = $1"))
+      assert Enum.any?(Enum.take(sqls, first_probe), &(&1 =~ "lock_timeout"))
+    end
+
+    test "a probe batch that keeps hitting its lock timeout is walked anyway", %{
+      user: u,
+      vault: v
+    } do
+      _ = write!(u, v, "probe.md", "probe text")
+      written = bodies(u)
+      pre_split!(u)
+      ProbeLockedRepo.plan(100)
+
+      assert :ok = Engram.Fixtures.complete_split!(repo: ProbeLockedRepo)
       assert bodies(u) == written
     end
 

@@ -47,8 +47,8 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   `notes` copy can be stale under a newer nonce, release B writes only the
   nonce, and SQL cannot tell that from a stale body); a body that does not
   match the `notes` nonce is kept and logged for a human look, and only a
-  NULL body column is rebuilt from the `notes` copy, when the copy's nonce
-  is set. A note's envelopes are bound to its own id (AAD) and its owner's
+  NULL body column is rebuilt from the `notes` copy, in the merged layout
+  the walk's insert writes (a pre-nonce copy, nonce NULL, as it is). A note's envelopes are bound to its own id (AAD) and its owner's
   key, so bytes written for it decrypt once the row is the owner's again.
   Each path is logged with the note ids; the repair repeats until the user
   has no such note, and a note still unreadable after that logs a warning.
@@ -73,11 +73,17 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
 
   No connection is held across the walk: each window is its own short
   transaction, with `lock_timeout` set inside it. A `checkout` around every
-  user inherited DBConnection's 15s and crashed boot at 1,637 users.
+  user inherited DBConnection's 15s and crashed boot at 1,637 users. A
+  window that outlives its deadline (`statement_timeout` just inside it,
+  or DBConnection's own) is halved down to one note; a note too slow even
+  alone is logged and left to the check, so one huge body cannot fail
+  every boot.
 
   Before any walk, one tenanted `EXISTS` per user (in batches of #{200} users
-  per short transaction) picks out the users with a note that reads with no
-  body, a body row under another owner included; only those are walked.
+  per short transaction, under the same `lock_timeout`) picks out the users
+  with a note that reads with no body, a body row under another owner
+  included; only those are walked. A batch still locked out after two
+  retries is walked whole.
 
   A pre-check skips all of that when no note needs anything, but only on a
   connection that can see every tenant: a superuser or BYPASSRLS role, or one
@@ -92,6 +98,9 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   @window 1_000
   # One window: 1,000 whole bodies copied at worst, on a self-hoster's disk.
   @window_timeout_ms 120_000
+  # Cancels a window's statement server-side inside the checkout deadline.
+  @statement_timeout "110s"
+  @lock_timeout "5s"
   @window_retries 2
   @probe_batch 200
   @progress_every 250
@@ -110,7 +119,7 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
 
   @insert """
   WITH w AS (
-    SELECT id FROM notes WHERE user_id = $1 AND id > $2 ORDER BY id LIMIT #{@window}
+    SELECT id FROM notes WHERE user_id = $1 AND id > $2 ORDER BY id LIMIT $3
   ), ins AS (
     INSERT INTO note_bodies (note_id, user_id, key_version, content_ct, crdt_ct, crdt_head)
       SELECT n.id, n.user_id,
@@ -134,6 +143,9 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   )
   SELECT (SELECT id FROM w ORDER BY id DESC LIMIT 1), (SELECT count(*) FROM ins)::int
   """
+
+  # The next row of a walk, to step over a window of one that cannot finish.
+  @next "SELECT id FROM notes WHERE user_id = $1 AND id > $2 ORDER BY id LIMIT 1"
 
   # Notes of the user that read with no body: no body row of the same
   # owner (`NoteBody.join/1` matches the owner too). The same answer with or
@@ -208,28 +220,26 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   # from a stale body). Per column: a body value is kept (`body` when it
   # holds the envelope under the `notes` nonce, `mismatch` when it does not,
   # logged for a human look); a NULL body is rebuilt from the `notes` copy
-  # when the copy's nonce is set (`copy`), else stays NULL (`none`). The head
-  # follows the CRDT state it was computed from.
-  path = fn body, ok, nonce, copy ->
+  # (`copy`, the insert's `merged` layout, so a pre-nonce copy too), else
+  # stays NULL (`none`). The head follows the CRDT state it was computed from.
+  path = fn body, ok, copy ->
     """
     CASE WHEN b.#{body} IS NOT NULL THEN (CASE WHEN #{ok} THEN 'body' ELSE 'mismatch' END)
-      WHEN n.#{nonce} IS NOT NULL AND #{copy} IS NOT NULL THEN 'copy' ELSE 'none' END
+      WHEN #{copy} IS NOT NULL THEN 'copy' ELSE 'none' END
     """
   end
 
-  value = fn body, nonce, copy ->
-    "CASE WHEN b.#{body} IS NOT NULL THEN b.#{body} WHEN n.#{nonce} IS NOT NULL THEN #{copy} END"
-  end
+  value = fn body, copy -> "COALESCE(b.#{body}, #{copy})" end
 
   @repair """
   WITH r AS (
     SELECT n.id, n.user_id,
       CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END AS key_version,
-      #{path.("content_ct", c_ok, "content_nonce", c_copy)} AS c_path,
-      #{path.("crdt_ct", s_ok, "crdt_state_nonce", s_copy)} AS s_path,
-      #{value.("content_ct", "content_nonce", c_copy)} AS content_ct,
-      #{value.("crdt_ct", "crdt_state_nonce", s_copy)} AS crdt_ct,
-      CASE WHEN b.crdt_ct IS NULL AND n.crdt_state_nonce IS NOT NULL AND #{s_copy} IS NOT NULL
+      #{path.("content_ct", c_ok, c_copy)} AS c_path,
+      #{path.("crdt_ct", s_ok, s_copy)} AS s_path,
+      #{value.("content_ct", c_copy)} AS content_ct,
+      #{value.("crdt_ct", s_copy)} AS crdt_ct,
+      CASE WHEN b.crdt_ct IS NULL AND #{s_copy} IS NOT NULL
         THEN #{head} ELSE b.crdt_head END AS crdt_head
     FROM notes n JOIN note_bodies b ON b.note_id = n.id
     WHERE n.id = ANY($1::uuid[]) AND b.note_id = ANY($1::uuid[]) AND n.user_id = $2
@@ -275,19 +285,32 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   defp users_needing_work(repo, users) do
     users
     |> Enum.chunk_every(@probe_batch)
-    |> Enum.flat_map(fn batch ->
-      {:ok, needing} =
-        repo.transaction(
-          fn ->
-            needing = Enum.filter(batch, &user_left?(repo, &1))
-            repo.query!("SELECT set_config('app.current_tenant', '', true)")
-            needing
-          end,
-          timeout: @window_timeout_ms
-        )
+    |> Enum.flat_map(&probe(repo, &1, @window_retries))
+  end
 
-      needing
-    end)
+  # Under the windows' `lock_timeout`, so a queued DDL lock fails the batch
+  # fast instead of at the checkout deadline. Contention is retried; a batch
+  # still locked out is walked whole (the walk has its own retries).
+  defp probe(repo, batch, retries) do
+    {:ok, needing} =
+      repo.transaction(
+        fn ->
+          repo.query!("SELECT set_config('lock_timeout', '#{@lock_timeout}', true)")
+          needing = Enum.filter(batch, &user_left?(repo, &1))
+          repo.query!("SELECT set_config('app.current_tenant', '', true)")
+          needing
+        end,
+        timeout: @window_timeout_ms
+      )
+
+    needing
+  rescue
+    e in Postgrex.Error ->
+      cond do
+        not contention?(e) -> reraise(e, __STACKTRACE__)
+        retries > 0 -> probe(repo, batch, retries - 1)
+        true -> batch
+      end
   end
 
   defp user_left?(repo, user_id) do
@@ -428,11 +451,47 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
     end
   end
 
-  defp walk(repo, user_id, after_id) do
-    case tenant(repo, user_id, fn -> repo.query!(@insert, [user_id, after_id]).rows end) do
-      [[nil, _]] -> :ok
-      [[last, _]] -> walk(repo, user_id, last)
+  # A window past its deadline is halved down to one note. A note too slow
+  # even alone is logged and stepped over: the check then warns about it
+  # and the migration records, as for any note it cannot finish (a raise
+  # would fail every boot on the same note).
+  defp walk(repo, user_id, after_id, size \\ @window) do
+    case window(repo, user_id, after_id, size) do
+      [[nil, _]] ->
+        :ok
+
+      [[last, _]] ->
+        walk(repo, user_id, last, size)
+
+      :too_slow when size > 1 ->
+        walk(repo, user_id, after_id, div(size, 2))
+
+      :too_slow ->
+        [[id]] = tenant(repo, user_id, fn -> repo.query!(@next, [user_id, after_id]).rows end)
+
+        Logger.warning(
+          "note_bodies split: a note too slow to copy alone, left to the check (note id: #{Ecto.UUID.load!(id)})",
+          category: :data,
+          user_id: Ecto.UUID.load!(user_id),
+          note_ids: [Ecto.UUID.load!(id)]
+        )
+
+        walk(repo, user_id, id)
     end
+  end
+
+  # Past its deadline the server cancels the window (`statement_timeout`) or
+  # DBConnection drops the connection; either way nothing committed.
+  defp window(repo, user_id, after_id, size) do
+    tenant(repo, user_id, fn -> repo.query!(@insert, [user_id, after_id, size]).rows end)
+  rescue
+    DBConnection.ConnectionError ->
+      :too_slow
+
+    e in Postgrex.Error ->
+      if match?(%{postgres: %{code: :query_canceled}}, e),
+        do: :too_slow,
+        else: reraise(e, __STACKTRACE__)
   end
 
   # One transaction in `user_id`'s RLS context; the tenant is cleared before
@@ -453,7 +512,8 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
         fn ->
           repo.query!(
             "SELECT set_config('app.current_tenant', $1::uuid::text, true), " <>
-              "set_config('lock_timeout', '5s', true)",
+              "set_config('lock_timeout', '#{@lock_timeout}', true), " <>
+              "set_config('statement_timeout', '#{@statement_timeout}', true)",
             [user_id]
           )
 
