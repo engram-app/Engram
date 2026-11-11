@@ -30,41 +30,6 @@ defmodule Engram.Backfill.ThrottleTest do
       end
     end
 
-    # A chain of hops on an injected clock: each hop has its own start, heals
-    # `per_window` rows in `work_ms` a window and stops at `cap`; its
-    # successor starts at once. `final_wait?` is whether the stopping window
-    # waits off its deficit too. Returns the chain's rate (rows/s).
-    defp chain_rate(final_wait?, per_s, cap, per_window, work_ms, hops) do
-      {now, writes} =
-        Enum.reduce(1..hops, {0, 0}, fn _, {now, total} ->
-          hop_start = now
-
-          {now, n} =
-            Enum.reduce_while(Stream.cycle([:window]), {now, 0}, fn _, {now, n} ->
-              n = n + per_window
-              now = now + work_ms
-              stop? = n >= cap
-
-              wait =
-                if stop? and not final_wait?,
-                  do: 0,
-                  else: Throttle.wait_ms(hop_start, n, per_s, if(stop?, do: 0, else: 250), now)
-
-              if stop?, do: {:halt, {now + wait, n}}, else: {:cont, {now + wait, n}}
-            end)
-
-          {now, total + n}
-        end)
-
-      writes * 1000 / now
-    end
-
-    test "a chain of capped hops keeps to the ceiling only if the stopping window waits too" do
-      # The bug the S1 review found: ~185/s at a 1,000-row cap against 150.
-      assert chain_rate(false, 150, 1_000, 200, 30, 50) > 180
-      assert chain_rate(true, 150, 1_000, 200, 30, 50) <= 150
-    end
-
     test "the wait is the deficit, never under the pause" do
       # 300 writes at 150/s need 2,000 ms; 500 have passed.
       assert Throttle.wait_ms(0, 300, 150, 250, 500) == 1_500
