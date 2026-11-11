@@ -1,9 +1,8 @@
-import { type EditorState, Prec } from "@codemirror/state";
-import { type Command, Decoration, type EditorView, keymap, WidgetType } from "@codemirror/view";
+import { type Command, Decoration, type EditorView, WidgetType } from "@codemirror/view";
 import type { Translate } from "@/i18n/translate";
 import { drawMermaid, rememberedMermaidHeight } from "../mermaid-render";
 import { fenceSurvives, scanFenced } from "./fence-scan";
-import { defineRenderer, type TextRenderer, tokensAt } from "./render-core";
+import { defineRenderer, enterBlockDown, enterBlockUp, type TextRenderer } from "./render-core";
 import { translator } from "./translator";
 import "./mermaid.css";
 
@@ -135,13 +134,6 @@ const mermaidRenderer: TextRenderer<FenceToken> = {
 	},
 };
 
-/** The rendered (mermaid) fence starting or ending at `pos`, if any. */
-function mermaidAt(state: EditorState, pos: number, edge: "from" | "to") {
-	return tokensAt(state, mermaidRenderer, pos, pos).find(
-		(t) => t.value !== null && t[edge] === pos,
-	);
-}
-
 /** Drop up to `width` leading spaces, so an indented diagram reaches mermaid flush. */
 function dedent(line: string, width: number): string {
 	let i = 0;
@@ -151,75 +143,11 @@ function dedent(line: string, width: number): string {
 	return line.slice(i);
 }
 
-/**
- * Vertical motion into a rendered block.
- *
- * A block replace leaves no visible position inside it, so CM6's ArrowDown/Up
- * step over the entire diagram: measured in a real editor, ArrowDown from the
- * line above a fence landed on the line BELOW the closing fence. The block was
- * unreachable by keyboard, openable only by clicking it. Callouts never had the
- * problem because only their header LINE is replaced, leaving the body lines
- * navigable.
- *
- * Landing the caret ON the fence reveals the source (the decoration skips any
- * block the selection intersects), so from there normal motion walks the
- * diagram and leaving it re-renders — the same feel as arrowing into a callout.
- */
-function enterFence(view: EditorView, forward: boolean): boolean {
-	const { state } = view;
-	const range = state.selection.main;
-	// Shift+Arrow is selecting, not navigating; hijacking it would collapse the
-	// selection the user is building.
-	if (!range.empty) {
-		return false;
-	}
-	const { doc } = state;
-	const caretLine = doc.lineAt(range.head).number;
-	// Vertical motion is VISUAL, not per-line: a soft-wrapped paragraph above a
-	// fence occupies several screen rows, and a line-number check alone fired on
-	// every one of them — ArrowDown from the paragraph's first row teleported into
-	// the diagram, skipping the rest of the text the user was reading. Ask CM6
-	// where the caret would actually land instead. Landing on a different line
-	// means this really is the last (or first) visual row of it.
-	//
-	// `moved === range.head` covers the no-layout case (jsdom, an unmeasured
-	// view), where moveVertically cannot move and would otherwise disable the
-	// keymap outright.
-	const moved = view.moveVertically(range, forward).head;
-	if (moved !== range.head && doc.lineAt(moved).number === caretLine) {
-		return false;
-	}
-	// Already inside: the block is revealed and normal motion is what should
-	// carry the caret through its lines.
-	if (tokensAt(state, mermaidRenderer, range.head, range.head).some((t) => t.value !== null)) {
-		return false;
-	}
-	// Enter at the near edge, so continuing in the same direction reads the
-	// source in the order you were already travelling.
-	const neighbour = caretLine + (forward ? 1 : -1);
-	if (neighbour < 1 || neighbour > doc.lines) {
-		return false;
-	}
-	const line = doc.line(neighbour);
-	const fence = forward ? mermaidAt(state, line.from, "from") : mermaidAt(state, line.to, "to");
-	if (!fence) {
-		return false;
-	}
-	view.dispatch({ selection: { anchor: forward ? fence.from : fence.to }, scrollIntoView: true });
-	return true;
-}
-
-export const enterMermaidDown: Command = (view) => enterFence(view, true);
-export const enterMermaidUp: Command = (view) => enterFence(view, false);
-
-// Prec.highest so this runs before the default cursor-motion bindings, which
-// would otherwise consume the key and skip the block.
-export const mermaidKeymap = Prec.highest(
-	keymap.of([
-		{ key: "ArrowDown", run: enterMermaidDown },
-		{ key: "ArrowUp", run: enterMermaidUp },
-	]),
-);
+// Arrow-key entry into a rendered diagram lives in the render core
+// (enterBlockDown/Up), shared by every widget it draws. Kept under these names
+// for callers that bind or test the mermaid case directly.
+export const enterMermaidDown: Command = enterBlockDown;
+export const enterMermaidUp: Command = enterBlockUp;
 
 /**
  * Renders ```mermaid fences in the editor, the way Reading mode already does.

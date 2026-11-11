@@ -2,7 +2,9 @@ import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import {
 	type EditorSelection,
 	type EditorState,
+	type Extension,
 	Facet,
+	Prec,
 	type Range,
 	RangeSet,
 	RangeValue,
@@ -10,7 +12,7 @@ import {
 	type Text,
 	type Transaction,
 } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
+import { type Command, Decoration, type DecorationSet, EditorView, keymap } from "@codemirror/view";
 import type { SyntaxNode, SyntaxNodeRef, Tree } from "@lezer/common";
 import { selectionTouches } from "./decoration-utils";
 
@@ -555,36 +557,108 @@ function revealPatch(state: EditorState, r: TextRenderer<unknown>, layer: Layer,
 	}
 }
 
-const renderCore = StateField.define<CoreState>({ create: build, update });
-
-/** Tokens of a text renderer touching [from, to]. O(log n + k). */
-function tokensAt(
-	state: EditorState,
-	r: TextRenderer<unknown>,
-	from: number,
-	to: number,
-): Token<unknown>[] {
-	const out: Token<unknown>[] = [];
-	state
-		.field(renderCore, false)
-		?.layers.get(r)
-		?.tokens.between(from, to, (f, t, v) => {
-			out.push({ from: f, to: t, value: v.value });
-		});
-	return out;
+/**
+ * Vertical motion into a rendered widget, for every widget the core draws
+ * (display math, mermaid, an image embed or callout header that fills its
+ * line). A replaced range leaves no visible position inside it, so CM6's
+ * ArrowDown/Up step straight over it and the source can only be opened by a
+ * click. Same approach as Atomic's arrowIntoTable: when the next line in the
+ * direction of travel is wholly covered by one of our widgets, put the caret
+ * on its near edge instead. That touches the widget, so reveal shows its
+ * source, and normal motion carries on through it.
+ */
+function enterBlock(view: EditorView, forward: boolean): boolean {
+	const { state } = view;
+	const range = state.selection.main;
+	// Shift+Arrow is selecting, not navigating; hijacking it would collapse the
+	// selection being built.
+	if (!range.empty) {
+		return false;
+	}
+	const { doc } = state;
+	const caretLine = doc.lineAt(range.head).number;
+	// Vertical motion is VISUAL: on a soft-wrapped line only the last (first)
+	// screen row may enter the widget below (above). Asked of the layout
+	// directly, by comparing the caret's row with the line end's (start's) row:
+	// asking moveVertically instead depends on where CM6 would land next to a
+	// replaced range, which is the very motion this replaces. No layout (jsdom,
+	// an unmeasured view) counts as the edge row.
+	if (!onEdgeRow(view, range.head, forward)) {
+		return false;
+	}
+	const n = caretLine + (forward ? 1 : -1);
+	if (n < 1 || n > doc.lines) {
+		return false;
+	}
+	const line = doc.line(n);
+	let target = -1;
+	for (const layer of state.field(renderCore, false)?.layers.values() ?? []) {
+		target = edgeOfCover(layer.decos, line, forward);
+		if (target >= 0) {
+			break;
+		}
+	}
+	if (target < 0) {
+		return false;
+	}
+	view.dispatch({ selection: { anchor: target }, scrollIntoView: true });
+	return true;
 }
+
+function onEdgeRow(view: EditorView, head: number, forward: boolean): boolean {
+	const line = view.state.doc.lineAt(head);
+	const here = view.coordsAtPos(head);
+	const edge = view.coordsAtPos(forward ? line.to : line.from);
+	return !(here && edge) || Math.abs(here.top - edge.top) < 1;
+}
+
+/** The near edge of a widget of ours that covers all of `line`, or -1. */
+function edgeOfCover(
+	decos: DecorationSet,
+	line: { from: number; to: number },
+	forward: boolean,
+): number {
+	let edge = -1;
+	decos.between(line.from, line.to, (from, to, deco) => {
+		if (deco.spec.widget && to > from && from <= line.from && to >= line.to) {
+			edge = forward ? Math.max(from, line.from) : Math.min(to, line.to);
+			return false;
+		}
+	});
+	return edge;
+}
+
+const enterBlockDown: Command = (view) => enterBlock(view, true);
+const enterBlockUp: Command = (view) => enterBlock(view, false);
+
+// Prec.highest so this runs before the default cursor-motion bindings, which
+// would otherwise consume the key and skip the widget.
+const blockEntryKeymap = Prec.highest(
+	keymap.of([
+		{ key: "ArrowDown", run: enterBlockDown },
+		{ key: "ArrowUp", run: enterBlockUp },
+	]),
+);
+
+const renderCore = StateField.define<CoreState>({ create: build, update });
 
 /**
  * Register a renderer. The returned field holds its decorations (so callers and
- * tests can read them) and brings the core with it; wrap it in Prec at the use
- * site to set its precedence.
+ * tests can read them) and brings the core with it, plus `extra` (its widget
+ * styles); wrap it in Prec at the use site to set its precedence.
  */
-function defineRenderer(r: Renderer): StateField<DecorationSet> {
+function defineRenderer(r: Renderer, extra: Extension = []): StateField<DecorationSet> {
 	const pick = (s: EditorState) => s.field(renderCore).layers.get(r)?.decos ?? Decoration.none;
 	return StateField.define<DecorationSet>({
 		create: pick,
 		update: (_v, tr) => pick(tr.state),
-		provide: (f) => [renderCore, renderers.of(r), EditorView.decorations.from(f)],
+		provide: (f) => [
+			renderCore,
+			renderers.of(r),
+			EditorView.decorations.from(f),
+			blockEntryKeymap,
+			extra,
+		],
 	});
 }
 
@@ -616,4 +690,4 @@ function inCodeBlock(tree: Tree, pos: number): boolean {
 }
 
 export type { Renderer, TextRenderer, Token, TreeRenderer };
-export { defineRenderer, inCodeBlock, searchForward, tokensAt };
+export { defineRenderer, enterBlockDown, enterBlockUp, inCodeBlock, searchForward };
