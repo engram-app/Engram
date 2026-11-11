@@ -136,7 +136,7 @@ export default function MobileLayout() {
 							    owns the seam, so the switcher drops its own. */}
 								<section className="flex items-center gap-1 border-border border-t pr-2">
 									<VaultSwitcher className="min-w-0 flex-1 border-t-0" />
-									<UserMenu />
+									<UserMenu planPlacement="beside" />
 								</section>
 							</FolderTreeProvider>
 						</SheetContent>
