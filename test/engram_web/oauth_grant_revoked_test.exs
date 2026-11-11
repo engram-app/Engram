@@ -611,6 +611,81 @@ defmodule EngramWeb.OAuthGrantRevokedTest do
     end
   end
 
+  describe "account deletion ends every grant (cause account_deleted)" do
+    setup %{client: client, user: user} do
+      {rt1, f1} = grant(client, user)
+      {rt2, f2} = grant(client, user)
+      other = insert(:user)
+      {other_rt, _} = grant(client, other)
+      %{rts: [rt1, rt2], families: Enum.sort([f1, f2]), other_rt: other_rt}
+    end
+
+    defp assert_account_deleted(user, families, rts, other_rt) do
+      evs = events(@event)
+      assert Enum.all?(evs, &(&1.user_id == user.id))
+      assert Enum.map(evs, & &1.props["cause"]) == ["account_deleted", "account_deleted"]
+
+      assert evs |> Enum.map(& &1.props["grant_id"]) |> Enum.sort() ==
+               families |> Enum.map(&OAuth.grant_id/1) |> Enum.sort()
+
+      for rt <- rts, do: assert(row(rt).revoked_at)
+      assert is_nil(row(other_rt).revoked_at)
+    end
+
+    test "inactivity / user / Clerk soft delete (Lifecycle.soft_delete/2)", %{
+      user: user,
+      families: families,
+      rts: rts,
+      other_rt: other_rt
+    } do
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = Engram.Accounts.Lifecycle.soft_delete(user, :inactivity)
+      end)
+
+      assert_account_deleted(user, families, rts, other_rt)
+    end
+
+    test "admin soft delete (Accounts.soft_delete_user/1)", %{
+      user: user,
+      families: families,
+      rts: rts,
+      other_rt: other_rt
+    } do
+      assert {:ok, _} = Engram.Accounts.soft_delete_user(user)
+      assert_account_deleted(user, families, rts, other_rt)
+    end
+
+    test "a delete that rolls back ends nothing and emits nothing", %{user: user, rts: rts} do
+      {:error, :undo} =
+        Repo.transaction_after_commit(fn ->
+          {:ok, _} = Engram.Accounts.soft_delete_user(user)
+          Repo.rollback(:undo)
+        end)
+
+      assert events(@event) == []
+      for rt <- rts, do: assert(is_nil(row(rt).revoked_at))
+      assert is_nil(Repo.reload!(user, skip_tenant_check: true).deleted_at)
+    end
+
+    test "analytics that raises cannot stop the delete", %{user: user, rts: rts} do
+      on_exit(fn -> Engram.Cache.evict(:user, user.id) end)
+      Engram.Cache.put(:user, user.id, :not_a_user)
+
+      assert {:ok, _} = Engram.Accounts.soft_delete_user(user)
+      for rt <- rts, do: assert(row(rt).revoked_at)
+      assert Repo.reload!(user, skip_tenant_check: true).deleted_at
+    end
+
+    test "a refresh after the delete is refused, as any revoked grant", %{
+      client: client,
+      user: user,
+      rts: [rt | _]
+    } do
+      assert {:ok, _} = Engram.Accounts.soft_delete_user(user)
+      assert_invalid_grant(refresh(client, rt))
+    end
+  end
+
   # The grant id rides the request process, which a keep-alive connection
   # (and this test) reuses: one request's grant must not label the next.
   test "a grant_id does not carry over to the next request", %{client: client, user: user} do

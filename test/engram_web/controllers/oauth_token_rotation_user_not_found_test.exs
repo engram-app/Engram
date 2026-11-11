@@ -179,4 +179,29 @@ defmodule EngramWeb.OAuthTokenRotationUserNotFoundTest do
     assert is_nil(row(successor).revoked_at)
     assert family_size(family_id) == 2
   end
+
+  # A soft-deleted account whose grants were somehow left live (written before
+  # deletion revoked them, or by a node on an older release mid-deploy): its
+  # user loads, but must be refused like a missing one, and nothing consumed.
+  test "a refresh for a soft-deleted user is refused user_deleted and consumes nothing", %{
+    conn: conn,
+    user: user,
+    client_id: client_id,
+    raw: raw,
+    ref: ref
+  } do
+    Repo.query!("UPDATE users SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(user.id)])
+    :ok = Engram.Cache.evict_local(:user, user.id)
+
+    conn = refresh(conn, raw, client_id)
+
+    assert json_response(conn, 400) == %{"error" => "invalid_grant"}
+
+    assert_receive {^ref, [:engram, :oauth, :token],
+                    %{result: :rejected, error: "invalid_grant", reason: :user_deleted}}
+
+    refute_received {^ref, [:engram, :oauth, :family_revoked], _}
+    assert is_nil(row(raw).consumed_at)
+    assert family_size(row(raw).family_id) == 1
+  end
 end
