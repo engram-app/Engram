@@ -130,6 +130,8 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealTest do
 
     def query!(sql, params), do: Engram.Repo.query!(sql, params)
 
+    def calls(i), do: :counters.get(:persistent_term.get({__MODULE__, :calls}), i)
+
     # Counts calls of kind `i` (1 = heal window, 2 = probe).
     defp bump(i) do
       counters = :persistent_term.get({__MODULE__, :calls})
@@ -286,6 +288,9 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealTest do
 
     assert :ok = heal!(FakeRepo)
     assert healed?(u, v, 2)
+    # One refused probe, then the retry: a batch walked whole without it
+    # would heal too, so the count is what proves the retry.
+    assert FakeRepo.calls(2) == 2
   end
 
   test "a probe batch past its statement_timeout is walked anyway", %{user: u, vault: v} do
@@ -296,7 +301,10 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealTest do
     assert healed?(u, v, 2)
   end
 
-  test "a body set concurrently survives a heal", %{user: u, vault: v} do
+  # CONTROL: the body is set before the heal reads, so the window never
+  # selects the note. The real race (a write between the heal's read and its
+  # UPDATE) is `NoteBodiesPreNonceHealRaceTest`, on real connections.
+  test "CONTROL: a body set before the heal is not selected", %{user: u, vault: v} do
     [raced | _] = pre_nonce!(u, v, 2)
     newer = <<1>> <> :crypto.strong_rand_bytes(60)
     FakeRepo.plan(concurrent: {raced.id, newer})
