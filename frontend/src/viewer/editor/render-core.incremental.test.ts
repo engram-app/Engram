@@ -65,6 +65,40 @@ describe("render core cost", () => {
 			expect(diffFromFresh(settled, ext, f), name).toEqual([]);
 		}
 	});
+
+	test("a keystroke in the paragraph above a closed 5000-line fence costs that paragraph, in every renderer", () => {
+		const body = Array.from(
+			{ length: 5000 },
+			(_, i) => `const v${i} = ${i}; // %% ![[a.png]]`,
+		).join("\n");
+		const s = parsedState(
+			`intro\nabove the fence\n\`\`\`js\n${body}\n\`\`\`\n\nafter %%c%%\n`,
+			ext,
+		);
+		const at = s.doc.line(2).from + 3;
+		let after = s;
+		const cost: Record<string, number> = {};
+		const run = () => {
+			after = s.update({ changes: { from: at, insert: "x" } }).state;
+		};
+		for (const [name, r] of [
+			["comments", commentRenderer],
+			["list rails", listRailsRenderer],
+			["indented code", indentedCodeRenderer],
+			["mermaid", mermaidRenderer],
+			["embeds", embeds],
+		] as const) {
+			cost[name] = workDuring(r, run);
+		}
+		expect(s.doc.length).toBeGreaterThan(150_000);
+		for (const [name, chars] of Object.entries(cost)) {
+			expect(chars, name).toBeLessThan(500);
+		}
+		const settled = settle(after);
+		for (const [name, f] of fields) {
+			expect(diffFromFresh(settled, ext, f), name).toEqual([]);
+		}
+	});
 });
 
 describe("decorations hold while the parser lags", () => {
