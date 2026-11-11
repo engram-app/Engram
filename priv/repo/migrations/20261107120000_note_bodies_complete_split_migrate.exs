@@ -73,19 +73,28 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
 
   No connection is held across the walk: each window is its own short
   transaction, with `lock_timeout` set inside it. A `checkout` around every
-  user inherited DBConnection's 15s and crashed boot at 1,637 users. A
-  window that outlives its deadline (`statement_timeout` just inside it,
-  or DBConnection's own) is halved down to one note, and so is an owner
-  repair. A note too slow even alone is logged and stepped over so every
-  other user still finishes, then the run raises with the count: recording
-  it would leave that note with no body for good once readers stop falling
-  back (the same reason as the contention raise above).
+  user inherited DBConnection's 15s and crashed boot at 1,637 users.
+
+  One run has a #{90} s deadline (ECS replaces a task not healthy ~150 s
+  after start): no window, repair or probe batch starts past it, and each
+  one's `statement_timeout` (at most 110 s) ends at it, so a run stops
+  within a few seconds of it. A window or repair batch (#{50} owner
+  repairs at most, each holding ACCESS EXCLUSIVE on `note_bodies`) past its
+  timeout is halved, at most #{4} times (1,000 -> 62); past that its notes
+  are logged and stepped over. Only a timeout counts (Postgres 57014 or
+  DBConnection's checkout deadline): a dropped connection is raised. A run
+  that stepped over notes or hit the deadline raises with the counts once
+  every user it reached is done: recording it would leave those notes with
+  no body for good once readers stop falling back (the same reason as the
+  contention raise above). Windows commit as they go, so each boot resumes
+  where the last stopped.
 
   Before any walk, one tenanted `EXISTS` per user (in batches of #{200} users
-  per short transaction, under the same `lock_timeout`) picks out the users
-  with a note that reads with no body, a body row under another owner
-  included; only those are walked. A batch still locked out after two
-  retries is walked whole.
+  per short transaction, under the same `lock_timeout` and
+  `statement_timeout`) picks out the users with a note that reads with no
+  body, a body row under another owner included; only those are walked. A
+  batch still locked out after two retries, or past its timeout, is walked
+  whole.
 
   A pre-check skips all of that when no note needs anything, but only on a
   connection that can see every tenant: a superuser or BYPASSRLS role, or one
@@ -97,12 +106,20 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
 
   require Logger
 
-  @window 1_000
   # One window: 1,000 whole bodies copied at worst, on a self-hoster's disk.
-  @window_timeout_ms 120_000
-  # Cancels a window's statement server-side inside the checkout deadline.
-  @statement_timeout "110s"
+  @window 1_000
+  # Cancels a window's statement server-side inside the checkout deadline,
+  # and never past the run's deadline.
+  @statement_timeout_ms 110_000
   @lock_timeout "5s"
+  # One run stops starting work this long after it began (ECS replaces a
+  # task that is not healthy ~150 s after start), and raises with the count.
+  @deadline_ms 90_000
+  # A window or repair batch past its deadline is halved at most this often
+  # (1,000 -> 62); past that its notes count as unfinished.
+  @max_halvings 4
+  # Owner repairs per transaction: each holds ACCESS EXCLUSIVE on note_bodies.
+  @repair_batch 50
   @window_retries 2
   @probe_batch 200
   @progress_every 250
@@ -146,8 +163,8 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   SELECT (SELECT id FROM w ORDER BY id DESC LIMIT 1), (SELECT count(*) FROM ins)::int
   """
 
-  # The next row of a walk, to step over a window of one that cannot finish.
-  @next "SELECT id FROM notes WHERE user_id = $1 AND id > $2 ORDER BY id LIMIT 1"
+  # The rows of a window, to step over one that cannot finish.
+  @window_rows "SELECT id, kind = 'note' FROM notes WHERE user_id = $1 AND id > $2 ORDER BY id LIMIT $3"
 
   # Notes of the user that read with no body: no body row of the same
   # owner (`NoteBody.join/1` matches the owner too). The same answer with or
@@ -259,34 +276,53 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   def down, do: :ok
 
   @doc false
-  # The whole migration on `repo`; public for `SelfHostJumpTest`.
-  def complete_split(repo) do
+  # The whole migration on `repo`; public for `SelfHostJumpTest`, which also
+  # passes `:deadline_ms` and `:max_halvings`.
+  def complete_split(repo, opts \\ []) do
     if work_remains?(repo) do
+      ctx = %{
+        deadline: now() + Keyword.get(opts, :deadline_ms, @deadline_ms),
+        max_halvings: Keyword.get(opts, :max_halvings, @max_halvings)
+      }
+
       %{rows: users} = repo.query!("SELECT id FROM users ORDER BY id")
-      split_users(repo, Enum.map(users, &hd/1))
+      split_users(repo, Enum.map(users, &hd/1), ctx)
     end
 
     :ok
   end
 
-  defp split_users(repo, users) do
-    started = System.monotonic_time(:millisecond)
-    pending = users_needing_work(repo, users)
+  defp now, do: System.monotonic_time(:millisecond)
+
+  # Milliseconds left in the run, at most one statement's worth; `:expired`
+  # once it is spent.
+  defp budget(ctx) do
+    case ctx.deadline - now() do
+      left when left > 0 -> min(left, @statement_timeout_ms)
+      _ -> :expired
+    end
+  end
+
+  defp split_users(repo, users, ctx) do
+    started = now()
+    pending = users_needing_work(repo, users, ctx)
     boot_log("walk started: #{length(pending)} of #{length(users)} users need work", started)
 
-    {skipped, slow_first} = walk_users(pending, repo, started)
-    {still, slow_final} = walk_users(skipped, repo, started)
-    slow = slow_first + slow_final
+    first = walk_users(pending, repo, started, ctx)
+    final = walk_users(first.skipped, repo, started, ctx)
+    slow = first.slow + final.slow
+    late = first.late + final.late
 
-    if still == [] and slow == 0 do
+    if final.skipped == [] and slow == 0 and late == 0 do
       boot_log("walk finished: #{length(pending)} users", started)
     else
       gaps =
         Enum.reject(
           [
-            still != [] &&
-              "#{length(still)} user(s) still need work after retries (lock contention)",
-            slow > 0 && "#{slow} note(s) too slow to copy even alone"
+            final.skipped != [] &&
+              "#{length(final.skipped)} user(s) still need work after retries (lock contention)",
+            slow > 0 && "#{slow} note(s) too slow to copy at the smallest window",
+            late > 0 && "#{late} user(s) not finished before the boot deadline"
           ],
           &(&1 == false)
         )
@@ -296,35 +332,48 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
     end
   end
 
-  defp users_needing_work(repo, users) do
+  defp users_needing_work(repo, users, ctx) do
     users
     |> Enum.chunk_every(@probe_batch)
-    |> Enum.flat_map(&probe(repo, &1, @window_retries))
+    |> Enum.flat_map(&probe(repo, &1, ctx, @window_retries))
   end
 
-  # Under the windows' `lock_timeout`, so a queued DDL lock fails the batch
-  # fast instead of at the checkout deadline. Contention is retried; a batch
-  # still locked out is walked whole (the walk has its own retries).
-  defp probe(repo, batch, retries) do
+  # Under the windows' `lock_timeout` and `statement_timeout`, so a queued
+  # DDL lock or a slow plan fails the batch fast instead of at the checkout
+  # deadline. Contention is retried; a batch still locked out, past its
+  # timeout, or reached after the deadline is walked whole (the walk has its
+  # own retries and deadline).
+  defp probe(repo, batch, ctx, retries) do
+    case budget(ctx) do
+      :expired -> batch
+      ms -> probe_batch(repo, batch, ms)
+    end
+  rescue
+    e in [Postgrex.Error, DBConnection.ConnectionError] ->
+      cond do
+        retries > 0 and contention?(e) -> probe(repo, batch, ctx, retries - 1)
+        contention?(e) or timeout?(e) -> batch
+        true -> reraise(e, __STACKTRACE__)
+      end
+  end
+
+  defp probe_batch(repo, batch, ms) do
     {:ok, needing} =
       repo.transaction(
         fn ->
-          repo.query!("SELECT set_config('lock_timeout', '#{@lock_timeout}', true)")
+          repo.query!(
+            "SELECT set_config('lock_timeout', '#{@lock_timeout}', true), " <>
+              "set_config('statement_timeout', '#{ms}ms', true)"
+          )
+
           needing = Enum.filter(batch, &user_left?(repo, &1))
           repo.query!("SELECT set_config('app.current_tenant', '', true)")
           needing
         end,
-        timeout: @window_timeout_ms
+        timeout: ms + 10_000
       )
 
     needing
-  rescue
-    e in Postgrex.Error ->
-      cond do
-        not contention?(e) -> reraise(e, __STACKTRACE__)
-        retries > 0 -> probe(repo, batch, retries - 1)
-        true -> batch
-      end
   end
 
   defp user_left?(repo, user_id) do
@@ -333,32 +382,33 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
     left?
   end
 
-  # Returns the users skipped for lock contention, and the count of notes
-  # too slow to finish even alone.
-  defp walk_users(users, repo, started) do
+  # The users skipped for lock contention, the count of notes too slow at
+  # the smallest window, and the count of users not finished by the deadline.
+  defp walk_users(users, repo, started, ctx) do
     total = length(users)
 
-    {skipped, slow} =
+    acc =
       users
       |> Enum.with_index(1)
-      |> Enum.reduce({[], 0}, fn {user_id, done}, {skipped, slow} ->
-        result = split_user(repo, user_id)
+      |> Enum.reduce(%{skipped: [], slow: 0, late: 0}, fn {user_id, done}, acc ->
+        result = if budget(ctx) == :expired, do: {:cut, []}, else: split_user(repo, user_id, ctx)
 
         if rem(done, @progress_every) == 0 do
           boot_log("walk progress: #{done} of #{total} users", started)
         end
 
         case result do
-          :contention -> {[user_id | skipped], slow}
-          too_slow -> {skipped, slow + too_slow}
+          :contention -> %{acc | skipped: [user_id | acc.skipped]}
+          {:done, slow} -> %{acc | slow: acc.slow + length(slow)}
+          {:cut, slow} -> %{acc | slow: acc.slow + length(slow), late: acc.late + 1}
         end
       end)
 
-    {Enum.reverse(skipped), slow}
+    %{acc | skipped: Enum.reverse(acc.skipped)}
   end
 
-  defp split_user(repo, user_id) do
-    length(user!(repo, user_id))
+  defp split_user(repo, user_id, ctx) do
+    user!(repo, user_id, ctx)
   rescue
     e in Postgrex.Error ->
       if contention?(e), do: :contention, else: reraise(e, __STACKTRACE__)
@@ -405,33 +455,42 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
     any?
   end
 
-  # Returns the ids of the notes too slow to finish even alone.
-  defp user!(repo, user_id) do
-    slow = walk(repo, user_id, <<0::128>>, @window, [])
-    check(repo, user_id, left(repo, user_id) -- slow, slow)
+  # `{:done | :cut, slow}`: `:cut` once the deadline passed, `slow` the ids
+  # of the notes too slow at the smallest window.
+  defp user!(repo, user_id, ctx) do
+    case walk(repo, user_id, <<0::128>>, {@window, 0}, [], ctx) do
+      {:done, slow} -> check(repo, user_id, left(repo, user_id) -- slow, slow, ctx)
+      cut -> cut
+    end
   end
 
   # Repairs until no note of the user reads with no body, or a repair makes
   # no progress (a note with no body row at all: none after the walk).
-  # Notes too slow even alone are left out, and returned.
-  defp check(_repo, _user_id, [], slow), do: slow
+  # Notes too slow at the smallest batch are left out, and returned.
+  defp check(_repo, _user_id, [], slow, _ctx), do: {:done, slow}
 
-  defp check(repo, user_id, ids, slow) do
-    slow = repair(repo, user_id, ids) ++ slow
+  defp check(repo, user_id, ids, slow, ctx) do
+    case repair_all(repo, user_id, ids, ctx) do
+      {:cut, more} ->
+        {:cut, more ++ slow}
 
-    case left(repo, user_id) -- slow do
-      ^ids ->
-        # A warning, never a raise: no retry would change the answer.
-        Logger.warning("note_bodies split incomplete: notes still read with no body",
-          category: :data,
-          user_id: Ecto.UUID.load!(user_id),
-          note_ids: Enum.map(ids, &Ecto.UUID.load!/1)
-        )
+      {:done, more} ->
+        slow = more ++ slow
 
-        slow
+        case left(repo, user_id) -- slow do
+          ^ids ->
+            # A warning, never a raise: no retry would change the answer.
+            Logger.warning("note_bodies split incomplete: notes still read with no body",
+              category: :data,
+              user_id: Ecto.UUID.load!(user_id),
+              note_ids: Enum.map(ids, &Ecto.UUID.load!/1)
+            )
 
-      rest ->
-        check(repo, user_id, rest, slow)
+            {:done, slow}
+
+          rest ->
+            check(repo, user_id, rest, slow, ctx)
+        end
     end
   end
 
@@ -439,10 +498,21 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
     tenant(repo, user_id, fn -> Enum.map(repo.query!(@left, [user_id]).rows, &hd/1) end)
   end
 
+  defp repair_all(repo, user_id, ids, ctx) do
+    ids
+    |> Enum.chunk_every(@repair_batch)
+    |> Enum.reduce_while({:done, []}, fn batch, {:done, slow} ->
+      case repair(repo, user_id, batch, 0, ctx) do
+        {:done, more} -> {:cont, {:done, more ++ slow}}
+        {:cut, more} -> {:halt, {:cut, more ++ slow}}
+      end
+    end)
+  end
+
   # Only for a user with a note under a foreign body row (prod: none). A
-  # batch past its deadline is split in half down to one note; returns the
-  # ids too slow even alone.
-  defp repair(repo, user_id, ids) do
+  # batch past its deadline is halved up to `max_halvings` times; past that
+  # its ids are returned as too slow.
+  defp repair(repo, user_id, ids, halvings, ctx) do
     fun = fn ->
       repo.query!("ALTER TABLE note_bodies NO FORCE ROW LEVEL SECURITY")
       %{rows: rows} = repo.query!(@repair, [ids, user_id])
@@ -450,18 +520,35 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
       rows
     end
 
-    case attempt(repo, user_id, fun) do
-      :too_slow when length(ids) > 1 ->
-        {first, second} = Enum.split(ids, div(length(ids), 2))
-        repair(repo, user_id, first) ++ repair(repo, user_id, second)
+    case attempt(repo, user_id, fun, ctx) do
+      :expired ->
+        {:cut, []}
 
       :too_slow ->
-        too_slow(user_id, hd(ids), "repair")
-        ids
+        cond do
+          budget(ctx) == :expired ->
+            {:cut, []}
+
+          halvings < ctx.max_halvings and length(ids) > 1 ->
+            {first, second} = Enum.split(ids, div(length(ids), 2))
+
+            case repair(repo, user_id, first, halvings + 1, ctx) do
+              {:done, slow} ->
+                {status, more} = repair(repo, user_id, second, halvings + 1, ctx)
+                {status, slow ++ more}
+
+              cut ->
+                cut
+            end
+
+          true ->
+            too_slow(user_id, ids, "repair")
+            {:done, ids}
+        end
 
       rows ->
         log_repair(user_id, rows)
-        []
+        {:done, []}
     end
   end
 
@@ -491,73 +578,101 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
     end
   end
 
-  # A window past its deadline is halved down to one note. A note too slow
-  # even alone is logged and stepped over; its id is returned, and the run
-  # raises at the end with the count, so it is not recorded.
-  defp walk(repo, user_id, after_id, size, slow) do
+  # A window past its deadline is halved up to `max_halvings` times. Past
+  # that its notes are logged and stepped over; their ids are returned, and
+  # the run raises at the end with the count, so it is not recorded.
+  defp walk(repo, user_id, after_id, {size, halvings}, slow, ctx) do
     insert = fn -> repo.query!(@insert, [user_id, after_id, size]).rows end
 
-    case attempt(repo, user_id, insert) do
+    case attempt(repo, user_id, insert, ctx) do
+      :expired ->
+        {:cut, slow}
+
       [[nil, _]] ->
-        slow
+        {:done, slow}
 
       [[last, _]] ->
-        walk(repo, user_id, last, size, slow)
-
-      :too_slow when size > 1 ->
-        walk(repo, user_id, after_id, div(size, 2), slow)
+        walk(repo, user_id, last, {size, halvings}, slow, ctx)
 
       :too_slow ->
-        [[id]] = tenant(repo, user_id, fn -> repo.query!(@next, [user_id, after_id]).rows end)
-        too_slow(user_id, id, "copy")
-        walk(repo, user_id, id, @window, [id | slow])
+        cond do
+          budget(ctx) == :expired ->
+            {:cut, slow}
+
+          halvings < ctx.max_halvings and size > 1 ->
+            walk(repo, user_id, after_id, {div(size, 2), halvings + 1}, slow, ctx)
+
+          true ->
+            tenant(repo, user_id, fn ->
+              repo.query!(@window_rows, [user_id, after_id, size]).rows
+            end)
+            |> step_over(repo, user_id, slow, ctx)
+        end
     end
   end
 
-  defp too_slow(user_id, id, step) do
+  defp step_over([], _repo, _user_id, slow, _ctx), do: {:done, slow}
+
+  defp step_over(rows, repo, user_id, slow, ctx) do
+    ids = for [id, true] <- rows, do: id
+    too_slow(user_id, ids, "copy")
+    walk(repo, user_id, rows |> List.last() |> hd(), {@window, 0}, ids ++ slow, ctx)
+  end
+
+  defp too_slow(_user_id, [], _step), do: :ok
+
+  defp too_slow(user_id, ids, step) do
+    note_ids = Enum.map(ids, &Ecto.UUID.load!/1)
+
     Logger.warning(
-      "note_bodies split: a note too slow to #{step} even alone (note id: #{Ecto.UUID.load!(id)})",
+      "note_bodies split: #{length(ids)} note(s) too slow to #{step} at the smallest window " <>
+        "(note ids: #{Enum.join(note_ids, ", ")})",
       category: :data,
       user_id: Ecto.UUID.load!(user_id),
-      note_ids: [Ecto.UUID.load!(id)]
+      note_ids: note_ids
     )
   end
 
-  # `tenant/3`, with a run past its deadline answered `:too_slow`: the server
-  # cancels it (`statement_timeout`) or DBConnection drops the connection;
-  # either way nothing committed. The walk and the repair both go through it.
-  defp attempt(repo, user_id, fun) do
-    tenant(repo, user_id, fun)
+  # `tenant/4` within the run's budget, a run past its deadline answered
+  # `:too_slow` and a spent budget `:expired`. The walk and the repair both
+  # go through it.
+  defp attempt(repo, user_id, fun, ctx) do
+    case budget(ctx) do
+      :expired -> :expired
+      ms -> tenant(repo, user_id, fun, ms)
+    end
   rescue
-    DBConnection.ConnectionError ->
-      :too_slow
-
-    e in Postgrex.Error ->
-      if match?(%{postgres: %{code: :query_canceled}}, e),
-        do: :too_slow,
-        else: reraise(e, __STACKTRACE__)
+    e in [Postgrex.Error, DBConnection.ConnectionError] ->
+      if timeout?(e), do: :too_slow, else: reraise(e, __STACKTRACE__)
   end
+
+  # Only a deadline is a slow run: Postgres cancelling the statement at its
+  # `statement_timeout` (57014), or DBConnection's checkout deadline. A
+  # dropped connection or a failover is raised, not halved.
+  defp timeout?(%Postgrex.Error{postgres: %{code: :query_canceled}}), do: true
+  defp timeout?(%DBConnection.ConnectionError{message: message}), do: message =~ "timed out"
+  defp timeout?(_error), do: false
 
   # One transaction in `user_id`'s RLS context; the tenant is cleared before
   # it ends (a test runs this in a sandbox, where it would outlive a
   # savepoint).
-  defp tenant(repo, user_id, fun, retries \\ @window_retries) do
-    in_tenant(repo, user_id, fun)
+  defp tenant(repo, user_id, fun, ms \\ @statement_timeout_ms, retries \\ @window_retries) do
+    in_tenant(repo, user_id, fun, ms)
   rescue
     e in Postgrex.Error ->
       if retries > 0 and contention?(e),
-        do: tenant(repo, user_id, fun, retries - 1),
+        do: tenant(repo, user_id, fun, ms, retries - 1),
         else: reraise(e, __STACKTRACE__)
   end
 
-  defp in_tenant(repo, user_id, fun) do
+  defp in_tenant(repo, user_id, fun, ms) do
     {:ok, result} =
       repo.transaction(
         fn ->
           repo.query!(
             "SELECT set_config('app.current_tenant', $1::uuid::text, true), " <>
               "set_config('lock_timeout', '#{@lock_timeout}', true), " <>
-              "set_config('statement_timeout', '#{@statement_timeout}', true)",
+              "set_config('statement_timeout', '#{ms}ms', true)",
             [user_id]
           )
 
@@ -565,7 +680,7 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
           repo.query!("SELECT set_config('app.current_tenant', '', true)")
           result
         end,
-        timeout: @window_timeout_ms
+        timeout: ms + 10_000
       )
 
     result

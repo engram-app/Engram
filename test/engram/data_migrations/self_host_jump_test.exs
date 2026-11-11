@@ -370,12 +370,42 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
   # deadline (#2545 review MED-2): for a body insert window wider than
   # `:max` notes, or one holding note `:never`. A window with no size
   # parameter is the old fixed 1,000. The owner repair the same, by its
-  # id list (`:repair_max`, `:repair_never`).
+  # id list (`:repair_max`, `:repair_never`); the largest repair batch is
+  # kept (`repair_seen/0`). `:error` picks what is raised: `:timeout` (the
+  # checkout deadline, default), `:canceled` (Postgres 57014 from
+  # `statement_timeout`) or `:closed` (a dropped connection, not a timeout).
   defmodule SlowRepo do
     @moduledoc false
     @key {__MODULE__, :spec}
 
-    def plan(spec), do: :persistent_term.put(@key, spec)
+    def plan(spec) do
+      :persistent_term.put(@key, spec)
+      :persistent_term.put({__MODULE__, :seen}, 0)
+    end
+
+    def repair_seen, do: :persistent_term.get({__MODULE__, :seen})
+
+    def fail!(spec) do
+      case Keyword.get(spec, :error, :timeout) do
+        :timeout ->
+          raise DBConnection.ConnectionError,
+                "client #PID<0.1.0> timed out because it checked out the connection " <>
+                  "for longer than 120000ms"
+
+        :canceled ->
+          raise %Postgrex.Error{
+            postgres: %{
+              code: :query_canceled,
+              pg_code: "57014",
+              severity: "ERROR",
+              message: "canceling statement due to statement timeout"
+            }
+          }
+
+        :closed ->
+          raise DBConnection.ConnectionError, "tcp recv: closed"
+      end
+    end
 
     defdelegate query!(sql), to: Engram.Repo
     defdelegate query!(sql, params, opts), to: Engram.Repo
@@ -385,10 +415,11 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
     def query!(sql, [ids, _user_id] = params) when is_list(ids) do
       spec = :persistent_term.get(@key)
 
-      if String.contains?(sql, "UPDATE note_bodies b SET") and
-           (length(ids) > Keyword.get(spec, :repair_max, 1_000) or spec[:repair_never] in ids) do
-        raise DBConnection.ConnectionError,
-              "client timed out because it checked out the connection"
+      if String.contains?(sql, "UPDATE note_bodies b SET") do
+        :persistent_term.put({__MODULE__, :seen}, max(repair_seen(), length(ids)))
+
+        if length(ids) > Keyword.get(spec, :repair_max, 1_000) or spec[:repair_never] in ids,
+          do: fail!(spec)
       end
 
       Engram.Repo.query!(sql, params)
@@ -396,10 +427,8 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
 
     def query!(sql, [user_id, after_id | rest] = params) do
       if String.contains?(sql, "INSERT INTO note_bodies") and
-           too_slow?(user_id, after_id, List.first(rest, 1_000)) do
-        raise DBConnection.ConnectionError,
-              "client timed out because it checked out the connection"
-      end
+           too_slow?(user_id, after_id, List.first(rest, 1_000)),
+         do: fail!(:persistent_term.get(@key))
 
       Engram.Repo.query!(sql, params)
     end
@@ -430,17 +459,18 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
       mod =
         String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate")
 
-      mod.complete_split(SlowRepo)
+      mod.complete_split(SlowRepo, :persistent_term.get({__MODULE__, :opts}, []))
     end
   end
 
-  # Records every statement, and refuses the per-user probe with a lock
-  # timeout the first `:times` calls (#2545 review LOW-3).
+  # Records every statement, and refuses the per-user probe with `code` (a
+  # lock timeout by default) the first `:times` calls (#2545 review LOW-3).
   defmodule ProbeLockedRepo do
     @moduledoc false
     @key {__MODULE__, :left}
 
-    def plan(times) do
+    def plan(times, code \\ :lock_not_available) do
+      :persistent_term.put({__MODULE__, :code}, code)
       :persistent_term.put(@key, :counters.new(1, []))
       :counters.put(:persistent_term.get(@key), 1, times)
       :persistent_term.put({__MODULE__, :log}, :ets.new(__MODULE__, [:public, :duplicate_bag]))
@@ -468,10 +498,13 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
 
         raise %Postgrex.Error{
           postgres: %{
-            code: :lock_not_available,
-            pg_code: "55P03",
+            code: :persistent_term.get({__MODULE__, :code}),
+            pg_code:
+              %{lock_not_available: "55P03", query_canceled: "57014"}[
+                :persistent_term.get({__MODULE__, :code})
+              ],
             severity: "ERROR",
-            message: "lock timeout"
+            message: "refused"
           }
         }
       end
@@ -610,14 +643,16 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
       for i <- 1..5, do: write!(u, v, "slow#{i}.md", "slow text #{i}")
       written = bodies(u)
       pre_split!(u)
-      SlowRepo.plan(max: 2)
+      SlowRepo.plan(max: 100)
 
       assert :ok = Engram.Fixtures.complete_split!(repo: SlowRepo)
 
       assert bodies(u) == written
     end
 
-    defp migrate_slow! do
+    # Wide halving by default, so a note too slow alone is found alone.
+    defp migrate_slow!(opts \\ [max_halvings: 10]) do
+      :persistent_term.put({SlowMigration, :opts}, opts)
       Engram.Fixtures.complete_split!(role: nil, only_load: true)
       version = 99_999_999_999_992
 
@@ -686,6 +721,72 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
       sqls = Enum.map(ProbeLockedRepo.log(), &elem(&1, 1))
       first_probe = Enum.find_index(sqls, &(&1 =~ "SELECT EXISTS" and &1 =~ "n.user_id = $1"))
       assert Enum.any?(Enum.take(sqls, first_probe), &(&1 =~ "lock_timeout"))
+      assert Enum.any?(Enum.take(sqls, first_probe), &(&1 =~ "statement_timeout"))
+    end
+
+    test "a probe batch past its statement_timeout is walked anyway", %{user: u, vault: v} do
+      _ = write!(u, v, "probe.md", "probe text")
+      written = bodies(u)
+      pre_split!(u)
+      ProbeLockedRepo.plan(1, :query_canceled)
+
+      assert :ok = Engram.Fixtures.complete_split!(repo: ProbeLockedRepo)
+      assert bodies(u) == written
+    end
+
+    test "a statement_timeout cancel (57014) is halved like the deadline", %{user: u, vault: v} do
+      for i <- 1..5, do: write!(u, v, "slow#{i}.md", "slow text #{i}")
+      written = bodies(u)
+      pre_split!(u)
+      SlowRepo.plan(max: 100, error: :canceled)
+
+      assert :ok = Engram.Fixtures.complete_split!(repo: SlowRepo)
+      assert bodies(u) == written
+    end
+
+    test "a dropped connection is not a slow window: it is raised", %{user: u, vault: v} do
+      for i <- 1..5, do: write!(u, v, "slow#{i}.md", "slow text #{i}")
+      pre_split!(u)
+      SlowRepo.plan(max: 2, error: :closed)
+
+      assert_raise DBConnection.ConnectionError, ~r/closed/, fn ->
+        Engram.Fixtures.complete_split!(repo: SlowRepo)
+      end
+    end
+
+    # #2550 review MED-2: the repair holds ACCESS EXCLUSIVE on note_bodies.
+    test "owner repairs go in batches of at most 50 notes", %{user: u, vault: v} do
+      for i <- 1..60, do: write!(u, v, "owned#{i}.md", "owned text #{i}")
+
+      Repo.query!("UPDATE note_bodies SET user_id = $2 WHERE user_id = $1", [
+        Ecto.UUID.dump!(u.id),
+        Ecto.UUID.dump!(insert(:user).id)
+      ])
+
+      SlowRepo.plan([])
+
+      assert :ok = Engram.Fixtures.complete_split!(repo: SlowRepo)
+      assert SlowRepo.repair_seen() in 1..50
+      assert read!(u, v, "owned60.md") == "owned text 60"
+    end
+
+    test "past the boot deadline: the count raised, migration not recorded", %{
+      user: u,
+      vault: v
+    } do
+      _ = write!(u, v, "late.md", "late text")
+      pre_split!(u)
+      SlowRepo.plan([])
+
+      assert migrate_slow!(deadline_ms: 0) =~ "1 user(s) not finished before the boot deadline"
+    end
+
+    test "halving stops at its cap: the window's notes counted, raised", %{user: u, vault: v} do
+      for i <- 1..5, do: write!(u, v, "slow#{i}.md", "slow text #{i}")
+      pre_split!(u)
+      SlowRepo.plan(max: 1)
+
+      assert migrate_slow!(max_halvings: 1) =~ "5 note(s) too slow"
     end
 
     test "a probe batch that keeps hitting its lock timeout is walked anyway", %{

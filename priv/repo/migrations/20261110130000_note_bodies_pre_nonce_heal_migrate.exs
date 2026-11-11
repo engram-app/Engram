@@ -26,13 +26,16 @@ defmodule Engram.Repo.Migrations.NoteBodiesPreNonceHealMigrate do
   per short transaction) picks out the users with such a note; only those
   are walked, in id windows of #{100} notes, one transaction each, under a
   5s `lock_timeout` and a `statement_timeout` inside the checkout deadline.
-  A probe batch still locked out after two retries is walked anyway. A
-  window that hits the deadline is halved down to one note; a note too slow
-  even alone is logged and stepped over, and the run raises at the end with
-  the count, as does a window still locked out after two retries: not
-  recorded, the next boot resumes. Recording would leave that note empty
-  for good once R8(e) drops its only bytes (the hotfix's raise, same
-  reason).
+  A probe batch still locked out after two retries, or past its timeout, is
+  walked anyway. A window past its timeout (Postgres 57014 or the checkout
+  deadline; a dropped connection is raised) is halved at most #{4} times;
+  past that its notes are logged and stepped over. One run has a #{90} s
+  deadline: nothing starts past it and every `statement_timeout` ends at
+  it. Notes stepped over, users not reached, or a window still locked out
+  after two retries: the run raises with the counts, not recorded, and the
+  next boot resumes where this one stopped. Recording would leave those
+  notes empty for good once R8(e) drops their only bytes (the hotfix's
+  raise, same reason).
 
   Prod (2026-11-10): no body row was ever under another owner, so no note
   is in this state; it runs the probe only (2 statements a user, ~1,637
@@ -44,9 +47,13 @@ defmodule Engram.Repo.Migrations.NoteBodiesPreNonceHealMigrate do
   require Logger
 
   @window 100
-  @window_timeout_ms 120_000
-  @statement_timeout "110s"
+  # At most per statement; never past the run's deadline.
+  @statement_timeout_ms 110_000
   @lock_timeout "5s"
+  # One run stops starting work this long after it began, then raises.
+  @deadline_ms 90_000
+  # A window past its timeout is halved at most this often (100 -> 6).
+  @max_halvings 4
   @retries 2
   @probe_batch 200
   @contention [:lock_not_available, :deadlock_detected]
@@ -83,38 +90,84 @@ defmodule Engram.Repo.Migrations.NoteBodiesPreNonceHealMigrate do
   SELECT (SELECT id FROM w ORDER BY id DESC LIMIT 1), (SELECT count(*) FROM up)::int
   """
 
-  @next "SELECT n.id #{from} AND n.id > $2 ORDER BY n.id LIMIT 1"
+  @window_rows "SELECT n.id #{from} AND n.id > $2 ORDER BY n.id LIMIT $3"
 
   def up, do: heal(repo())
 
   def down, do: :ok
 
   @doc false
-  # Public for `NoteBodiesPreNonceHealTest`.
-  def heal(repo) do
+  # Public for `NoteBodiesPreNonceHealTest`, which also passes
+  # `:deadline_ms` and `:max_halvings`.
+  def heal(repo, opts \\ []) do
+    ctx = %{
+      deadline: now() + Keyword.get(opts, :deadline_ms, @deadline_ms),
+      max_halvings: Keyword.get(opts, :max_halvings, @max_halvings)
+    }
+
     %{rows: users} = repo.query!("SELECT id FROM users ORDER BY id")
 
-    users
-    |> Enum.map(&hd/1)
-    |> Enum.chunk_every(@probe_batch)
-    |> Enum.flat_map(&probe(repo, &1, @retries))
-    |> Enum.reduce(0, &(&2 + walk(repo, &1, <<0::128>>, @window, 0)))
-    |> case do
-      0 ->
-        :ok
+    {slow, late} =
+      users
+      |> Enum.map(&hd/1)
+      |> Enum.chunk_every(@probe_batch)
+      |> Enum.flat_map(&probe(repo, &1, ctx, @retries))
+      |> Enum.reduce({0, 0}, fn user_id, {slow, late} ->
+        case walk(repo, user_id, <<0::128>>, {@window, 0}, 0, ctx) do
+          {:done, more} -> {slow + more, late}
+          {:cut, more} -> {slow + more, late + 1}
+        end
+      end)
 
-      slow ->
-        raise "note_bodies pre-nonce heal: #{slow} note(s) too slow to heal even alone; " <>
-                "not recording this migration, the next boot resumes"
+    if slow + late > 0 do
+      gaps =
+        Enum.reject(
+          [
+            slow > 0 && "#{slow} note(s) too slow to heal at the smallest window",
+            late > 0 && "#{late} user(s) not finished before the boot deadline"
+          ],
+          &(&1 == false)
+        )
+
+      raise "note_bodies pre-nonce heal: #{Enum.join(gaps, ", ")}; " <>
+              "not recording this migration, the next boot resumes"
+    end
+
+    :ok
+  end
+
+  defp now, do: System.monotonic_time(:millisecond)
+
+  # Copied from 20261107120000, not in lib/: the N-1 gate runs this on the old release.
+  defp budget(ctx) do
+    case ctx.deadline - now() do
+      left when left > 0 -> min(left, @statement_timeout_ms)
+      _ -> :expired
     end
   end
 
-  # Copied from 20261107120000, not in lib/: the N-1 gate runs this on the old release.
-  defp probe(repo, batch, retries) do
+  defp probe(repo, batch, ctx, retries) do
+    case budget(ctx) do
+      :expired -> batch
+      ms -> probe_batch(repo, batch, ms)
+    end
+  rescue
+    e in [Postgrex.Error, DBConnection.ConnectionError] ->
+      cond do
+        retries > 0 and contention?(e) -> probe(repo, batch, ctx, retries - 1)
+        contention?(e) or timeout?(e) -> batch
+        true -> reraise(e, __STACKTRACE__)
+      end
+  end
+
+  defp probe_batch(repo, batch, ms) do
     {:ok, needing} =
       repo.transaction(
         fn ->
-          repo.query!("SELECT set_config('lock_timeout', '#{@lock_timeout}', true)")
+          repo.query!(
+            "SELECT set_config('lock_timeout', '#{@lock_timeout}', true), " <>
+              "set_config('statement_timeout', '#{ms}ms', true)"
+          )
 
           needing =
             Enum.filter(batch, fn user_id ->
@@ -128,72 +181,88 @@ defmodule Engram.Repo.Migrations.NoteBodiesPreNonceHealMigrate do
           repo.query!("SELECT set_config('app.current_tenant', '', true)")
           needing
         end,
-        timeout: @window_timeout_ms
+        timeout: ms + 10_000
       )
 
     needing
-  rescue
-    e in Postgrex.Error ->
-      cond do
-        not contention?(e) -> reraise(e, __STACKTRACE__)
-        retries > 0 -> probe(repo, batch, retries - 1)
-        true -> batch
-      end
   end
 
-  # Returns the count of notes too slow to heal even alone.
-  defp walk(repo, user_id, after_id, size, slow) do
-    case window(repo, user_id, after_id, size) do
+  # `{:done | :cut, slow}`: `:cut` once the deadline passed, `slow` the
+  # count of notes stepped over at the smallest window.
+  defp walk(repo, user_id, after_id, {size, halvings}, slow, ctx) do
+    case window(repo, user_id, after_id, size, ctx) do
+      :expired ->
+        {:cut, slow}
+
       [[nil, _]] ->
-        slow
+        {:done, slow}
 
       [[last, _]] ->
-        walk(repo, user_id, last, size, slow)
-
-      :too_slow when size > 1 ->
-        walk(repo, user_id, after_id, div(size, 2), slow)
+        walk(repo, user_id, last, {size, halvings}, slow, ctx)
 
       :too_slow ->
-        case tenant(repo, user_id, fn -> repo.query!(@next, [user_id, after_id]).rows end) do
-          [] ->
-            slow
+        cond do
+          budget(ctx) == :expired ->
+            {:cut, slow}
 
-          [[id]] ->
-            Logger.warning(
-              "note_bodies pre-nonce heal: a note too slow to heal even alone (note id: #{Ecto.UUID.load!(id)})",
-              category: :data,
-              user_id: Ecto.UUID.load!(user_id),
-              note_ids: [Ecto.UUID.load!(id)]
-            )
+          halvings < ctx.max_halvings and size > 1 ->
+            walk(repo, user_id, after_id, {div(size, 2), halvings + 1}, slow, ctx)
 
-            walk(repo, user_id, id, @window, slow + 1)
+          true ->
+            tenant(repo, user_id, fn ->
+              Enum.map(repo.query!(@window_rows, [user_id, after_id, size]).rows, &hd/1)
+            end)
+            |> step_over(repo, user_id, slow, ctx)
         end
     end
   end
 
-  # A window past its deadline: the server cancels it (`statement_timeout`)
-  # or DBConnection drops the connection; either way nothing committed.
-  defp window(repo, user_id, after_id, size) do
-    tenant(repo, user_id, fn -> repo.query!(@heal, [user_id, after_id, size]).rows end)
-  rescue
-    DBConnection.ConnectionError -> :too_slow
-    e in Postgrex.Error -> if canceled?(e), do: :too_slow, else: reraise(e, __STACKTRACE__)
+  defp step_over([], _repo, _user_id, slow, _ctx), do: {:done, slow}
+
+  defp step_over(ids, repo, user_id, slow, ctx) do
+    note_ids = Enum.map(ids, &Ecto.UUID.load!/1)
+
+    Logger.warning(
+      "note_bodies pre-nonce heal: #{length(ids)} note(s) too slow to heal at the " <>
+        "smallest window (note ids: #{Enum.join(note_ids, ", ")})",
+      category: :data,
+      user_id: Ecto.UUID.load!(user_id),
+      note_ids: note_ids
+    )
+
+    walk(repo, user_id, List.last(ids), {@window, 0}, slow + length(ids), ctx)
   end
 
-  defp canceled?(%Postgrex.Error{postgres: %{code: :query_canceled}}), do: true
-  defp canceled?(_error), do: false
+  defp window(repo, user_id, after_id, size, ctx) do
+    case budget(ctx) do
+      :expired ->
+        :expired
+
+      ms ->
+        tenant(repo, user_id, fn -> repo.query!(@heal, [user_id, after_id, size]).rows end, ms)
+    end
+  rescue
+    e in [Postgrex.Error, DBConnection.ConnectionError] ->
+      if timeout?(e), do: :too_slow, else: reraise(e, __STACKTRACE__)
+  end
+
+  # Only a deadline is a slow run: Postgres 57014 (`statement_timeout`) or
+  # DBConnection's checkout deadline. A dropped connection is raised.
+  defp timeout?(%Postgrex.Error{postgres: %{code: :query_canceled}}), do: true
+  defp timeout?(%DBConnection.ConnectionError{message: message}), do: message =~ "timed out"
+  defp timeout?(_error), do: false
 
   defp contention?(%Postgrex.Error{postgres: %{code: code}}), do: code in @contention
   defp contention?(_error), do: false
 
-  defp tenant(repo, user_id, fun, retries \\ @retries) do
+  defp tenant(repo, user_id, fun, ms \\ @statement_timeout_ms, retries \\ @retries) do
     {:ok, result} =
       repo.transaction(
         fn ->
           repo.query!(
             "SELECT set_config('app.current_tenant', $1::uuid::text, true), " <>
               "set_config('lock_timeout', '#{@lock_timeout}', true), " <>
-              "set_config('statement_timeout', '#{@statement_timeout}', true)",
+              "set_config('statement_timeout', '#{ms}ms', true)",
             [user_id]
           )
 
@@ -201,14 +270,14 @@ defmodule Engram.Repo.Migrations.NoteBodiesPreNonceHealMigrate do
           repo.query!("SELECT set_config('app.current_tenant', '', true)")
           result
         end,
-        timeout: @window_timeout_ms
+        timeout: ms + 10_000
       )
 
     result
   rescue
     e in Postgrex.Error ->
       if retries > 0 and contention?(e),
-        do: tenant(repo, user_id, fun, retries - 1),
+        do: tenant(repo, user_id, fun, ms, retries - 1),
         else: reraise(e, __STACKTRACE__)
   end
 end
