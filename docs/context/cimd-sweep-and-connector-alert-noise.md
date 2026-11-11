@@ -20,7 +20,7 @@ Rule: engram-infra group `engram-prod-loki-categories`. LogQL counts `mcp_cimd_r
 
 ### Root cause
 
-`Engram.Workers.CimdRefresh` (cron `40 5 * * *`, `config/config.exs`) refetched EVERY client with a `cimd_url`, forever. A dead test client (Harness, host `dev.1mlight.xyz`, TCP 80/443 time out, 0 refresh tokens ever, last good fetch 2026-11-04) failed daily from 2026-11-05.
+`Engram.Workers.CimdRefresh` (cron `40 5 * * *`, `config/config.exs`) refetched EVERY client with a `cimd_url`, forever. A dead test client (Harness, host `dev.1mlight.xyz`, TCP 80/443 time out, no live refresh token, last good fetch 2026-11-04) failed daily from 2026-11-05.
 
 ### Fix
 
@@ -32,7 +32,17 @@ Rule: engram-infra group `engram-prod-loki-categories`. LogQL counts `mcp_cimd_r
 
 ### Why not "skip every client with no live grant"
 
-Prod has 17 CIMD clients: 9 with a live token, 8 with ZERO tokens ever (Antigravity, Flowy, Harness, Spiich, Zed, ChatGPT, Irene, Telosnex). 7 of those 8 are healthy vendors, and the daily refresh is the early warning for a vendor that has never connected (ChatGPT, Zed).
+Prod has 17 CIMD clients: 9 with a live refresh token, 8 with no live refresh token today (Antigravity, Flowy, Harness, Spiich, Zed, ChatGPT, Irene, Telosnex). No refresh-token ROW today does not mean the client never connected: `Engram.OAuth.cleanup_expired/0` (`lib/engram/oauth.ex`, ~1687-1745) deletes consumed (rotated) tokens after 24h, revoked families and expired tokens after 7 days. ChatGPT also uses a per-connector CIMD URL, so one vendor has MANY client rows (prod: row 88b89099 holds ~4,978 tokens, 4,814 live, plus others; the chatgpt.com row among the 8 is one abandoned connector).
+
+So "no live grant" alone is also true of healthy abandoned rows whose host still answers, and skipping them would silence a free early warning (7 of the 8 are healthy vendors). Skipping needs TWO independent signals: no live grant AND a stale last-good fetch. The fetch staleness (`cimd_fetched_at` older than `dead_after_days/0`) is the direct dead-host signal; the grant check only protects clients people still use.
+
+## Prod funnel facts (21 days, Oct 21 to Nov 11, from `analytics_events`, which only has data since Oct 21)
+
+- `mcp_oauth_authorize_started` 2,558 (all anonymous by design), `granted` 1,368, `token_issued` 76,656 (refresh_token grants dominate), `token_failed` 2,971 (437 anonymous), `code_expired` 97, `authorize_rejected` 3.
+- chatgpt (cimd): started 2,340, granted 1,244, code tokens 1,163, refresh tokens 60,269, failed 2,868. Of those, 2,446 are refresh_token / invalid_grant / refresh_token_revoked across only 9 users (dead-token retry loops) and 397 are refresh_token_unknown.
+- zed (cimd): 5 started, 5 granted, 5 code tokens, 54 failed refreshes (49 revoked) from 1 user.
+- The `other` bucket also holds Codex (client_agent=codex, 1,636 events) and unmapped vendors (13,536 events with client_agent=other), so per-vendor numbers for Antigravity, Telosnex, Grok and others are invisible today.
+- The retry-loop issues are tracked as #2333 and #2299.
 
 ## Alert 2: oauth-rate-limited
 
