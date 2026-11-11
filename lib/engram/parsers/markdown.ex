@@ -2,8 +2,8 @@ defmodule Engram.Parsers.Markdown do
   @moduledoc """
   Heading-aware markdown chunker.
 
-  Splits content at heading boundaries, builds folder-aware context prefixes,
-  and splits large sections at content-defined paragraph, line, sentence or
+  Splits content at heading boundaries, builds title and heading context
+  prefixes, and splits large sections at content-defined paragraph, line, sentence or
   word boundaries (~512 tokens / 2048 bytes).
   The chunking runs in Rust: native/engram_native/src/chunker.rs.
   """
@@ -59,13 +59,14 @@ defmodule Engram.Parsers.Markdown do
   Returns a list of chunk maps:
   - `:position`     — sequential index (0-based)
   - `:text`         — raw chunk text (no context prefix)
-  - `:context_text` — "folder > title > heading\\n\\ntext" for keyword search
-  - `:embed_text`   — "title > heading\\n\\ntext" for dense embedding: no
-                      folder, which is a filter key, not meaning (#1621)
-  - `:heading_path` — e.g. "Title > H1 > H2" (`:headings` joined)
-  - `:headings`     — the same path as a list, title first: a heading
-                      may itself contain " > " (chunker v5). A merged
-                      chunk's path is the one all its sections share.
+  - `:context_text` — "title > heading\\n\\ntext" for keyword search
+  - `:embed_text`   — the same, for dense embedding. They are equal for
+                      prose; a property note's dense input is its values
+  - `:heading_path` — e.g. "Title > H1 > H2" (`:headings` joined, an
+                      empty title left out)
+  - `:headings`     — the same path as a list, title first ("" for none):
+                      a heading may itself contain " > " (chunker v5). A
+                      merged chunk's path is the one all its sections share.
   - `:section_count` — how many sections the chunk joins (min512); 1 when
                       it is one section, or part of one
   - `:char_start`   — byte offset in post-frontmatter body
@@ -81,14 +82,26 @@ defmodule Engram.Parsers.Markdown do
   `"frontmatter_dense"` chunk: its dense input is the title and the values.
   An Excalidraw note (frontmatter `excalidraw-plugin`) loses its drawing JSON.
 
+  The inputs are the note's bytes only (R3c): no folder, and the title is
+  the frontmatter `title:` or the first H1, never the file name, so a rename
+  or a move leaves every chunk, and every reuse fingerprint, as it was. The
+  prefix is the title and the headings ("" and the headings alone without
+  a title); aliases join the lead line of the first dense chunk. `legacy:
+  true` builds the pre-R3c inputs byte for byte (the folder, the file-name
+  title, aliases in every prefix), for the reuse fingerprints of points
+  indexed before it (`Engram.Indexing`). Contract: deleted with that
+  candidate.
+
   Exception: when frontmatter is present, a synthetic chunk carrying the raw
   frontmatter block is appended last, with `heading_path` fixed to
   `"frontmatter"`, `kind` `"frontmatter"` and `char_start`/`char_end` both
   fixed to `0`.
   """
-  def parse("", _path), do: []
+  def parse(content, path, opts \\ [])
 
-  def parse(content, path) do
+  def parse("", _path, _opts), do: []
+
+  def parse(content, path, opts) do
     # The frontmatter codec and the heading patterns all expect LF, so a CRLF
     # note lost its frontmatter chunk and had its body cut short (#1605).
     # Invalid UTF-8 is scrubbed: the Rust side takes only valid text.
@@ -100,15 +113,24 @@ defmodule Engram.Parsers.Markdown do
       |> String.replace("\r\n", "\n")
       |> String.replace_prefix("\uFEFF", "")
 
-    folder = extract_folder(path)
-    title = Helpers.extract_title(content, path)
+    {folder, title} =
+      if Keyword.get(opts, :legacy, false),
+        do: {extract_folder(path), Helpers.extract_title(content, path)},
+        else: {"", Engram.Native.note_title(content) || ""}
+
     # Structured files (JSON canvas, Obsidian bases) are keyword-only whole.
     data? = Path.extname(path) in @data_exts
 
     fm = frontmatter(content)
 
     content
-    |> Engram.Native.chunk(folder, title, aliases(fm, title), lead(fm))
+    |> Engram.Native.chunk(
+      folder,
+      title,
+      aliases(fm, title),
+      lead(fm),
+      Keyword.get(opts, :legacy, false)
+    )
     |> canvas_cards(path, content)
     |> Enum.with_index(fn {text, context_text, embed_text, {headings, members}, char_start,
                            char_end, kind},
@@ -118,7 +140,7 @@ defmodule Engram.Parsers.Markdown do
         text: text,
         context_text: context_text,
         embed_text: embed_text,
-        heading_path: Enum.join(headings, " > "),
+        heading_path: heading_path(headings),
         headings: headings,
         section_count: members,
         char_start: char_start,
@@ -127,6 +149,9 @@ defmodule Engram.Parsers.Markdown do
       }
     end)
   end
+
+  defp heading_path(["" | headings]), do: Enum.join(headings, " > ")
+  defp heading_path(headings), do: Enum.join(headings, " > ")
 
   @doc "Whether chunks of `kind` get a dense vector."
   @spec dense_kind?(String.t()) :: boolean()
@@ -144,8 +169,9 @@ defmodule Engram.Parsers.Markdown do
          true <- byte_size(content) <= @max_canvas_decode,
          {:ok, %{"nodes" => nodes}} when is_list(nodes) <- Jason.decode(content),
          cards when cards != "" <- card_text(nodes) do
-      prefix = binary_part(embed, 0, byte_size(embed) - byte_size(text) - 2)
-      [{text, ctx, prefix <> "\n\n" <> cards, hs, s, e, "canvas_dense"} | rest]
+      # The prefix and its "\n\n", or "" (no title, R3c).
+      prefix = binary_part(embed, 0, byte_size(embed) - byte_size(text))
+      [{text, ctx, prefix <> cards, hs, s, e, "canvas_dense"} | rest]
     else
       _ -> chunks
     end
@@ -192,10 +218,10 @@ defmodule Engram.Parsers.Markdown do
   end
 
   @doc """
-  The note's aliases for the chunk prefix: `aliases` (a list or one
-  scalar) then the legacy `alias`, strings and numbers only, trimmed, empty
-  ones dropped, deduplicated case-insensitively against each other and the
-  title. The chunker joins them and caps the part at 200 chars.
+  The note's aliases for the first chunk's lead line: `aliases` (a list or
+  one scalar) then the legacy `alias`, strings and numbers only, trimmed,
+  empty ones dropped, deduplicated case-insensitively against each other
+  and the title. The chunker joins them and caps the part at 200 chars.
   """
   @spec aliases(map(), String.t()) :: [String.t()]
   def aliases(values, title) do

@@ -48,28 +48,45 @@ defmodule Engram.Parsers.MarkdownTest do
     end
   end
 
-  describe "parse/2 aliases in the prefix" do
+  # R3c: aliases join the first dense chunk's lead line; every prefix had
+  # them before (`legacy: true` still does), so an alias edit re-embedded
+  # the whole note.
+  describe "parse/2 aliases in the lead" do
+    # What precedes the chunk text, without the blank line.
     defp embed_prefix(%{embed_text: e, text: t}),
-      do: binary_part(e, 0, byte_size(e) - byte_size(t) - 2)
+      do: e |> binary_part(0, byte_size(e) - byte_size(t)) |> String.trim_trailing("\n")
 
-    defp first_prefix(content, path \\ "T.md"),
-      do: content |> Markdown.parse(path) |> hd() |> embed_prefix()
+    defp first_prefix(content, path \\ "T.md", opts \\ []),
+      do: content |> Markdown.parse(path, opts) |> hd() |> embed_prefix()
 
     # B3
-    test "every alias form reaches the prefix" do
+    test "every alias form reaches the lead" do
       for fm <- [
             "aliases: [A, B]",
             "aliases:\n  - A\n  - B",
             "aliases: A\nalias: B",
             "alias: [A, B]"
           ] do
-        assert first_prefix("---\n#{fm}\n---\nbody") == "T (aka A, B)", fm
+        assert first_prefix("---\n#{fm}\n---\nbody") == "(aka A, B)", fm
+        assert first_prefix("---\n#{fm}\n---\n# T\nbody") == "T\n(aka A, B)", fm
+        assert first_prefix("---\n#{fm}\n---\nbody", "T.md", legacy: true) == "T (aka A, B)", fm
       end
+    end
+
+    test "an alias is on the first chunk only" do
+      two = "## A\n#{String.duplicate("alpha ", 100)}\n## B\n#{String.duplicate("beta ", 120)}"
+      [c0, c1 | _] = Markdown.parse("---\naliases: [Zed]\n---\n" <> two, "T.md")
+      assert embed_prefix(c0) == "A\n(aka Zed)"
+      assert embed_prefix(c1) == "B"
+      refute c1.context_text =~ "Zed"
+
+      [_c0, c1 | _] = Markdown.parse("---\naliases: [Zed]\n---\n" <> two, "T.md", legacy: true)
+      assert embed_prefix(c1) == "T (aka Zed) > B"
     end
 
     # B4
     test "a comma scalar is one alias" do
-      assert first_prefix("---\naliases: a, b\n---\nbody") == "T (aka a, b)"
+      assert first_prefix("---\naliases: a, b\n---\nbody") == "(aka a, b)"
     end
 
     # B5
@@ -86,15 +103,15 @@ defmodule Engram.Parsers.MarkdownTest do
     # B9
     test "a BOM before the fence still reads the aliases" do
       chunks = Markdown.parse("\uFEFF---\naliases: [x]\n---\nbody", "T.md")
-      assert embed_prefix(hd(chunks)) == "T (aka x)"
-      assert Enum.map(chunks, & &1.heading_path) == ["T", "frontmatter"]
+      assert embed_prefix(hd(chunks)) == "(aka x)"
+      assert Enum.map(chunks, & &1.heading_path) == ["", "frontmatter"]
     end
 
     # B1
     test "bad YAML still chunks, with no aliases" do
       chunks = Markdown.parse("---\naliases: [x\n  bad: : :\n---\nbody", "T.md")
-      assert [%{text: "body"} = c | _] = chunks
-      assert embed_prefix(c) == "T"
+      assert [%{text: "body", embed_text: "body"} = c | _] = chunks
+      assert embed_prefix(c) == ""
     end
   end
 
@@ -128,7 +145,8 @@ defmodule Engram.Parsers.MarkdownTest do
       assert [%{kind: "frontmatter_dense", embed_text: e}] =
                Markdown.parse("---\nproject: zanzibar\n---\n", "Plan.md")
 
-      assert e == "Plan\n\nzanzibar"
+      # No file-name title (R3c): the values alone.
+      assert e == "zanzibar"
     end
   end
 
@@ -138,9 +156,9 @@ defmodule Engram.Parsers.MarkdownTest do
     test "type and description lead the first chunk only" do
       fm = "---\ntype: Playbook\ndescription: Restore a backup\n---\n"
       [c0, c1, %{kind: "frontmatter"}] = Markdown.parse(fm <> @two_sections, "T.md")
-      assert String.starts_with?(c0.embed_text, "T > A\nPlaybook: Restore a backup\n\n## A")
-      assert String.starts_with?(c0.context_text, "T > A\nPlaybook: Restore a backup\n\n")
-      assert String.starts_with?(c1.embed_text, "T > B\n\n## B")
+      assert String.starts_with?(c0.embed_text, "A\nPlaybook: Restore a backup\n\n## A")
+      assert String.starts_with?(c0.context_text, "A\nPlaybook: Restore a backup\n\n")
+      assert String.starts_with?(c1.embed_text, "B\n\n## B")
     end
 
     test "a long description is one line cut at 200 bytes" do
@@ -153,7 +171,7 @@ defmodule Engram.Parsers.MarkdownTest do
     test "a type alone adds nothing" do
       assert Markdown.lead(%{"type" => "Playbook"}) == nil
       [c0 | _] = Markdown.parse("---\ntype: Playbook\n---\n" <> @two_sections, "T.md")
-      assert String.starts_with?(c0.embed_text, "T > A\n\n## A")
+      assert String.starts_with?(c0.embed_text, "A\n\n## A")
     end
 
     test "trust, lifecycle, filter keys and dates never reach a dense input" do
@@ -170,7 +188,11 @@ defmodule Engram.Parsers.MarkdownTest do
       ---
       """
 
-      for content <- [fm <> @two_sections, fm] do
+      # Properties alone: no title (R3c) and only filter keys, so nothing is
+      # dense at all.
+      assert fm |> Markdown.parse("T.md") |> Enum.map(& &1.kind) == ["frontmatter"]
+
+      for content <- [fm <> @two_sections] do
         embeds =
           content
           |> Markdown.parse("T.md")
@@ -302,14 +324,36 @@ defmodule Engram.Parsers.MarkdownTest do
   end
 
   # ---------------------------------------------------------------------------
-  # folder-aware context prepending
+  # path-free context (R3c)
   # ---------------------------------------------------------------------------
 
   describe "context_text" do
-    test "prepends folder when note is in a folder" do
-      chunks = Markdown.parse(@simple_note, "Health/Hello World.md")
-      [first | _] = chunks
-      assert String.starts_with?(first.context_text, "Health > ")
+    # A rename or a move must not change a chunk: the folder is a filter
+    # (`folder:`), not meaning. `legacy: true` is the old input.
+    test "the folder is not in the inputs" do
+      [first | _] = Markdown.parse(@simple_note, "Health/Hello World.md")
+      assert String.starts_with?(first.context_text, "Hello World")
+      refute first.context_text =~ "Health" or first.embed_text =~ "Health"
+
+      [old | _] = Markdown.parse(@simple_note, "Health/Hello World.md", legacy: true)
+      assert String.starts_with?(old.context_text, "Health > Hello World")
+    end
+
+    test "the file name is never the title" do
+      [first] = Markdown.parse("Just a paragraph.", "Work/Quarterly Plan.md")
+      assert first.context_text == "Just a paragraph."
+      assert first.embed_text == "Just a paragraph."
+      assert first.heading_path == ""
+
+      [old] = Markdown.parse("Just a paragraph.", "Work/Quarterly Plan.md", legacy: true)
+      assert old.context_text == "Work > Quarterly Plan\n\nJust a paragraph."
+      assert old.embed_text == "Quarterly Plan\n\nJust a paragraph."
+    end
+
+    test "the same note chunks the same after a rename or a move" do
+      for content <- [@simple_note, @frontmatter_note, "no title\n\n## H\nbody"] do
+        assert Markdown.parse(content, "a/b/One.md") == Markdown.parse(content, "Two.md")
+      end
     end
 
     test "no folder prefix for root-level notes" do

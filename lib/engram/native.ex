@@ -63,7 +63,7 @@ defmodule Engram.Native do
     {:link_extract, :link_extract_nif, :link_extract_dirty_nif, 2},
     {:note_title, :note_title_nif, :note_title_dirty_nif, 1},
     {:note_meta, :note_meta_nif, :note_meta_dirty_nif, 1},
-    {:chunk, :chunk_nif, :chunk_dirty_nif, 5},
+    {:chunk, :chunk_nif, :chunk_dirty_nif, 6},
     {:frontmatter_split, :frontmatter_split_nif, :frontmatter_split_dirty_nif, 1},
     {:frontmatter_parse, :frontmatter_parse_nif, :frontmatter_parse_dirty_nif, 1},
     {:text_diff, :text_diff_nif, :text_diff_dirty_nif, 2},
@@ -93,7 +93,7 @@ defmodule Engram.Native do
     name_index_delete_nif: 3,
     name_index_bytes_nif: 1,
     name_index_patch_nif: 2,
-    chunk_job_nif: 5,
+    chunk_job_nif: 6,
     chunk_step_nif: 1
   ]
 
@@ -132,24 +132,26 @@ defmodule Engram.Native do
   embed_text, {headings, section_count}, char_start, char_end, kind}]`,
   before positions; `headings` is a list, title first, and `section_count`
   the sections a min512 chunk joins (1 for one). Splits
-  frontmatter itself. Valid UTF-8 only.
+  frontmatter itself. Valid UTF-8 only. `legacy`: the pre-R3c inputs
+  (aliases in every prefix), byte for byte, for old reuse fingerprints.
   """
-  def chunk(content, folder, title, aliases \\ [], lead \\ nil)
+  def chunk(content, folder, title, aliases \\ [], lead \\ nil, legacy \\ false)
 
   @slice_from 262_144
 
   # Over @slice_from, a note chunks one heading segment (64 KB) per dirty
   # call, so it never holds the one dirty CPU scheduler for its whole run
   # (4.5 MB of heading tree held it for 8 s). The chunks are the same.
-  def chunk(content, folder, title, aliases, lead) when byte_size(content) > @slice_from do
+  def chunk(content, folder, title, aliases, lead, legacy)
+      when byte_size(content) > @slice_from do
     call(:chunk, content, %{dirty: true, sliced: true}, fn ->
-      {job, peak} = chunk_job_nif(content, folder, title, aliases, lead)
+      {job, peak} = chunk_job_nif(content, folder, title, aliases, lead, legacy)
       chunk_steps(job, [], peak)
     end)
   end
 
-  def chunk(content, folder, title, aliases, lead),
-    do: sized(:chunk, content, [content, folder, title, aliases, lead])
+  def chunk(content, folder, title, aliases, lead, legacy),
+    do: sized(:chunk, content, [content, folder, title, aliases, lead, legacy])
 
   # `cleared`: the body passed its chunk budget and is being chunked again,
   # coalesced; what earlier steps returned is dropped.
