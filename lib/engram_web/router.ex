@@ -41,14 +41,6 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000
   end
 
-  pipeline :rate_limit_oauth_clients do
-    plug EngramWeb.Plugs.OAuthRateLimit
-  end
-
-  pipeline :rate_limit_device_auth do
-    plug EngramWeb.Plugs.DeviceAuthRateLimit
-  end
-
   # Shared auth / abuse / onboarding / rate-limit stack for authenticated API
   # endpoints. Used by BOTH the vault-scoped REST scope and the MCP scope so a
   # new security control can't be added to one and silently missed on the other.
@@ -237,6 +229,14 @@ defmodule EngramWeb.Router do
     }
 
     plug :put_csp_header
+  end
+
+  pipeline :rate_limit_oauth_clients do
+    plug EngramWeb.Plugs.OAuthRateLimit
+  end
+
+  pipeline :rate_limit_device_auth do
+    plug EngramWeb.Plugs.DeviceAuthRateLimit
   end
 
   defp put_csp_header(conn, _opts) do
