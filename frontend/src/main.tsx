@@ -9,6 +9,7 @@ import { setApiBase, setWsBase } from "./api/base";
 import { queryClient } from "./api/query-client";
 import { configPromise, type EngramConfig } from "./config";
 import { ConfigProvider } from "./config-context";
+import { loadFenceWasm } from "./crdt/frontmatter-fence";
 import ErrorFallback from "./error-fallback";
 import { reportLanguageDemand } from "./i18n/browser-language";
 import { LocaleProvider } from "./i18n/locale-provider";
@@ -56,6 +57,11 @@ initAnalytics(import.meta.env.VITE_POSTHOG_KEY ?? "");
 // Which languages users need that the app does not ship (once per device).
 // Waits for the analytics client above, so GPC and self-host send nothing.
 reportLanguageDemand();
+// The frontmatter fence split as the backend's Rust rule (wasm). Until it
+// loads, or if it cannot, splitFrontmatter uses its TS path.
+loadFenceWasm().catch((err: unknown) => {
+	console.warn("frontmatter fence wasm unavailable, using the TS split", err);
+});
 
 // Both auth providers are declared lazy at module scope; only one is
 // instantiated per page load based on resolved config (BootstrapGate).

@@ -30,7 +30,10 @@ defmodule EngramWeb.CSP do
 
   @static %{
     "default-src" => ["'self'"],
-    "script-src" => ["'self'", "'unsafe-inline'"],
+    # 'wasm-unsafe-eval' lets the SPA compile WebAssembly (the frontmatter
+    # fence split, frontend/src/crdt/frontmatter-fence.ts). It allows no JS
+    # eval; without it the SPA falls back to its TS split.
+    "script-src" => ["'self'", "'unsafe-inline'", "'wasm-unsafe-eval'"],
     "style-src" => ["'self'", "'unsafe-inline'"],
     "img-src" => ["'self'", "data:", "blob:", "https:"],
     "font-src" => ["'self'", "data:"],

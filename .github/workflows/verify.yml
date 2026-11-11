@@ -2723,6 +2723,20 @@ jobs:
           # Three attempts all lost the SDK to a concurrent prune.
           exit 99
 
+      - name: Committed web fence wasm matches a fresh build (native/web_wasm)
+        # frontend/src/crdt/frontmatter-fence.wasm is engram_core's fence
+        # split for the web app, committed because the frontend builds with
+        # bun only. A Rust change that is not rebuilt into it would split
+        # notes one way here and another in the browser. Pure Rust (no
+        # `envelope`, so no wasi-sdk); build.sh remaps paths so the bytes do
+        # not depend on the checkout. Also no host imports, like the guard.
+        working-directory: native
+        run: |
+          export CARGO_TARGET_DIR="$HOME/.cache/engram-native-target"
+          ./web_wasm/build.sh
+          python3 wasm_guard/imports.py ../frontend/src/crdt/frontmatter-fence.wasm fm_split
+          git diff --exit-code -- ../frontend/src/crdt/frontmatter-fence.wasm
+
       - name: Containerized mix (reuse the prebuilt _build)
         # prebuild-mix compiles at /app inside engram-mix-builder:ci. Bare-metal
         # mix here sees a different project root and OTP patch, so it threw the
