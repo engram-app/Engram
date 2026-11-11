@@ -1,7 +1,6 @@
-import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
-import type { EditorState, Range } from "@codemirror/state";
-import { StateField } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
+import type { Range } from "@codemirror/state";
+import { Decoration } from "@codemirror/view";
+import { defineRenderer, type TreeRenderer } from "./render-core";
 
 // A paragraph indented by a tab (or 4 spaces) with no list above it is a Markdown
 // code block. Atomic gives fenced code its monospace + tinted background + left
@@ -11,38 +10,40 @@ import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 // View-only: line classes, never a document change.
 const INDENT_ONLY = /^(?:\t| {4})[ \t]*$/u;
 
-function build(state: EditorState): DecorationSet {
-	const out: Range<Decoration>[] = [];
-	// Bounded parse to the end of the doc: the tree is otherwise lazy and would
-	// leave blocks below the viewport undecorated until they scroll in.
-	// If the bounded parse times out, style what HAS parsed rather than nothing.
-	const tree = ensureSyntaxTree(state, state.doc.length, 100) ?? syntaxTree(state);
-	tree.iterate({
-		enter: (node) => {
-			if (node.name !== "CodeBlock") {
-				return;
-			}
-			let last = state.doc.lineAt(node.to).number;
-			// The parser ends a block at its last line with text, but Enter on an indented
-			// line leaves a whitespace-only `\t` line that is where you are still typing.
-			// Keep the styling running through those, or it drops out on every new line.
-			while (last < state.doc.lines && INDENT_ONLY.test(state.doc.line(last + 1).text)) {
-				last++;
-			}
-			for (let n = state.doc.lineAt(node.from).number; n <= last; n++) {
-				out.push(
-					Decoration.line({ class: "cm-atomic-fenced-code cm-indented-code" }).range(
-						state.doc.line(n).from,
-					),
-				);
-			}
-		},
-	});
-	return Decoration.set(out, true);
-}
+const LINE = Decoration.line({ class: "cm-atomic-fenced-code cm-indented-code" });
 
-export const indentedCodeLines = StateField.define<DecorationSet>({
-	create: build,
-	update: (deco, tr) => (tr.docChanged ? build(tr.state) : deco),
-	provide: (f) => EditorView.decorations.from(f),
-});
+/** Code-block line classes for the lines in [from, to); the core walks only that region. */
+export const indentedCodeRenderer: TreeRenderer = {
+	kind: "tree",
+	visit(state, from, to) {
+		const { doc } = state;
+		const out: Range<Decoration>[] = [];
+		const stop = to >= doc.length ? doc.length + 1 : to;
+		return {
+			enter(node) {
+				if (node.name !== "CodeBlock") {
+					return;
+				}
+				let last = doc.lineAt(node.to).number;
+				// The parser ends a block at its last line with text, but Enter on an indented
+				// line leaves a whitespace-only `\t` line that is where you are still typing.
+				// Keep the styling running through those, or it drops out on every new line.
+				while (last < doc.lines && INDENT_ONLY.test(doc.line(last + 1).text)) {
+					last++;
+				}
+				for (let n = doc.lineAt(Math.max(node.from, from)).number; n <= last; n++) {
+					const at = doc.line(n).from;
+					if (at >= stop) {
+						break;
+					}
+					if (at >= from) {
+						out.push(LINE.range(at));
+					}
+				}
+			},
+			finish: () => out,
+		};
+	},
+};
+
+export const indentedCodeLines = defineRenderer(indentedCodeRenderer);
