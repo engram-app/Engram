@@ -228,7 +228,7 @@ defmodule Engram.Telemetry.ObanDiscardHandlerTest do
   # metadata said `:discarded`; Oban 2.24 sends `:discard`
   # (deps/oban/lib/oban/queues/executor.ex emit_event/1), so the discard line
   # never fired in prod.
-  describe "handle_event/4 — real Oban executor" do
+  describe "handle_event/4 with the real Oban executor" do
     defp run(attempt) do
       capture_log([level: :warning], fn ->
         perform_job(FailingWorker, %{}, attempt: attempt, repo: Engram.Repo)
@@ -270,7 +270,7 @@ defmodule Engram.Telemetry.ObanDiscardHandlerTest do
     end
   end
 
-  describe "handle_event/4 — worker-resolution failures" do
+  describe "handle_event/4 on worker-resolution failures" do
     # The staging 2026-11-11 shape: a node without the worker module. The
     # error is Oban's own, and its text is the whole diagnosis.
     test "the retry line carries Oban's worker-resolution message" do

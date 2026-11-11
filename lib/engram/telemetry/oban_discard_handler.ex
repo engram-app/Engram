@@ -14,7 +14,7 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
       must be visible on the FIRST attempt rather than hours later when the
       retries run out. See #1496.
 
-    * any other `state: :failure` — a failed attempt Oban will retry. Silent
+    * any other `state: :failure`: a failed attempt Oban will retry. Silent
       retries hid a node failing every job with "unknown worker" on staging
       (2026-11-11), so each one logs a warning.
 
