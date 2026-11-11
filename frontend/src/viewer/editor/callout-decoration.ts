@@ -1,15 +1,8 @@
-import { RangeSetBuilder } from "@codemirror/state";
-import {
-	Decoration,
-	type DecorationSet,
-	type EditorView,
-	ViewPlugin,
-	type ViewUpdate,
-	WidgetType,
-} from "@codemirror/view";
+import type { Range } from "@codemirror/state";
+import { Decoration, WidgetType } from "@codemirror/view";
 import { defaultConfig } from "@portaljs/remark-callouts";
 import "./callout.css";
-import { selectionTouches } from "./decoration-utils";
+import { defineRenderer, type TextRenderer } from "./render-core";
 
 // First line of a callout block: `> [!type]`, an optional fold marker (`+`/`-`),
 // optionally followed by a title.
@@ -82,75 +75,73 @@ class CalloutTitleWidget extends WidgetType {
 	}
 }
 
-function buildCallouts(view: EditorView): DecorationSet {
-	const { doc, selection: sel } = view.state;
-	const builder = new RangeSetBuilder<Decoration>();
-	// ponytail: whole-doc scan; fine for typical note sizes. Same tradeoff as
-	// katex-decoration.ts — view.visibleRanges is empty under happy-dom.
-	let lineNo = 1;
-	while (lineNo <= doc.lines) {
-		const line = doc.line(lineNo);
-		const m = CALLOUT_START_RE.exec(line.text);
-		if (!m) {
-			lineNo++;
-			continue;
-		}
-		const type = (m.groups?.type ?? "").toLowerCase();
-		let endLineNo = lineNo;
-		while (endLineNo + 1 <= doc.lines) {
-			const nextText = doc.line(endLineNo + 1).text;
-			// A new `> [!type]` header always starts a fresh block, even though
-			// it also matches the blockquote continuation regex.
-			if (!BLOCKQUOTE_LINE_RE.test(nextText) || CALLOUT_START_RE.test(nextText)) {
-				break;
+/**
+ * Callout blocks: a `> [!type]` header and the `>` lines under it. One token per
+ * block; a line outside a block carries no state, so it is neutral. Revealed raw
+ * while the selection touches the block.
+ */
+export const calloutRenderer: TextRenderer<string> = {
+	kind: "text",
+	reveal: true,
+	scan(state, from, emit, neutral) {
+		const { doc } = state;
+		let lineNo = doc.lineAt(from).number;
+		while (lineNo <= doc.lines) {
+			const line = doc.line(lineNo);
+			if (line.from > from && neutral(line.from)) {
+				return;
 			}
-			endLineNo++;
-		}
-		const blockFrom = line.from;
-		const blockTo = doc.line(endLineNo).to;
-		// Reveal raw when the cursor/selection intersects the block.
-		const active = selectionTouches(sel, blockFrom, blockTo);
-		if (!active) {
-			const style = resolveStyle(type);
-			const attributes: Record<string, string> = {
-				class: `cm-callout cm-callout-${type}`,
-			};
-			if (style) {
-				attributes.style = `--callout-color:${style.color}`;
+			const m = CALLOUT_START_RE.exec(line.text);
+			if (!m) {
+				lineNo++;
+				continue;
 			}
-			const deco = Decoration.line({ attributes });
-			builder.add(line.from, line.from, deco);
-			if (style) {
-				// The header line's line-decoration must land first (same `from`, lower
-				// startSide), and the replace before any later line — RangeSetBuilder
-				// only accepts ranges in (from, startSide) order.
-				const title = line.text.slice(m[0].length).trim() || capitalize(style.keyword);
-				builder.add(
-					line.from,
-					line.to,
-					Decoration.replace({ widget: new CalloutTitleWidget(style.svg, title) }),
-				);
+			let endLineNo = lineNo;
+			while (endLineNo + 1 <= doc.lines) {
+				const nextText = doc.line(endLineNo + 1).text;
+				// A new `> [!type]` header always starts a fresh block, even though
+				// it also matches the blockquote continuation regex.
+				if (!BLOCKQUOTE_LINE_RE.test(nextText) || CALLOUT_START_RE.test(nextText)) {
+					break;
+				}
+				endLineNo++;
 			}
-			for (let n = lineNo + 1; n <= endLineNo; n++) {
-				builder.add(doc.line(n).from, doc.line(n).from, deco);
-			}
-		}
-		lineNo = endLineNo + 1;
-	}
-	return builder.finish();
-}
-
-export const calloutDecoration = ViewPlugin.fromClass(
-	class {
-		decorations: DecorationSet;
-		constructor(view: EditorView) {
-			this.decorations = buildCallouts(view);
-		}
-		update(u: ViewUpdate) {
-			if (u.docChanged || u.selectionSet || u.viewportChanged) {
-				this.decorations = buildCallouts(u.view);
-			}
+			emit({
+				from: line.from,
+				to: doc.line(endLineNo).to,
+				value: (m.groups?.type ?? "").toLowerCase(),
+			});
+			lineNo = endLineNo + 1;
 		}
 	},
-	{ decorations: (v) => v.decorations },
-);
+	decorate(state, t) {
+		const { doc } = state;
+		const type = t.value;
+		const style = resolveStyle(type);
+		const attributes: Record<string, string> = { class: `cm-callout cm-callout-${type}` };
+		if (style) {
+			attributes.style = `--callout-color:${style.color}`;
+		}
+		const deco = Decoration.line({ attributes });
+		const header = doc.lineAt(t.from);
+		const out: Range<Decoration>[] = [deco.range(header.from)];
+		if (style) {
+			// The header line's line decoration lands first (same `from`, lower
+			// startSide); the set is sorted, so order here is for the reader.
+			const head = CALLOUT_START_RE.exec(header.text)?.[0].length ?? 0;
+			const title = header.text.slice(head).trim() || capitalize(style.keyword);
+			out.push(
+				Decoration.replace({ widget: new CalloutTitleWidget(style.svg, title) }).range(
+					header.from,
+					header.to,
+				),
+			);
+		}
+		for (let n = header.number + 1; n <= doc.lineAt(t.to).number; n++) {
+			out.push(deco.range(doc.line(n).from));
+		}
+		return out;
+	},
+};
+
+export const calloutDecoration = defineRenderer(calloutRenderer);
