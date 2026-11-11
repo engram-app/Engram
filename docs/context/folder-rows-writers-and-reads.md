@@ -98,7 +98,7 @@ reads it, built CONCURRENTLY on filled data:
 | folders by structural seq | `(vault_id, seq) WHERE seq IS NOT NULL` | S5 (first writer of `seq`) |
 
 The notes `(vault_id, folder_ref_id, id)` index is S1's
-(`20261107160300`).
+(`20261111020300`).
 
 ## Gotchas
 
