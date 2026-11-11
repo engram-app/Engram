@@ -3979,6 +3979,23 @@ jobs:
             echo "drops=$drops" >> "$GITHUB_OUTPUT"
           fi
 
+      # ── version-unique ── Ecto keys migrations by version alone. Two files
+      # with one version crash every task at boot ("migration version ... is
+      # duplicated"); shipped in separate releases, the later one is silently
+      # never run. Each PR is green alone (PRs #2513 and #2521 both added
+      # 20261107140000_*), so check the tree, then this branch's added
+      # versions against main and every other open PR (refs/pull/<n>/head,
+      # fetched from GitHub directly; an open PR it cannot fetch fails).
+      - name: Migration versions unique (tree, main, open PRs)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash test/scripts/check_migration_versions_test.sh
+          bash priv/repo/check_migration_versions.sh tree
+          if [ "${{ steps.detect.outputs.touches }}" = "true" ]; then
+            bash priv/repo/check_migration_versions.sh open-prs "$(git merge-base origin/main HEAD)"
+          fi
+
       # ── contract-references ── when a new migration drops, removes or renames
       # something: extract the columns and tables it drops and verify NO lib/
       # code still references them. Code that uses a column must be removed
