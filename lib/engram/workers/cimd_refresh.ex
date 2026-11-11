@@ -1,7 +1,15 @@
 defmodule Engram.Workers.CimdRefresh do
   @moduledoc """
-  Daily refresh of every stored CIMD client document, and (`kind: "jwks"`,
-  every 5 min) of every CIMD client's JWKS. See `perform/1`.
+  Daily refresh of the stored CIMD client document, and (`kind: "jwks"`,
+  every 5 min) of the JWKS, of every ACTIVE CIMD client. See `perform/1`.
+
+  Active = a live (unrevoked) refresh token used in the last 30 days
+  (`active_cimd_clients/0`, shared by both sweeps). A client nobody uses (a
+  dead test registration whose host is gone) is not retried daily forever,
+  which also keeps its failure logs from tripping the connector-refused alert.
+  Skipped clients are not broken: the authorize path still calls
+  `Cimd.ensure_client/1`, so a skipped client refreshes on demand the next time
+  someone authorizes.
 
   `Engram.OAuth.Cimd.ensure_client/1` is called from exactly one place,
   `Engram.OAuth.fetch_client/1`, which only the authorize path reaches. So
@@ -69,12 +77,13 @@ defmodule Engram.Workers.CimdRefresh do
 
   require Logger
 
-  # The JWKS sweep: vendor fetches in flight at once, the per-fetch ceiling
-  # (the fetcher's own 3 s budget plus DNS and the persist), and how recently
-  # a client must have made a token request to be swept.
+  # The JWKS sweep: vendor fetches in flight at once and the per-fetch ceiling
+  # (the fetcher's own 3 s budget plus DNS and the persist). `@active_days` is
+  # how recently a client must have made a token request to be swept, by
+  # either sweep.
   @jwks_concurrency 4
   @jwks_fetch_timeout_ms 15_000
-  @jwks_active_days 30
+  @active_days 30
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(10)
@@ -118,11 +127,31 @@ defmodule Engram.Workers.CimdRefresh do
   # this sweep runs with no user in context at all.
   defp cimd_rows do
     Repo.all(
-      from(c in Client,
-        where: not is_nil(c.cimd_url),
-        select: {c.cimd_url, c.cimd_fetched_at}
-      ),
+      from(c in active_cimd_clients(), select: {c.cimd_url, c.cimd_fetched_at}),
       skip_tenant_check: true
+    )
+  end
+
+  # The one definition of "worth a vendor fetch", used by both sweeps: a CIMD
+  # client with a LIVE (unrevoked) grant used for a token request in the last
+  # `@active_days`. EXISTS is served by
+  # `oauth_refresh_tokens_client_id_last_used_at_index`, not a join that
+  # scanned every refresh token (second review #13). Binding is `:client`.
+  defp active_cimd_clients do
+    cutoff = DateTime.add(DateTime.utc_now(), -@active_days * 86_400, :second)
+
+    from(c in Client,
+      as: :client,
+      where:
+        not is_nil(c.cimd_url) and
+          exists(
+            from(rt in RefreshToken,
+              where:
+                rt.client_id == parent_as(:client).client_id and is_nil(rt.revoked_at) and
+                  rt.last_used_at > ^cutoff,
+              select: 1
+            )
+          )
     )
   end
 
@@ -131,30 +160,14 @@ defmodule Engram.Workers.CimdRefresh do
   # result lands on every row naming it (`JwksCache.refresh_background/1`). A
   # failure leaves the last good keys in place.
   #
-  # Only clients with a LIVE (unrevoked) grant used for a token request in the
-  # last 30 days, most recently used first, so a burst of registrations that
-  # never connect, or grants since disconnected, cost no vendor fetches. One
-  # that comes back fetches on demand in the token path.
-  #
-  # EXISTS plus a per-client max, both served by
-  # `oauth_refresh_tokens_client_id_last_used_at_index`, rather than a join
-  # that scanned every refresh token (second review #13). Clients sharing a
-  # jwks_uri collapse to one URI, ordered by its most recent use.
+  # Active clients only (`active_cimd_clients/0`), most recently used first, so
+  # a burst of registrations that never connect, or grants since disconnected,
+  # cost no vendor fetches. One that comes back fetches on demand in the token
+  # path. Clients sharing a jwks_uri collapse to one URI, ordered by its most
+  # recent use.
   defp jwks_uris do
-    cutoff = DateTime.add(DateTime.utc_now(), -@jwks_active_days * 86_400, :second)
-
-    from(c in Client,
-      as: :client,
-      where:
-        not is_nil(c.cimd_url) and not is_nil(c.jwks_uri) and
-          exists(
-            from(rt in RefreshToken,
-              where:
-                rt.client_id == parent_as(:client).client_id and is_nil(rt.revoked_at) and
-                  rt.last_used_at > ^cutoff,
-              select: 1
-            )
-          ),
+    from(c in active_cimd_clients(),
+      where: not is_nil(c.jwks_uri),
       select: {
         c.jwks_uri,
         # `utc_wall`: Ecto casts this to `timestamp`, which would read a

@@ -63,7 +63,7 @@ defmodule Engram.Workers.CimdRefreshTest do
   describe "perform/1" do
     # The whole point: nobody authorized, and the document still got re-read.
     test "refetches a row past its TTL" do
-      client = cimd_client(cimd_fetched_at: aged(2))
+      client = cimd_client(cimd_fetched_at: aged(2)) |> used()
 
       expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
 
@@ -76,7 +76,7 @@ defmodule Engram.Workers.CimdRefreshTest do
     # so a row inside the TTL costs no outbound fetch. Mox is strict here: an
     # unexpected `fetch` call fails the test.
     test "leaves a fresh row alone" do
-      cimd_client(cimd_fetched_at: DateTime.utc_now())
+      cimd_client(cimd_fetched_at: DateTime.utc_now()) |> used()
 
       assert {:ok, %{unchanged: 1}} = perform_job(CimdRefresh, %{})
     end
@@ -93,6 +93,7 @@ defmodule Engram.Workers.CimdRefreshTest do
           token_endpoint_auth_methods_supported: ["none", "private_key_jwt"],
           jwks_uri: "https://claude.ai/oauth/jwks.json"
         )
+        |> used()
 
       assert Client.public_auth_permitted?(client),
              "precondition: the cached row grants credential-free exchanges"
@@ -122,7 +123,7 @@ defmodule Engram.Workers.CimdRefreshTest do
     # unmoved) timestamp is the only evidence this worker has. The failure
     # itself is carried by `mcp_cimd_stale_retained`, not by this tally.
     test "keeps the cached row when the vendor is unreachable" do
-      client = cimd_client(cimd_fetched_at: aged(2))
+      client = cimd_client(cimd_fetched_at: aged(2)) |> used()
 
       expect(FetcherMock, :fetch, fn @url -> {:error, :fetch_failed} end)
 
@@ -140,6 +141,33 @@ defmodule Engram.Workers.CimdRefreshTest do
 
       assert {:ok, tally} = perform_job(CimdRefresh, %{})
       assert tally == %{}
+    end
+
+    # Same "live grant used in the last 30 days" rule as the JWKS sweep. Mox is
+    # strict: an unexpected fetch of a skipped client fails the test. Skipped
+    # clients still refresh on demand via the authorize path.
+    test "skips clients with no token, a revoked token, or a token idle 31 days" do
+      cimd_client(cimd_url: "https://never.example/c", cimd_fetched_at: aged(2))
+
+      [cimd_url: "https://revoked.example/c", cimd_fetched_at: aged(2)]
+      |> cimd_client()
+      |> used(1, revoked_at: DateTime.utc_now(:second))
+
+      [cimd_url: "https://idle.example/c", cimd_fetched_at: aged(2)]
+      |> cimd_client()
+      |> used(31)
+
+      assert {:ok, tally} = perform_job(CimdRefresh, %{})
+      assert tally == %{}
+    end
+
+    test "fetches a client with a live token used within 30 days" do
+      client = cimd_client(cimd_fetched_at: aged(2)) |> used(29)
+
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
+
+      assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{})
+      assert DateTime.compare(reload(client).cimd_fetched_at, client.cimd_fetched_at) == :gt
     end
 
     test "is a no-op with no CIMD clients at all" do
