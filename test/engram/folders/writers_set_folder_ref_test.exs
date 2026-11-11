@@ -1,7 +1,7 @@
 defmodule Engram.Folders.WritersSetFolderRefTest do
   # R9.5 step 2: every writer of a note's or attachment's path sets
   # `folder_ref_id` itself. Release D dropped the `notes_set_folder_ref`
-  # trigger and its restore twin (20261107150000); these tests drive every
+  # trigger and its restore twin (20261111000000); these tests drive every
   # write path without them, then check every live row of the vault against
   # the folder tree.
   #
