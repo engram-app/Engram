@@ -1,15 +1,8 @@
-import { type EditorState, Prec, type Range, StateField, type Text } from "@codemirror/state";
-import {
-	type Command,
-	Decoration,
-	type DecorationSet,
-	EditorView,
-	keymap,
-	WidgetType,
-} from "@codemirror/view";
+import { type EditorState, Prec } from "@codemirror/state";
+import { type Command, Decoration, type EditorView, keymap, WidgetType } from "@codemirror/view";
 import type { Translate } from "@/i18n/translate";
 import { drawMermaid, rememberedMermaidHeight } from "../mermaid-render";
-import { selectionTouches } from "./decoration-utils";
+import { defineRenderer, type TextRenderer, tokensAt } from "./render-core";
 import { translator } from "./translator";
 import "./mermaid.css";
 
@@ -103,14 +96,8 @@ function isDark(): boolean {
 	return document.documentElement.classList.contains("dark");
 }
 
-interface Fence {
-	/** Document offsets of the whole block, opening fence through closing fence. */
-	from: number;
-	to: number;
-	openLine: number;
-	closeLine: number;
-	code: string;
-}
+/** A fenced block: its mermaid source, or null for any other fence (or an unclosed one). */
+type FenceToken = { code: string } | null;
 
 // CommonMark fences, not just ```mermaid at column 0. The run of backticks and
 // the indentation are captured because both are load-bearing: a closing fence
@@ -123,74 +110,92 @@ const FENCE_OPEN = /^(?<indent> {0,3})(?<ticks>`{3,})[ \t]*(?<info>[^`]*?)[ \t]*
 const FENCE_CLOSE = /^ {0,3}(?<ticks>`{3,})[ \t]*$/;
 
 /**
- * Every complete ```mermaid block in the document.
+ * Every fence, as tokens on the render core.
  *
  * Walks EVERY fence, not just the mermaid ones, and jumps the scan past each
  * one it finds. That is what stops a ```mermaid line QUOTED inside a wider
- * documentation fence from being read as a real block — it is content, and the
+ * documentation fence from being read as a real block: it is content, and the
  * scanner never looks at it. Leading indentation up to three spaces is allowed,
  * so a fence inside a list item renders here as it already did in Reading mode.
+ * Non-mermaid fences are tokens too, which is what makes a line outside every
+ * fence a neutral point the core can resync at.
  *
- * Scanned rather than read off syntaxTree(state), which was tried and reverted.
- * The tree is parsed LAZILY: on a fresh EditorState it covered seven characters,
- * and in a real editor it trails the viewport on a long note. Fences below the
- * parse frontier would simply stop rendering — a worse failure than the two
- * cases the tree would have fixed. This scan is O(lines) and always complete.
+ * Scanned rather than read off syntaxTree(state), which was tried and reverted:
+ * the tree is parsed lazily, and fences below the parse frontier stopped
+ * rendering. This scan only ever covers the lines an edit touched.
  *
  * ponytail: three spaces is the CommonMark document-level allowance, so a fence
  * indented further by a NESTED list item is still missed. Upgrade path is to
  * track container indentation; not worth it until someone hits it.
  *
- * Shared by the decoration and the arrow-key commands on purpose: two scanners
- * would be two answers to "where does this block start", and the commands exist
- * precisely to land the caret on a boundary the decoration computed.
+ * The arrow-key commands below read these same tokens, so "where does this
+ * block start" has one answer.
  */
-function fenceRanges(doc: Text): Fence[] {
-	const out: Fence[] = [];
-	let lineNo = 1;
-	while (lineNo <= doc.lines) {
-		const line = doc.line(lineNo);
-		const open = FENCE_OPEN.exec(line.text);
-		if (!open) {
-			lineNo++;
-			continue;
-		}
-		const indent = open.groups?.indent?.length ?? 0;
-		const ticks = open.groups?.ticks?.length ?? 0;
-		const info = open.groups?.info ?? "";
-
-		let closeNo = 0;
-		for (let n = lineNo + 1; n <= doc.lines; n++) {
-			const close = FENCE_CLOSE.exec(doc.line(n).text);
-			if (close && (close.groups?.ticks?.length ?? 0) >= ticks) {
-				closeNo = n;
-				break;
+const mermaidRenderer: TextRenderer<FenceToken> = {
+	kind: "text",
+	reveal: true,
+	refresh: (tr) => tr.startState.facet(translator) !== tr.state.facet(translator),
+	scan(state, from, emit, neutral) {
+		const { doc } = state;
+		let lineNo = doc.lineAt(from).number;
+		while (lineNo <= doc.lines) {
+			const line = doc.line(lineNo);
+			if (line.from > from && neutral(line.from)) {
+				return;
 			}
-		}
-		// No closer means the block is still being typed — and that everything
-		// below is inside it, so there is nothing further to find either.
-		if (closeNo === 0) {
-			break;
-		}
-
-		if (info === "mermaid") {
-			const body: string[] = [];
-			for (let n = lineNo + 1; n < closeNo; n++) {
-				body.push(dedent(doc.line(n).text, indent));
+			const open = FENCE_OPEN.exec(line.text);
+			if (!open) {
+				lineNo++;
+				continue;
 			}
-			out.push({
-				from: line.from,
-				to: doc.line(closeNo).to,
-				openLine: lineNo,
-				closeLine: closeNo,
-				code: body.join("\n"),
-			});
+			const indent = open.groups?.indent?.length ?? 0;
+			const ticks = open.groups?.ticks?.length ?? 0;
+			let closeNo = 0;
+			for (let n = lineNo + 1; n <= doc.lines; n++) {
+				const close = FENCE_CLOSE.exec(doc.line(n).text);
+				if (close && (close.groups?.ticks?.length ?? 0) >= ticks) {
+					closeNo = n;
+					break;
+				}
+			}
+			// No closer: the block is still being typed, and everything below is
+			// inside it. One token to the end, never rendered.
+			if (closeNo === 0) {
+				emit({ from: line.from, to: doc.length, value: null });
+				return;
+			}
+			let value: FenceToken = null;
+			if (open.groups?.info === "mermaid") {
+				const body: string[] = [];
+				for (let n = lineNo + 1; n < closeNo; n++) {
+					body.push(dedent(doc.line(n).text, indent));
+				}
+				value = { code: body.join("\n") };
+			}
+			emit({ from: line.from, to: doc.line(closeNo).to, value });
+			// Past the whole block whether or not it was ours: everything between the
+			// marks is content, including any line that looks like a fence.
+			lineNo = closeNo + 1;
 		}
-		// Past the whole block whether or not it was ours: everything between the
-		// marks is content, including any line that looks like a fence.
-		lineNo = closeNo + 1;
-	}
-	return out;
+	},
+	decorate(state, t) {
+		if (t.value === null) {
+			return [];
+		}
+		return [
+			Decoration.replace({
+				widget: new MermaidWidget(t.value.code, isDark(), state.facet(translator)),
+				block: true,
+			}).range(t.from, t.to),
+		];
+	},
+};
+
+/** The rendered (mermaid) fence starting or ending at `pos`, if any. */
+function mermaidAt(state: EditorState, pos: number, edge: "from" | "to") {
+	return tokensAt(state, mermaidRenderer, pos, pos).find(
+		(t) => t.value !== null && t[edge] === pos,
+	);
 }
 
 /** Drop up to `width` leading spaces, so an indented diagram reaches mermaid flush. */
@@ -200,30 +205,6 @@ function dedent(line: string, width: number): string {
 		i++;
 	}
 	return line.slice(i);
-}
-
-function buildMermaid(state: EditorState): DecorationSet {
-	const { doc, selection: sel } = state;
-	const dark = isDark();
-	const ranges: Range<Decoration>[] = [];
-
-	for (const fence of fenceRanges(doc)) {
-		// Reveal raw when the cursor/selection intersects the block, matching
-		// callouts and math.
-		if (selectionTouches(sel, fence.from, fence.to)) {
-			continue;
-		}
-		ranges.push(
-			Decoration.replace({
-				widget: new MermaidWidget(fence.code, dark, state.facet(translator)),
-				block: true,
-			}).range(fence.from, fence.to),
-		);
-	}
-
-	// `true` = let RangeSet sort. The scan is in document order, but the cost is
-	// nil and an unsorted set throws.
-	return Decoration.set(ranges, true);
 }
 
 /**
@@ -264,24 +245,24 @@ function enterFence(view: EditorView, forward: boolean): boolean {
 	if (moved !== range.head && doc.lineAt(moved).number === caretLine) {
 		return false;
 	}
-	for (const fence of fenceRanges(doc)) {
-		// Already inside: the block is revealed and normal motion is what should
-		// carry the caret through its lines.
-		if (range.head >= fence.from && range.head <= fence.to) {
-			return false;
-		}
-		// Enter at the near edge, so continuing in the same direction reads the
-		// source in the order you were already travelling.
-		const entering = forward ? caretLine === fence.openLine - 1 : caretLine === fence.closeLine + 1;
-		if (entering) {
-			view.dispatch({
-				selection: { anchor: forward ? fence.from : fence.to },
-				scrollIntoView: true,
-			});
-			return true;
-		}
+	// Already inside: the block is revealed and normal motion is what should
+	// carry the caret through its lines.
+	if (tokensAt(state, mermaidRenderer, range.head, range.head).some((t) => t.value !== null)) {
+		return false;
 	}
-	return false;
+	// Enter at the near edge, so continuing in the same direction reads the
+	// source in the order you were already travelling.
+	const neighbour = caretLine + (forward ? 1 : -1);
+	if (neighbour < 1 || neighbour > doc.lines) {
+		return false;
+	}
+	const line = doc.line(neighbour);
+	const fence = forward ? mermaidAt(state, line.from, "from") : mermaidAt(state, line.to, "to");
+	if (!fence) {
+		return false;
+	}
+	view.dispatch({ selection: { anchor: forward ? fence.from : fence.to }, scrollIntoView: true });
+	return true;
 }
 
 export const enterMermaidDown: Command = (view) => enterFence(view, true);
@@ -299,25 +280,12 @@ export const mermaidKeymap = Prec.highest(
 /**
  * Renders ```mermaid fences in the editor, the way Reading mode already does.
  *
- * StateField, not ViewPlugin: a mermaid fence is always multi-line, so its
- * replace decoration spans line breaks, and CM6 only accepts those from the
- * decorations facet fed by a state field. See katex-decoration.ts, which hit the
- * same rule.
+ * On the render core, so a StateField underneath: a mermaid fence is always
+ * multi-line, its replace decoration spans line breaks, and CM6 only accepts
+ * those from a state field. A keystroke rescans the fence it is in; a widget
+ * whose source did not change is `eq` and keeps its drawn diagram.
  *
  * View-only. It decorates the markdown source and never mutates
  * EditorState.doc, leaving the yCollab Y.Text binding untouched.
  */
-export const mermaidDecoration = StateField.define<DecorationSet>({
-	create: (state) => buildMermaid(state),
-	update(value, tr) {
-		if (
-			tr.docChanged ||
-			tr.selection ||
-			tr.startState.facet(translator) !== tr.state.facet(translator)
-		) {
-			return buildMermaid(tr.state);
-		}
-		return value;
-	},
-	provide: (f) => EditorView.decorations.from(f),
-});
+export const mermaidDecoration = defineRenderer(mermaidRenderer);
