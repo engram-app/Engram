@@ -27,9 +27,10 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
   alerting; the source event already carries `worker` and `queue` metadata.
   """
 
-  require Logger
-
+  alias Engram.Logger.Metadata
   alias Engram.Logger.SafeException
+
+  require Logger
 
   @handler_id :engram_oban_discard
   # Oban contract (>= v2.0): `worker` arrives in metadata as a binary
@@ -71,7 +72,7 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
 
     Logger.warning(
       "Oban job discarded after max_attempts: worker=#{worker} queue=#{inspect(queue)} job_id=#{inspect(Map.get(job, :id))} attempt=#{inspect(Map.get(job, :attempt))}/#{inspect(Map.get(job, :max_attempts))} error_kind=#{error_kind}",
-      Engram.Logger.Metadata.with_category(:warning, :oban,
+      Metadata.with_category(:warning, :oban,
         worker: worker,
         queue: queue,
         job_id: Map.get(job, :id),
@@ -117,7 +118,7 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
 
     Logger.warning(
       "Oban job timed out: worker=#{worker} queue=#{inspect(queue)} job_id=#{inspect(Map.get(job, :id))} attempt=#{inspect(Map.get(job, :attempt))}/#{inspect(Map.get(job, :max_attempts))} ran_ms=#{ran_ms}",
-      Engram.Logger.Metadata.with_category(:warning, :oban,
+      Metadata.with_category(:warning, :oban,
         worker: worker,
         queue: queue,
         job_id: Map.get(job, :id),
@@ -151,7 +152,7 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
 
     Logger.warning(
       "Oban job attempt failed, will retry: worker=#{worker} queue=#{inspect(queue)} job_id=#{inspect(Map.get(job, :id))} attempt=#{inspect(Map.get(job, :attempt))}/#{inspect(Map.get(job, :max_attempts))} error_kind=#{error_kind} node=#{node()} error=#{error_message}",
-      Engram.Logger.Metadata.with_category(:warning, :oban,
+      Metadata.with_category(:warning, :oban,
         worker: worker,
         queue: queue,
         job_id: Map.get(job, :id),
