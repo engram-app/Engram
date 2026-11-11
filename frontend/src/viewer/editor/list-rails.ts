@@ -1,6 +1,6 @@
-import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
-import { type EditorState, type Range, StateField } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
+import type { Range } from "@codemirror/state";
+import { Decoration, EditorView } from "@codemirror/view";
+import { defineRenderer, type TreeRenderer } from "./render-core";
 
 // Indent guides for nested lists, the same idea as the file tree's: one thin
 // vertical rail per level above the line's own. The rails are drawn by CSS
@@ -31,67 +31,72 @@ interface LineInfo {
 	kinds: string[];
 }
 
-function build(state: EditorState): DecorationSet {
-	const byLine = new Map<number, LineInfo>();
-	const stack: string[] = [];
-	// Bounded full parse: the tree is otherwise lazy and trails the viewport.
-	ensureSyntaxTree(state, state.doc.length, 100)?.iterate({
-		enter: (node) => {
-			if (node.name !== "ListItem") {
-				return;
-			}
-			stack.push(node.node.parent?.name ?? "BulletList");
-			const depth = stack.length;
-			const kinds = stack.slice(0, -1);
-			const last = state.doc.lineAt(node.to).number;
-			for (let n = state.doc.lineAt(node.from).number; n <= last; n++) {
-				if (depth > (byLine.get(n)?.depth ?? 0)) {
-					byLine.set(n, { depth, kinds });
-				}
-			}
-		},
-		leave: (node) => {
-			if (node.name === "ListItem") {
-				stack.pop();
-			}
+function railDeco(depth: number, kinds: string[]): Decoration {
+	// One 1px layer per ancestor level, each placed under that ancestor's marker.
+	const xs = kinds.map((kind, k) => {
+		const offset = RAIL_OFFSET_EM[kind] ?? 0.6;
+		return `calc(${ATOMIC_LIST_BASE_EM + offset}em + ${k} * ${INDENT}) 0`;
+	});
+	const layers = xs.map(() => "linear-gradient(var(--border), var(--border))").join(",");
+	return Decoration.line({
+		class: "cm-list-rails",
+		// Atomic indents a nested item by a fixed 0.6em per level whatever the Tab
+		// size is (it replaces the leading whitespace with nothing and sets
+		// padding-left itself: base 0.8em + alcove 1.2em + depth * 0.6em). Set the
+		// same padding with OUR level size so nested lists respect the indent.
+		attributes: {
+			style: `--rails:${depth - 1};padding-left:calc(${ATOMIC_LIST_BASE_EM + ATOMIC_LIST_ALCOVE_EM}em + ${depth - 1} * ${INDENT});background-image:${layers};background-repeat:no-repeat;background-size:${xs.map(() => "1px 100%").join(",")};background-position:${xs.join(",")}`,
 		},
 	});
-	const out: Range<Decoration>[] = [];
-	for (const [n, { depth, kinds }] of byLine) {
-		if (depth < 2) {
-			continue;
-		}
-		// One 1px layer per ancestor level, each placed under that ancestor's marker.
-		const xs = kinds.map((kind, k) => {
-			const offset = RAIL_OFFSET_EM[kind] ?? 0.6;
-			return `calc(${ATOMIC_LIST_BASE_EM + offset}em + ${k} * ${INDENT}) 0`;
-		});
-		const layers = xs.map(() => "linear-gradient(var(--border), var(--border))").join(",");
-		out.push(
-			Decoration.line({
-				class: "cm-list-rails",
-				// Atomic indents a nested item by a fixed 0.6em per level whatever the Tab
-				// size is (it replaces the leading whitespace with nothing and sets
-				// padding-left itself: base 0.8em + alcove 1.2em + depth * 0.6em). Set the
-				// same padding with OUR level size so nested lists respect the indent.
-				attributes: {
-					style: `--rails:${depth - 1};padding-left:calc(${ATOMIC_LIST_BASE_EM + ATOMIC_LIST_ALCOVE_EM}em + ${depth - 1} * ${INDENT});background-image:${layers};background-repeat:no-repeat;background-size:${xs.map(() => "1px 100%").join(",")};background-position:${xs.join(",")}`,
-				},
-			}).range(state.doc.line(n).from),
-		);
-	}
-	return Decoration.set(out, true);
 }
 
+/** Rails for the lines in [from, to). The core walks only the region an update touched. */
+export const listRailsRenderer: TreeRenderer = {
+	kind: "tree",
+	visit(state, from, to) {
+		const { doc } = state;
+		const byLine = new Map<number, LineInfo>();
+		const stack: string[] = [];
+		// The walk enters every ancestor of the range, so an item that starts above
+		// it still counts towards the depth of the lines inside it.
+		const first = doc.lineAt(from).number;
+		const last = doc.lineAt(Math.min(to, doc.length)).number;
+		return {
+			enter(node) {
+				if (node.name !== "ListItem") {
+					return;
+				}
+				stack.push(node.node.parent?.name ?? "BulletList");
+				const depth = stack.length;
+				const kinds = stack.slice(0, -1);
+				const end = Math.min(doc.lineAt(node.to).number, last);
+				for (let n = Math.max(doc.lineAt(node.from).number, first); n <= end; n++) {
+					if (depth > (byLine.get(n)?.depth ?? 0)) {
+						byLine.set(n, { depth, kinds });
+					}
+				}
+			},
+			leave(node) {
+				if (node.name === "ListItem") {
+					stack.pop();
+				}
+			},
+			finish() {
+				const out: Range<Decoration>[] = [];
+				for (const [n, { depth, kinds }] of byLine) {
+					const at = doc.line(n).from;
+					if (depth >= 2 && at >= from && at < to + (to >= doc.length ? 1 : 0)) {
+						out.push(railDeco(depth, kinds).range(at));
+					}
+				}
+				return out;
+			},
+		};
+	},
+};
+
 export const listRails = [
-	StateField.define<DecorationSet>({
-		create: build,
-		// The tree can change without the document (it parses in the background), so
-		// rebuild when the tree identity moves too.
-		update: (deco, tr) =>
-			tr.docChanged || syntaxTree(tr.state) !== syntaxTree(tr.startState) ? build(tr.state) : deco,
-		provide: (f) => EditorView.decorations.from(f),
-	}),
+	defineRenderer(listRailsRenderer),
 	// One indent size for both the Tab character and the rails: change INDENT here
 	// and both follow. A length, not a number of spaces: CodeMirror's own tab-size
 	// is in space widths, which in this proportional font is barely over 1em.

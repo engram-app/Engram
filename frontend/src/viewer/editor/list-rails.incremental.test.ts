@@ -1,0 +1,50 @@
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import type { StateField } from "@codemirror/state";
+import type { DecorationSet } from "@codemirror/view";
+import { describe, expect, test } from "vitest";
+import { listRails } from "./list-rails";
+import { diffFromFresh, parsedState, placed, settle } from "./render-test-utils";
+
+const ext = [markdown({ base: markdownLanguage }), listRails];
+const field = listRails[0] as StateField<DecorationSet>;
+
+const parsed = (doc: string) => parsedState(doc, ext);
+
+const NESTED = "- a\n\t- b\n\t\t- c\n";
+
+describe("list rails render incrementally", () => {
+	test("a keystroke at the end of a long list keeps every rail above it (no rebuild)", () => {
+		const s = parsed(NESTED.repeat(2000));
+		const before = placed(s.field(field));
+		const end = s.doc.length;
+		const after = s.update({ changes: { from: end, insert: "x" } }).state;
+		const now = placed(after.field(field));
+		// The first rail is far from the edit: the SAME object, mapped, not rebuilt.
+		expect(now[0]?.[2]).toBe(before[0]?.[2]);
+		// The typed line is a lazy continuation of the last item, so it gains rails.
+		expect(diffFromFresh(settle(after), ext, field)).toEqual([]);
+	});
+
+	test("matches a fresh build after nesting, un-nesting and joining edits", () => {
+		let s = parsed(`${NESTED.repeat(30)}\npara\n\n${NESTED.repeat(30)}`);
+		const edits = [
+			{ from: 0, insert: "\t" },
+			{ from: s.doc.line(10).from, insert: "\t\t- new\n" },
+			{ from: s.doc.line(5).from, to: s.doc.line(5).from + 1 },
+			{ from: s.doc.line(90).from, to: s.doc.line(92).to },
+		];
+		for (const changes of edits) {
+			s = settle(s.update({ changes }).state);
+			expect(diffFromFresh(s, ext, field)).toEqual([]);
+		}
+	});
+
+	test("edge cases: empty doc, edit at start, delete everything", () => {
+		let s = parsed("");
+		expect(placed(s.field(field))).toEqual([]);
+		s = settle(s.update({ changes: { from: 0, insert: NESTED } }).state);
+		expect(diffFromFresh(s, ext, field)).toEqual([]);
+		s = s.update({ changes: { from: 0, to: s.doc.length } }).state;
+		expect(placed(s.field(field))).toEqual([]);
+	});
+});
