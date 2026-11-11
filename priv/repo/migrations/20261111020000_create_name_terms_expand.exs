@@ -1,5 +1,13 @@
+# Shared with 20261111000000; see the file for why it is not in lib/.
+Code.require_file("lock_timeout_retry.exs", __DIR__)
+
 defmodule Engram.Repo.Migrations.CreateNameTermsExpand do
   use Ecto.Migration
+
+  alias Engram.Repo.Migrations.LockTimeoutRetry
+
+  @disable_ddl_transaction true
+  @disable_migration_lock true
 
   # squawk-ignore-file
   #
@@ -19,47 +27,54 @@ defmodule Engram.Repo.Migrations.CreateNameTermsExpand do
   # most 500 postings per query term on its prefix. `name_terms_ref` serves
   # the per-ref replace on rename. A vault delete cascades its rows; a user
   # delete reaches them through its vaults.
-  def change do
-    create table(:name_terms, primary_key: false, options: "WITH (fillfactor = 90)") do
-      add :vault_id, references(:vaults, type: :uuid, on_delete: :delete_all),
-        null: false,
-        primary_key: true
+  #
+  # Locks: the foreign key takes SHARE ROW EXCLUSIVE on `vaults` (vault
+  # writes wait, reads do not). The statements run through `LockTimeoutRetry`:
+  # a 5 s `lock_timeout` per statement and a statement that hits it (55P03)
+  # retried twice, so a busy `vaults` row does not crash boot. No DDL
+  # transaction, so each statement is rerun-safe on its own (IF NOT EXISTS,
+  # a policy dropped by name before it is created; RLS enable / force and the
+  # grant are idempotent). Constraint names match Ecto's (`name_terms_pkey`,
+  # `name_terms_vault_id_fkey`). Calls no app module (N-1 gate).
 
-      add :dim, :integer, null: false, primary_key: true
-      add :ref_kind, :smallint, null: false, primary_key: true
-      add :ref_id, :uuid, null: false, primary_key: true
-      add :user_id, :uuid, null: false
-    end
+  def up, do: run_up(repo())
+  def down, do: run_down(repo())
 
-    create index(:name_terms, [:ref_id], name: :name_terms_ref)
+  @tenant_policy """
+  CREATE POLICY tenant_isolation_name_terms ON name_terms
+    USING (user_id = (SELECT NULLIF((SELECT current_setting('app.current_tenant', true)), '')::uuid))
+    WITH CHECK (user_id = (SELECT NULLIF((SELECT current_setting('app.current_tenant', true)), '')::uuid))
+  """
 
-    execute(
-      "ALTER TABLE name_terms ENABLE ROW LEVEL SECURITY",
-      "ALTER TABLE name_terms DISABLE ROW LEVEL SECURITY"
-    )
-
-    execute(
-      "ALTER TABLE name_terms FORCE ROW LEVEL SECURITY",
-      "ALTER TABLE name_terms NO FORCE ROW LEVEL SECURITY"
-    )
-
-    execute(
+  @doc false
+  # Public for `CreateNameTermsLockTest`.
+  def run_up(repo) do
+    LockTimeoutRetry.with_lock_timeout(repo, [
       """
-      CREATE POLICY tenant_isolation_name_terms ON name_terms
-        USING (user_id = (SELECT NULLIF((SELECT current_setting('app.current_tenant', true)), '')::uuid))
-        WITH CHECK (user_id = (SELECT NULLIF((SELECT current_setting('app.current_tenant', true)), '')::uuid))
+      CREATE TABLE IF NOT EXISTS name_terms (
+        vault_id uuid NOT NULL,
+        dim integer NOT NULL,
+        ref_kind smallint NOT NULL,
+        ref_id uuid NOT NULL,
+        user_id uuid NOT NULL,
+        CONSTRAINT name_terms_pkey PRIMARY KEY (vault_id, dim, ref_kind, ref_id),
+        CONSTRAINT name_terms_vault_id_fkey FOREIGN KEY (vault_id)
+          REFERENCES vaults (id) ON DELETE CASCADE
+      ) WITH (fillfactor = 90)
       """,
-      "DROP POLICY IF EXISTS tenant_isolation_name_terms ON name_terms"
-    )
-
-    execute(
+      "CREATE INDEX IF NOT EXISTS name_terms_ref ON name_terms (ref_id)",
+      "ALTER TABLE name_terms ENABLE ROW LEVEL SECURITY",
+      "ALTER TABLE name_terms FORCE ROW LEVEL SECURITY",
+      "DROP POLICY IF EXISTS tenant_isolation_name_terms ON name_terms",
+      @tenant_policy,
+      "DROP POLICY IF EXISTS maintenance_all ON name_terms",
       "CREATE POLICY maintenance_all ON name_terms TO engram_maintenance USING (true) WITH CHECK (true)",
-      "DROP POLICY IF EXISTS maintenance_all ON name_terms"
-    )
+      "GRANT SELECT, INSERT, UPDATE, DELETE ON name_terms TO engram_app"
+    ])
+  end
 
-    execute(
-      "GRANT SELECT, INSERT, UPDATE, DELETE ON name_terms TO engram_app",
-      "REVOKE ALL ON name_terms FROM engram_app"
-    )
+  @doc false
+  def run_down(repo) do
+    LockTimeoutRetry.with_lock_timeout(repo, ["DROP TABLE IF EXISTS name_terms"])
   end
 end
