@@ -43,7 +43,10 @@ defmodule Engram.MigrationRlsLintTest do
     # filtering them, with no ACCESS EXCLUSIVE lock per window; ends each
     # user with a fail-loud count in the same context.
     # `SelfHostJumpTest`, `NoteSplitTest`.
-    "20261107120000_note_bodies_complete_split_migrate.exs"
+    "20261107120000_note_bodies_complete_split_migrate.exs",
+    # Same per-user tenant context; it only fills rows the owner already
+    # holds, run as `engram_app` in `NoteBodiesPreNonceHealTest`.
+    "20261110130000_note_bodies_pre_nonce_heal_migrate.exs"
   ]
 
   test "tenant-table DML in migrations handles FORCE ROW LEVEL SECURITY" do

@@ -634,6 +634,27 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
+  A pre-nonce note whose body column is NULL: the `notes` content nonce
+  NULL and its ciphertext the whole envelope (the layout before nonces had
+  their own column), and the body row's content NULL. The state the R8(c)
+  owner repair once left behind (#2545 review MED-1).
+  """
+  def pre_nonce_null_body!(note_id) do
+    id = Ecto.UUID.dump!(note_id)
+
+    Engram.Repo.query!(
+      """
+      UPDATE notes AS n SET content_ciphertext = b.content_ct, content_nonce = NULL
+      FROM note_bodies AS b WHERE b.note_id = n.id AND n.id = $1
+      """,
+      [id]
+    )
+
+    Engram.Repo.query!("UPDATE note_bodies SET content_ct = NULL WHERE note_id = $1", [id])
+    :ok
+  end
+
+  @doc """
   Runs migration 20261107120000 (R8(c): every note gets its body row before
   boot) on the test's sandbox connection, as an upgrade runs it. `role:`
   runs it as that database role (`"engram_app"`: RLS enforced, no bypass).
