@@ -1,6 +1,6 @@
 # Context Doc: OAuth discovery URLs behind edge-terminated TLS
 
-_Last verified: 2026-10-03_
+_Last verified: 2026-11-11_
 
 ## Status
 
@@ -106,12 +106,12 @@ Ruled out while hunting this, worth not re-deriving:
   `api.engram.page/oauth/authorize/consent`; `oauth` is in `@api_top_segments`, so it
   rewrites to `/api/oauth/authorize/consent`, which exists. `fetchOAuthClient` already
   hardcodes the `/api` prefix.
-- **The RFC 8707 `resource` param IS server-validated since #1977** (it was not when the
+- **The RFC 8707 `resource` param IS server-validated since #1994 (issue #1977)** (it was not when the
   `:80` bug happened, which is why that bug did not additionally poison token exchange). A
   `resource` naming another host is `invalid_target` at authorize
   (`check_resource/2`, `lib/engram/oauth.ex:496-508`) and at token for both grants
   (`check_resource/4`, `lib/engram_web/controllers/oauth_token_controller.ex:59-70`); empty
-  is absent. Tokens carry `aud: "engram:mcp"` (`lib/engram/token.ex:19`). So a wrong
+  is absent. Tokens carry `aud: "engram:mcp"` (`lib/engram/token.ex:21`). So a wrong
   advertised `resource` host now fails the exchange, not just the client's self-check.
 - **CIMD egress** is ordinary outbound HTTPS through NAT, same path as Voyage/Qdrant/
   Clerk/Paddle. `SsrfGuard` pins to a resolved public address; no proxy interaction.
