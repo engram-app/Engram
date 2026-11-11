@@ -18,6 +18,8 @@ name: Deploy prod
 # Rollback recipe (forward-roll — no separate workflow):
 #   git tag release-v0.5.235 <last-known-good-sha-on-main>
 #   git push origin release-v0.5.235
+# A commit below the rollback floor is refused. In an incident, use the
+# annotated [allow-below-floor] override: docs/context/rollback-floor.md.
 #
 # PROMOTION IS MANUAL (#1155). This workflow opens the engram-infra bump PR
 # but does NOT merge it, so staging can be verified before prod moves. The
@@ -38,33 +40,6 @@ permissions:
   contents: read
 
 jobs:
-  # Real-app proof gate. Before prod moves, run the FULL Obsidian e2e suite
-  # (e2e-clerk / e2e-crdt / e2e-browser) against the EXACT commit this
-  # release-v* tag points at, and BLOCK the deploy if any of them fail.
-  #
-  # Why dispatch verify.yml instead of a workflow_call or a copy of the
-  # bring-up steps:
-  #   - verify.yml already owns the ~600-line Obsidian/Xvfb/CDP bring-up.
-  #     Copying it here would rot; a workflow_call refactor would have to
-  #     thread `force_full` through verify.yml's fingerprint gating (dozens
-  #     of `if:` conditions) and is a big change to the shared merge-gate
-  #     file. This job touches ONLY deploy-prod.yml — maximally conservative.
-  #   - verify.yml IGNORES release-v* tags (`tags-ignore`) and its `ci`
-  #     aggregate treats the full-Obsidian e2e as REPORT-ONLY (#1076), so a
-  #     tag push alone runs nothing and the run conclusion would be green even
-  #     on a red e2e. This gate therefore (a) dispatches verify.yml with
-  #     `force_full=true` on the tag ref so the fingerprint is bypassed and
-  #     every e2e job actually runs, and (b) reads the INDIVIDUAL e2e-* job
-  #     conclusions (not the run/ci conclusion) to decide pass/fail.
-  #   - GITHUB_TOKEN is an explicit exception to Actions' recursion guard for
-  #     workflow_dispatch, so `actions: write` lets us kick verify.yml.
-  #
-  # Emergency override (GATED by default): a hotfix or a known-flake can be
-  # shipped by putting `[skip-release-e2e]` in the ANNOTATED tag's message:
-  #   git tag -a release-v0.5.999 -m "[skip-release-e2e] hotfix: <reason>" <sha>
-  #   git push origin release-v0.5.999
-  # The bypass is explicit and LOGGED (::warning::). A plain lightweight tag
-  # (the normal recipe) has no message, so it can never accidentally bypass.
   # Rollback floor (`Engram.Release.Floor`, docs/context/rollback-floor.md):
   # fail the deploy of a tag whose commit does not descend from the floor tag
   # named in MAIN's priv/release_floor (the deployed commit's own copy is
@@ -72,8 +47,8 @@ jobs:
   #
   # DEFENSE IN DEPTH ONLY. A tag push runs the deploy-prod.yml OF THE TAGGED
   # COMMIT, so a rollback to a commit from before this job existed runs a
-  # workflow with no floor gate at all. The gate that sees every prod move is
-  # engram-infra's check on the image-bump PR.
+  # workflow with no floor gate at all. The gate that will see every prod move
+  # is engram-infra's check on the image-bump PR (pending: engram-infra#1806).
   #
   # Incident override, the [skip-release-e2e] pattern: an ANNOTATED tag whose
   # message contains `[allow-below-floor]` deploys below the floor with a
@@ -103,6 +78,50 @@ jobs:
           floor=$(git show origin/main:priv/release_floor | tr -d '[:space:]')
           ALLOW_BELOW_FLOOR="$allow" bash scripts/check_release_floor.sh "$floor" "$GITHUB_SHA"
 
+      # A refused release is otherwise silent: every later job is skipped, so
+      # their failure() notices never run, and release-please pushes these
+      # tags unattended.
+      - name: Notify rollback floor blocked (alerts)
+        if: failure()
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -uo pipefail
+          CONTENT="**DEPLOY BLOCKED** \`${TAG}\`
+          Rollback floor check FAILED, prod is NOT moving. See docs/context/rollback-floor.md.
+          Tagged by ${ACTOR}
+          ${RUN_URL}"
+          bash scripts/discord_alert.sh "$CONTENT"
+
+  # Real-app proof gate. Before prod moves, run the FULL Obsidian e2e suite
+  # (e2e-clerk / e2e-crdt / e2e-browser) against the EXACT commit this
+  # release-v* tag points at, and BLOCK the deploy if any of them fail.
+  #
+  # Why dispatch verify.yml instead of a workflow_call or a copy of the
+  # bring-up steps:
+  #   - verify.yml already owns the ~600-line Obsidian/Xvfb/CDP bring-up.
+  #     Copying it here would rot; a workflow_call refactor would have to
+  #     thread `force_full` through verify.yml's fingerprint gating (dozens
+  #     of `if:` conditions) and is a big change to the shared merge-gate
+  #     file. This job touches ONLY deploy-prod.yml — maximally conservative.
+  #   - verify.yml IGNORES release-v* tags (`tags-ignore`) and its `ci`
+  #     aggregate treats the full-Obsidian e2e as REPORT-ONLY (#1076), so a
+  #     tag push alone runs nothing and the run conclusion would be green even
+  #     on a red e2e. This gate therefore (a) dispatches verify.yml with
+  #     `force_full=true` on the tag ref so the fingerprint is bypassed and
+  #     every e2e job actually runs, and (b) reads the INDIVIDUAL e2e-* job
+  #     conclusions (not the run/ci conclusion) to decide pass/fail.
+  #   - GITHUB_TOKEN is an explicit exception to Actions' recursion guard for
+  #     workflow_dispatch, so `actions: write` lets us kick verify.yml.
+  #
+  # Emergency override (GATED by default): a hotfix or a known-flake can be
+  # shipped by putting `[skip-release-e2e]` in the ANNOTATED tag's message:
+  #   git tag -a release-v0.5.999 -m "[skip-release-e2e] hotfix: <reason>" <sha>
+  #   git push origin release-v0.5.999
+  # The bypass is explicit and LOGGED (::warning::). A plain lightweight tag
+  # (the normal recipe) has no message, so it can never accidentally bypass.
   release-e2e-gate:
     needs: release-floor-gate
     runs-on: [self-hosted, linux, x64, isolated]
@@ -257,20 +276,11 @@ jobs:
           ACTOR: ${{ github.actor }}
         run: |
           set -uo pipefail
-          [ -n "$WEBHOOK" ] || { echo "No alerts webhook configured — skipping."; exit 0; }
           CONTENT="**DEPLOY BLOCKED** \`${RELEASE}\`
           Release e2e gate FAILED — real-app proof is red, prod is NOT moving.
           Tagged by ${ACTOR}
           ${RUN_URL}"
-          # flags:4 = SUPPRESS_EMBEDS. Discord auto-embeds every URL, so messages
-          # rendered as a stack of preview cards. Links stay clickable without them.
-          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
-            -H 'Content-Type: application/json' \
-            -H 'User-Agent: engram-ci/1.0 (+https://github.com/engram-app/Engram)' \
-            --max-time 10 \
-            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram CI' '{content:$c,username:$u,flags:4}')" \
-            "$WEBHOOK") || code="000"
-          case "$code" in 2*) echo "Alert sent ($code)";; *) echo "::warning::Discord alert failed (HTTP $code)";; esac
+          bash scripts/discord_alert.sh "$CONTENT"
 
   open-infra-pr:
     # BLOCKED on the real-app proof gate: a red full-Obsidian e2e (or a failed
@@ -563,20 +573,11 @@ jobs:
           ACTOR: ${{ github.actor }}
         run: |
           set -uo pipefail
-          [ -n "$WEBHOOK" ] || { echo "No alerts webhook configured — skipping."; exit 0; }
           CONTENT="**DEPLOY FAILED** \`${RELEASE}\`
           The image-bump PR was not opened — prod has not moved.
           Tagged by ${ACTOR}
           ${RUN_URL}"
-          # flags:4 = SUPPRESS_EMBEDS. Discord auto-embeds every URL, so messages
-          # rendered as a stack of preview cards. Links stay clickable without them.
-          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
-            -H 'Content-Type: application/json' \
-            -H 'User-Agent: engram-ci/1.0 (+https://github.com/engram-app/Engram)' \
-            --max-time 10 \
-            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram CI' '{content:$c,username:$u,flags:4}')" \
-            "$WEBHOOK") || code="000"
-          case "$code" in 2*) echo "Alert sent ($code)";; *) echo "::warning::Discord alert failed (HTTP $code)";; esac
+          bash scripts/discord_alert.sh "$CONTENT"
 
   create-release-notes:
     # BLOCKED on the real-app proof gate: a red full-Obsidian e2e fails

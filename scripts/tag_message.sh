@@ -13,4 +13,10 @@ tag="${1:?tag required}"
 ref=$(gh api "repos/${GH_REPO:?GH_REPO required}/git/ref/tags/${tag}" -q '.object.type + " " + .object.sha' 2>/dev/null) || exit 0
 read -r obj_type obj_sha <<<"$ref"
 [ "${obj_type:-}" = "tag" ] && [ -n "${obj_sha:-}" ] || exit 0
-gh api "repos/${GH_REPO}/git/tags/${obj_sha}" -q '.message' 2>/dev/null || true
+# A lightweight tag made FROM an annotated one points at the same tag object:
+# the message belongs only to the tag that object names.
+out=$(gh api "repos/${GH_REPO}/git/tags/${obj_sha}" -q '.tag + "\n" + .message' 2>/dev/null) || exit 0
+{
+  read -r name
+  if [ "$name" = "$tag" ]; then cat; fi
+} <<<"$out"

@@ -3605,6 +3605,18 @@ jobs:
           # deploy-prod.yml's rollback-floor gate and its tag-override lookup.
           bash test/scripts/check_release_floor_test.sh
           bash test/scripts/tag_message_test.sh
+          bash test/scripts/check_floor_tag_on_main_test.sh
+          bash test/scripts/discord_alert_test.sh
+          bash test/scripts/deploy_prod_floor_wiring_test.sh
+
+      - name: Rollback floor names a real tag on main
+        # A typo or a not-yet-cut tag in priv/release_floor would merge green,
+        # then refuse every deploy with no override. Uses the GitHub API, so
+        # this job's depth-50 checkout needs no tags.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/check_floor_tag_on_main.sh
 
       - name: Process cmdline redaction self-check
         # Guards scripts/redact_cmdline.sh and asserts every workflow line
