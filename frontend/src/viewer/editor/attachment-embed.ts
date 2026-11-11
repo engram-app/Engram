@@ -3,6 +3,7 @@ import { StateEffect } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
 import type { Translate } from "@/i18n/translate";
+import { fenceSurvives, scanFenced } from "./fence-scan";
 import { defineRenderer, type TextRenderer } from "./render-core";
 import { translator } from "./translator";
 
@@ -15,7 +16,6 @@ interface AttachmentEmbedOpts {
 
 const IMAGE = /\.(?:png|jpe?g|gif|webp|svg|avif|bmp)$/iu;
 const EMBED = /!\[\[(?<target>[^\]|]+)(?:\|(?<alias>[^\]]*))?\]\]/gu;
-const FENCE = /^ {0,3}(?:`{3,}|~{3,})/u;
 
 class EmbedWidget extends WidgetType {
 	constructor(
@@ -102,42 +102,27 @@ function embedRenderer(opts: AttachmentEmbedOpts): TextRenderer<EmbedToken> {
 		refresh: (tr) =>
 			tr.startState.facet(translator) !== tr.state.facet(translator) ||
 			tr.effects.some((e) => e.is(refreshAttachmentEmbeds)),
+		keep: (state, t, from, to) => t.value === null && fenceSurvives(state.doc, t, from, to),
 		scan(state, from, emit, neutral) {
-			const { doc } = state;
-			let fence = -1; // where the open fence started, or -1
-			for (let n = doc.lineAt(from).number; n <= doc.lines; n++) {
-				const line = doc.line(n);
-				if (fence < 0 && line.from > from && neutral(line.from)) {
-					return;
-				}
-				if (FENCE.test(line.text)) {
-					if (fence < 0) {
-						fence = line.from;
-					} else {
-						emit({ from: fence, to: line.to, value: null });
-						fence = -1;
+			scanFenced(
+				state,
+				from,
+				neutral,
+				(fence) => emit({ from: fence.from, to: fence.to, value: null }),
+				(line) => {
+					for (const m of line.text.matchAll(EMBED)) {
+						const target = (m.groups?.target ?? "").trim();
+						if (IMAGE.test(target)) {
+							const at = line.from + (m.index ?? 0);
+							emit({
+								from: at,
+								to: at + m[0].length,
+								value: { target, alias: (m.groups?.alias ?? "").trim() },
+							});
+						}
 					}
-					continue;
-				}
-				if (fence >= 0) {
-					continue;
-				}
-				for (const m of line.text.matchAll(EMBED)) {
-					const target = (m.groups?.target ?? "").trim();
-					if (IMAGE.test(target)) {
-						const at = line.from + (m.index ?? 0);
-						emit({
-							from: at,
-							to: at + m[0].length,
-							value: { target, alias: (m.groups?.alias ?? "").trim() },
-						});
-					}
-				}
-			}
-			// An unclosed fence: everything below is inside it.
-			if (fence >= 0) {
-				emit({ from: fence, to: doc.length, value: null });
-			}
+				},
+			);
 		},
 		decorate(state, t) {
 			const embed = t.value;
@@ -186,3 +171,5 @@ export function attachmentEmbeds(opts: AttachmentEmbedOpts) {
 export function isImageEmbedTarget(opts: AttachmentEmbedOpts, target: string): boolean {
 	return IMAGE.test(target.trim()) && opts.resolve(target.trim()) !== null;
 }
+
+export { embedRenderer };

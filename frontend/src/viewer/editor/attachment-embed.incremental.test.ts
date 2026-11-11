@@ -40,4 +40,9 @@ describe("attachment embeds render incrementally", () => {
 		expect(placed(s.field(field))).toHaveLength(6);
 		known.delete("later.png");
 	});
+
+	test("a shorter or different fence cannot close a longer one", () => {
+		const s = parsedState("````md\n```js\n````\n\n![[pic.png]]\n", ext);
+		expect(placed(s.field(field))).toHaveLength(1);
+	});
 });

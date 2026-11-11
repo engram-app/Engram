@@ -2,6 +2,7 @@ import { type EditorState, Prec } from "@codemirror/state";
 import { type Command, Decoration, type EditorView, keymap, WidgetType } from "@codemirror/view";
 import type { Translate } from "@/i18n/translate";
 import { drawMermaid, rememberedMermaidHeight } from "../mermaid-render";
+import { fenceSurvives, scanFenced } from "./fence-scan";
 import { defineRenderer, type TextRenderer, tokensAt } from "./render-core";
 import { translator } from "./translator";
 import "./mermaid.css";
@@ -86,34 +87,17 @@ class MermaidWidget extends WidgetType {
 /** A fenced block: its mermaid source, or null for any other fence (or an unclosed one). */
 type FenceToken = { code: string } | null;
 
-// CommonMark fences, not just ```mermaid at column 0. The run of backticks and
-// the indentation are captured because both are load-bearing: a closing fence
-// must be at LEAST as long as its opener, which is the whole mechanism by which
-// a ````markdown block can quote a ```mermaid one.
-//
-// Info strings cannot contain a backtick, which is what keeps FENCE_OPEN from
-// matching a closer.
-const FENCE_OPEN = /^(?<indent> {0,3})(?<ticks>`{3,})[ \t]*(?<info>[^`]*?)[ \t]*$/;
-const FENCE_CLOSE = /^ {0,3}(?<ticks>`{3,})[ \t]*$/;
-
 /**
- * Every fence, as tokens on the render core.
- *
- * Walks EVERY fence, not just the mermaid ones, and jumps the scan past each
- * one it finds. That is what stops a ```mermaid line QUOTED inside a wider
- * documentation fence from being read as a real block: it is content, and the
- * scanner never looks at it. Leading indentation up to three spaces is allowed,
- * so a fence inside a list item renders here as it already did in Reading mode.
- * Non-mermaid fences are tokens too, which is what makes a line outside every
- * fence a neutral point the core can resync at.
+ * Every fence, as tokens on the render core, through the shared fence scanner
+ * (fence-scan.ts). It jumps the scan past each fence, which is what stops a
+ * ```mermaid line QUOTED inside a wider documentation fence from being read as
+ * a real block. Non-mermaid fences are tokens too, so a line outside every
+ * fence is a neutral point the core can resync at, and an edit inside one that
+ * does not close it costs nothing here.
  *
  * Scanned rather than read off syntaxTree(state), which was tried and reverted:
  * the tree is parsed lazily, and fences below the parse frontier stopped
- * rendering. This scan only ever covers the lines an edit touched.
- *
- * ponytail: three spaces is the CommonMark document-level allowance, so a fence
- * indented further by a NESTED list item is still missed. Upgrade path is to
- * track container indentation; not worth it until someone hits it.
+ * rendering.
  *
  * The arrow-key commands below read these same tokens, so "where does this
  * block start" has one answer.
@@ -122,48 +106,21 @@ const mermaidRenderer: TextRenderer<FenceToken> = {
 	kind: "text",
 	reveal: true,
 	refresh: (tr) => tr.startState.facet(translator) !== tr.state.facet(translator),
+	keep: (state, t, from, to) => t.value === null && fenceSurvives(state.doc, t, from, to),
 	scan(state, from, emit, neutral) {
 		const { doc } = state;
-		let lineNo = doc.lineAt(from).number;
-		while (lineNo <= doc.lines) {
-			const line = doc.line(lineNo);
-			if (line.from > from && neutral(line.from)) {
-				return;
-			}
-			const open = FENCE_OPEN.exec(line.text);
-			if (!open) {
-				lineNo++;
-				continue;
-			}
-			const indent = open.groups?.indent?.length ?? 0;
-			const ticks = open.groups?.ticks?.length ?? 0;
-			let closeNo = 0;
-			for (let n = lineNo + 1; n <= doc.lines; n++) {
-				const close = FENCE_CLOSE.exec(doc.line(n).text);
-				if (close && (close.groups?.ticks?.length ?? 0) >= ticks) {
-					closeNo = n;
-					break;
-				}
-			}
-			// No closer: the block is still being typed, and everything below is
-			// inside it. One token to the end, never rendered.
-			if (closeNo === 0) {
-				emit({ from: line.from, to: doc.length, value: null });
-				return;
-			}
+		scanFenced(state, from, neutral, (fence) => {
 			let value: FenceToken = null;
-			if (open.groups?.info === "mermaid") {
+			// An unclosed fence is still being typed: never rendered.
+			if (fence.closeLine && fence.info === "mermaid") {
 				const body: string[] = [];
-				for (let n = lineNo + 1; n < closeNo; n++) {
-					body.push(dedent(doc.line(n).text, indent));
+				for (let n = fence.openLine + 1; n < fence.closeLine; n++) {
+					body.push(dedent(doc.line(n).text, fence.indent));
 				}
 				value = { code: body.join("\n") };
 			}
-			emit({ from: line.from, to: doc.line(closeNo).to, value });
-			// Past the whole block whether or not it was ours: everything between the
-			// marks is content, including any line that looks like a fence.
-			lineNo = closeNo + 1;
-		}
+			emit({ from: fence.from, to: fence.to, value });
+		});
 	},
 	decorate(state, t) {
 		if (t.value === null) {
@@ -276,3 +233,5 @@ export const mermaidKeymap = Prec.highest(
  * EditorState.doc, leaving the yCollab Y.Text binding untouched.
  */
 export const mermaidDecoration = defineRenderer(mermaidRenderer);
+
+export { mermaidRenderer };

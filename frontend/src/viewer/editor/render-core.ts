@@ -68,6 +68,13 @@ interface TextRenderer<T> {
 	usesTree?: boolean;
 	/** Re-decorate every token (no rescan): a facet or effect the widgets read changed. */
 	refresh?: (tr: Transaction) => boolean;
+	/**
+	 * An edit of lines [from, to] lies strictly inside `token` (neither its first
+	 * nor its last line). True if the token still stands as it was, so the core
+	 * re-decorates it instead of rescanning it: a keystroke inside a 5000-line
+	 * fence then costs the edited lines, not the fence.
+	 */
+	keep?: (state: EditorState, token: Token<unknown>, from: number, to: number) => boolean;
 }
 
 /** Renders from syntax nodes. All tree renderers share one walk per update. */
@@ -229,6 +236,37 @@ function rescan(
 	return end;
 }
 
+/** An old token the edit lies strictly inside, that the renderer says still stands: re-decorate it, no rescan. */
+function kept(
+	state: EditorState,
+	r: TextRenderer<unknown>,
+	layer: Layer,
+	old: RangeSet<TokenMark<unknown>>,
+	span: Span,
+): boolean {
+	if (!r.keep) {
+		return false;
+	}
+	const { doc } = state;
+	const first = doc.lineAt(span[0]);
+	const last = doc.lineAt(span[1]);
+	const around: Token<unknown>[] = [];
+	old.between(first.from, last.to, (from, to, v) => {
+		if (from < first.from && to > last.to) {
+			around.push({ from, to, value: v.value });
+			return false;
+		}
+	});
+	const [t] = around;
+	if (!(t && r.keep(state, t, first.from, last.to))) {
+		return false;
+	}
+	const decos: Range<Decoration>[] = [];
+	decorateTokens(state, r, [t], decos);
+	layer.decos = patch(layer.decos, t.from, t.to, decos);
+	return true;
+}
+
 function renderTree(state: EditorState, tree: Tree, tree$: [TreeRenderer, Layer][], spans: Span[]) {
 	for (const [from, to] of spans) {
 		if (to <= from) {
@@ -302,12 +340,66 @@ function blockRegion(state: EditorState, tree: Tree, from: number, to: number): 
 	return [Math.min(start?.from ?? 0, q), Math.max(end, Math.min(to, tree.length))];
 }
 
+// Leaf blocks: nothing nests inside them that another block could restart at.
+const LEAVES = new Set([
+	"FencedCode",
+	"CodeBlock",
+	"Paragraph",
+	"HTMLBlock",
+	"CommentBlock",
+	"Table",
+]);
+
+function leafAround(tree: Tree, from: number, to: number): SyntaxNode | null {
+	for (let n: SyntaxNode | null = tree.resolveInner(from, 1); n; n = n.parent) {
+		if (LEAVES.has(n.name)) {
+			return n.to >= to ? n : null;
+		}
+	}
+	return null;
+}
+
+/**
+ * The edited lines alone, when an edit sits strictly inside one leaf block
+ * (not on its first or last line) and the old and new trees agree on that
+ * block's bounds: then nothing outside those lines can have changed.
+ */
+function narrowed(
+	tr: Transaction,
+	before: Tree,
+	tree: Tree,
+	[fromA, toA, fromB, toB]: [number, number, number, number],
+): Span | null {
+	const was = leafAround(before, fromA, toA);
+	const now = leafAround(tree, fromB, toB);
+	if (
+		!(was && now) ||
+		was.name !== now.name ||
+		tr.changes.mapPos(was.from, -1) !== now.from ||
+		tr.changes.mapPos(was.to, 1) !== now.to
+	) {
+		return null;
+	}
+	const { doc } = tr.state;
+	const first = doc.lineAt(fromB);
+	const last = doc.lineAt(toB);
+	if (first.from <= now.from || last.to >= now.to) {
+		return null;
+	}
+	return [first.from, last.to + 1];
+}
+
 function treeSpans(tr: Transaction, startLen: number, tree: Tree): Span[] {
 	const { state } = tr;
 	const spans: Span[] = [];
 	const before = syntaxTree(tr.startState);
 	if (tr.docChanged) {
 		tr.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+			const inside = narrowed(tr, before, tree, [fromA, toA, fromB, toB]);
+			if (inside) {
+				spans.push(inside);
+				return;
+			}
 			const [a, b] = blockRegion(tr.startState, before, fromA, toA);
 			const [c, d] = blockRegion(state, tree, fromB, toB);
 			spans.push([Math.min(tr.changes.mapPos(a, -1), c), Math.max(tr.changes.mapPos(b, 1), d)]);
@@ -330,7 +422,10 @@ function treeSpans(tr: Transaction, startLen: number, tree: Tree): Span[] {
  * rest arrives through tree advances.
  */
 const MOUNT_PARSE_CHARS = 3000;
-const MOUNT_PARSE_MS = 50;
+// A time cap, not a target: 3000 chars parse in a few ms once warm, but the
+// first parse of a session pays for a cold parser, and cutting it short leaves
+// the first screen unstyled (code read as prose) until the next tree advance.
+const MOUNT_PARSE_MS = 200;
 
 function build(state: EditorState): CoreState {
 	const tree =
@@ -396,7 +491,7 @@ function update(value: CoreState, tr: Transaction): CoreState {
 		}
 		let floor = 0;
 		for (const span of mergeSpans([...edits, ...(r.usesTree ? tSpans : [])])) {
-			if (span[1] < floor) {
+			if (span[1] < floor || kept(state, r, layer, old, span)) {
 				continue;
 			}
 			floor = rescan(state, r, layer, old, span, floor);
