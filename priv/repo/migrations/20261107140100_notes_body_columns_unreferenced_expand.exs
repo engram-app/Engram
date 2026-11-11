@@ -64,7 +64,7 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedExpand do
   """
 
   def up do
-    with_lock_timeout([
+    with_lock_timeout(repo(), [
       "ALTER TABLE notes DROP CONSTRAINT IF EXISTS notes_kind_shape_v4_check",
       @shape_v4,
       "ALTER TABLE notes VALIDATE CONSTRAINT notes_kind_shape_v4_check",
@@ -82,7 +82,7 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedExpand do
   # Back to 20261106110000's trigger and the v3 check (NOT VALID: a note a
   # later release wrote with neither content column stays readable).
   def down do
-    with_lock_timeout([
+    with_lock_timeout(repo(), [
       "ALTER TABLE notes DROP CONSTRAINT IF EXISTS notes_kind_shape_v3_check",
       @shape_v3,
       "ALTER TABLE notes DROP CONSTRAINT IF EXISTS notes_kind_shape_v4_check",
@@ -104,15 +104,21 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedExpand do
   # busy table. That raises at boot, every task fails and the deploy rolls
   # back (the 0.79.0 incident mechanism). The 5 s lock_timeout per statement
   # is the bound we want; the scan itself takes no lock that blocks writes.
-  defp with_lock_timeout(statements) do
-    repo().checkout(
+  #
+  # The helper is copied from 20261107130100, not shared: the N-1 check runs
+  # new migrations against the previous release's code, so a migration cannot
+  # call a new `lib/` module.
+  @doc false
+  # Public for `NotesBodyColumnsUnreferencedLockTest`.
+  def with_lock_timeout(repo, statements) do
+    repo.checkout(
       fn ->
-        repo().query!("SET lock_timeout = '5s'")
+        repo.query!("SET lock_timeout = '5s'")
 
         try do
-          Enum.each(statements, &repo().query!(&1, [], timeout: :infinity))
+          Enum.each(statements, &repo.query!(&1, [], timeout: :infinity))
         after
-          repo().query!("RESET lock_timeout")
+          repo.query!("RESET lock_timeout")
         end
       end,
       timeout: :infinity
