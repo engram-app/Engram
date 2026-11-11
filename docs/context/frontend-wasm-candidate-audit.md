@@ -15,7 +15,11 @@ Which web-app and plugin logic is worth moving into Rust/WASM, which is not, and
 - Plugin's own numbers: FNV hash is 1.0-1.4x faster than JS; native `toBase64` beats WASM base64 by about 10x.
 
 ## DO
-- **Frontmatter fence split.** The same logic lives three times: backend `native/engram_native/src/frontmatter.rs`, web `frontend/src/crdt/frontmatter-codec.ts`, plugin `src/crdt/frontmatter-codec.ts`. The reason is correctness, not speed. TS opens a fence only on `---\n`; Rust also accepts `---\r\n`. The web copy claims "ported verbatim" but is 127 lines against the plugin's 246. Pair with #1884. Hand-write the scan; do not pull in the `regex` crate (hundreds of KB).
+- **Frontmatter fence split.** The same logic lives three times: backend `native/engram_native/src/frontmatter.rs`, web `frontend/src/crdt/frontmatter-codec.ts`, plugin `src/crdt/frontmatter-codec.ts`. The reason is correctness, not speed. TS opens a fence only on `---\n`; Rust also accepts `---\r\n`. The web copy claims "ported verbatim" but is 127 lines against the plugin's 192 (the plugin fence logic matches the web copy). Pair with #1884. Hand-write the scan; do not pull in the `regex` crate (hundreds of KB).
+
+  **Outcome (decided 2026-11-11, merged in #2564).** The rule was consolidated once in Rust (`native/engram_core/src/frontmatter.rs`) for the backend NIF callers (frontmatter.rs, meta.rs, links.rs). The web app was deliberately NOT moved to WASM: its only caller is genesis (note create/duplicate), the TS fallback would keep a second copy anyway, and WASM cost a binary, a CI rebuild step, a CSP loosening (`'wasm-unsafe-eval'`) and a BOM-stripping bug (`TextDecoder` strips U+FEFF by default; needs `ignoreBOM: true`). Instead the web TS split reads the same shared golden fixture as the Rust and Elixir tests, so drift fails a test. Rule: `docs/context/frontmatter-fence-rule.md`. Plugin CRLF follow-up: engram-app/Engram-obsidian#696. Stored title/tags/links self-heal: #2570.
+
+  **Lesson:** a WASM port only pays when it REMOVES the TS copy; if a fallback keeps the TS copy, share a fixture table instead.
 
 ## MAYBE
 - Title / tags / link extraction: only if clients must derive them offline.
