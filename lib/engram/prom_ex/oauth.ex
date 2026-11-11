@@ -30,7 +30,7 @@ defmodule Engram.PromEx.OAuth do
     * `reason`: `:none` on success; otherwise an `Engram.OAuth.grant_reason()`
       or one of the controller's own: `:refresh_token_missing`,
       `:unsupported_grant_type`, `:grant_type_missing`, `:token_persist_failed`,
-      `:client_auth_failed`, `:client_auth_unavailable`, `:rotation_rolled_back`.
+      `:client_auth_failed`, `:client_auth_unavailable`.
 
     * `[:engram, :oauth, :family_revoked]` →
       `engram_prom_ex_oauth_family_revoked_total`, tags `[:client_agent,

@@ -18,8 +18,10 @@ defmodule EngramWeb.OAuthTokenRotationUserNotFoundTest do
 
   On real data a miss cannot happen today (`users` has no RLS, the `:user`
   cache never stores nil, a hard delete cascades the token row away first), so
-  the tests make the lookup miss through the node cache, the one input to
-  `Accounts.get_user/1` that is not the database.
+  the tests delete the user row with FK triggers off, inside the sandbox, and
+  evict it from the node cache: the token row stays and the lookup misses.
+  (Poisoning the shared `:user` cache instead is racy: other async tests clear
+  it, `Engram.DataCase`.)
   """
   use EngramWeb.ConnCase, async: true
 
@@ -82,10 +84,14 @@ defmodule EngramWeb.OAuthTokenRotationUserNotFoundTest do
     %{user: user, client_id: client.client_id, raw: raw, ref: ref}
   end
 
-  # The rotation's user lookup answers "no such user" while the row exists.
+  # The user row goes, its refresh tokens stay (FK triggers off, sandbox
+  # only), so the rotation's user lookup misses while the token row exists.
+  # Evicted after the delete: a concurrent clear only forces the same miss.
   defp fail_user_lookup(user) do
-    :ok = Engram.Cache.put(:user, user.id, nil)
-    on_exit(fn -> Engram.Cache.evict_local(:user, user.id) end)
+    Repo.query!("SET LOCAL session_replication_role = replica")
+    Repo.query!("DELETE FROM users WHERE id = $1", [Ecto.UUID.dump!(user.id)])
+    Repo.query!("SET LOCAL session_replication_role = origin")
+    :ok = Engram.Cache.evict_local(:user, user.id)
   end
 
   defp row(raw) do

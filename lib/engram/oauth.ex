@@ -730,9 +730,7 @@ defmodule Engram.OAuth do
   Rotates a refresh token: marks the presented one consumed, mints + issues
   a successor in the same family. If the presented token is already
   consumed (replay) or revoked, this revokes the entire family per
-  RFC 6749 §10.4. A refusal is `{:error, {:invalid_grant, grant_reason()}}`;
-  a rotation that rolled back (nothing changed, the token is still good) is
-  `{:error, :temporarily_unavailable}`.
+  RFC 6749 §10.4. A refusal is `{:error, {:invalid_grant, grant_reason()}}`.
   """
   def rotate_refresh_token(raw_token, client_id, opts \\ []) do
     case refresh_token_by_raw(raw_token) do
@@ -777,50 +775,31 @@ defmodule Engram.OAuth do
   #
   # A refusal that revokes (reuse) must commit, so the transaction returns the
   # result instead of rolling back. Logging and analytics run after it.
+  # Nothing in it rolls back: every refusal, `user_not_found` included, is
+  # decided before the first write (`with_user/2`).
   defp rotate_existing(%RefreshToken{client_id: actual}, requested, _opts)
        when actual != requested,
        do: grant_error(:client_mismatch)
 
   defp rotate_existing(%RefreshToken{} = rt, _client_id, opts) do
-    Repo.transaction_after_commit(fn ->
-      lock_grants!(rt.user_id)
+    {:ok, outcome} =
+      Repo.transaction_after_commit(fn ->
+        lock_grants!(rt.user_id)
 
-      outcome =
-        case lock_row(rt) do
-          nil -> {:error, :refresh_token_unknown}
-          locked -> decide(locked, opts[:ip])
-        end
+        outcome =
+          case lock_row(rt) do
+            nil -> {:error, :refresh_token_unknown}
+            locked -> decide(locked, opts[:ip])
+          end
 
-      # Logged and counted after commit through the queue's rescue: a
-      # failing log or analytics call can never turn the answer into a 500.
-      Repo.after_commit(fn -> report(outcome, rt, opts[:user_agent]) end)
-      outcome
-    end)
-    |> case do
-      {:ok, outcome} -> answer(outcome)
-      {:error, reason} -> rolled_back(rt, reason)
-    end
+        # Logged and counted after commit through the queue's rescue: a
+        # failing log or analytics call can never turn the answer into a 500.
+        Repo.after_commit(fn -> report(outcome, rt, opts[:user_agent]) end)
+        outcome
+      end)
+
+    answer(outcome)
   end
-
-  # The transaction rolled back (`decide/2`'s `Repo.rollback/1`): nothing was
-  # consumed, minted or revoked, so the presented token is still good. Not
-  # `invalid_grant`, which makes a client drop the connection (#2299, #2333):
-  # retryable, answered like the token endpoint's other transient failure.
-  defp rolled_back(rt, reason) do
-    Logger.warning(
-      "oauth_refresh_rotation_rolled_back",
-      Metadata.with_category(:warning, :auth,
-        reason: Metadata.safe_reason(grant_reason_of(reason)),
-        client_id: rt.client_id,
-        family_id: rt.family_id
-      )
-    )
-
-    {:error, :temporarily_unavailable}
-  end
-
-  defp grant_reason_of({:invalid_grant, reason}), do: reason
-  defp grant_reason_of(reason), do: reason
 
   @doc """
   Serializes, for one user, rotation (`rotate_refresh_token/3`) with every
@@ -886,13 +865,15 @@ defmodule Engram.OAuth do
   # Consumed, in a live family: a replay. Inside the grace window it may be a
   # lost rotation response (`grace_reissue/2`); otherwise it is reuse.
   defp decide({%RefreshToken{consumed_at: %DateTime{} = at} = rt, true = _family_live}, ip) do
-    with true <- DateTime.diff(DateTime.utc_now(), at) <= @refresh_reuse_grace_seconds,
-         {:ok, response, ip_matched} <- grace_reissue(rt, ip) do
-      {:ok, response, {:grace, ip_matched}}
+    if DateTime.diff(DateTime.utc_now(), at) <= @refresh_reuse_grace_seconds do
+      with_user(rt, fn user ->
+        case grace_reissue(rt, user, ip) do
+          {:ok, response, ip_matched} -> {:ok, response, {:grace, ip_matched}}
+          :not_eligible -> refuse_reuse(rt)
+        end
+      end)
     else
-      _not_eligible ->
-        _ = revoke_family(rt.family_id, :refresh_reuse)
-        {:error, :refresh_token_reuse}
+      refuse_reuse(rt)
     end
   end
 
@@ -900,19 +881,36 @@ defmodule Engram.OAuth do
     if DateTime.compare(DateTime.utc_now(), exp) == :gt do
       {:error, :refresh_token_expired}
     else
-      # The successor copies the row as the consume LEFT it (RETURNING), not
-      # as it was locked: the latest point anything could have rewritten it.
-      {1, [consumed]} =
-        Repo.update_all(
-          from(r in RefreshToken, where: r.id == ^rt.id, select: r),
-          [set: [consumed_at: DateTime.utc_now(:second)]],
-          skip_tenant_check: true
-        )
+      with_user(rt, fn user ->
+        # The successor copies the row as the consume LEFT it (RETURNING), not
+        # as it was locked: the latest point anything could have rewritten it.
+        {1, [consumed]} =
+          Repo.update_all(
+            from(r in RefreshToken, where: r.id == ^rt.id, select: r),
+            [set: [consumed_at: DateTime.utc_now(:second)]],
+            skip_tenant_check: true
+          )
 
-      case mint_rotation_successor(consumed, ip) do
-        {:ok, response} -> {:ok, response}
-        {:error, reason} -> Repo.rollback(reason)
-      end
+        {:ok, mint_rotation_successor(consumed, user, ip)}
+      end)
+    end
+  end
+
+  defp refuse_reuse(rt) do
+    _ = revoke_family(rt.family_id, :refresh_reuse)
+    {:error, :refresh_token_reuse}
+  end
+
+  # The token's user, loaded before anything is written, for both minting
+  # paths. A miss is permanent (the user is gone, or a loader rule refuses
+  # it), so it is a terminal `user_not_found` that consumes nothing and kills
+  # nothing. It used to be checked after the consume: a fresh rotation rolled
+  # back into a 500, and a grace replay killed the family as reuse (review of
+  # #2574). The same one user read as before, moved earlier.
+  defp with_user(rt, fun) do
+    case fetch_user(rt.user_id) do
+      {:ok, user} -> fun.(user)
+      {:error, {:invalid_grant, reason}} -> {:error, reason}
     end
   end
 
@@ -948,9 +946,8 @@ defmodule Engram.OAuth do
     )
   end
 
-  # Inside rotate_existing/3's transaction, which undoes the insert when the
-  # user lookup fails (it should not: the user_id FK guarantees the row).
-  defp mint_rotation_successor(rt, ip) do
+  # Inside rotate_existing/3's transaction, with the user `with_user/2` loaded.
+  defp mint_rotation_successor(rt, user, ip) do
     {:ok, refresh_raw, refresh_row} =
       rt
       |> grant_attrs(rt.family_id, ip)
@@ -960,9 +957,7 @@ defmodule Engram.OAuth do
       |> Map.put(:parent_id, rt.id)
       |> insert_refresh_token()
 
-    with {:ok, user} <- fetch_user(rt.user_id) do
-      {:ok, build_token_response(user, rt, refresh_raw, refresh_row)}
-    end
+    build_token_response(user, rt, refresh_raw, refresh_row)
   end
 
   defp revoke_family(family_id, cause) do
@@ -1130,7 +1125,7 @@ defmodule Engram.OAuth do
   # and client authentication (the token controller, before this runs) still
   # apply, every re-issue logs whether the caller's IP matched the original
   # rotation's, and a revoked successor turning up later revokes the family.
-  defp grace_reissue(rt, ip) do
+  defp grace_reissue(rt, user, ip) do
     successors =
       Repo.all(
         from(r in RefreshToken,
@@ -1156,10 +1151,9 @@ defmodule Engram.OAuth do
          true <- live != [],
          # The first successor is the original rotation; the rest re-issues.
          true <- length(successors) - 1 < @max_grace_reissues,
-         {n, _} when n == length(live) <- revoke_ids(live_ids),
-         {:ok, response} <- mint_rotation_successor(rt, ip) do
+         {n, _} when n == length(live) <- revoke_ids(live_ids) do
       original = Enum.min_by(successors, & &1.inserted_at, DateTime)
-      {:ok, response, original.last_used_ip == ip}
+      {:ok, mint_rotation_successor(rt, user, ip), original.last_used_ip == ip}
     else
       _ -> :not_eligible
     end
