@@ -8,7 +8,9 @@ defmodule Engram.PromEx.Indexing do
     * `[:engram, :indexing, :repath, :stop]` — `%{count}`, metadata
       `%{outcome: :ok | :missing_points | :fallback}`:
         - `:ok`             — points PATCHed in place (the cheap, 0-Voyage path);
-          `count` is the number of points repathed.
+          `count` is the note's points `Qdrant.count_by_note/5` found (its
+          `n` points at any path, plus points with no `n` under the old
+          path); the PATCH changes only those under the old path.
         - `:missing_points` — embedded note had zero points under the old path
           (benign on rapid multi-rename; a real inconsistency otherwise).
         - `:fallback`       — repath exhausted retries and fell back to a full
@@ -37,8 +39,8 @@ defmodule Engram.PromEx.Indexing do
       `:outcome`. Alert on `:fallback` / `:missing_points` rate; the `:ok` rate
       is the "renames took the cheap path" signal.
     * `engram_prom_ex_indexing_repath_points_total` — sum of `count` by
-      `:outcome`. For `:ok` this is total points repathed = the zero-Voyage
-      volume saved.
+      `:outcome`. For `:ok` this is the renamed notes' points (an upper
+      bound on those PATCHed) = the zero-Voyage volume saved.
     * `engram_prom_ex_indexing_link_rewrite_failures_total` — counter of
       per-source-note link-rewrite failures from `RewriteNoteLinks`
       (rename propagation, #648/#1231), tagged by `:reason`.
@@ -204,7 +206,7 @@ defmodule Engram.PromEx.Indexing do
           event_name: @repath_stop_event,
           measurement: :count,
           description:
-            "Qdrant points repathed in place by outcome (0-Voyage volume saved on :ok).",
+            "Renamed notes' Qdrant points kept in place by outcome (0-Voyage volume saved on :ok).",
           tags: [:outcome]
         ),
         counter(

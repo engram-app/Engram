@@ -23,6 +23,7 @@ defmodule Engram.Vector.QdrantStrictModeTest do
   @user_id "11111111-1111-1111-1111-111111111111"
   @vault_id "22222222-2222-2222-2222-222222222222"
   @tag_hmac "dGFnLWhtYWM="
+  @note_id "33333333-3333-3333-3333-333333333333"
 
   setup do
     # Per-process override, NOT the global app env. 22 Bypass suites set
@@ -84,9 +85,21 @@ defmodule Engram.Vector.QdrantStrictModeTest do
   end
 
   test "path_hmac, the delete filter key, is indexed too", %{col: col} do
-    # `delete_by_note/4` filters on path_hmac. Under strict mode an unindexed
+    # `delete_by_note/5` filters on path_hmac. Under strict mode an unindexed
     # key fails the DELETE, which would strand a deleted note's points.
-    assert :ok = Qdrant.delete_by_note(col, @user_id, @vault_id, "cGF0aC1obWFj")
+    assert :ok = Qdrant.delete_by_note(col, @user_id, @vault_id, @note_id, "cGF0aC1obWFj")
+  end
+
+  # The per-note filters' `n` arm (`n == id`, `is_empty(n)`) needs the `n`
+  # index, which `ensure_collection/2` creates.
+  test "the per-note filters' n arm is indexed", %{col: col} do
+    ServiceConfig.put_override(:qdrant_note_id_filter, true)
+    Engram.Cache.clear_local(:note_id_filter)
+    on_exit(fn -> Engram.Cache.clear_local(:note_id_filter) end)
+    assert Qdrant.n_filterable?(col)
+
+    assert {:ok, _} = Qdrant.count_by_note(col, @user_id, @vault_id, @note_id, "cGF0aC1obWFj")
+    assert :ok = Qdrant.delete_by_note(col, @user_id, @vault_id, @note_id, "cGF0aC1obWFj")
   end
 
   # The Cloud hard limits on a real server (review H1): Qdrant applies

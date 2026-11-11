@@ -692,7 +692,7 @@ defmodule Engram.Search do
   # rest.
   defp search_filter(user, vault, opts, ffs) do
     with {:ok, payload} <- payload_filter(user, opts, ffs) do
-      if note_filter().any?(opts) and n_indexed?() do
+      if note_filter().any?(opts) and Qdrant.n_filterable?() do
         vaults = filter_vaults(user, vault, opts)
 
         case note_filter().resolve(user, vaults, opts, sample: true) do
@@ -724,11 +724,6 @@ defmodule Engram.Search do
         :no_match
     end
   end
-
-  # Whether the collection has its `n` index, cached per node for a minute:
-  # a filtered search pays at most one collection-info read a minute.
-  defp n_indexed?,
-    do: Engram.Cache.fetch(:note_id_filter, {:n_index, Qdrant.base_url()}, &Qdrant.n_indexed?/0)
 
   # The most a `:too_wide` search fetches: 16x the page, in at most two rounds.
   @widen_factor 16

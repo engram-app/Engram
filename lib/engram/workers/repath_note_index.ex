@@ -5,7 +5,10 @@ defmodule Engram.Workers.RepathNoteIndex do
   the payload AAD binds to point-UUID, so dense/sparse vectors and ciphertext
   survive — only the plaintext `path_hmac`/`folder_hmac` filter-keys change.
 
-  Branches on the point count under the OLD path_hmac:
+  Branches on the note's point count: points carrying its note id `n`, plus
+  points with no `n` under the OLD path_hmac (`Qdrant.count_by_note/5`). A
+  point with `n` and no path key (an R3a chunk point) counts, so the rename
+  still resparses its keyword vector:
 
     * count > 0                                -> PATCH new hmacs onto the points
     * count == 0 and content_hash != embed_hash -> enqueue EmbedNote (embed fresh)
@@ -91,7 +94,7 @@ defmodule Engram.Workers.RepathNoteIndex do
             case Indexing.repath_points(note, old_path_hmac) do
               :ok ->
                 # #746 — Grafana proof that rename took the cheap path (0 Voyage).
-                # `count` is the number of points patched.
+                # `count` is the note's points counted (see `emit_repath/2`).
                 emit_repath(:ok, count)
                 # The moved points' keyword vectors still encode the old
                 # path's context prefix; a resparse is cheap (no Voyage).
@@ -158,8 +161,11 @@ defmodule Engram.Workers.RepathNoteIndex do
 
   # Single repath telemetry event tagged by a bounded `:outcome` so PromEx maps
   # one counter + one points-sum (see `Engram.PromEx.Indexing`). Cardinality
-  # contract: `:outcome` only — never note_id/user_id/vault_id. `count` is the
-  # number of points patched on `:ok`, and 1 (an event tick) otherwise.
+  # contract: `:outcome` only, never note_id/user_id/vault_id. `count` on
+  # `:ok` is the note's points `Qdrant.count_by_note/5` found: its `n` points
+  # at any path plus no-`n` points under the old path, so an upper bound on
+  # those PATCHed (a point already at the new path is counted, not changed).
+  # 1 (an event tick) otherwise.
   defp emit_repath(outcome, count) do
     :telemetry.execute(
       [:engram, :indexing, :repath, :stop],
