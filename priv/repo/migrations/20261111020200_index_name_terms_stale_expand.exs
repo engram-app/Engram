@@ -1,5 +1,11 @@
+# Shared summary line; see the file for why it is not in lib/.
+Code.require_file("migration_log.exs", __DIR__)
+
 defmodule Engram.Repo.Migrations.IndexNameTermsStaleExpand do
   use Ecto.Migration
+
+  alias Engram.Repo.Migrations.MigrationLog
+
   @disable_ddl_transaction true
   @disable_migration_lock true
 
@@ -27,6 +33,8 @@ defmodule Engram.Repo.Migrations.IndexNameTermsStaleExpand do
   """
 
   def up do
+    started = MigrationLog.now()
+
     execute "DROP INDEX CONCURRENTLY IF EXISTS notes_name_terms_stale"
 
     execute """
@@ -44,6 +52,16 @@ defmodule Engram.Repo.Migrations.IndexNameTermsStaleExpand do
       AND name_terms_stamp IS DISTINCT FROM ('\\x01'::bytea || name_hmac)
       AND name_terms_stamp IS DISTINCT FROM ('\\x00'::bytea || name_hmac)
     """
+
+    # Runs the queued statements, so the line reports the built indexes.
+    flush()
+
+    MigrationLog.indexes(
+      repo(),
+      "index_name_terms_stale",
+      ~w(notes_name_terms_stale folders_name_terms_stale),
+      started
+    )
   end
 
   def down do

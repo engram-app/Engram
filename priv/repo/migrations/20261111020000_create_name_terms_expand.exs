@@ -1,10 +1,11 @@
 # Shared with 20261111000000; see the file for why it is not in lib/.
 Code.require_file("lock_timeout_retry.exs", __DIR__)
+Code.require_file("migration_log.exs", __DIR__)
 
 defmodule Engram.Repo.Migrations.CreateNameTermsExpand do
   use Ecto.Migration
 
-  alias Engram.Repo.Migrations.LockTimeoutRetry
+  alias Engram.Repo.Migrations.{LockTimeoutRetry, MigrationLog}
 
   @disable_ddl_transaction true
   @disable_migration_lock true
@@ -47,8 +48,27 @@ defmodule Engram.Repo.Migrations.CreateNameTermsExpand do
   """
 
   @doc false
-  # Public for `CreateNameTermsLockTest`.
+  # Public for `NameTermsMigrationsLockTest`.
   def run_up(repo) do
+    started = MigrationLog.now()
+    existed = existed?(repo)
+
+    :ok = build(repo)
+
+    MigrationLog.done(
+      "create_name_terms",
+      [table_created: if(existed, do: 0, else: 1), policies: policies(repo)],
+      started
+    )
+  end
+
+  defp existed?(repo),
+    do: repo.query!("SELECT 1 FROM pg_class WHERE relname = 'name_terms'").num_rows == 1
+
+  defp policies(repo),
+    do: repo.query!("SELECT 1 FROM pg_policies WHERE tablename = 'name_terms'").num_rows
+
+  defp build(repo) do
     LockTimeoutRetry.with_lock_timeout(repo, [
       """
       CREATE TABLE IF NOT EXISTS name_terms (

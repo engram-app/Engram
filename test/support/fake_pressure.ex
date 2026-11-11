@@ -1,6 +1,6 @@
 defmodule Engram.Test.FakePressure do
   @moduledoc """
-  The test reader behind `Engram.Backfill.Throttle.pressure/1`
+  The test reader behind `Engram.Backfill.Throttle.pressure/0`
   (config/test.exs): a fixed reading, no pressure unless a test `set/1`s one.
   A real reading would see other tests' open sandbox transactions.
   `async: false` tests only; `reset/0` in `on_exit`.

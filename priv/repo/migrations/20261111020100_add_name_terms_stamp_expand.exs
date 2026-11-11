@@ -1,10 +1,11 @@
 # Shared with 20261111000000; see the file for why it is not in lib/.
 Code.require_file("lock_timeout_retry.exs", __DIR__)
+Code.require_file("migration_log.exs", __DIR__)
 
 defmodule Engram.Repo.Migrations.AddNameTermsStampExpand do
   use Ecto.Migration
 
-  alias Engram.Repo.Migrations.LockTimeoutRetry
+  alias Engram.Repo.Migrations.{LockTimeoutRetry, MigrationLog}
 
   @disable_ddl_transaction true
   @disable_migration_lock true
@@ -34,12 +35,20 @@ defmodule Engram.Repo.Migrations.AddNameTermsStampExpand do
   def down, do: run_down(repo())
 
   @doc false
-  # Public for `AddNameTermsStampLockTest`.
+  # Public for `NameTermsMigrationsLockTest`.
   def run_up(repo) do
-    LockTimeoutRetry.with_lock_timeout(repo, [
-      "ALTER TABLE notes ADD COLUMN IF NOT EXISTS name_terms_stamp bytea",
-      "ALTER TABLE folders ADD COLUMN IF NOT EXISTS name_terms_stamp bytea"
-    ])
+    started = MigrationLog.now()
+
+    :ok =
+      LockTimeoutRetry.with_lock_timeout(repo, [
+        "ALTER TABLE notes ADD COLUMN IF NOT EXISTS name_terms_stamp bytea",
+        "ALTER TABLE folders ADD COLUMN IF NOT EXISTS name_terms_stamp bytea"
+      ])
+
+    present =
+      MigrationLog.columns(repo, [{"notes", "name_terms_stamp"}, {"folders", "name_terms_stamp"}])
+
+    MigrationLog.done("add_name_terms_stamp", [columns_present: "#{present}/2"], started)
   end
 
   @doc false

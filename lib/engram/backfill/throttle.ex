@@ -9,14 +9,19 @@ defmodule Engram.Backfill.Throttle do
     * `wait_ms/5`: after a window, how long to sleep so the hop's writes
       stay at or under its ceiling (and never less than the chain's pause).
       Pure, so a test drives it with its own clock.
-    * `pressure/1`: one probe on the app pool, timed. Its wall time is the
-      pool queue plus a round trip; its result is the age of the oldest open
-      client transaction (pg_stat_activity; a role sees only the
-      `xact_start` of its own role's sessions, so this is the app's and the
-      maintenance pool's own long transactions). Either over its bound
-      (`backfill_max_queue_ms`, default #{200}; `backfill_max_xact_s`,
-      default #{120}) holds the hop: the chain re-inserts it later and
-      writes nothing now.
+    * `pressure/0`: one probe on the app pool, timed. The PRIMARY signal is
+      its wall time, the pool queue plus a round trip (`backfill_max_queue_ms`,
+      default #{200}): it sees load from every source. The secondary one is
+      the age of the oldest open client transaction (`backfill_max_xact_s`,
+      default #{120}), but pg_stat_activity shows `xact_start` only for the
+      caller's own role's sessions unless the role holds `pg_monitor` /
+      `pg_read_all_stats`, and `engram_app` holds neither (engram-infra
+      main: only `engram_metrics_ro` and `engram_audit_ro` do). So a long
+      transaction from another role (`engram_maintenance`, `engram_audit_ro`,
+      a bastion session) is invisible to this gate; the infra
+      `pg_long_xact` alert covers those. Either over its bound holds the
+      hop: the chain re-inserts it later and writes nothing now.
+    * `log_pass/2`: the one summary line per pass.
     * `positive/2`: a positive-integer service setting, falling back to
       its default (with a warning) on a bad env value.
 
@@ -57,33 +62,32 @@ defmodule Engram.Backfill.Throttle do
   def now_ms, do: System.monotonic_time(:millisecond)
 
   @doc """
-  nil when the database has room for a hop of `backfill` (a name for the
-  log line), else why not: `:pool_queue` or `:long_xact`, logged.
+  nil when the database has room for a hop, else why not: `:pool_queue` or
+  `:long_xact`. The caller reports it in its `log_pass/2` line.
   """
-  @spec pressure(String.t()) :: nil | :pool_queue | :long_xact
-  def pressure(backfill) do
+  @spec pressure() :: nil | :pool_queue | :long_xact
+  def pressure do
     %{queue_ms: queue_ms, xact_s: xact_s} = reader().read(Engram.Repo)
 
-    reason =
-      cond do
-        queue_ms > positive(:backfill_max_queue_ms, @max_queue_ms) -> :pool_queue
-        xact_s > positive(:backfill_max_xact_s, @max_xact_s) -> :long_xact
-        true -> nil
-      end
-
-    if reason do
-      Logger.info(
-        "backfill hop held on database pressure",
-        DataMigration.progress_metadata(
-          backfill: backfill,
-          reason_label: reason,
-          queue_ms: queue_ms,
-          xact_s: xact_s
-        )
-      )
+    cond do
+      queue_ms > positive(:backfill_max_queue_ms, @max_queue_ms) -> :pool_queue
+      xact_s > positive(:backfill_max_xact_s, @max_xact_s) -> :long_xact
+      true -> nil
     end
+  end
 
-    reason
+  @doc """
+  The one summary line of a backfill pass (a chain hop): counts, the hold
+  reason and timing only, never an id. `fields`: `written` (rows written),
+  `held` (the `pressure/0` reason, or `:none`), `elapsed_ms`, plus whatever
+  the chain can count cheaply (`left_est`, `walk_left`, `result`).
+  """
+  @spec log_pass(String.t(), keyword()) :: :ok
+  def log_pass(backfill, fields) do
+    Logger.info(
+      "backfill pass",
+      DataMigration.progress_metadata([backfill: backfill] ++ fields)
+    )
   end
 
   @doc "One timed probe: pool queue plus round trip (ms), oldest open transaction (s)."

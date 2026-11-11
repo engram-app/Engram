@@ -24,7 +24,7 @@ defmodule Engram.DataMigrations.NameTerms do
   """
   @behaviour Engram.DataMigration
 
-  import Ecto.Query, only: [from: 2]
+  import Ecto.Query, only: [from: 2, subquery: 1]
 
   alias Engram.Backfill.{TenantScan, Throttle}
   alias Engram.DataMigrations
@@ -121,6 +121,28 @@ defmodule Engram.DataMigrations.NameTerms do
       DateTime.diff(DateTime.utc_now(), at) < @retry_after_s
     else
       _ -> false
+    end
+  end
+
+  @left_cap 1_000
+
+  @doc """
+  Stale refs left, counted up to #{@left_cap} per table on the stale partial
+  indexes (a bounded read, for the chain's pass line), or `:unknown` on a
+  per-user pool (counting would be one query per user).
+  """
+  @spec left() :: non_neg_integer() | :unknown
+  def left do
+    case TenantScan.pool() do
+      {:fleet, repo} ->
+        for schema <- [Note, Folder], reduce: 0 do
+          n ->
+            capped = from(r in NameTerms.stale_query(schema), select: 1, limit: @left_cap)
+            n + repo.aggregate(subquery(capped), :count)
+        end
+
+      :per_user ->
+        :unknown
     end
   end
 

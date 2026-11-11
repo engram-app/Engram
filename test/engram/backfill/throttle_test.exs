@@ -20,7 +20,12 @@ defmodule Engram.Backfill.ThrottleTest do
     end
 
     test "a pass never exceeds N writes a second" do
-      for {per_s, per_window, work_ms} <- [{150, 200, 30}, {150, 1, 0}, {1, 7, 5}, {10_000, 200, 1}] do
+      for {per_s, per_window, work_ms} <- [
+            {150, 200, 30},
+            {150, 1, 0},
+            {1, 7, 5},
+            {10_000, 200, 1}
+          ] do
         simulate(per_s, per_window, work_ms, 0, 200)
       end
     end
@@ -34,28 +39,28 @@ defmodule Engram.Backfill.ThrottleTest do
     end
   end
 
-  describe "pressure/1" do
+  describe "pressure/0" do
     setup do
       on_exit(&FakePressure.reset/0)
     end
 
     test "nil while the database has room" do
-      assert Throttle.pressure("test") == nil
+      assert Throttle.pressure() == nil
     end
 
     test "a long open transaction or a slow pool queue holds a hop" do
       FakePressure.set(%{xact_s: 121})
-      assert Throttle.pressure("test") == :long_xact
+      assert Throttle.pressure() == :long_xact
 
       FakePressure.set(%{queue_ms: 201})
-      assert Throttle.pressure("test") == :pool_queue
+      assert Throttle.pressure() == :pool_queue
     end
 
     test "the bounds are service settings" do
       FakePressure.set(%{xact_s: 30})
-      assert Throttle.pressure("test") == nil
+      assert Throttle.pressure() == nil
       ServiceConfig.put_override(:backfill_max_xact_s, 10)
-      assert Throttle.pressure("test") == :long_xact
+      assert Throttle.pressure() == :long_xact
     end
 
     test "the real probe reads a queue time and a transaction age" do

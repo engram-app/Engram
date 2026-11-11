@@ -7,11 +7,23 @@ defmodule Engram.Migrations.NameTermsMigrationsLockTest do
   """
   use Engram.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Engram.LockTimeoutRepo
 
   @files [
     "priv/repo/migrations/20261111020000_create_name_terms_expand.exs",
-    "priv/repo/migrations/20261111020100_add_name_terms_stamp_expand.exs"
+    "priv/repo/migrations/20261111020100_add_name_terms_stamp_expand.exs",
+    "priv/repo/migrations/migration_log.exs"
+  ]
+
+  # The CONCURRENTLY builds cannot run in a sandbox transaction: their line
+  # comes from `MigrationLog.indexes/4`, after a `flush()`.
+  @cic [
+    {"priv/repo/migrations/20261111020200_index_name_terms_stale_expand.exs",
+     ~w(notes_name_terms_stale folders_name_terms_stale)},
+    {"priv/repo/migrations/20261111020300_index_notes_folder_ref_live_id_expand.exs",
+     ~w(folders_live_parent_id notes_folder_ref_live_id)}
   ]
 
   setup_all do
@@ -24,6 +36,22 @@ defmodule Engram.Migrations.NameTermsMigrationsLockTest do
 
   defp add_stamp,
     do: String.to_existing_atom("Elixir.Engram.Repo.Migrations.AddNameTermsStampExpand")
+
+  defp migration_log,
+    do: String.to_existing_atom("Elixir.Engram.Repo.Migrations.MigrationLog")
+
+  # The one summary line a migration logs at :info (`category: :boot`).
+  defp summary(fun) do
+    previous = Logger.level()
+    Logger.configure(level: :info)
+
+    try do
+      log = capture_log([level: :info], fun)
+      Regex.scan(~r/migration \w+: [^\n]*\(\d+ ms\)/, log) |> List.flatten()
+    after
+      Logger.configure(level: previous)
+    end
+  end
 
   defp table?,
     do: Engram.Repo.query!("SELECT 1 FROM pg_class WHERE relname = 'name_terms'").num_rows == 1
@@ -83,6 +111,39 @@ defmodule Engram.Migrations.NameTermsMigrationsLockTest do
     test "it gives up after its retries" do
       LockTimeoutRepo.refuse(3)
       assert_raise Postgrex.Error, fn -> add_stamp().run_up(LockTimeoutRepo) end
+    end
+  end
+
+  describe "one summary line per migration, counts only" do
+    test "create name_terms: whether it created the table, and its policies" do
+      create_table().run_down(Engram.Repo)
+      assert [line] = summary(fn -> create_table().run_up(Engram.Repo) end)
+      assert line =~ "migration create_name_terms: table_created 1, policies 2 ("
+
+      assert [line] = summary(fn -> create_table().run_up(Engram.Repo) end)
+      assert line =~ "table_created 0, policies 2"
+    end
+
+    test "add name_terms_stamp: columns present" do
+      add_stamp().run_down(Engram.Repo)
+      assert [line] = summary(fn -> add_stamp().run_up(Engram.Repo) end)
+      assert line =~ "migration add_name_terms_stamp: columns_present 2/2 ("
+    end
+
+    test "the index builds report their valid indexes and estimated entries" do
+      for {file, indexes} <- @cic do
+        source = File.read!(file)
+        [_, after_flush] = String.split(source, "flush()", parts: 2)
+        assert after_flush =~ ~r/MigrationLog\.indexes\(\s*repo\(\),/
+        for index <- indexes, do: assert(after_flush =~ index)
+
+        assert [line] =
+                 summary(fn ->
+                   migration_log().indexes(Engram.Repo, "x", indexes, migration_log().now())
+                 end)
+
+        assert line =~ ~r/migration x: indexes_valid 2\/2, entries_est \d+ \(/
+      end
     end
   end
 end

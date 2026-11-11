@@ -26,6 +26,7 @@ defmodule Engram.Search.NameTermsTest do
   alias Engram.Search.NameTerms.Row
   alias Engram.ServiceConfig
   alias Engram.StalledDekLoad
+  alias Engram.Test.{FakePressure, LogCapture}
   alias Engram.Workers.BackfillNameTerms
 
   defmodule ScopeFilter do
@@ -868,8 +869,8 @@ defmodule Engram.Search.NameTermsTest do
     test "database pressure holds a hop: nothing written, the same hop re-inserted later",
          ctx do
       note = write!(ctx.user, ctx.vault, "Held.md")
-      Engram.Test.FakePressure.set(%{xact_s: 100_000})
-      on_exit(&Engram.Test.FakePressure.reset/0)
+      FakePressure.set(%{xact_s: 100_000})
+      on_exit(&FakePressure.reset/0)
       args = %{"table" => "notes", "pause_ms" => 0}
 
       :ok = perform_job(BackfillNameTerms, args)
@@ -881,8 +882,8 @@ defmodule Engram.Search.NameTermsTest do
 
     test "a slow pool queue holds a hop too, and an off chain is never re-inserted", ctx do
       note = write!(ctx.user, ctx.vault, "Queued.md")
-      Engram.Test.FakePressure.set(%{queue_ms: 10_000})
-      on_exit(&Engram.Test.FakePressure.reset/0)
+      FakePressure.set(%{queue_ms: 10_000})
+      on_exit(&FakePressure.reset/0)
 
       :ok = perform_job(BackfillNameTerms, %{"table" => "notes", "pause_ms" => 0})
       assert rows(note.id) == []
@@ -892,6 +893,39 @@ defmodule Engram.Search.NameTermsTest do
       ServiceConfig.put_override(:name_terms_backfill, false)
       :ok = perform_job(BackfillNameTerms, %{"table" => "notes", "pause_ms" => 0})
       assert all_enqueued(worker: BackfillNameTerms) == []
+    end
+
+    test "each pass logs one summary line: written, held, elapsed, left", ctx do
+      for i <- 1..2, do: write!(ctx.user, ctx.vault, "sum#{i}.md")
+      previous = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous) end)
+      on_exit(&FakePressure.reset/0)
+
+      pass_lines = fn fun ->
+        {_, events} = LogCapture.with_events(fun)
+
+        for %{msg: {:string, msg}, meta: meta} <- events,
+            IO.iodata_to_binary(msg) == "backfill pass",
+            do: meta
+      end
+
+      assert [meta] =
+               pass_lines.(fn ->
+                 perform_job(BackfillNameTerms, %{"table" => "notes", "pause_ms" => 0})
+               end)
+
+      assert %{backfill: "name_terms", written: 2, held: :none, result: :walked} = meta
+      assert is_integer(meta.elapsed_ms)
+      assert meta.left in [0, :unknown]
+
+      Repo.delete_all(Oban.Job)
+      FakePressure.set(%{queue_ms: 10_000})
+
+      assert [%{written: 0, held: :pool_queue}] =
+               pass_lines.(fn ->
+                 perform_job(BackfillNameTerms, %{"table" => "notes", "pause_ms" => 0})
+               end)
     end
 
     test "a restore racing the delete hook: the live note is stale and the drain rewrites it",

@@ -1,5 +1,11 @@
+# Shared summary line; see the file for why it is not in lib/.
+Code.require_file("migration_log.exs", __DIR__)
+
 defmodule Engram.Repo.Migrations.IndexNotesFolderRefLiveIdExpand do
   use Ecto.Migration
+
+  alias Engram.Repo.Migrations.MigrationLog
+
   @disable_ddl_transaction true
   @disable_migration_lock true
 
@@ -34,6 +40,8 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderRefLiveIdExpand do
   """
 
   def up do
+    started = MigrationLog.now()
+
     execute "DROP INDEX CONCURRENTLY IF EXISTS folders_live_parent_id"
 
     execute """
@@ -48,6 +56,16 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderRefLiveIdExpand do
     ON notes (vault_id, folder_ref_id, id) INCLUDE (user_id)
     WHERE deleted_at IS NULL AND kind = 'note'
     """
+
+    # Runs the queued statements, so the line reports the built indexes.
+    flush()
+
+    MigrationLog.indexes(
+      repo(),
+      "index_notes_folder_ref_live_id",
+      ~w(folders_live_parent_id notes_folder_ref_live_id),
+      started
+    )
   end
 
   def down do

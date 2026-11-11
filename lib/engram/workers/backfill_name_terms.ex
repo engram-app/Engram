@@ -20,7 +20,7 @@ defmodule Engram.Workers.BackfillNameTerms do
   that its refs stay at or under `Ledger.writes_per_s/0` a second (default
   150), never less than the 250 ms pause. At prod size (~170k notes, ~44k
   folders, 1,655 users) that is about 24 min of walking. Before a hop, the
-  pressure gate (`Throttle.pressure/1`: app pool queue, oldest open
+  pressure gate (`Throttle.pressure/0`: app pool queue, oldest open
   transaction) can hold it: the hop is re-inserted #{60} s later with the
   same cursor and writes nothing. The kill switch is read first, so an off
   chain is never re-inserted. At most #{500} hops per chain; a chain that hits
@@ -58,9 +58,9 @@ defmodule Engram.Workers.BackfillNameTerms do
       not Ledger.enabled?() ->
         :ok
 
-      Throttle.pressure("name_terms") ->
+      reason = Throttle.pressure() ->
         {:ok, _} = Oban.insert(new(args, schedule_in: @held_s))
-        :ok
+        Throttle.log_pass("name_terms", written: 0, held: reason, elapsed_ms: 0)
 
       true ->
         hop(args)
@@ -102,6 +102,14 @@ defmodule Engram.Workers.BackfillNameTerms do
     {:ok, {status, at, fixed}} =
       IdWindows.reduce_all(@tables[table], {:walked, nil, fixed0}, step, walk_opts)
 
+    Throttle.log_pass("name_terms",
+      written: fixed - fixed0,
+      held: :none,
+      elapsed_ms: Throttle.now_ms() - started,
+      left: Ledger.left(),
+      result: status
+    )
+
     case {status, table} do
       {:killed, _} ->
         :ok
@@ -138,7 +146,9 @@ defmodule Engram.Workers.BackfillNameTerms do
 
   # Test knobs ride along.
   defp successor(args, next) do
-    {:ok, _} = Oban.insert(new(Map.merge(Map.take(args, ["hop_ms", "pause_ms", "batch_size"]), next)))
+    {:ok, _} =
+      Oban.insert(new(Map.merge(Map.take(args, ["hop_ms", "pause_ms", "batch_size"]), next)))
+
     :ok
   end
 end
