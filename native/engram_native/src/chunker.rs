@@ -8,15 +8,6 @@
 //! inside a list item or block quote is part of that block.
 use crate::links::{Segments, SEGMENT};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
-use regex::Regex;
-use std::sync::OnceLock;
-
-macro_rules! re {
-    ($pat:expr) => {{
-        static RE: OnceLock<Regex> = OnceLock::new();
-        RE.get_or_init(|| Regex::new($pat).unwrap())
-    }};
-}
 
 /// ~4 bytes per token: 512 tokens.
 pub const MAX_CHUNK: usize = 2048;

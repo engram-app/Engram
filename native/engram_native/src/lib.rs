@@ -1,6 +1,34 @@
 //! In-house NIFs. Each is a pure function over binaries, runs on a dirty CPU
 //! scheduler, and returns BEAM binaries (so its OUTPUT is visible to
 //! `:erlang.memory(:binary)`). See docs/context for the memory standard.
+/// A regex compiled once per process, searched with THIS thread's cache.
+///
+/// A plain `static Regex` shares one cache pool across threads, so a cache
+/// one thread grew is cleared and regrown on another. Each thread's counter
+/// in `memory` then counts bytes it allocated but another thread freed, and
+/// a NIF's peak climbed with what ran beside it: the chunker's 10x test read
+/// 4.7 MB alone and 12-13.6 MB in CI (#2186). A clone has a pool of its own,
+/// so here every thread allocates and frees its own cache.
+/// ponytail: one clone (a few hundred bytes) and one cache per regex per
+/// thread, kept for the thread's life; dirty schedulers never exit.
+macro_rules! re {
+    (bytes $pat:expr) => {
+        re!(@ regex::bytes::Regex, $pat)
+    };
+    ($pat:expr) => {
+        re!(@ regex::Regex, $pat)
+    };
+    (@ $ty:ty, $pat:expr) => {{
+        static SHARED: std::sync::OnceLock<$ty> = std::sync::OnceLock::new();
+        thread_local! {
+            static LOCAL: &'static $ty = Box::leak(Box::new(
+                SHARED.get_or_init(|| <$ty>::new($pat).unwrap()).clone(),
+            ));
+        }
+        LOCAL.with(|r| *r)
+    }};
+}
+
 mod chunker;
 mod frontmatter;
 mod json;

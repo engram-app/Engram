@@ -13,9 +13,7 @@
 //!
 //! Output: `(key, value as JSON)` in source order, the JSON exactly as
 //! `Jason.encode/1` prints the YamlElixir term.
-use regex::Regex;
 use std::collections::HashSet;
-use std::sync::OnceLock;
 
 /// The block's keys and JSON values in source order, or None: ask YamlElixir.
 pub fn parse(block: &str) -> Option<Vec<(String, String)>> {
@@ -221,7 +219,6 @@ enum Value {
 /// (Erlang's float printing is not reproduced here), hex/octal and huge
 /// ints, and yamerl's `+`/`-`/`0x` quirks (it reads a bare sign as 0).
 fn resolve(s: &str) -> Option<Value> {
-    static FLOAT: OnceLock<Regex> = OnceLock::new();
     match s {
         "" | "~" | "null" | "Null" | "NULL" => return Some(Value::Null),
         "true" | "True" | "TRUE" => return Some(Value::Bool(true)),
@@ -248,8 +245,7 @@ fn resolve(s: &str) -> Option<Value> {
         };
         return Some(Value::Int(if neg { -n } else { n }));
     }
-    let float = FLOAT
-        .get_or_init(|| Regex::new(r"\A(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?\z").unwrap());
+    let float = re!(r"\A(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?\z");
     if float.is_match(body) || matches!(body, ".nan" | ".NaN" | ".NAN" | ".inf" | ".Inf" | ".INF") {
         return None;
     }

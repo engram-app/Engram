@@ -15,10 +15,8 @@
 //! longer fences, indented code and multi-backtick spans. Frontmatter keeps
 //! its regex.
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
-use regex::Regex;
 use std::borrow::Cow;
 use std::collections::HashSet;
-use std::sync::OnceLock;
 
 /// (position, kind, a_start, a_len, b_start, b_len). kind: 0 wiki, 1 wiki
 /// embed, 2 markdown, 3 markdown embed. Wiki: a = body between the brackets.
@@ -26,10 +24,9 @@ use std::sync::OnceLock;
 pub type Raw = (usize, u8, usize, usize, usize, usize);
 
 fn frontmatter_len(s: &str) -> usize {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re =
-        RE.get_or_init(|| Regex::new(r"(?s)\A---[\s\x{180E}]*\n.*?\n---[\s\x{180E}]*\n").unwrap());
-    re.find(s).map_or(0, |m| m.end())
+    re!(r"(?s)\A---[\s\x{180E}]*\n.*?\n---[\s\x{180E}]*\n")
+        .find(s)
+        .map_or(0, |m| m.end())
 }
 
 /// Sorted, non-overlapping (start, end) byte ranges a link may not start in.
