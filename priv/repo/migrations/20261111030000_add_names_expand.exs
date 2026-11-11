@@ -1,10 +1,11 @@
 # Shared with 20261111000000; see the file for why it is not in lib/.
 Code.require_file("lock_timeout_retry.exs", __DIR__)
+Code.require_file("migration_log.exs", __DIR__)
 
 defmodule Engram.Repo.Migrations.AddNamesExpand do
   use Ecto.Migration
 
-  alias Engram.Repo.Migrations.LockTimeoutRetry
+  alias Engram.Repo.Migrations.{LockTimeoutRetry, MigrationLog}
 
   @disable_ddl_transaction true
   @disable_migration_lock true
@@ -39,34 +40,47 @@ defmodule Engram.Repo.Migrations.AddNamesExpand do
   the three tables are ever locked together. Rerun-safe (`IF NOT EXISTS`).
   """
 
+  @columns for(
+             t <- ~w(notes attachments),
+             c <- ~w(name_ciphertext name_nonce name_hmac name_ci_hmac name_stamp),
+             do: {t, c}
+           ) ++
+             for(c <- ~w(name_ci_hmac name_stamp seq notes_cascaded), do: {"folders", c})
+
   def up, do: run_up(repo())
   def down, do: run_down(repo())
 
   @doc false
   # Public for `AddNamesLockTest`.
   def run_up(repo) do
-    LockTimeoutRetry.with_lock_timeout(
-      repo,
-      Enum.map(["notes", "attachments"], fn table ->
-        """
-        ALTER TABLE #{table}
-          ADD COLUMN IF NOT EXISTS name_ciphertext bytea,
-          ADD COLUMN IF NOT EXISTS name_nonce bytea,
-          ADD COLUMN IF NOT EXISTS name_hmac bytea,
-          ADD COLUMN IF NOT EXISTS name_ci_hmac bytea,
-          ADD COLUMN IF NOT EXISTS name_stamp bytea
-        """
-      end) ++
-        [
+    started = MigrationLog.now()
+
+    :ok =
+      LockTimeoutRetry.with_lock_timeout(
+        repo,
+        Enum.map(["notes", "attachments"], fn table ->
           """
-          ALTER TABLE folders
+          ALTER TABLE #{table}
+            ADD COLUMN IF NOT EXISTS name_ciphertext bytea,
+            ADD COLUMN IF NOT EXISTS name_nonce bytea,
+            ADD COLUMN IF NOT EXISTS name_hmac bytea,
             ADD COLUMN IF NOT EXISTS name_ci_hmac bytea,
-            ADD COLUMN IF NOT EXISTS name_stamp bytea,
-            ADD COLUMN IF NOT EXISTS seq bigint,
-            ADD COLUMN IF NOT EXISTS notes_cascaded boolean NOT NULL DEFAULT true
+            ADD COLUMN IF NOT EXISTS name_stamp bytea
           """
-        ]
-    )
+        end) ++
+          [
+            """
+            ALTER TABLE folders
+              ADD COLUMN IF NOT EXISTS name_ci_hmac bytea,
+              ADD COLUMN IF NOT EXISTS name_stamp bytea,
+              ADD COLUMN IF NOT EXISTS seq bigint,
+              ADD COLUMN IF NOT EXISTS notes_cascaded boolean NOT NULL DEFAULT true
+            """
+          ]
+      )
+
+    present = MigrationLog.columns(repo, @columns)
+    MigrationLog.done("add_names", [columns_present: "#{present}/#{length(@columns)}"], started)
   end
 
   @doc false

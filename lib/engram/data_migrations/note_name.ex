@@ -35,7 +35,7 @@ defmodule Engram.DataMigrations.NoteName do
   (default on); off, the runner starts nothing and the chain stops at its next
   hop. Pace: `note_name_backfill_max_rows` (rows per hop, default 500) and
   `note_name_backfill_writes_per_s` (rows a second inside a hop, default
-  150); the chain's pressure gate (`Engram.Backfill.Throttle.pressure/1`)
+  150); the chain's pressure gate (`Engram.Backfill.Throttle.pressure/0`)
   holds a hop on a slow app pool or a long open transaction.
   """
   @behaviour Engram.DataMigration

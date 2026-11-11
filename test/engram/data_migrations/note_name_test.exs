@@ -16,6 +16,7 @@ defmodule Engram.DataMigrations.NoteNameTest do
   alias Engram.Notes
   alias Engram.Notes.Name
   alias Engram.Repo
+  alias Engram.Test.{FakePressure, LogCapture}
   alias Engram.Workers.BackfillNoteNames
 
   setup do
@@ -174,8 +175,8 @@ defmodule Engram.DataMigrations.NoteNameTest do
   } do
     note = note!(u, v, "H/held.md")
     n_minus_1_insert!()
-    Engram.Test.FakePressure.set(%{xact_s: 100_000})
-    on_exit(&Engram.Test.FakePressure.reset/0)
+    FakePressure.set(%{xact_s: 100_000})
+    on_exit(&FakePressure.reset/0)
     args = %{"t" => 0, "from" => nil}
 
     assert :ok = perform_job(BackfillNoteNames, args)
@@ -188,6 +189,33 @@ defmodule Engram.DataMigrations.NoteNameTest do
     Engram.ServiceConfig.put_override(:note_name_backfill, false)
     assert :ok = perform_job(BackfillNoteNames, args)
     assert [] = all_enqueued(worker: BackfillNoteNames)
+  end
+
+  test "each pass logs one summary line: written, held, elapsed", %{user: u, vault: v} do
+    for i <- 1..2, do: note!(u, v, "L/#{i}.md")
+    n_minus_1_insert!()
+    previous = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous) end)
+    on_exit(&FakePressure.reset/0)
+
+    pass_lines = fn fun ->
+      {_, events} = LogCapture.with_events(fun)
+
+      for %{msg: {:string, msg}, meta: meta} <- events,
+          IO.iodata_to_binary(msg) == "backfill pass",
+          do: meta
+    end
+
+    assert [meta] = pass_lines.(fn -> BackfillNoteNames.hop(%{}, pause_ms: 0) end)
+    # Two notes and their folder row "L".
+    assert %{backfill: "note_name", written: 3, held: :none} = meta
+    assert is_integer(meta.elapsed_ms)
+
+    FakePressure.set(%{xact_s: 100_000})
+
+    assert [%{written: 0, held: :long_xact}] =
+             pass_lines.(fn -> perform_job(BackfillNoteNames, %{"t" => 0, "from" => nil}) end)
   end
 
   test "perform paces the chain: the successor is scheduled, not immediate", %{

@@ -7,6 +7,8 @@ defmodule Engram.Migrations.AddNamesLockTest do
   """
   use Engram.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Engram.LockTimeoutRepo
 
   setup_all do
@@ -50,5 +52,15 @@ defmodule Engram.Migrations.AddNamesLockTest do
   test "it gives up after its retries" do
     LockTimeoutRepo.refuse(3)
     assert_raise Postgrex.Error, fn -> migration().run_up(LockTimeoutRepo) end
+  end
+
+  test "one summary line, counts only: the columns present" do
+    migration().run_down(Engram.Repo)
+    previous = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous) end)
+
+    log = capture_log([level: :info], fn -> migration().run_up(Engram.Repo) end)
+    assert [_] = Regex.scan(~r/migration add_names: columns_present 14\/14 \(\d+ ms\)/, log)
   end
 end

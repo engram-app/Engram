@@ -17,7 +17,7 @@ defmodule Engram.Workers.BackfillNoteNames do
   concurrency 1) is free between hops. Inside a hop the walk also keeps to
   `NoteName.writes_per_s/0` rows a second (default 150,
   `Engram.Backfill.Throttle`), and before a hop the pressure gate
-  (`Throttle.pressure/1`: app pool queue, oldest open transaction) can hold
+  (`Throttle.pressure/0`: app pool queue, oldest open transaction) can hold
   it: the same hop is re-inserted 45 s later and writes nothing. About 600 rows a minute at most;
   ~67k prod notes plus their tombstones and attachments: about 3 h (estimate,
   not measured). A window is 100 ids, one transaction under
@@ -92,9 +92,9 @@ defmodule Engram.Workers.BackfillNoteNames do
         :ok
 
       # Held on database pressure: the same hop, later, nothing written now.
-      Throttle.pressure("note_name") ->
+      reason = Throttle.pressure() ->
         {:ok, _} = Oban.insert(new(args, schedule_in: @pace_s))
-        :ok
+        Throttle.log_pass("note_name", written: 0, held: reason, elapsed_ms: 0)
 
       true ->
         case hop(args, max_rows: NoteName.max_rows()) do
@@ -146,8 +146,9 @@ defmodule Engram.Workers.BackfillNoteNames do
       fleet: fleet
     }
 
+    started = Throttle.now_ms()
     result = walk(st, o)
-    log(result, st.t)
+    log(result, st.t, started)
     elem(result, 0)
   end
 
@@ -223,17 +224,19 @@ defmodule Engram.Workers.BackfillNoteNames do
   defp schema(:attachments), do: Attachment
   defp schema(:folders), do: Folder
 
-  defp log({result, st}, first_table) do
-    Logger.info(
-      "note name backfill hop",
-      Metadata.with_category(:info, :oban,
-        result: elem_result(result),
-        fixed: st.hop_fixed,
-        windows: st.windows,
-        from_table: Enum.at(@tables, first_table),
-        walk_fixed: st.walk_fixed,
-        walk_left: st.walk_left
-      )
+  # The pass line (`Throttle.log_pass/2`). Rows left are not counted: the
+  # name columns have no index, so a count would walk the table; `walk_left`
+  # says whether this walk has left any behind.
+  defp log({result, st}, first_table, started) do
+    Throttle.log_pass("note_name",
+      written: st.hop_fixed,
+      held: :none,
+      elapsed_ms: Throttle.now_ms() - started,
+      result: elem_result(result),
+      windows: st.windows,
+      from_table: Enum.at(@tables, first_table),
+      walk_fixed: st.walk_fixed,
+      walk_left: st.walk_left
     )
   end
 
