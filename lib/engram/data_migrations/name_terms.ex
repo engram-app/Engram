@@ -137,7 +137,9 @@ defmodule Engram.DataMigrations.NameTerms do
       {:fleet, repo} ->
         for schema <- [Note, Folder], reduce: 0 do
           n ->
-            capped = from(r in NameTerms.stale_query(schema), select: 1, limit: @left_cap)
+            # A subquery must select a field or source (`select: 1` raises
+            # Ecto.SubQueryError, on the fleet path only).
+            capped = from(r in NameTerms.stale_query(schema), select: r.id, limit: @left_cap)
             n + repo.aggregate(subquery(capped), :count)
         end
 
