@@ -7,6 +7,7 @@ import {
 	RangeSet,
 	RangeValue,
 	StateField,
+	type Text,
 	type Transaction,
 } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
@@ -456,5 +457,32 @@ function defineRenderer(r: Renderer): StateField<DecorationSet> {
 	});
 }
 
+/**
+ * The first `needle` at or after `from`, or -1. Line by line, so it costs the
+ * distance travelled and never copies the document. `needle` holds no newline.
+ */
+function searchForward(doc: Text, from: number, needle: string): number {
+	for (let n = doc.lineAt(from).number; n <= doc.lines; n++) {
+		const line = doc.line(n);
+		const at = line.text.indexOf(needle, Math.max(0, from - line.from));
+		if (at >= 0) {
+			return line.from + at;
+		}
+	}
+	return -1;
+}
+
+const CODE_BLOCKS = new Set(["FencedCode", "CodeBlock"]);
+
+/** Is `pos` inside a fenced or indented code block, per the tree parsed so far? */
+function inCodeBlock(tree: Tree, pos: number): boolean {
+	for (let n: SyntaxNode | null = tree.resolveInner(pos, 1); n; n = n.parent) {
+		if (CODE_BLOCKS.has(n.name)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 export type { Renderer, TextRenderer, Token, TreeRenderer };
-export { defineRenderer, tokensAt };
+export { defineRenderer, inCodeBlock, searchForward, tokensAt };

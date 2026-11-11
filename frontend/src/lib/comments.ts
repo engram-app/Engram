@@ -35,6 +35,48 @@ function inlineCodeEnd(text: string, from: number, run: number, limit: number): 
 	return -1;
 }
 
+type CommentKind = CommentRange["kind"];
+
+/** The opener and closer of each comment form. */
+const DELIMS: Record<CommentKind, { open: string; close: string }> = {
+	percent: { open: "%%", close: "%%" },
+	html: { open: "<!--", close: "-->" },
+};
+
+/**
+ * The first comment opener in `text[from, end)`, skipping inline code spans.
+ * One line at a time: the reading view (findComments) and the editor's
+ * incremental renderer both scan through this, so they agree on what opens a
+ * comment.
+ */
+function findOpener(
+	text: string,
+	from: number,
+	end: number,
+): { at: number; kind: CommentKind } | null {
+	let j = from;
+	while (j < end) {
+		const ch = text[j];
+		if (ch === "`") {
+			let k = j;
+			while (text[k] === "`") {
+				k++;
+			}
+			const close = inlineCodeEnd(text, j, k - j, end);
+			j = close >= 0 ? close : k;
+			continue;
+		}
+		if (ch === "%" && text[j + 1] === "%") {
+			return { at: j, kind: "percent" };
+		}
+		if (ch === "<" && text.startsWith("<!--", j)) {
+			return { at: j, kind: "html" };
+		}
+		j++;
+	}
+	return null;
+}
+
 /** Every comment in `text`, in order, outside code. */
 function findComments(text: string): CommentRange[] {
 	const out: CommentRange[] = [];
@@ -45,28 +87,13 @@ function findComments(text: string): CommentRange[] {
 			continue;
 		}
 		let j = Math.max(line.body, resume);
-		while (j < line.end) {
-			const ch = text[j];
-			if (ch === "`") {
-				let k = j;
-				while (text[k] === "`") {
-					k++;
-				}
-				const close = inlineCodeEnd(text, j, k - j, line.end);
-				j = close >= 0 ? close : k;
-				continue;
-			}
-			const percent = ch === "%" && text[j + 1] === "%";
-			if (percent || (ch === "<" && text.startsWith("<!--", j))) {
-				const closer = percent ? "%%" : "-->";
-				const close = text.indexOf(closer, j + (percent ? 2 : 4));
-				const to = close < 0 ? n : close + closer.length;
-				out.push({ from: j, to, kind: percent ? "percent" : "html" });
-				resume = to;
-				j = to;
-				continue;
-			}
-			j++;
+		for (let open = findOpener(text, j, line.end); open; open = findOpener(text, j, line.end)) {
+			const { open: o, close: c } = DELIMS[open.kind];
+			const close = text.indexOf(c, open.at + o.length);
+			const to = close < 0 ? n : close + c.length;
+			out.push({ from: open.at, to, kind: open.kind });
+			resume = to;
+			j = to;
 		}
 	}
 	return out;
@@ -87,5 +114,5 @@ function stripComments(text: string): string {
 	return out + text.slice(at);
 }
 
-export type { CommentRange };
-export { findComments, stripComments };
+export type { CommentKind, CommentRange };
+export { DELIMS as COMMENT_DELIMS, findComments, findOpener, stripComments };
