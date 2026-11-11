@@ -53,6 +53,8 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # scan must see it go through SafeException.
     "lib/engram_web/request_exception_logger.ex",
     "lib/engram/oban/safe_engine.ex",
+    # Its retry line renders a failed job's exception message.
+    "lib/engram/telemetry/oban_discard_handler.ex",
     # Logs exception and EXIT reasons from the liveness stamp. A Postgrex
     # error renders "Failing row contains (...)", so this file can absolutely
     # reach a row value — it was out-of-scope on the claim that it "never"

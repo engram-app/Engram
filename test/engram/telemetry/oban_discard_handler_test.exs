@@ -2,8 +2,17 @@ defmodule Engram.Telemetry.ObanDiscardHandlerTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
+  import Oban.Testing, only: [perform_job: 3]
 
   alias Engram.Telemetry.ObanDiscardHandler
+
+  defmodule FailingWorker do
+    @moduledoc false
+    use Oban.Worker, queue: :default, max_attempts: 3
+
+    @impl Oban.Worker
+    def perform(_job), do: {:error, :boom}
+  end
 
   setup do
     ObanDiscardHandler.attach()
@@ -85,7 +94,7 @@ defmodule Engram.Telemetry.ObanDiscardHandlerTest do
     # as the terminal fact, not as one more timeout among five.
     test "a timeout on the FINAL attempt logs the discard, not the timeout" do
       metadata = %{
-        state: :discarded,
+        state: :discard,
         worker: "Engram.Workers.EmbedNote",
         queue: :embed,
         job: %{id: 43, args: %{}, attempt: 5, max_attempts: 5},
@@ -109,7 +118,7 @@ defmodule Engram.Telemetry.ObanDiscardHandlerTest do
       measurements = %{duration: 1_000, queue_time: 0}
 
       metadata = %{
-        state: :discarded,
+        state: :discard,
         worker: "Engram.Workers.EmbedNote",
         queue: :embed,
         job: %{id: 42, args: %{"note_id" => 7}, attempt: 5, max_attempts: 5},
@@ -146,7 +155,7 @@ defmodule Engram.Telemetry.ObanDiscardHandlerTest do
       measurements = %{duration: 1_000, queue_time: 0}
 
       metadata = %{
-        state: :discarded,
+        state: :discard,
         worker: "Engram.Workers.EmbedNote",
         queue: :embed,
         job: %{id: 99, args: %{}, attempt: 3, max_attempts: 3},
@@ -195,7 +204,7 @@ defmodule Engram.Telemetry.ObanDiscardHandlerTest do
       measurements = %{duration: 1_000}
 
       metadata = %{
-        state: :discarded,
+        state: :discard,
         worker: "X",
         queue: :default,
         job: %{id: 1, args: %{}, attempt: 1, max_attempts: 1},
@@ -211,6 +220,98 @@ defmodule Engram.Telemetry.ObanDiscardHandlerTest do
       # Re-emission probe should receive exactly one message, not two.
       assert_received {:discarded_emitted, _, _}
       refute_received {:discarded_emitted, _, _}
+    end
+  end
+
+  # These run the job through Oban's REAL executor (`perform_job/3`), so the
+  # `state` the handler sees is the one Oban actually emits. Hand-built
+  # metadata said `:discarded`; Oban 2.24 sends `:discard`
+  # (deps/oban/lib/oban/queues/executor.ex emit_event/1), so the discard line
+  # never fired in prod.
+  describe "handle_event/4 — real Oban executor" do
+    defp run(attempt) do
+      capture_log([level: :warning], fn ->
+        perform_job(FailingWorker, %{}, attempt: attempt, repo: Engram.Repo)
+        Process.sleep(10)
+      end)
+    end
+
+    defp count(logs, needle), do: logs |> String.split(needle) |> length() |> Kernel.-(1)
+
+    test "a retryable failed attempt logs exactly one warning with its fields" do
+      logs = run(1)
+
+      assert count(logs, "Oban job attempt failed, will retry") == 1
+      assert logs =~ "[warning]"
+      assert logs =~ "worker=Engram.Telemetry.ObanDiscardHandlerTest.FailingWorker"
+      assert logs =~ ~r/job_id=\d+/
+      assert logs =~ "attempt=1/3"
+      assert logs =~ ~s(queue="default")
+      assert logs =~ "error_kind=Elixir.Oban.PerformError"
+      assert logs =~ "node=#{node()}"
+      refute logs =~ "Oban job discarded"
+      refute_received {:discarded_emitted, _, _}
+    end
+
+    test "the final attempt logs the discard once, not a retry" do
+      logs = run(3)
+
+      assert count(logs, "Oban job discarded after max_attempts") == 1
+      assert logs =~ "attempt=3/3"
+      refute logs =~ "will retry"
+
+      # The event behind engram_prom_ex_reliability_oban_discarded_total
+      # (tags [:worker, :queue, :error_kind], Engram.PromEx.Reliability).
+      assert_received {:discarded_emitted, %{count: 1}, m}
+      assert m.worker == "Engram.Telemetry.ObanDiscardHandlerTest.FailingWorker"
+      assert m.queue == "default"
+      assert m.error_kind == Oban.PerformError
+      refute_received {:discarded_emitted, _, _}
+    end
+  end
+
+  describe "handle_event/4 — worker-resolution failures" do
+    # The staging 2026-11-11 shape: a node without the worker module. The
+    # error is Oban's own, and its text is the whole diagnosis.
+    test "the retry line carries Oban's worker-resolution message" do
+      {:error, error} = Oban.Worker.from_string("Engram.Workers.NoSuchWorkerXyz")
+
+      logs =
+        capture_log([level: :warning], fn ->
+          :telemetry.execute([:oban, :job, :exception], %{duration: 1}, %{
+            state: :failure,
+            worker: "Engram.Workers.NoSuchWorkerXyz",
+            queue: :maintenance,
+            job: %{id: 7, attempt: 1, max_attempts: 5},
+            kind: :error,
+            reason: error
+          })
+
+          Process.sleep(10)
+        end)
+
+      assert count(logs, "Oban job attempt failed, will retry") == 1
+      assert logs =~ "error_kind=Elixir.RuntimeError"
+      assert logs =~ "error=unknown worker: Engram.Workers.NoSuchWorkerXyz"
+    end
+
+    test "any other RuntimeError text stays out of the retry line" do
+      logs =
+        capture_log([level: :warning], fn ->
+          :telemetry.execute([:oban, :job, :exception], %{duration: 1}, %{
+            state: :failure,
+            worker: "Engram.Workers.EmbedNote",
+            queue: :embed,
+            job: %{id: 8, attempt: 1, max_attempts: 5},
+            kind: :error,
+            reason: %RuntimeError{message: "secret Medical/canary.md"}
+          })
+
+          Process.sleep(10)
+        end)
+
+      assert logs =~ "error=RuntimeError (details redacted)"
+      refute logs =~ "canary"
     end
   end
 end

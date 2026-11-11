@@ -50,6 +50,38 @@ defmodule Engram.Logger.ExceptionEgressTest do
       assert SafeException.sanitize(e) == e
     end
 
+    # Staging 2026-11-11: a 0.81.0 node ran BackfillNoteNames jobs it had no
+    # module for, and the only record said "RuntimeError (details redacted)".
+    # Both errors come from the real Oban.Worker.from_string/1, not hand-built.
+    test "Oban's two worker-resolution errors keep their message" do
+      {:error, unknown} = Oban.Worker.from_string("Engram.Workers.NoSuchWorkerXyz")
+      {:error, not_worker} = Oban.Worker.from_string("Engram.Repo")
+
+      assert Exception.message(unknown) == "unknown worker: Engram.Workers.NoSuchWorkerXyz"
+      assert Exception.message(not_worker) == "module is not a worker: Engram.Repo"
+
+      for e <- [unknown, not_worker] do
+        assert SafeException.sanitize(e) == e
+      end
+    end
+
+    test "any other RuntimeError message is still redacted" do
+      for message <- [
+            "boom #{@canary}",
+            # Lookalikes: the prefix alone must not vouch for what follows it.
+            "unknown worker: #{@canary}",
+            "module is not a worker: Engram.Repo\n#{@canary}",
+            "module is not a worker: Engram.Repo #{@canary}",
+            "prefix unknown worker: Engram.Repo"
+          ] do
+        safe = SafeException.sanitize(%RuntimeError{message: message})
+
+        assert %RedactedError{type: RuntimeError} = safe
+        assert Exception.message(safe) == "RuntimeError (details redacted)"
+        refute_canary(Exception.message(safe))
+      end
+    end
+
     test "a wrapped Oban reason keeps its safe tag" do
       e = %Oban.PerformError{message: inspect({:error, payload()}), reason: {:error, payload()}}
       safe = SafeException.sanitize(e)
