@@ -163,7 +163,8 @@ export default function NotePage() {
 
 	const navigate = useNavigate();
 	const { data: folders } = useFolders();
-	const createNote = useCreateNote();
+	// `mutate` is stable; the hook's result object is new on every render.
+	const { mutate: createNote } = useCreateNote();
 	const deleteNote = useDeleteNote();
 	const duplicateNote = useDuplicateNote();
 	const batchMoveNotes = useBatchMoveNotes();
@@ -192,24 +193,16 @@ export default function NotePage() {
 	// resolved link routes straight to the note id instead of through the
 	// lazy /v/:slug/wiki/* resolver.
 	const wikiMap = useMemo(() => buildWikiMap(shown?.note.links), [shown?.note.links]);
-	// Manifest layer for wikiHref, read through a ref (same identity-stability
-	// reasoning as manifestPathsRef below): edges lag behind fresh links, the
-	// manifest resolves them without the /wiki redirect flash, and a manifest
-	// refetch must not change these callbacks' identity.
+	// Manifest layer for wikiHref: edges lag behind fresh links, and the
+	// manifest resolves them without the /wiki redirect flash.
 	// Everything a [[link]] can open: notes and attachments, both routed by id.
 	const linkTargets = useMemo(
 		() => [...(manifest?.notes ?? []), ...(manifest?.attachments ?? [])],
 		[manifest],
 	);
-	const wikiManifestRef = useRef<{ id: string; path: string }[]>([]);
-	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render is the point: it keeps the callback identity stable so the consuming effect does not re-fire on every render. See the comment above.
-	wikiManifestRef.current = linkTargets;
-	// useCallback keeps a stable identity so passing it to NoteEditor doesn't
-	// re-fire the decorationsCompartment reconfigure effect on every render.
-	const resolveWikiLink = useCallback(
-		(permalink: string) => wikiHref(permalink, slug, wikiMap, wikiManifestRef.current),
-		[slug, wikiMap],
-	);
+	// The link callbacks below need no stable identity: NoteEditor reads them
+	// through a latest-value ref and never reconfigures on a new one.
+	const resolveWikiLink = (permalink: string) => wikiHref(permalink, slug, wikiMap, linkTargets);
 	// Editor-mode click-to-open. Router nav must come from the React tree —
 	// see LivePreviewOpts.openWikiLink for why the editor can't reach the
 	// router singleton itself.
@@ -224,52 +217,36 @@ export default function NotePage() {
 			if (!name || name === ".md") {
 				return;
 			}
-			createNote.mutate({ folder, id: uuid7(), name, renameOnArrive: false });
+			createNote({ folder, id: uuid7(), name, renameOnArrive: false });
 		},
 		[createNote],
 	);
 	// Markdown links: resolve like Reading mode does, navigate in-app when the
 	// target is a note in this vault, and report false for everything else so
 	// link-open.ts sends it to a new tab.
-	const openMarkdownLink = useCallback(
-		(href: string) => {
-			const to = href.startsWith("/")
-				? href
-				: markdownLinkHref(href, slug, wikiMap, wikiManifestRef.current);
-			if (!to) {
-				return false;
-			}
-			navigate(to);
-			return true;
-		},
-		[navigate, slug, wikiMap],
-	);
-	const openWikiLink = useCallback(
-		(permalink: string) => {
-			const href = wikiHref(permalink, slug, wikiMap, wikiManifestRef.current);
-			const newPage = wikiCreateTarget(href);
-			if (newPage !== null) {
-				createWikiTarget(newPage);
-			} else if (href.startsWith("/")) {
-				navigate(href);
-			} else if (href.startsWith("#")) {
-				// Same-page heading — hash assignment scrolls, no reload.
-				window.location.hash = href;
-			}
-		},
-		[navigate, slug, wikiMap, createWikiTarget],
-	);
-	// `[[` autocomplete's candidate list: notes and attachments. Read through a ref, not a useMemo keyed
-	// on manifest, so this callback's identity NEVER changes -- the manifest
-	// query refetches on its own staleTime, and a new function identity there
-	// would fire NoteEditor's decorationsCompartment.reconfigure effect for
-	// every refetch with no UI change to show for it (same onView/onShortcutRef
-	// reasoning documented in note-editor.tsx).
+	const openMarkdownLink = (href: string) => {
+		const to = href.startsWith("/") ? href : markdownLinkHref(href, slug, wikiMap, linkTargets);
+		if (!to) {
+			return false;
+		}
+		navigate(to);
+		return true;
+	};
+	const openWikiLink = (permalink: string) => {
+		const href = wikiHref(permalink, slug, wikiMap, linkTargets);
+		const newPage = wikiCreateTarget(href);
+		if (newPage !== null) {
+			createWikiTarget(newPage);
+		} else if (href.startsWith("/")) {
+			navigate(href);
+		} else if (href.startsWith("#")) {
+			// Same-page heading — hash assignment scrolls, no reload.
+			window.location.hash = href;
+		}
+	};
+	// `[[` autocomplete's candidate list: notes and attachments.
 	const manifestPaths = useMemo(() => linkTargets.map((n) => n.path), [linkTargets]);
-	const manifestPathsRef = useRef<string[]>([]);
-	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render is the point: it keeps the callback identity stable so the consuming effect does not re-fire on every render. See the comment above.
-	manifestPathsRef.current = manifestPaths;
-	const wikiCompletionPaths = useCallback(() => manifestPathsRef.current, []);
+	const wikiCompletionPaths = () => manifestPaths;
 
 	// ── Doc lifecycle ────────────────────────────────────────────────────────
 	// Open the routed note's CRDT doc, keyed by its stable note_id (NOT path — a
