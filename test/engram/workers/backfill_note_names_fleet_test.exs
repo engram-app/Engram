@@ -19,16 +19,7 @@ defmodule Engram.Workers.BackfillNoteNamesFleetTest do
   alias Engram.Workers.BackfillNoteNames
 
   setup do
-    config =
-      Keyword.merge(Repo.config(),
-        pool: DBConnection.ConnectionPool,
-        pool_size: 1,
-        after_connect: {Postgrex, :query!, ["SET SESSION AUTHORIZATION engram_maintenance", []]}
-      )
-
-    start_supervised!({Maintenance, config})
-    Application.put_env(:engram, :maintenance_repo_enabled, true)
-    on_exit(fn -> Application.delete_env(:engram, :maintenance_repo_enabled) end)
+    Engram.Test.MaintenancePool.start!()
 
     # Committed fixtures commit their side effects too: the writes enqueue
     # Oban jobs outside the sandbox. Every job past this id is ours and goes
@@ -108,6 +99,13 @@ defmodule Engram.Workers.BackfillNoteNamesFleetTest do
     assert {2, false} =
              BackfillNoteNames.heal_window(:notes, ids, %{repo: Maintenance, user_id: nil})
 
+    assert Enum.map(made, &name_of/1) == ["n1.md", "n2.md"]
+  end
+
+  test "one full hop on the fleet path names every tenant's rows", %{made: made} do
+    assert {:fleet, _} = Engram.Backfill.TenantScan.pool()
+
+    assert {:next, _} = BackfillNoteNames.hop(%{}, pause_ms: 0)
     assert Enum.map(made, &name_of/1) == ["n1.md", "n2.md"]
   end
 
