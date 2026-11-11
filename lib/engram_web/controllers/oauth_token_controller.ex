@@ -178,7 +178,7 @@ defmodule EngramWeb.OAuthTokenController do
   defp track_issued(conn, grant_type, client_props, response) do
     props =
       client_props
-      |> with_grant_id(grant_type)
+      |> with_grant_id()
       |> Map.merge(%{
         grant_type: Atom.to_string(grant_type),
         auth_method: auth_method(conn),
@@ -196,7 +196,7 @@ defmodule EngramWeb.OAuthTokenController do
   defp track_failed(conn, grant_type, client_props, error, reason) do
     props =
       client_props
-      |> with_grant_id(grant_type)
+      |> with_grant_id()
       |> Map.merge(%{
         grant_type: Atom.to_string(grant_type),
         auth_method: auth_method(conn),
@@ -223,15 +223,14 @@ defmodule EngramWeb.OAuthTokenController do
     Map.put(props, :client_agent, McpClient.agent(RequestMeta.get_user_agent(conn), props.client))
   end
 
-  # The code's join key (`OAuth.grant_id/1`), when the exchange found one.
-  defp with_grant_id(props, :authorization_code) do
+  # The grant's join key (`OAuth.grant_id/1`), when the code or refresh token
+  # named a known row. Only those two grant types ever set it.
+  defp with_grant_id(props) do
     case OAuth.take_grant_id() do
       nil -> props
       grant_id -> Map.put(props, :grant_id, grant_id)
     end
   end
-
-  defp with_grant_id(props, _grant_type), do: props
 
   # The access token we just minted names its user; reading our own claim
   # back is cheaper than threading the user out of `Engram.OAuth`.

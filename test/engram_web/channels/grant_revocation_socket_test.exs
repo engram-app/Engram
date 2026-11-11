@@ -270,7 +270,7 @@ defmodule EngramWeb.GrantRevocationSocketTest do
     test "the purge pass disconnects what it revokes", ctx do
       tokens = grant(ctx, {%{ctx.a.id => "write"}, "none"})
 
-      assert Connections.drop_vault_from_grants(ctx.user.id, ctx.a.id) > 0
+      assert Connections.drop_vault_from_grants(ctx.user.id, ctx.a.id, cause: :vault_purged) > 0
 
       assert_disconnected(ctx)
       assert Accounts.grant_claims(tokens.access_token) == :revoked

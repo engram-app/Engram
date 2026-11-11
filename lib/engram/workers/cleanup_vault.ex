@@ -360,7 +360,10 @@ defmodule Engram.Workers.CleanupVault do
     # there would vanish uncounted instead of being narrowed or revoked.
     # Kicks the owner's sockets once if a grant changed or a key went.
     revoked_grants =
-      Engram.Connections.drop_vault_from_grants(vault.user_id, vault_id, kick_owner: revoked > 0)
+      Engram.Connections.drop_vault_from_grants(vault.user_id, vault_id,
+        kick_owner: revoked > 0,
+        cause: :vault_purged
+      )
 
     # `api_key_vaults` carries no RLS policy, so the guard never fires for it
     # and the option here is inert either way. Left as-is to keep this diff

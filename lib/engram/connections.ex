@@ -180,9 +180,10 @@ defmodule Engram.Connections do
         # sentinel), so it is judged on its levels instead: any grant that can
         # reach the vault at all, read, write or through its new-vaults policy,
         # dies whole. Narrowing it would mean rewriting levels the user chose.
-        revoke_rows(legacy) ++ revoke_families(leveled_reaching(query, vault_id))
+        revoke_rows(legacy, :user_disconnect_client) ++
+          revoke_families(leveled_reaching(query, vault_id), :user_disconnect_client)
       else
-        revoke_rows(query)
+        revoke_rows(query, :user_disconnect_client)
       end
 
     Engram.OAuth.grants_changed(changed)
@@ -209,20 +210,21 @@ defmodule Engram.Connections do
 
   # Revokes every not-yet-revoked row of each family, consumed rotation
   # predecessors included, keyed on `family_id` rather than a row-id list.
-  defp revoke_families([]), do: []
+  defp revoke_families([], _cause), do: []
 
-  defp revoke_families(families) do
+  defp revoke_families(families, cause) do
     from(t in RefreshToken, where: t.family_id in ^families, where: is_nil(t.revoked_at))
-    |> revoke_rows()
+    |> revoke_rows(cause)
   end
 
   # Marks the rows of `query` revoked and returns `{family_id, user_id}` per
   # changed row, for `Engram.OAuth.grants_changed/1`. Every revoke here goes
   # through it, so none can forget the cache eviction or the socket
   # disconnect, and through `OAuth.revoke_refresh_tokens/2`, so none can miss
-  # a successor a concurrent rotation is committing (#1974).
-  defp revoke_rows(query) do
-    {_n, changed} = OAuth.revoke_refresh_tokens(query)
+  # a successor a concurrent rotation is committing (#1974). `cause` is the
+  # `OAuth.revoke_cause()` its `mcp_oauth_grant_revoked` events carry.
+  defp revoke_rows(query, cause) do
+    {_n, changed} = OAuth.revoke_refresh_tokens(query, cause: cause)
     changed
   end
 
@@ -248,7 +250,7 @@ defmodule Engram.Connections do
         where: is_nil(t.revoked_at)
       )
 
-    changed = revoke_rows(query)
+    changed = revoke_rows(query, :user_disconnect_grant)
     Engram.OAuth.grants_changed(changed)
 
     if changed == [] and not oauth_family_history?(user_id, family_id),
@@ -359,7 +361,7 @@ defmodule Engram.Connections do
         )
       end)
 
-    _ = drop_vault_from_grants(user_id, vault_id, kick_owner: devices > 0)
+    _ = drop_vault_from_grants(user_id, vault_id, kick_owner: devices > 0, cause: :vault_deleted)
     :ok
   end
 
@@ -398,21 +400,27 @@ defmodule Engram.Connections do
   that revoked other credentials in the same transaction (`CleanupVault`'s
   keys, `revoke_by_vault/2`'s device tokens): one kick either way, decided
   here.
+
+  `cause:` is required: `:vault_deleted` at soft delete, `:vault_purged` at
+  purge (`OAuth.revoke_cause()`), carried by each revoked grant's
+  `mcp_oauth_grant_revoked`.
   """
   @spec drop_vault_from_grants(Ecto.UUID.t(), Ecto.UUID.t(), keyword()) :: non_neg_integer()
-  def drop_vault_from_grants(user_id, vault_id, opts \\ []) do
+  def drop_vault_from_grants(user_id, vault_id, opts) do
+    cause = Keyword.fetch!(opts, :cause)
+
     {:ok, revoked} =
       Repo.transaction_after_commit(fn ->
         # Rotation copies a family's state under the same lock, so a
         # successor minted concurrently cannot undo the narrowing below.
         Engram.OAuth.lock_grants!(user_id)
-        do_drop_vault_from_grants(user_id, vault_id, Keyword.get(opts, :kick_owner, false))
+        do_drop_vault_from_grants(user_id, vault_id, Keyword.get(opts, :kick_owner, false), cause)
       end)
 
     revoked
   end
 
-  defp do_drop_vault_from_grants(user_id, vault_id, kick_owner) do
+  defp do_drop_vault_from_grants(user_id, vault_id, kick_owner, cause) do
     {_, narrowed} =
       Repo.update_all(
         from(t in RefreshToken,
@@ -454,10 +462,10 @@ defmodule Engram.Connections do
     live = List.delete(Vaults.active_vault_ids(user_id), vault_id)
 
     revoked =
-      revoke_rows(only_vault) ++
+      revoke_rows(only_vault, cause) ++
         (from(t in RefreshToken, where: t.user_id == ^user_id, where: is_nil(t.revoked_at))
          |> leveled_reaching(vault_id, &(not Permissions.reaches_anything?(&1, live)))
-         |> revoke_families())
+         |> revoke_families(cause))
 
     case narrowed ++ revoked do
       [] when kick_owner ->
