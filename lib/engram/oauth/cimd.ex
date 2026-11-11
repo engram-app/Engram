@@ -149,6 +149,27 @@ defmodule Engram.OAuth.Cimd do
   """
   @spec ensure_client(term()) :: {:ok, Client.t()} | {:error, reason()}
   def ensure_client(url) do
+    case ensure_client_status(url) do
+      {:error, _reason} = error -> error
+      {_status, client} -> {:ok, client}
+    end
+  end
+
+  @typedoc """
+  What `ensure_client_status/1` did: `:fresh` (inside its TTL, no fetch),
+  `:refreshed` (fetched and stored, including first contact), `:stale_retained`
+  (past its TTL, the refetch failed, the cached row is served).
+  """
+  @type status :: :fresh | :refreshed | :stale_retained
+
+  @doc """
+  `ensure_client/1` plus what happened, for callers that must tell a failed
+  refetch from a row that was simply still fresh (`Engram.Workers.CimdRefresh`).
+  The same single fetch/validation path; `ensure_client/1` is this function with
+  the status dropped.
+  """
+  @spec ensure_client_status(term()) :: {status(), Client.t()} | {:error, reason()}
+  def ensure_client_status(url) do
     cond do
       not url_shaped?(url) -> {:error, :not_cimd}
       not path_ok?(url) -> {:error, :invalid_url}
@@ -187,8 +208,8 @@ defmodule Engram.OAuth.Cimd do
 
   defp ensure(url) do
     case get_by_url(url) do
-      {:ok, client} -> if fresh?(client), do: {:ok, client}, else: refresh(client, url)
-      {:error, :not_found} -> fetch_and_store(url, nil)
+      {:ok, client} -> if fresh?(client), do: {:fresh, client}, else: refresh(client, url)
+      {:error, :not_found} -> tag_refreshed(fetch_and_store(url, nil))
     end
   end
 
@@ -208,13 +229,16 @@ defmodule Engram.OAuth.Cimd do
   defp refresh(client, url) do
     case fetch_and_store(url, client) do
       {:ok, refreshed} ->
-        {:ok, refreshed}
+        {:refreshed, refreshed}
 
       {:error, reason} ->
         log_unless_rate_limited("mcp_cimd_stale_retained", url, reason)
-        {:ok, client}
+        {:stale_retained, client}
     end
   end
+
+  defp tag_refreshed({:ok, client}), do: {:refreshed, client}
+  defp tag_refreshed({:error, _reason} = error), do: error
 
   defp fetch_and_store(url, existing) do
     with :ok <- rate_limit(url, existing),

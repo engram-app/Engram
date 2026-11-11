@@ -1,10 +1,34 @@
 defmodule Engram.Workers.CimdRefresh do
   @moduledoc """
-  Daily refresh of every stored CIMD client document, and (`kind: "jwks"`,
-  every 5 min) of every CIMD client's JWKS. See `perform/1`.
+  Daily refresh of the stored CIMD client document, and (`kind: "jwks"`, every
+  5 min) of the JWKS of every RECENTLY USED client. See `perform/1`.
 
-  `Engram.OAuth.Cimd.ensure_client/1` is called from exactly one place,
-  `Engram.OAuth.fetch_client/1`, which only the authorize path reaches. So
+  Live grant = at least one refresh token that is unrevoked and unexpired,
+  whenever it was last used (`live_grant_client_ids/2`, the one subquery both sweeps use). A dormant
+  grant must keep its document fresh: the refresh-token exchange never calls
+  `ensure_client/1` and trusts the stored row (#1642). The JWKS sweep layers a
+  30-day `last_used_at` rule on top, because a dormant client's JWKS is
+  fetched on demand in the token path.
+
+  The DOCUMENT sweep refreshes a client unless it is demonstrably DEAD: no
+  live grant AND `cimd_fetched_at` older than `dead_after_days/0`. A healthy
+  vendor nobody has connected yet keeps its daily early-warning refresh. Only
+  a host unreachable for a week with no grant stops being retried (it would
+  otherwise log four failure lines a day forever and trip the
+  connector-refused alert). `cimd_fetched_at` only moves on a successful
+  fetch, and NULL (never fetched) counts as not dead. A document exactly
+  `dead_after_days/0` old by the time the sweep runs is dead.
+
+  Skipped = dead. Nothing deletes or updates `oauth_clients` here; the sweep
+  only stops REFETCHING. A skipped client refreshes on demand: the authorize
+  path calls `Cimd.ensure_client/1`.
+
+  `total=` in the sweep log lines counts the clients swept, not every stored
+  CIMD client.
+
+  Before this sweep, `Engram.OAuth.Cimd.ensure_client/1` was called from exactly
+  one place, `Engram.OAuth.fetch_client/1`, which only the authorize path
+  reaches. So
   `cimd_fetched_at` measured time since a user last ran the interactive flow,
   NOT whether the vendor was reachable. A client living on 90-day refresh
   tokens could hold a document we last read months ago, and nothing would
@@ -16,10 +40,11 @@ defmodule Engram.Workers.CimdRefresh do
   `none` after a key compromise — could not land that change until somebody
   happened to re-authorize (#1642).
 
-  This sweep makes the clock mean what it says. It calls the SAME
-  `ensure_client/1` the authorize path calls, so a row inside its TTL (the document's clamped `max-age`, 5 min to 24h) is a
-  no-op and anything older is refetched, validated and stored through one code
-  path. Deliberately no second fetch implementation: a private one here would
+  This sweep makes the clock mean what it says. It calls
+  `Cimd.ensure_client_status/1`, the function `ensure_client/1` (the authorize
+  path) is a thin wrapper over, so a row inside its TTL (the document's clamped
+  `max-age`, 5 min to 24h) is a no-op and anything older is refetched,
+  validated and stored through one code path. Deliberately no second fetch implementation: a private one here would
   be free to drift from the validation the authorize path applies, which is the
   2026-08-04 mistake in a new place.
 
@@ -28,24 +53,25 @@ defmodule Engram.Workers.CimdRefresh do
   five-minute vendor outage must not lock out its users. The difference is that
   we now retry daily instead of never.
 
-  ## Why the tally counts timestamps rather than return values
+  ## What the tally counts
 
-  `Cimd.refresh/2` folds every fetch failure into `{:ok, cached_client}` on
-  purpose, so `ensure_client/1` cannot tell this worker whether anything was
-  actually re-read. Counting its `:ok`s would report a fully successful sweep
-  while every vendor was unreachable. `cimd_fetched_at` moving is the only
-  honest evidence a document was refreshed, so that is what gets counted.
+  `Cimd.refresh/2` folds a failed refetch into a served cached row on purpose
+  (availability beats freshness), which is why `ensure_client/1` alone cannot
+  tell this worker whether anything was re-read. The sweep therefore calls
+  `Cimd.ensure_client_status/1`, the same single fetch path with the outcome
+  kept, and tallies it:
 
-  `unchanged` therefore covers two different facts that this worker cannot
-  separate without duplicating the TTL: a row still inside its TTL (normal, the
-  common case) and a row past it whose refetch failed. Both already have their
-  own signal, which is why no third one is invented here:
+    * `fresh`: inside its TTL, nothing fetched (the common case)
+    * `refreshed`: fetched, validated and stored
+    * `stale_retained`: past its TTL, the refetch failed (unreachable host,
+      invalid document, or refused by our own fetch limiter), cached row kept
+    * any other key: the error reason (`ensure_client_status/1` returned
+      `{:error, reason}`)
 
-    * a failed fetch logs `mcp_cimd_stale_retained` from `Cimd.refresh/2`
-    * a refetch refused by our own fetch limiter logs NOTHING by design
-      (unbounded volume behind a bounded refusal), and is instead visible as
-      `engram_prom_ex_rate_limiter_hit_total{purpose="cimd_fetch",result="deny"}`,
-      which the `engram-prod-cimd-fetch-rate-limited` alert watches
+  A failed fetch also logs `mcp_cimd_stale_retained` from `Cimd.refresh/2`
+  (the limiter refusal logs nothing by design, and is visible as
+  `engram_prom_ex_rate_limiter_hit_total{purpose="cimd_fetch",result="deny"}`,
+  which the `engram-prod-cimd-fetch-rate-limited` alert watches).
 
   ## No staleness ceiling here
 
@@ -69,12 +95,28 @@ defmodule Engram.Workers.CimdRefresh do
 
   require Logger
 
-  # The JWKS sweep: vendor fetches in flight at once, the per-fetch ceiling
-  # (the fetcher's own 3 s budget plus DNS and the persist), and how recently
-  # a client must have made a token request to be swept.
+  # The JWKS sweep: vendor fetches in flight at once and the per-fetch ceiling
+  # (the fetcher's own 3 s budget plus DNS and the persist).
   @jwks_concurrency 4
   @jwks_fetch_timeout_ms 15_000
-  @jwks_active_days 30
+
+  # Defaults for the two tunables below, read through `active_days/0` and
+  # `dead_after_days/0` (the repo's `Application.get_env` convention for worker
+  # knobs, `:cimd_active_days` / `:cimd_dead_after_days`).
+  @default_active_days 30
+  @default_dead_after_days 7
+
+  @doc "How recently a client must have made a token request to get its JWKS swept."
+  @spec active_days() :: pos_integer()
+  def active_days, do: Application.get_env(:engram, :cimd_active_days, @default_active_days)
+
+  @doc """
+  Document sweep: a client with no live grant whose last good fetch is older
+  than this many days is dead and no longer retried daily.
+  """
+  @spec dead_after_days() :: pos_integer()
+  def dead_after_days,
+    do: Application.get_env(:engram, :cimd_dead_after_days, @default_dead_after_days)
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(10)
@@ -105,7 +147,7 @@ defmodule Engram.Workers.CimdRefresh do
   end
 
   def perform(%Oban.Job{}) do
-    rows = cimd_rows()
+    rows = sweep_urls(DateTime.utc_now())
     tally = Enum.reduce(rows, %{}, &tally_refresh/2)
 
     log_sweep("mcp_cimd_refresh_sweep", length(rows), tally)
@@ -116,45 +158,55 @@ defmodule Engram.Workers.CimdRefresh do
   # `skip_tenant_check: true` for the same reason every other read in
   # `Engram.OAuth.Cimd` carries it: an OAuth client is not tenant-scoped, and
   # this sweep runs with no user in context at all.
-  defp cimd_rows do
+  @doc false
+  # The document sweep's client URLs as of `now`; public only so a test can pin
+  # `now` and probe the dead-client boundary to the second.
+  @spec sweep_urls(DateTime.t()) :: [String.t()]
+  def sweep_urls(now) do
     Repo.all(
-      from(c in Client,
-        where: not is_nil(c.cimd_url),
-        select: {c.cimd_url, c.cimd_fetched_at}
+      from(c in cimd_clients(),
+        where:
+          c.client_id in subquery(live_grant_client_ids(now)) or is_nil(c.cimd_fetched_at) or
+            c.cimd_fetched_at > ^days_ago(now, dead_after_days()),
+        select: c.cimd_url
       ),
       skip_tenant_check: true
     )
   end
 
-  # #1974: the JWKS sweep. Every 5 min, so the token path finds a fresh
-  # persisted key set instead of fetching. One fetch per distinct URI; the
-  # result lands on every row naming it (`JwksCache.refresh_background/1`). A
-  # failure leaves the last good keys in place.
-  #
-  # Only clients with a LIVE (unrevoked) grant used for a token request in the
-  # last 30 days, most recently used first, so a burst of registrations that
-  # never connect, or grants since disconnected, cost no vendor fetches. One
-  # that comes back fetches on demand in the token path.
-  #
-  # EXISTS plus a per-client max, both served by
-  # `oauth_refresh_tokens_client_id_last_used_at_index`, rather than a join
-  # that scanned every refresh token (second review #13). Clients sharing a
-  # jwks_uri collapse to one URI, ordered by its most recent use.
-  defp jwks_uris do
-    cutoff = DateTime.add(DateTime.utc_now(), -@jwks_active_days * 86_400, :second)
+  defp cimd_clients, do: from(c in Client, where: not is_nil(c.cimd_url))
 
-    from(c in Client,
-      as: :client,
+  # The one definition of "has a live grant", used by both sweeps: the ids of
+  # clients with a refresh token (any user) that is unrevoked and unexpired.
+  # With `last_used_after`, that token must also have been used since then. An
+  # IN subquery (not EXISTS) because the document sweep ORs it with the
+  # not-dead rule. A small, once-a-day semi-join over `oauth_refresh_tokens`
+  # (~7k rows); the JWKS sweep reaches it every 5 min over the same rows.
+
+  defp live_grant_client_ids(now, last_used_after \\ nil) do
+    live =
+      from(rt in RefreshToken,
+        where: is_nil(rt.revoked_at) and rt.expires_at > ^now,
+        select: rt.client_id
+      )
+
+    if last_used_after, do: where(live, [rt], rt.last_used_at > ^last_used_after), else: live
+  end
+
+  defp days_ago(now, days), do: DateTime.add(now, -days * 86_400, :second)
+
+  # Recently used clients only (live grant used in the last `active_days/0`),
+  # most recently used first, so a burst of registrations that never connect,
+  # or grants since disconnected, cost no vendor fetches. One that comes back fetches on demand in the token
+  # path. Clients sharing a jwks_uri collapse to one URI, ordered by its most
+  # recent use.
+  defp jwks_uris do
+    now = DateTime.utc_now()
+
+    from(c in cimd_clients(),
       where:
-        not is_nil(c.cimd_url) and not is_nil(c.jwks_uri) and
-          exists(
-            from(rt in RefreshToken,
-              where:
-                rt.client_id == parent_as(:client).client_id and is_nil(rt.revoked_at) and
-                  rt.last_used_at > ^cutoff,
-              select: 1
-            )
-          ),
+        c.client_id in subquery(live_grant_client_ids(now, days_ago(now, active_days()))) and
+          not is_nil(c.jwks_uri),
       select: {
         c.jwks_uri,
         # `utc_wall`: Ecto casts this to `timestamp`, which would read a
@@ -184,27 +236,18 @@ defmodule Engram.Workers.CimdRefresh do
     end
   end
 
-  defp tally_refresh({url, before_at}, acc) do
+  defp tally_refresh(url, acc) do
     outcome =
-      case Cimd.ensure_client(url) do
-        {:ok, %Client{cimd_fetched_at: after_at}} -> refreshed?(before_at, after_at)
+      case Cimd.ensure_client_status(url) do
+        {status, %Client{}} -> status
         {:error, reason} -> reason
       end
 
     Map.update(acc, outcome, 1, &(&1 + 1))
   end
 
-  defp refreshed?(nil, %DateTime{}), do: :refreshed
-  defp refreshed?(%DateTime{}, nil), do: :unchanged
-  defp refreshed?(nil, nil), do: :unchanged
-
-  defp refreshed?(%DateTime{} = before_at, %DateTime{} = after_at) do
-    if DateTime.compare(after_at, before_at) == :gt, do: :refreshed, else: :unchanged
-  end
-
-  # One line per sweep. Stays at `:info`: with failures folded into `unchanged`
-  # this worker has nothing to escalate that its two existing signals do not
-  # already carry, and a routine all-fresh sweep is not news.
+  # One line per sweep. Stays at `:info`: `stale_retained` is already logged
+  # per client by `Cimd.refresh/2`, and a routine all-fresh sweep is not news.
   defp log_sweep(event, total, tally) do
     Logger.info(
       "#{event} total=#{total} #{format_tally(tally)}",

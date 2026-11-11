@@ -57,6 +57,95 @@ defmodule Engram.OAuth.CimdTest do
     end
   end
 
+  # PINS the authorize path's contract (the 2026-08-04 invalid_client outage
+  # area). `ensure_client_status/1` sits underneath `ensure_client/1`; these
+  # assert the same return values AND the same log events and levels for all
+  # four paths, and are written to pass unchanged on the code from before the
+  # status function existed.
+  describe "ensure_client/1 pinned behavior" do
+    defp age_row(seconds) do
+      Repo.update_all(
+        Client,
+        [set: [cimd_fetched_at: DateTime.add(DateTime.utc_now(), -seconds, :second)]],
+        skip_tenant_check: true
+      )
+    end
+
+    defp capture_warnings(fun) do
+      previous = Logger.level()
+      Logger.configure(level: :warning)
+      on_exit(fn -> Logger.configure(level: previous) end)
+      ExUnit.CaptureLog.capture_log([level: :warning], fun)
+    end
+
+    test "fresh row: {:ok, client}, nothing fetched, nothing logged" do
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
+      assert {:ok, %Client{}} = Cimd.ensure_client(@url)
+
+      log = capture_warnings(fn -> assert {:ok, %Client{}} = Cimd.ensure_client(@url) end)
+      assert log == ""
+    end
+
+    test "refreshed row: {:ok, client} with a moved timestamp, nothing logged" do
+      expect(FetcherMock, :fetch, 2, fn @url -> {:ok, document()} end)
+      assert {:ok, %Client{cimd_fetched_at: before_at}} = Cimd.ensure_client(@url)
+      age_row(90_000)
+
+      log =
+        capture_warnings(fn ->
+          assert {:ok, %Client{cimd_fetched_at: after_at}} = Cimd.ensure_client(@url)
+          assert DateTime.compare(after_at, before_at) in [:gt, :eq]
+        end)
+
+      assert log == ""
+    end
+
+    test "stale_retained: {:ok, cached client}, warnings mcp_cimd_rejected then mcp_cimd_stale_retained" do
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
+      assert {:ok, %Client{client_id: id}} = Cimd.ensure_client(@url)
+      age_row(90_000)
+      expect(FetcherMock, :fetch, fn @url -> {:error, :fetch_failed} end)
+
+      log =
+        capture_warnings(fn ->
+          assert {:ok, %Client{client_id: ^id}} = Cimd.ensure_client(@url)
+        end)
+
+      assert [rejected, retained] = String.split(log, "\n", trim: true)
+
+      for line <- [rejected, retained] do
+        assert line =~ "[warning]"
+        assert line =~ "category=lifecycle"
+        assert line =~ "cimd_host=claude.ai"
+        assert line =~ "reason=:fetch_failed"
+      end
+
+      assert rejected =~ "mcp_cimd_rejected"
+      assert retained =~ "mcp_cimd_stale_retained"
+    end
+
+    test "error: {:error, reason}, one warning mcp_cimd_rejected on first contact" do
+      expect(FetcherMock, :fetch, fn @url -> {:error, :fetch_failed} end)
+
+      log =
+        capture_warnings(fn ->
+          assert {:error, :fetch_failed} = Cimd.ensure_client(@url)
+        end)
+
+      assert [line] = String.split(log, "\n", trim: true)
+      assert line =~ "[warning]"
+      assert line =~ "mcp_cimd_rejected"
+      assert line =~ "category=lifecycle"
+      assert line =~ "cimd_host=claude.ai"
+      assert line =~ "reason=:fetch_failed"
+    end
+
+    test "gating errors are returned without logging" do
+      log = capture_warnings(fn -> assert {:error, :not_cimd} = Cimd.ensure_client("garbage") end)
+      assert log == ""
+    end
+  end
+
   describe "ensure_client/1 gating" do
     # The `https://` prefix is the only discriminator, so a DCR uuid (or any
     # garbage) must never be sent down the fetch path.
