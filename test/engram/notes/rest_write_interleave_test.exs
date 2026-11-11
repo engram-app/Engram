@@ -36,7 +36,7 @@ defmodule Engram.Notes.RestWriteInterleaveTest do
   alias Engram.CheckpointInterleave
   alias Engram.Crypto
   alias Engram.Notes
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence}
 
   setup do
     CheckpointInterleave.checkout_real!()
@@ -137,5 +137,73 @@ defmodule Engram.Notes.RestWriteInterleaveTest do
            stored:        #{inspect(before_replay)}
            after replay:  #{inspect(CrdtBridge.text_of(stored))}
            """
+  end
+
+  # #2541 review: `served_base/4` reads the row, then the tail. The checkpoint
+  # here commits between the two, so the check pairs the old row with an empty
+  # tail. No fence catches that, because a mismatch never writes.
+  test "a checkpoint mid-check does not refuse the hash a GET just served", ctx do
+    %{user: user, vault: vault} = ctx
+    {note, doc} = note_with_tail(user, vault)
+    {:ok, read} = Notes.get_note(user, vault, "race.md")
+    assert read.content == "BODY LIVE"
+
+    assert {:ok, _} =
+             write_across_checkpoint(user, vault, note, doc, base_hash: read.content_hash)
+
+    assert {:ok, %{content: "BODY REST"}} = Notes.get_note(user, vault, "race.md")
+  end
+
+  test "a truly stale base across a checkpoint gets a 409 with the current text", ctx do
+    %{user: user, vault: vault} = ctx
+    {note, doc} = note_with_tail(user, vault)
+    stale = String.duplicate("a", 64)
+
+    assert {:error, :version_conflict, view} =
+             write_across_checkpoint(user, vault, note, doc, base_hash: stale)
+
+    assert view.content == "BODY LIVE"
+    assert {:ok, %{content: "BODY LIVE"}} = Notes.get_note(user, vault, "race.md")
+  end
+
+  # A note whose latest edit is only in the tail, and the doc holding that edit.
+  defp note_with_tail(user, vault) do
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "race.md", "content" => "BODY"}, actor: "api")
+
+    {:ok, state} = Crypto.decrypt_crdt_state(Engram.Fixtures.raw_note!(note.id), user)
+    {:ok, doc} = CrdtBridge.doc_from_state(state)
+    {:ok, sv} = Yex.encode_state_vector(doc)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "BODY LIVE")
+    {:ok, update} = Yex.encode_state_as_update(doc, sv)
+    st = %{user_id: user.id, vault_id: vault.id, note_id: note.id}
+    _ = CrdtPersistence.update_v1(st, update, note.id, doc)
+    {note, doc}
+  end
+
+  # Parks the write after its row read, commits a checkpoint, then lets it run.
+  defp write_across_checkpoint(user, vault, note, doc, opts) do
+    on_exit(CheckpointInterleave.arm(:after_note_read))
+
+    writer =
+      Task.async(fn ->
+        CheckpointInterleave.checkout_real!()
+        attrs = %{"path" => "race.md", "content" => "BODY REST"}
+        Notes.upsert_note(user, vault, attrs, [actor: "api"] ++ opts)
+      end)
+
+    parked = CheckpointInterleave.await_parked(:after_note_read, writer.pid)
+
+    # The folded ids, as every production caller passes: omitted, nothing is
+    # pruned and the row read cannot tear.
+    folded =
+      Engram.Repo.with_tenant!(user.id, fn ->
+        note.id |> CrdtPersistence.tail_rows(vault.id) |> Enum.map(& &1.id)
+      end)
+
+    assert folded != []
+    :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc, prune_ids: folded)
+    CheckpointInterleave.release(:after_note_read, parked)
+    Task.await(writer, 15_000)
   end
 end
