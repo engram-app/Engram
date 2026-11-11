@@ -1,9 +1,9 @@
-import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
-import { type EditorState, type Range, StateEffect, StateField } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
+import { syntaxTree } from "@codemirror/language";
+import { StateEffect } from "@codemirror/state";
+import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
 import type { Translate } from "@/i18n/translate";
-import { selectionTouches } from "./decoration-utils";
+import { defineRenderer, type TextRenderer } from "./render-core";
 import { translator } from "./translator";
 
 interface AttachmentEmbedOpts {
@@ -82,76 +82,94 @@ function inCode(tree: Tree, pos: number): boolean {
 	return false;
 }
 
-function build(state: EditorState, opts: AttachmentEmbedOpts): DecorationSet {
-	const out: Range<Decoration>[] = [];
-	// Parsed once per build, not once per embed.
-	const tree = ensureSyntaxTree(state, state.doc.length, 100) ?? syntaxTree(state);
-	let inFence = false;
-	for (let n = 1; n <= state.doc.lines; n++) {
-		const line = state.doc.line(n);
-		if (FENCE.test(line.text)) {
-			inFence = !inFence;
-			continue;
-		}
-		if (inFence) {
-			continue;
-		}
-		for (const m of line.text.matchAll(EMBED)) {
-			const target = (m.groups?.target ?? "").trim();
-			if (!IMAGE.test(target)) {
-				continue;
-			}
-			const path = opts.resolve(target);
-			if (path === null) {
-				continue;
-			}
-			const from = line.from + (m.index ?? 0);
-			const to = from + m[0].length;
-			if (inCode(tree, from) || selectionTouches(state.selection, from, to)) {
-				continue;
-			}
-			const alias = (m.groups?.alias ?? "").trim();
-			const width = /^\d+$/u.test(alias) ? Number(alias) : null;
-			out.push(
-				Decoration.replace({
-					widget: new EmbedWidget(
-						path,
-						width === null ? alias || target : target,
-						width,
-						opts.load,
-						state.facet(translator),
-					),
-				}).range(from, to),
-			);
-		}
-	}
-	return Decoration.set(out);
-}
+/** A `![[target|alias]]` embed, or a fenced block (no embeds inside, no decoration). */
+type EmbedToken = { target: string; alias: string } | null;
 
 /**
  * Obsidian-style image embeds: `![[pic.png]]` renders as the image, and the raw
  * source comes back while the caret is on it. View-only (never edits the doc).
  * Images only; other embeds stay as text.
  *
- * ponytail: rescans the whole doc on every change. Cheap at note sizes; narrow it
- * to the changed lines if a huge note makes typing lag.
+ * On the render core. Tokens are every image embed (resolved or not, so a
+ * refreshed attachment list re-decorates without a rescan) and every fenced
+ * block, which is what makes a line outside a fence neutral.
  */
+function embedRenderer(opts: AttachmentEmbedOpts): TextRenderer<EmbedToken> {
+	return {
+		kind: "text",
+		reveal: true,
+		usesTree: true,
+		refresh: (tr) =>
+			tr.startState.facet(translator) !== tr.state.facet(translator) ||
+			tr.effects.some((e) => e.is(refreshAttachmentEmbeds)),
+		scan(state, from, emit, neutral) {
+			const { doc } = state;
+			let fence = -1; // where the open fence started, or -1
+			for (let n = doc.lineAt(from).number; n <= doc.lines; n++) {
+				const line = doc.line(n);
+				if (fence < 0 && line.from > from && neutral(line.from)) {
+					return;
+				}
+				if (FENCE.test(line.text)) {
+					if (fence < 0) {
+						fence = line.from;
+					} else {
+						emit({ from: fence, to: line.to, value: null });
+						fence = -1;
+					}
+					continue;
+				}
+				if (fence >= 0) {
+					continue;
+				}
+				for (const m of line.text.matchAll(EMBED)) {
+					const target = (m.groups?.target ?? "").trim();
+					if (IMAGE.test(target)) {
+						const at = line.from + (m.index ?? 0);
+						emit({
+							from: at,
+							to: at + m[0].length,
+							value: { target, alias: (m.groups?.alias ?? "").trim() },
+						});
+					}
+				}
+			}
+			// An unclosed fence: everything below is inside it.
+			if (fence >= 0) {
+				emit({ from: fence, to: doc.length, value: null });
+			}
+		},
+		decorate(state, t) {
+			const embed = t.value;
+			if (embed === null) {
+				return [];
+			}
+			const path = opts.resolve(embed.target);
+			if (path === null || inCode(syntaxTree(state), t.from)) {
+				return [];
+			}
+			const width = /^\d+$/u.test(embed.alias) ? Number(embed.alias) : null;
+			return [
+				Decoration.replace({
+					widget: new EmbedWidget(
+						path,
+						width === null ? embed.alias || embed.target : embed.target,
+						width,
+						opts.load,
+						state.facet(translator),
+					),
+				}).range(t.from, t.to),
+			];
+		},
+	};
+}
+
 /** Dispatch when the attachments list changed, so embeds resolve again without rebuilding the editor. */
 export const refreshAttachmentEmbeds = StateEffect.define<null>();
 
 export function attachmentEmbeds(opts: AttachmentEmbedOpts) {
 	return [
-		StateField.define<DecorationSet>({
-			create: (state) => build(state, opts),
-			update: (deco, tr) =>
-				tr.docChanged ||
-				tr.selection ||
-				tr.startState.facet(translator) !== tr.state.facet(translator) ||
-				tr.effects.some((e) => e.is(refreshAttachmentEmbeds))
-					? build(tr.state, opts)
-					: deco,
-			provide: (f) => EditorView.decorations.from(f),
-		}),
+		defineRenderer(embedRenderer(opts)),
 		EditorView.baseTheme({
 			".cm-attachment-embed": {
 				display: "inline-block",
