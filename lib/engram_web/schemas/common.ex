@@ -205,7 +205,10 @@ defmodule EngramWeb.Schemas.Error do
 end
 
 defmodule EngramWeb.Schemas.Conflict do
-  @moduledoc "409 version-conflict body; carries the server's authoritative note."
+  @moduledoc """
+  409 body of a note write that changed nothing. Carries `server_note` (the
+  current note) when one exists, else `reason`.
+  """
   alias OpenApiSpex.Schema
   require OpenApiSpex
 
@@ -213,9 +216,19 @@ defmodule EngramWeb.Schemas.Conflict do
     title: "Conflict",
     type: :object,
     properties: %{
-      error: %Schema{type: :string, example: "version_conflict"},
-      server_note: EngramWeb.Schemas.Note
-    }
+      conflict: %Schema{type: :boolean, example: true},
+      server_note: EngramWeb.Schemas.Note,
+      reason: %Schema{
+        type: :string,
+        enum: ["recently_deleted", "stale_base", "concurrent_edit"],
+        description:
+          "Set when there is no server note to return. `recently_deleted`: the path was " <>
+            "deleted seconds ago, drop the local copy. `stale_base`: a `base_hash` write " <>
+            "found no note at the path (renamed or deleted), re-read it where it lives " <>
+            "now. `concurrent_edit`: retry."
+      }
+    },
+    required: [:conflict]
   })
 end
 

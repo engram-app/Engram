@@ -945,6 +945,11 @@ defmodule Engram.Notes do
   Creates or updates a note. Sanitizes path, extracts metadata, computes content_hash.
   Returns {:ok, note} or {:error, changeset}.
 
+  A `base_hash` in `attrs` (the `content_hash` the writer read) makes it an
+  edit: a moved-on row answers `{:error, :version_conflict, note}`, and NO
+  live row at the path or id answers `{:error, :stale_base}` instead of
+  creating one.
+
   Options:
 
     * `actor:` (required) the history actor (#1710): `"sync"`, `"mcp"`,
@@ -2482,6 +2487,7 @@ defmodule Engram.Notes do
          opts: opts
        }) do
     actor = Keyword.fetch!(opts, :actor)
+    base_hash = Keyword.get(opts, :base_hash)
 
     case existing_by_client_id(client_id, vault) do
       %Note{deleted_at: nil} = live ->
@@ -2520,6 +2526,14 @@ defmodule Engram.Notes do
             embed_opts: opts
           )
         end
+
+      nil when is_binary(base_hash) ->
+        # A base_hash declares "I am editing the version I read", but no live
+        # note holds this path or this id (a folder rename moved it, or it was
+        # purged). Creating here forked a duplicate and resurrected the
+        # renamed-away folder (E7). Same answer as `rmw_note/5` gives the MCP
+        # base_hash write: stale, re-read. A create declares no base.
+        {:error, :stale_base}
 
       nil ->
         insert_new_note(

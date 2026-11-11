@@ -1530,8 +1530,19 @@
       },
       "Conflict": {
         "properties": {
-          "error": {
-            "example": "version_conflict",
+          "conflict": {
+            "example": true,
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "reason": {
+            "description": "Set when there is no server note to return. `recently_deleted`: the path was deleted seconds ago, drop the local copy. `stale_base`: a `base_hash` write found no note at the path (renamed or deleted), re-read it where it lives now. `concurrent_edit`: retry.",
+            "enum": [
+              "recently_deleted",
+              "stale_base",
+              "concurrent_edit"
+            ],
             "type": "string",
             "x-struct": null,
             "x-validate": null
@@ -1540,6 +1551,9 @@
             "$ref": "#/components/schemas/Note"
           }
         },
+        "required": [
+          "conflict"
+        ],
         "title": "Conflict",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.Conflict",
@@ -4140,6 +4154,16 @@
             },
             "description": "Appended"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conflict"
+                }
+              }
+            },
+            "description": "Nothing written; see `reason`"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -5436,7 +5460,7 @@
     "/api/notes": {
       "post": {
         "callbacks": {},
-        "description": "Creates a note or updates the existing one at the same path. Updates are merged convergently (CRDT) with the stored content. Pass `base_hash` — the `content_hash` you last read — for compare-and-swap semantics: if the note changed since that read, the write returns 409 with the current server note instead of merging. With an API key, replacing an existing note REQUIRES `base_hash`: without one the write returns the same 409 and changes nothing (creating a new note needs none). Notes over 10MB are rejected with 413, and exceeding the plan's note cap returns 402.",
+        "description": "Creates a note or updates the existing one at the same path. Updates are merged convergently (CRDT) with the stored content. Pass `base_hash` — the `content_hash` you last read — for compare-and-swap semantics: if the note changed since that read, the write returns 409 with the current server note instead of merging. With an API key, replacing an existing note REQUIRES `base_hash`: without one the write returns the same 409 and changes nothing (creating a new note needs none). A `base_hash` write to a path that holds no note (renamed or deleted since the read) returns 409 `{conflict: true, reason: \"stale_base\"}` and creates nothing: re-read the note where it lives now. Notes over 10MB are rejected with 413, and exceeding the plan's note cap returns 402.",
         "operationId": "notes-upsert",
         "parameters": [],
         "requestBody": {
