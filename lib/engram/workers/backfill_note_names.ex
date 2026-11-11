@@ -14,7 +14,11 @@ defmodule Engram.Workers.BackfillNoteNames do
   window costs the database a few statements four times a second at most and
   a hop reads at most about 120 windows. It then schedules its successor 45 s
   out with its cursor in the args, so the lane (`:crdt_backfill`,
-  concurrency 1) is free between hops. About 600 rows a minute at most;
+  concurrency 1) is free between hops. Inside a hop the walk also keeps to
+  `NoteName.writes_per_s/0` rows a second (default 150,
+  `Engram.Backfill.Throttle`), and before a hop the pressure gate
+  (`Throttle.pressure/1`: app pool queue, oldest open transaction) can hold
+  it: the same hop is re-inserted 45 s later and writes nothing. About 600 rows a minute at most;
   ~67k prod notes plus their tombstones and attachments: about 3 h (estimate,
   not measured). A window is 100 ids, one transaction under
   `lock_timeout = '2s'`: one probe of its stale rows, one
@@ -61,7 +65,7 @@ defmodule Engram.Workers.BackfillNoteNames do
 
   alias Engram.Accounts.User
   alias Engram.Attachments.Attachment
-  alias Engram.Backfill.{IdWindows, PacedChain}
+  alias Engram.Backfill.{IdWindows, PacedChain, Throttle}
   alias Engram.Crypto
   alias Engram.Crypto.{Envelope, NameKeys, PathCrypto, RotationGate}
   alias Engram.DataMigrations
@@ -83,25 +87,32 @@ defmodule Engram.Workers.BackfillNoteNames do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
-    if NoteName.enabled?() do
-      case hop(args, max_rows: NoteName.max_rows()) do
-        {:next, next} ->
-          {:ok, _} = Oban.insert(new(next, schedule_in: @pace_s))
-          :ok
+    cond do
+      not NoteName.enabled?() ->
+        :ok
 
-        _done_or_stopped ->
-          :ok
-      end
-    else
-      :ok
+      # Held on database pressure: the same hop, later, nothing written now.
+      Throttle.pressure("note_name") ->
+        {:ok, _} = Oban.insert(new(args, schedule_in: @pace_s))
+        :ok
+
+      true ->
+        case hop(args, max_rows: NoteName.max_rows()) do
+          {:next, next} ->
+            {:ok, _} = Oban.insert(new(next, schedule_in: @pace_s))
+            :ok
+
+          _done_or_stopped ->
+            :ok
+        end
     end
   end
 
   @doc """
   One hop of the chain from `args` (a fresh walk for `%{}`). Returns
   `{:next, args}` for the successor, `:done` (ledger marked done) or
-  `:stopped`. Options (tests): `:max_rows`, `:batch_size`, `:budget_ms`,
-  `:pause_ms`, `:fleet` (`NoteName.fleet_ready?/1`).
+  `:stopped`. Options (tests): `:max_rows`, `:writes_per_s`, `:batch_size`,
+  `:budget_ms`, `:pause_ms`, `:fleet` (`NoteName.fleet_ready?/1`).
   """
   @spec hop(map(), keyword()) :: {:next, map()} | :done | :stopped
   def hop(args, opts \\ []) do
@@ -128,6 +139,7 @@ defmodule Engram.Workers.BackfillNoteNames do
 
     o = %{
       max_rows: Keyword.get(opts, :max_rows, NoteName.max_rows()),
+      writes_per_s: Keyword.get(opts, :writes_per_s, NoteName.writes_per_s()),
       batch: Keyword.get(opts, :batch_size, @batch_size),
       deadline: PacedChain.deadline(Keyword.get(opts, :budget_ms, @budget_ms)),
       pause_ms: Keyword.get(opts, :pause_ms, PacedChain.pause_ms()),
@@ -162,6 +174,8 @@ defmodule Engram.Workers.BackfillNoteNames do
            stop?: stop?,
            continue?: &NoteName.enabled?/0,
            pause_ms: o.pause_ms,
+           writes: & &1.hop_fixed,
+           writes_per_s: o.writes_per_s,
            batch_size: o.batch,
            fun_in_tenant: false
          ) do

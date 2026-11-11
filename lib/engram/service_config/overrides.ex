@@ -78,9 +78,10 @@ defmodule Engram.ServiceConfig.Overrides do
     name_terms_title_weight_pct: {:integer, 0..1_000},
     name_terms_folder_weight_pct: {:integer, 0..1_000},
     name_terms_folder_slots: {:integer, 0..1_000},
-    # The `NoteName` backfill (`BackfillNoteNames`): kill switch and rows per hop.
+    # The `NoteName` backfill (`BackfillNoteNames`): kill switch, rows per hop, rows a second.
     note_name_backfill: :boolean,
-    note_name_backfill_max_rows: {:integer, 1..100_000}
+    note_name_backfill_max_rows: {:integer, 1..100_000},
+    note_name_backfill_writes_per_s: {:integer, 1..10_000}
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})

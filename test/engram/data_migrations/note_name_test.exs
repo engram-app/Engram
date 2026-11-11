@@ -156,6 +156,40 @@ defmodule Engram.DataMigrations.NoteNameTest do
     assert Enum.all?(notes, &(name_of(u, "notes", &1.id) == Path.basename(&1.path)))
   end
 
+  test "a hop keeps to note_name_backfill_writes_per_s", %{user: u, vault: v} do
+    notes = for i <- 1..3, do: note!(u, v, "R/#{i}.md")
+    n_minus_1_insert!()
+    Engram.ServiceConfig.put_override(:note_name_backfill_writes_per_s, 2)
+
+    {us, _} = :timer.tc(fn -> BackfillNoteNames.hop(%{}, pause_ms: 0, batch_size: 3) end)
+
+    assert Enum.all?(notes, &(name_of(u, "notes", &1.id) != nil))
+    # 3 rows at 2 a second: the window is followed by a 1.5 s wait.
+    assert div(us, 1000) >= 1_500
+  end
+
+  test "database pressure holds a hop: nothing written, the same hop re-inserted later", %{
+    user: u,
+    vault: v
+  } do
+    note = note!(u, v, "H/held.md")
+    n_minus_1_insert!()
+    Engram.Test.FakePressure.set(%{xact_s: 100_000})
+    on_exit(&Engram.Test.FakePressure.reset/0)
+    args = %{"t" => 0, "from" => nil}
+
+    assert :ok = perform_job(BackfillNoteNames, args)
+    assert name_of(u, "notes", note.id) == nil
+    assert [%{args: ^args, scheduled_at: at}] = all_enqueued(worker: BackfillNoteNames)
+    assert DateTime.diff(at, DateTime.utc_now()) >= 40
+
+    # Off wins over pressure: no re-insert.
+    Repo.delete_all(Oban.Job)
+    Engram.ServiceConfig.put_override(:note_name_backfill, false)
+    assert :ok = perform_job(BackfillNoteNames, args)
+    assert [] = all_enqueued(worker: BackfillNoteNames)
+  end
+
   test "perform paces the chain: the successor is scheduled, not immediate", %{
     user: u,
     vault: v

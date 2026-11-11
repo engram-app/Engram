@@ -33,11 +33,14 @@ defmodule Engram.DataMigrations.NoteName do
 
   Kill switch: `enabled?/0` is the `note_name_backfill` service override
   (default on); off, the runner starts nothing and the chain stops at its next
-  hop. Pace: `note_name_backfill_max_rows` (rows per hop, default 500).
+  hop. Pace: `note_name_backfill_max_rows` (rows per hop, default 500) and
+  `note_name_backfill_writes_per_s` (rows a second inside a hop, default
+  150); the chain's pressure gate (`Engram.Backfill.Throttle.pressure/1`)
+  holds a hop on a slow app pool or a long open transaction.
   """
   @behaviour Engram.DataMigration
 
-  alias Engram.Backfill.WalkMemo
+  alias Engram.Backfill.{Throttle, WalkMemo}
   alias Engram.Cluster.Readiness
   alias Engram.DataMigrations
   alias Engram.Logger.Metadata
@@ -47,6 +50,11 @@ defmodule Engram.DataMigrations.NoteName do
   require Logger
 
   @max_rows 500
+  # The same ceiling as `NameTerms` (`Engram.Backfill.Throttle`). With 500
+  # rows a hop and 45 s between hops the chain averages ~10 rows/s, so the
+  # ceiling only caps the burst inside a hop (100-id windows, 250 ms apart,
+  # could reach ~400 rows/s).
+  @writes_per_s 150
   @last_walk "note_name:last_walk"
 
   @impl true
@@ -116,18 +124,9 @@ defmodule Engram.DataMigrations.NoteName do
 
   @doc "Rows a chain hop fixes at most: the `note_name_backfill_max_rows` override."
   @spec max_rows() :: pos_integer()
-  def max_rows do
-    case Engram.ServiceConfig.get(:note_name_backfill_max_rows, @max_rows) do
-      n when is_integer(n) and n > 0 ->
-        n
+  def max_rows, do: Throttle.positive(:note_name_backfill_max_rows, @max_rows)
 
-      _ ->
-        Logger.warning(
-          "note_name_backfill_max_rows is not a positive integer, using #{@max_rows}",
-          Metadata.with_category(:warning, :data)
-        )
-
-        @max_rows
-    end
-  end
+  @doc "Rows a hop fixes a second at most: the `note_name_backfill_writes_per_s` override."
+  @spec writes_per_s() :: pos_integer()
+  def writes_per_s, do: Throttle.positive(:note_name_backfill_writes_per_s, @writes_per_s)
 end
