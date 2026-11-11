@@ -15,10 +15,10 @@ afterEach(() => {
 describe("renderMermaid", () => {
 	// Diagrams are note content. Pele's security page: keep the options ours,
 	// and the hooks it inserts unfiltered (icons, math) are never passed.
-	it("renders with remote images off, no-referrer links and no unfiltered hooks", async () => {
+	it("renders with remote images and links off, and no unfiltered hooks", async () => {
 		await renderMermaid("graph TD; A-->B");
 		const [, options] = renderAsync.mock.calls[0] ?? [];
-		expect(options).toMatchObject({ images: false, linkRel: "noopener noreferrer nofollow" });
+		expect(options).toMatchObject({ images: false, links: false });
 		expect(options).not.toHaveProperty("icons");
 		expect(options).not.toHaveProperty("math");
 	});

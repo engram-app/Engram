@@ -85,7 +85,8 @@ let idCounter = 0;
  * page: never let the diagram supply them). Pele emits no scripts, handlers or
  * HTML labels, always blocks javascript:/data:/vbscript: links and caps source
  * and output size. On top of that: no remote images (a diagram must not make
- * the reader's browser fetch a URL), links never pass a referrer, and no
+ * the reader's browser fetch a URL), no links (a `click` line could otherwise
+ * navigate the whole app to any path or URL, `target=_top`), and no
  * `icons`/`math` hooks, the two inputs Pele inserts unfiltered.
  */
 export async function renderMermaid(code: string, fontFamily?: string): Promise<string> {
@@ -93,7 +94,7 @@ export async function renderMermaid(code: string, fontFamily?: string): Promise<
 	idCounter += 1;
 	const { svg } = await renderAsync(code, {
 		images: false,
-		linkRel: "noopener noreferrer nofollow",
+		links: false,
 		idPrefix: `pele-${idCounter}-`,
 		...(fontFamily ? { fontFamily } : {}),
 	});
