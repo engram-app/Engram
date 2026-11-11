@@ -363,12 +363,12 @@ defmodule Engram.Crypto.UserDekRotation do
           from(f in Folder, where: f.id == ^folder.id)
           |> Repo.update_all(
             [
-              set: [
-                name_ciphertext: ct,
-                name_nonce: nonce,
-                name_hmac: Folder.name_hmac(new_filter_key, segment),
-                dek_version: new_dek_version
-              ]
+              set:
+                [
+                  name_ciphertext: ct,
+                  name_nonce: nonce,
+                  dek_version: new_dek_version
+                ] ++ Folder.name_keys(new_filter_key, segment, nonce)
             ],
             skip_tenant_check: true
           )
@@ -1020,6 +1020,14 @@ defmodule Engram.Crypto.UserDekRotation do
                   {:basename_hmac,
                    Crypto.hmac_field(new_filter_key, Engram.Links.basename_key(plaintext))}
                   | Engram.Links.path_keys(new_filter_key, plaintext, new_nonce) ++
+                      Engram.Notes.Name.keys(
+                        :attachments,
+                        new_dek,
+                        new_filter_key,
+                        att.id,
+                        plaintext,
+                        new_nonce
+                      ) ++
                       Engram.Folders.Rows.carry_attachment_ref(
                         att.folder_ref_stamp,
                         nonce,
@@ -2325,7 +2333,15 @@ defmodule Engram.Crypto.UserDekRotation do
                   [
                     {:basename_hmac,
                      Crypto.hmac_field(new_filter_key, Engram.Links.basename_key(plaintext))}
-                    | Engram.Links.path_keys(new_filter_key, plaintext, new_nonce)
+                    | Engram.Links.path_keys(new_filter_key, plaintext, new_nonce) ++
+                        Engram.Notes.Name.keys(
+                          :notes,
+                          new_dek,
+                          new_filter_key,
+                          note.id,
+                          plaintext,
+                          new_nonce
+                        )
                   ]
                 else
                   []

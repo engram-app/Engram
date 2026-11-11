@@ -36,6 +36,7 @@ defmodule Engram.Notes do
     Helpers,
     Identity,
     Keys,
+    Name,
     Note,
     NoteBody,
     OkfFields,
@@ -3283,8 +3284,15 @@ defmodule Engram.Notes do
            ),
          {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, existing.id) do
       phase_b =
-        inject_phase_b_fields(encrypted, user, existing.id, sanitized_path, folder, crdt.tags)
-        |> keep_stored_path(existing)
+        inject_phase_b_fields(
+          encrypted,
+          user,
+          existing.id,
+          sanitized_path,
+          folder,
+          crdt.tags,
+          existing
+        )
         |> inject_frontmatter_fields(user, existing.id, crdt.merged_text)
         |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
         |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
@@ -7543,6 +7551,11 @@ defmodule Engram.Notes do
     :path_ci_hmac,
     :path_length,
     :link_keys_stamp,
+    :name_ciphertext,
+    :name_nonce,
+    :name_hmac,
+    :name_ci_hmac,
+    :name_stamp,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac
@@ -7561,6 +7574,11 @@ defmodule Engram.Notes do
     :path_ci_hmac,
     :path_length,
     :link_keys_stamp,
+    :name_ciphertext,
+    :name_nonce,
+    :name_hmac,
+    :name_ci_hmac,
+    :name_stamp,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac,
@@ -7570,13 +7588,13 @@ defmodule Engram.Notes do
     :dek_version
   ]
 
-  # Statement-size bound for the VALUES join: 500 rows × ≤20 params stays
+  # Statement-size bound for the VALUES join: 500 rows × ≤25 params stays
   # well under Postgres's 65535-bind-param protocol limit.
   @rename_update_chunk 500
 
-  # Rows per tombstone `insert_all` in rename_folder/4. A tombstone binds 24
-  # parameters (9 base columns + 15 from full_aad_bound_kw/7), so 65535 allows
-  # 2730; 1000 is a half-margin so a new column cannot re-arm the overflow.
+  # Rows per tombstone `insert_all` in rename_folder/4. A tombstone binds 29
+  # parameters (9 base columns + 20 from full_aad_bound_kw/7), so 65535 allows
+  # 2259; 1000 keeps a margin so a new column cannot re-arm the overflow.
   @tombstone_insert_chunk 1000
 
   defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows) do
@@ -9278,8 +9296,16 @@ defmodule Engram.Notes do
   # than silently skipping to enforce the "Phase B is mandatory" contract.
   # T3.6 — note_id is required to construct the AAD bind string for path /
   # folder / tags ciphertext.
-  defp inject_phase_b_fields(attrs, user, note_id, path, folder, tags) do
-    Map.merge(attrs, Map.new(phase_b_keyword_for(user, note_id, path, folder, tags)))
+  #
+  # `stored` (the row being rewritten, or nil for a new row): when it already
+  # stores this path, AAD-bound (`stored_path?/3`), the path, folder and name
+  # columns are not rebuilt at all: no encrypt, no derived HMAC, no column in
+  # the write. Re-encrypting them only swapped nonces, and `path_nonce`,
+  # `link_keys_stamp` and `name_stamp` sit in index keys and predicates, so no
+  # content write (every CRDT checkpoint) could be a HOT update. A rename, a
+  # legacy (pre-AAD) row or a filter-key change rebuilds them.
+  defp inject_phase_b_fields(attrs, user, note_id, path, folder, tags, stored \\ nil) do
+    Map.merge(attrs, Map.new(phase_b_keyword_for(user, note_id, path, folder, tags, stored)))
   end
 
   # OKF fields AND parse_status from ONE parse of the persisted content. Both
@@ -9350,41 +9376,20 @@ defmodule Engram.Notes do
   # for HMAC + envelope computation without duplicating the phase-B logic.
   # The `defp` counterpart cannot be called across module boundaries; this
   # thin wrapper exposes it without promoting it to an official public API.
-  def inject_phase_b_fields_pub(attrs, user, note_id, path, folder, tags) do
-    inject_phase_b_fields(attrs, user, note_id, path, folder, tags)
+  def inject_phase_b_fields_pub(attrs, user, note_id, path, folder, tags, stored \\ nil) do
+    inject_phase_b_fields(attrs, user, note_id, path, folder, tags, stored)
   end
 
-  @path_folder_fields [
-    :path_ciphertext,
-    :path_nonce,
-    :path_hmac,
-    :basename_hmac,
-    :path_ci_hmac,
-    :path_length,
-    :link_keys_stamp,
-    :folder_ciphertext,
-    :folder_nonce,
-    :folder_hmac
-  ]
+  # Equal path hmacs under the current filter key mean equal plaintext (the
+  # folder is the path's, so it is equal too; never the folder hash, which a
+  # note may not carry, R9).
+  defp stored_path?(nil, _filter_key, _path), do: false
 
-  @doc """
-  Drops the freshly encrypted path and folder from a content write's
-  attributes when the row already stores the same path and folder, AAD-bound:
-  equal path hmacs under the current filter key mean equal plaintext (the
-  folder is the path's, so it is equal too; never the folder hash, which a
-  note may not carry, R9). Re-encrypting
-  them only swapped the nonces, and `path_nonce`/`link_keys_stamp` sit in
-  index keys and predicates, so no content write could be a HOT update. A
-  rename, a legacy (pre-AAD) row or a filter-key change keeps the new fields.
-  """
-  @spec keep_stored_path(map(), Note.t()) :: map()
-  def keep_stored_path(attrs, %Note{} = stored) do
-    if stored.dek_version == Crypto.row_version_aad_bound() and
-         is_binary(stored.path_ciphertext) and is_binary(stored.folder_ciphertext) and
-         attrs[:path_hmac] == stored.path_hmac,
-       do: Map.drop(attrs, @path_folder_fields),
-       else: attrs
-  end
+  defp stored_path?(%Note{} = stored, filter_key, path),
+    do:
+      stored.dek_version == Crypto.row_version_aad_bound() and
+        is_binary(stored.path_ciphertext) and is_binary(stored.folder_ciphertext) and
+        stored.path_hmac == Crypto.hmac_field(filter_key, path)
 
   @doc false
   # Public delegate so `CrdtCheckpoint` re-runs frontmatter derivation (OKF
@@ -9436,7 +9441,7 @@ defmodule Engram.Notes do
   # tags_nonce regardless of vault.encrypted. Before B.3 the plaintext `tags`
   # column was the system of record for unencrypted vaults; that column is
   # now gone, so this helper is the only place tags get persisted.
-  defp phase_b_keyword_for(user, note_id, path, folder, tags) when is_list(tags) do
+  defp phase_b_keyword_for(user, note_id, path, folder, tags, stored) when is_list(tags) do
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, filter_key} = Crypto.dek_filter_key(user)
     tags_aad = Crypto.aad_for_row(:notes, :tags, note_id)
@@ -9444,7 +9449,12 @@ defmodule Engram.Notes do
     {tags_ct, tags_n} =
       Envelope.encrypt(:erlang.term_to_binary(tags), dek, tags_aad)
 
-    phase_b_path_folder_for(user, note_id, path, folder) ++
+    path_cols =
+      if stored_path?(stored, filter_key, path),
+        do: [],
+        else: phase_b_path_folder_for(user, note_id, path, folder)
+
+    path_cols ++
       [
         tags_ciphertext: tags_ct,
         tags_nonce: tags_n,
@@ -9490,13 +9500,6 @@ defmodule Engram.Notes do
         Crypto.aad_for_row(:notes, :title, note_id)
       )
 
-    {path_ct, path_n} =
-      Envelope.encrypt(
-        path,
-        dek,
-        Crypto.aad_for_row(:notes, :path, note_id)
-      )
-
     {folder_ct, folder_n} =
       Envelope.encrypt(
         folder,
@@ -9515,13 +9518,9 @@ defmodule Engram.Notes do
       content_ciphertext: content_ct,
       content_nonce: content_n,
       title_ciphertext: title_ct,
-      title_nonce: title_n,
-      path_ciphertext: path_ct,
-      path_nonce: path_n,
-      path_hmac: Crypto.hmac_field(filter_key, path),
-      basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path))
+      title_nonce: title_n
     ] ++
-      Links.path_keys(filter_key, path, path_n) ++
+      path_kw(dek, filter_key, note_id, path) ++
       [
         folder_ciphertext: folder_ct,
         folder_nonce: folder_n,
@@ -9539,10 +9538,24 @@ defmodule Engram.Notes do
   defp phase_b_path_folder_for(user, note_id, path, folder) do
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, filter_key} = Crypto.dek_filter_key(user)
-    path_aad = Crypto.aad_for_row(:notes, :path, note_id)
     folder_aad = Crypto.aad_for_row(:notes, :folder, note_id)
-    {path_ct, path_n} = Envelope.encrypt(path, dek, path_aad)
     {folder_ct, folder_n} = Envelope.encrypt(folder, dek, folder_aad)
+
+    path_kw(dek, filter_key, note_id, path) ++
+      [
+        folder_ciphertext: folder_ct,
+        folder_nonce: folder_n,
+        folder_hmac: Crypto.hmac_field(filter_key, folder)
+      ]
+  end
+
+  # Every column a note's path derives, from one encryption of it: the path
+  # envelope and hashes, the link resolution keys, and the row's own name
+  # (`Name.keys/6`, O(1) folder rename plan S2). The one place a note path is
+  # written: both builders above call it, so every note writer stamps the name
+  # from the same nonce as the path.
+  defp path_kw(dek, filter_key, note_id, path) do
+    {path_ct, path_n} = Envelope.encrypt(path, dek, Crypto.aad_for_row(:notes, :path, note_id))
 
     [
       path_ciphertext: path_ct,
@@ -9551,10 +9564,6 @@ defmodule Engram.Notes do
       basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path))
     ] ++
       Links.path_keys(filter_key, path, path_n) ++
-      [
-        folder_ciphertext: folder_ct,
-        folder_nonce: folder_n,
-        folder_hmac: Crypto.hmac_field(filter_key, folder)
-      ]
+      Name.keys(:notes, dek, filter_key, note_id, path, path_n)
   end
 end

@@ -60,6 +60,7 @@ defmodule Engram.ServiceConfig.Overrides do
     payload_backfill_points_per_min: {:integer, 1..100_000},
     rebuild_max_disk_percent: {:integer, 1..100},
     file_times_backfill: :boolean,
+    folder_table_backfill: :boolean,
     # Every paced backfill chain's pressure gate (`Engram.Backfill.Throttle`).
     backfill_max_queue_ms: {:integer, 1..60_000},
     backfill_max_xact_s: {:integer, 1..86_400},
@@ -76,7 +77,11 @@ defmodule Engram.ServiceConfig.Overrides do
     # search-quality eval without a deploy.
     name_terms_title_weight_pct: {:integer, 0..1_000},
     name_terms_folder_weight_pct: {:integer, 0..1_000},
-    name_terms_folder_slots: {:integer, 0..1_000}
+    name_terms_folder_slots: {:integer, 0..1_000},
+    # The `NoteName` backfill (`BackfillNoteNames`): kill switch, rows per hop, rows a second.
+    note_name_backfill: :boolean,
+    note_name_backfill_max_rows: {:integer, 1..100_000},
+    note_name_backfill_writes_per_s: {:integer, 1..10_000}
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})

@@ -26,10 +26,9 @@ defmodule Engram.DataMigrations.NameTerms do
 
   import Ecto.Query, only: [from: 2, subquery: 1]
 
-  alias Engram.Backfill.{TenantScan, Throttle}
+  alias Engram.Backfill.{TenantScan, Throttle, WalkMemo}
   alias Engram.DataMigrations
   alias Engram.Folders.Folder
-  alias Engram.Maintenance.Cursor
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Search.NameTerms
@@ -102,27 +101,18 @@ defmodule Engram.DataMigrations.NameTerms do
   end
 
   @last_walk "name_terms:last_walk"
-  @retry_after_s 86_400
 
   @doc "Records a complete chain walk (`BackfillNameTerms`) and how many refs it fixed."
   @spec walked(non_neg_integer()) :: :ok
-  def walked(fixed) do
-    Cursor.put(@last_walk, %{"fixed" => fixed, "at" => DateTime.to_iso8601(DateTime.utc_now())})
-  end
+  def walked(fixed), do: WalkMemo.walked(@last_walk, fixed)
 
-  # The last complete walk fixed nothing and is under a day old: what is
-  # still stale was written after it, or was deferred on a transient key
-  # error (`Crypto.key_outcome/1` `:later`). Close the ledger and leave it
-  # to the drain, which only runs once the ledger is done and retries those
-  # users' stale rows each tick.
-  defp fruitless_walk? do
-    with %{"fixed" => 0, "at" => at} <- Cursor.get(@last_walk),
-         {:ok, at, _} <- DateTime.from_iso8601(at) do
-      DateTime.diff(DateTime.utc_now(), at) < @retry_after_s
-    else
-      _ -> false
-    end
-  end
+  # The last complete walk fixed nothing and is under a day old
+  # (`Engram.Backfill.WalkMemo`, shared with `NoteName`): what is still stale
+  # was written after it, or was deferred on a transient key error
+  # (`Crypto.key_outcome/1` `:later`). Close the ledger and leave it to the
+  # drain, which only runs once the ledger is done and retries those users'
+  # stale rows each tick.
+  defp fruitless_walk?, do: WalkMemo.fruitless?(@last_walk)
 
   @left_cap 1_000
 

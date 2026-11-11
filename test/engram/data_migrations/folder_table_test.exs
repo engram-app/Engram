@@ -111,6 +111,28 @@ defmodule Engram.DataMigrations.FolderTableTest do
     end
   end
 
+  describe "kill switch" do
+    test "with folder_table_backfill off the runner runs no pass and writes nothing", %{
+      user: u,
+      vault: v
+    } do
+      %{notes: notes} = seed!(u, v)
+      Engram.ServiceConfig.put_override(:folder_table_backfill, false)
+
+      refute FolderTable.enabled?()
+      assert Engram.Workers.DataMigrationsRunner.run(FolderTable) == :skipped
+      assert ref("notes", notes.a1.id) == nil
+      refute FolderTable.done?()
+
+      Engram.ServiceConfig.put_override(:folder_table_backfill, true)
+      assert FolderTable.enabled?()
+    end
+
+    test "on by default" do
+      assert FolderTable.enabled?()
+    end
+  end
+
   describe "backfill" do
     test "creates the ancestor chains and points notes, attachments and markers", %{
       user: u,

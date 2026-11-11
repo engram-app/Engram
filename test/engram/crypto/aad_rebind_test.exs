@@ -5,7 +5,7 @@ defmodule Engram.Crypto.AadRebindTest do
 
   alias Engram.Crypto
   alias Engram.Crypto.{AadRebind, DekCache, Envelope}
-  alias Engram.Notes.Note
+  alias Engram.Notes.{Name, Note}
   alias Engram.Repo
 
   setup do
@@ -108,6 +108,21 @@ defmodule Engram.Crypto.AadRebindTest do
       assert decrypted.title == "legacy title"
       assert decrypted.path == "legacy/path.md"
       assert decrypted.folder == "legacy"
+
+      # The rebind draws a fresh path nonce, so it writes the row's name
+      # (O(1) folder rename plan S2) from the same nonce: current, not stale.
+      assert reloaded.name_stamp == Name.stamp(reloaded.path_nonce)
+
+      assert {:ok, "path.md"} =
+               Name.decrypt(
+                 :notes,
+                 dek,
+                 reloaded.id,
+                 reloaded.name_ciphertext,
+                 reloaded.name_nonce
+               )
+
+      assert reloaded.name_ci_hmac == Name.ci_hmac(filter_key, "path.md")
       assert decrypted.tags == ["t1"]
     end
 

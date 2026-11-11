@@ -561,6 +561,12 @@ defmodule Engram.Folders.FolderRefReleaseTest do
         Map.new(rows, fn [t, seq, idx] -> {t, {seq, idx}} end)
       end
 
+      # Plan the statements this DELETE fires now, under enable_seqscan =
+      # off, not from a plan a pooled backend cached earlier (a cached
+      # generic plan does not see the SET). Defensive: suspected, NOT
+      # reproduced, cause of the one CI red of this test on #2535
+      # (docs/context/testing-strategy.md).
+      Repo.query!("DISCARD PLANS")
       Repo.query!("SET LOCAL enable_seqscan = off")
       before = scans.()
       Repo.query!("DELETE FROM folders WHERE id = $1", [dump(row)])

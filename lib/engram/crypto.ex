@@ -254,6 +254,16 @@ defmodule Engram.Crypto do
   def key_outcome({:error, _reason}), do: :later
 
   @doc """
+  The bounded label of a failed key load, for the counters and logs next to
+  `key_outcome/1`: `:no_user` for a missing user, the error atom, or
+  `:dek_error` for anything else (never the term itself).
+  """
+  @spec key_reason(nil | {:error, term()}) :: atom()
+  def key_reason(nil), do: :no_user
+  def key_reason({:error, reason}) when is_atom(reason), do: reason
+  def key_reason({:error, _}), do: :dek_error
+
+  @doc """
   Returns the plaintext DEK for a user, unwrapping via the provider if not cached.
   """
   @spec get_dek(User.t()) :: {:ok, <<_::256>>} | {:error, term()}

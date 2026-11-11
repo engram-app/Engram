@@ -27,6 +27,13 @@ defmodule Engram.Attachments.Attachment do
     field :path_ci_hmac, :binary
     field :path_length, :integer
     field :link_keys_stamp, :binary
+    # The row's own name (`Engram.Notes.Name`, S2): current only while
+    # `name_stamp` matches `path_nonce`.
+    field :name_ciphertext, :binary
+    field :name_nonce, :binary
+    field :name_hmac, :binary
+    field :name_ci_hmac, :binary
+    field :name_stamp, :binary
     # Decoded plaintext is materialized into this virtual field by the read
     # path (`Engram.Attachments.get_attachment/3`). It never persists; the
     # actual ciphertext lives in S3-compatible object storage.
@@ -83,6 +90,11 @@ defmodule Engram.Attachments.Attachment do
       :path_ci_hmac,
       :path_length,
       :link_keys_stamp,
+      :name_ciphertext,
+      :name_nonce,
+      :name_hmac,
+      :name_ci_hmac,
+      :name_stamp,
       :content_hash,
       :mime_type,
       :size_bytes,

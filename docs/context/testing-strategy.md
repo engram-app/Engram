@@ -1,6 +1,6 @@
 # Context Doc: Testing Strategy
 
-_Last verified: 2026-10-03_
+_Last verified: 2026-11-10_
 
 ## Status
 Working — ExUnit tests cover business logic and HTTP contract via ConnCase. E2E tests verify real Obsidian sync workflows against Docker stack.
@@ -144,6 +144,32 @@ way, and the mutation also revealed that the sibling cross-user case is
 defended by RLS rather than by the query, so it stays green under the same
 mutation. That distinction is invisible without mutating, and it is the
 difference between two tests and one test plus decoration.
+
+## Committed fixtures and plan tests share the partition's backends
+
+Found on #2535 (2026-11-10): a new test that committed its fixtures turned two
+unrelated tests red later in the same CI partition, while S1's identical
+partition stayed green and both passed locally.
+
+- **Committed fixtures leak their side effects.** A test that writes through
+  `Sandbox.unboxed_run/2` (the fleet tests on the maintenance pool) commits
+  everything those writes cause, including the Oban jobs a note write
+  enqueues. Clean them on exit: record `max(oban_jobs.id)` before the fixtures
+  and delete every job past it (`backfill_note_names_fleet_test.exs`).
+  Otherwise the queue-depth poll tests (`prom_ex/oban_test.exs`) count the
+  leftovers.
+- **Plan and scan-count tests read cached plans (suspected, not
+  reproduced).** `folder_ref_release_test.exs:546` (a hard folder delete must
+  null references through an index) went red once in that partition: "notes:
+  the SET NULL action seq-scanned". Postgres caches the plans of foreign-key
+  actions and PL/pgSQL statements per backend and switches to a generic plan
+  after 5 runs, and a cached plan ignores a later `SET LOCAL enable_seqscan`.
+  A local repro that ran the action 6 times on one backend still used the
+  index, and 6 seeds of the two files together stayed green, so the cause is
+  unproven. The test now runs `DISCARD PLANS` first (cheap, makes it measure a
+  fresh plan) and the committed fixtures avoid folder rows they do not need
+  (root-level paths). If it goes red again, capture `EXPLAIN` of the RI query
+  in the failing backend before changing anything.
 
 ## Claims about the system carry their evidence
 

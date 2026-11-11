@@ -91,6 +91,14 @@ defmodule Engram.DataMigrations.FolderTable do
   # 3: heals references to soft-deleted folder rows (see the moduledoc).
   def version, do: 3
 
+  @doc """
+  Kill switch: the `folder_table_backfill` service override (default on);
+  off, the runner runs no pass. The drain's per-user repair runs only once the
+  ledger is done, so it is not gated here.
+  """
+  @impl true
+  def enabled?, do: Engram.ServiceConfig.get(:folder_table_backfill, true) == true
+
   @impl true
   def run_pass, do: run_pass([])
 
@@ -374,13 +382,15 @@ defmodule Engram.DataMigrations.FolderTable do
   # Rows inserted (0 when a live folder of that name, or that id, exists).
   defp insert_row(repo, ctx, row, explicit?) do
     {ct, nonce} = encrypt_name(ctx, row.id, row.segment)
+    keys = Folder.name_keys(ctx.fk, row.segment, nonce)
 
     %{num_rows: n} =
       repo.query!(
         """
         INSERT INTO folders (id, vault_id, user_id, parent_id, name_ciphertext, name_nonce,
-                             name_hmac, full_path_hmac, dek_version, explicit)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                             name_hmac, full_path_hmac, dek_version, explicit,
+                             name_ci_hmac, name_stamp)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT DO NOTHING
         """,
         [
@@ -393,7 +403,9 @@ defmodule Engram.DataMigrations.FolderTable do
           row.name_hmac,
           row.full,
           Crypto.row_version_aad_bound(),
-          explicit?
+          explicit?,
+          keys[:name_ci_hmac],
+          keys[:name_stamp]
         ]
       )
 
@@ -402,12 +414,13 @@ defmodule Engram.DataMigrations.FolderTable do
 
   defp update_row(repo, ctx, row, explicit?) do
     {ct, nonce} = encrypt_name(ctx, row.id, row.segment)
+    keys = Folder.name_keys(ctx.fk, row.segment, nonce)
 
     repo.query!(
       """
       UPDATE folders SET parent_id = $2, name_ciphertext = $3, name_nonce = $4, name_hmac = $5,
              full_path_hmac = $6, dek_version = $7, explicit = explicit OR $8, updated_at = now(),
-             deleted_at = NULL, delete_op_id = NULL
+             deleted_at = NULL, delete_op_id = NULL, name_ci_hmac = $11, name_stamp = $12
       WHERE id = $1 AND vault_id = $9 AND user_id = $10
       """,
       [
@@ -420,7 +433,9 @@ defmodule Engram.DataMigrations.FolderTable do
         Crypto.row_version_aad_bound(),
         explicit?,
         row.vault,
-        dump(ctx.user_id)
+        dump(ctx.user_id),
+        keys[:name_ci_hmac],
+        keys[:name_stamp]
       ]
     )
   end

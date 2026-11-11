@@ -16,7 +16,7 @@ defmodule Engram.Attachments.BulkUpdate do
 
   alias Engram.Repo
 
-  # x at most 11 params per row: far under Postgres's 65535-bind-param limit
+  # x at most 16 params per row: far under Postgres's 65535-bind-param limit
   @chunk 500
 
   @doc "Rows per statement. `:attachments_bulk_chunk` lowers it (tests)."
@@ -35,6 +35,11 @@ defmodule Engram.Attachments.BulkUpdate do
     path_ci_hmac: "bytea",
     path_length: "integer",
     link_keys_stamp: "bytea",
+    name_ciphertext: "bytea",
+    name_nonce: "bytea",
+    name_hmac: "bytea",
+    name_ci_hmac: "bytea",
+    name_stamp: "bytea",
     folder_ref_id: "uuid",
     folder_ref_stamp: "bytea"
   ]

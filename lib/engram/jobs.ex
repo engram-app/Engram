@@ -70,6 +70,12 @@ defmodule Engram.Jobs do
       period: :infinity,
       states: [:available, :scheduled, :retryable]
     ],
+    # One fleet-wide chain: a hop inserts its own successor while executing.
+    Engram.Workers.BackfillNoteNames => [
+      fields: [:worker],
+      period: :infinity,
+      states: [:available, :scheduled, :retryable]
+    ],
     Engram.Workers.BookkeepingCanary => [period: 3000, states: :incomplete],
     Engram.Workers.BookkeepingDrain => [period: 600, states: :incomplete],
     Engram.Workers.CancelReasonMarker => [

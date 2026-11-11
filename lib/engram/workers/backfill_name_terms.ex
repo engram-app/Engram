@@ -2,8 +2,8 @@ defmodule Engram.Workers.BackfillNameTerms do
   @moduledoc """
   The `NameTerms` backfill (`Engram.DataMigrations.NameTerms`) as one paced
   chain: each hop walks `notes`, then `folders`, in 200-id windows
-  (`Engram.Backfill.IdWindows.reduce_all/4`: the fleet on the maintenance
-  pool, else per user), healing the stale refs of each window
+  (`Engram.Backfill.PacedChain.walk/5` over `IdWindows.reduce_all/4`: the
+  fleet on the maintenance pool, else per user), healing the stale refs of each window
   (`Engram.Search.NameTerms.heal_window/3`), with a #{250} ms pause between
   windows. A hop stops after #{30} s and inserts its successor at its
   cursor, so the walk resumes where it stopped (a restart costs nothing).
@@ -32,14 +32,13 @@ defmodule Engram.Workers.BackfillNameTerms do
     max_attempts: 5,
     unique: Engram.Jobs.unique(__MODULE__)
 
-  alias Engram.Backfill.{IdWindows, Throttle}
+  alias Engram.Backfill.{PacedChain, Throttle}
   alias Engram.DataMigrations.NameTerms, as: Ledger
   alias Engram.Folders.Folder
   alias Engram.Notes.Note
   alias Engram.Search.NameTerms
 
   @hop_ms 30_000
-  @pause_ms 250
   @max_hops 500
   @held_s 60
   @tables %{"notes" => Note, "folders" => Folder}
@@ -73,38 +72,26 @@ defmodule Engram.Workers.BackfillNameTerms do
     from = cursor(args)
     started = Throttle.now_ms()
     deadline = started + Map.get(args, "hop_ms", @hop_ms)
-    pause = Map.get(args, "pause_ms", @pause_ms)
     max_rows = Ledger.max_rows()
-    per_s = Ledger.writes_per_s()
-
     fixed0 = Map.get(args, "fixed", 0)
 
-    # The kill switch is read per window, so it stops a running chain.
-    step = fn ids, ctx, {_status, _at, n} ->
-      if Ledger.enabled?() do
-        n = n + NameTerms.heal_window(@tables[table], ids, ctx)
-        at = {ctx.user_id, List.last(ids)}
-        now = Throttle.now_ms()
+    result =
+      PacedChain.walk(
+        @tables[table],
+        from,
+        fixed0,
+        fn ids, ctx, n -> n + NameTerms.heal_window(@tables[table], ids, ctx) end,
+        [
+          stop?: fn n -> Throttle.now_ms() > deadline or n - fixed0 >= max_rows end,
+          pause_ms: Map.get(args, "pause_ms", PacedChain.pause_ms()),
+          writes: &(&1 - fixed0),
+          writes_per_s: Ledger.writes_per_s(),
+          # The kill switch is read per window, so it stops a running chain.
+          continue?: &Ledger.enabled?/0
+        ] ++ batch_size(args)
+      )
 
-        stop? = now > deadline or n - fixed0 >= max_rows
-
-        # A stopped hop waits off its deficit too: its successor starts at
-        # once, so skipping it let the chain run past the ceiling (~185/s at
-        # a 1,000-row cap against 150).
-        Process.sleep(
-          Throttle.wait_ms(started, n - fixed0, per_s, if(stop?, do: 0, else: pause), now)
-        )
-
-        if stop?, do: {:halt, {:stopped, at, n}}, else: {:cont, {:walked, at, n}}
-      else
-        {:halt, {:killed, nil, n}}
-      end
-    end
-
-    walk_opts = [from: from] ++ batch_size(args)
-
-    {:ok, {status, at, fixed}} =
-      IdWindows.reduce_all(@tables[table], {:walked, nil, fixed0}, step, walk_opts)
+    {status, fixed} = outcome(result)
 
     Throttle.log_pass("name_terms",
       written: fixed - fixed0,
@@ -114,13 +101,11 @@ defmodule Engram.Workers.BackfillNameTerms do
       result: status
     )
 
-    case {status, table} do
-      {:killed, _} ->
+    case {result, table} do
+      {{:aborted, _fixed}, _} ->
         :ok
 
-      {:stopped, _} when hop + 1 < @max_hops ->
-        {user, after_id} = at
-
+      {{:stopped, {user, after_id}, fixed}, _} when hop + 1 < @max_hops ->
         successor(args, %{
           "table" => table,
           "user" => user,
@@ -129,16 +114,19 @@ defmodule Engram.Workers.BackfillNameTerms do
           "fixed" => fixed
         })
 
-      {:stopped, _} ->
+      {{:stopped, _at, _fixed}, _} ->
         :ok
 
-      {:walked, "notes"} ->
+      {{:walked, fixed}, "notes"} ->
         successor(args, %{"table" => "folders", "hop" => hop + 1, "fixed" => fixed})
 
-      {:walked, "folders"} ->
+      {{:walked, fixed}, "folders"} ->
         Ledger.walked(fixed)
     end
   end
+
+  defp outcome({:stopped, _at, fixed}), do: {:stopped, fixed}
+  defp outcome({status, fixed}), do: {status, fixed}
 
   defp cursor(%{"after" => after_id} = args) when is_binary(after_id),
     do: {Map.get(args, "user"), after_id}
