@@ -1,5 +1,10 @@
+# Shared with 20261111000000; see the file for why it is not in lib/.
+Code.require_file("lock_timeout_retry.exs", __DIR__)
+
 defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedExpand do
   use Ecto.Migration
+
+  alias Engram.Repo.Migrations.LockTimeoutRetry
 
   @disable_ddl_transaction true
   @disable_migration_lock true
@@ -29,12 +34,17 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedExpand do
 
   NOT VALID add (ACCESS EXCLUSIVE, brief), then VALIDATE (SHARE UPDATE
   EXCLUSIVE: reads and writes continue), then the old check dropped. No DDL
-  transaction, so the add commits before the scan. One pinned connection, so
-  the `lock_timeout` reaches every statement and is reset after. Rerun-safe:
-  a partial run is redone from the top. Calls no app module (N-1 gate).
+  transaction, so the add commits before the scan. The statements run
+  through `LockTimeoutRetry` (lock_timeout_retry.exs, shared with
+  20261111000000): one pinned connection with no checkout deadline, a 5 s
+  `lock_timeout` on every statement, and a statement that hits it (55P03)
+  retried twice, so a busy `notes` table does not crash boot. A refused
+  statement changed nothing, so retrying it alone is safe, and each
+  statement is idempotent on its own: `DROP CONSTRAINT IF EXISTS`, the
+  NOT VALID add right after its own drop, VALIDATE of a valid check is a
+  no-op, `CREATE OR REPLACE TRIGGER`. Rerun-safe: a partial run is redone
+  from the top. Calls no app module (N-1 gate).
   """
-
-  @lock_retries 2
 
   @shape_v4 """
   ALTER TABLE notes ADD CONSTRAINT notes_kind_shape_v4_check CHECK (
@@ -65,8 +75,13 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedExpand do
   ) NOT VALID
   """
 
-  def up do
-    with_lock_timeout(repo(), [
+  def up, do: run_up(repo())
+  def down, do: run_down(repo())
+
+  @doc false
+  # Public for `NotesBodyColumnsUnreferencedLockTest`.
+  def run_up(repo) do
+    LockTimeoutRetry.with_lock_timeout(repo, [
       "ALTER TABLE notes DROP CONSTRAINT IF EXISTS notes_kind_shape_v4_check",
       @shape_v4,
       "ALTER TABLE notes VALIDATE CONSTRAINT notes_kind_shape_v4_check",
@@ -83,8 +98,9 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedExpand do
 
   # Back to 20261106110000's trigger and the v3 check (NOT VALID: a note a
   # later release wrote with neither content column stays readable).
-  def down do
-    with_lock_timeout(repo(), [
+  @doc false
+  def run_down(repo) do
+    LockTimeoutRetry.with_lock_timeout(repo, [
       "ALTER TABLE notes DROP CONSTRAINT IF EXISTS notes_kind_shape_v3_check",
       @shape_v3,
       "ALTER TABLE notes DROP CONSTRAINT IF EXISTS notes_kind_shape_v4_check",
@@ -98,44 +114,5 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedExpand do
       EXECUTE FUNCTION notes_null_crdt_head()
       """
     ])
-  end
-
-  # `timeout: :infinity` on the checkout: without it DBConnection's 15 s
-  # default is a deadline for the WHOLE block (a per-query timeout does not
-  # extend it), and the VALIDATE scan plus a few lock waits can pass 15 s on a
-  # busy table. That raises at boot, every task fails and the deploy rolls
-  # back (the 0.79.0 incident mechanism). The 5 s lock_timeout per statement
-  # is the bound we want; the scan itself takes no lock that blocks writes.
-  #
-  # The helper is copied from 20261107130100, not shared: the N-1 check runs
-  # new migrations against the previous release's code, so a migration cannot
-  # call a new `lib/` module.
-  @doc false
-  # Public for `NotesBodyColumnsUnreferencedLockTest`.
-  def with_lock_timeout(repo, statements) do
-    repo.checkout(
-      fn ->
-        repo.query!("SET lock_timeout = '5s'")
-
-        try do
-          Enum.each(statements, &run(repo, &1, @lock_retries))
-        after
-          repo.query!("RESET lock_timeout")
-        end
-      end,
-      timeout: :infinity
-    )
-  end
-
-  # A statement that hits its lock_timeout (55P03) is retried, so a busy
-  # table does not crash boot. Only that statement: it changed nothing, and
-  # starting over would repeat the VALIDATE scan.
-  defp run(repo, statement, retries) do
-    repo.query!(statement, [], timeout: :infinity)
-  rescue
-    e in Postgrex.Error ->
-      if retries > 0 and match?(%{postgres: %{code: :lock_not_available}}, e),
-        do: run(repo, statement, retries - 1),
-        else: reraise(e, __STACKTRACE__)
   end
 end

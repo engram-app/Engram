@@ -115,10 +115,15 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedTest do
   # The migration runs at boot. A checkout without `timeout: :infinity` gets
   # DBConnection's 15 s deadline for the whole block (VALIDATE scan included),
   # which crashed the 0.79.0 boot. Read the source: the deadline only bites on
-  # a prod-sized table, so a behavioural test here would pass either way.
+  # a prod-sized table, so a behavioural test here would pass either way. The
+  # checkout lives in the shared helper the migration runs through.
   test "the migration's checkout has no 15 s deadline" do
+    assert File.read!(
+             "priv/repo/migrations/20261111000100_notes_body_columns_unreferenced_expand.exs"
+           ) =~ "LockTimeoutRetry.with_lock_timeout(repo"
+
     {:ok, ast} =
-      "priv/repo/migrations/20261111000100_notes_body_columns_unreferenced_expand.exs"
+      "priv/repo/migrations/lock_timeout_retry.exs"
       |> File.read!()
       |> Code.string_to_quoted()
 

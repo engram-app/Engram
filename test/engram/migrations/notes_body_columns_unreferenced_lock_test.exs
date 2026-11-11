@@ -19,17 +19,24 @@ defmodule Engram.Migrations.NotesBodyColumnsUnreferencedLockTest do
     do:
       String.to_existing_atom("Elixir.Engram.Repo.Migrations.NotesBodyColumnsUnreferencedExpand")
 
-  test "a statement that hits its lock timeout is retried, then succeeds" do
+  defp constraint?(name) do
+    Engram.Repo.query!("SELECT 1 FROM pg_constraint WHERE conname = $1", [name]).num_rows == 1
+  end
+
+  test "a statement that hits its lock timeout is retried, then the migration lands" do
+    migration().run_down(Engram.Repo)
+    assert constraint?("notes_kind_shape_v3_check")
+
     LockTimeoutRepo.refuse(2)
-    assert :ok = migration().with_lock_timeout(LockTimeoutRepo, ["SELECT 1"])
+    assert :ok = migration().run_up(LockTimeoutRepo)
+
     assert LockTimeoutRepo.left() == 0
+    assert constraint?("notes_kind_shape_v4_check")
+    refute constraint?("notes_kind_shape_v3_check")
   end
 
   test "it gives up after its retries" do
     LockTimeoutRepo.refuse(3)
-
-    assert_raise Postgrex.Error, fn ->
-      migration().with_lock_timeout(LockTimeoutRepo, ["SELECT 1"])
-    end
+    assert_raise Postgrex.Error, fn -> migration().run_up(LockTimeoutRepo) end
   end
 end
