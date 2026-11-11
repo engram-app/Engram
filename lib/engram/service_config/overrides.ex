@@ -59,7 +59,9 @@ defmodule Engram.ServiceConfig.Overrides do
     payload_backfill: :boolean,
     payload_backfill_points_per_min: {:integer, 1..100_000},
     rebuild_max_disk_percent: {:integer, 1..100},
-    file_times_backfill: :boolean
+    file_times_backfill: :boolean,
+    # The plugin's `folder_op` wire (#2523 S4), default off: `Engram.Folders.Wire`.
+    folder_ops: :boolean
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})

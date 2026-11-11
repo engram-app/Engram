@@ -329,6 +329,14 @@
             "x-struct": null,
             "x-validate": null
           },
+          "folder_id": {
+            "description": "Notes only, and only while the server's folder_ops switch is on: the id of the note's folder (null at the root, or for a folder with no row yet).",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "id": {
             "description": "Stable note/attachment id — lets a client reconcile its path↔id map.",
             "format": "uuid",
@@ -678,6 +686,15 @@
           "change_seq": {
             "description": "Current per-vault sequence watermark.",
             "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "folders": {
+            "description": "Only while the server's folder_ops switch is on: every live folder. The root has no entry; its children have parent_id null.",
+            "items": {
+              "$ref": "#/components/schemas/FolderNode"
+            },
+            "type": "array",
             "x-struct": null,
             "x-validate": null
           },
@@ -2079,6 +2096,39 @@
         "x-struct": "Elixir.EngramWeb.Schemas.OkFlag",
         "x-validate": null
       },
+      "FolderNode": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "name": {
+            "description": "One path segment.",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "parent_id": {
+            "description": "Null for a child of the root (the root has no row).",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "id",
+          "parent_id",
+          "name"
+        ],
+        "title": "FolderNode",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.FolderNode",
+        "x-validate": null
+      },
       "BatchCreateFoldersResponse": {
         "properties": {
           "folders": {
@@ -2816,6 +2866,15 @@
         "properties": {
           "folder": {
             "$ref": "#/components/schemas/Folder"
+          },
+          "folders": {
+            "description": "Only while the server's folder_ops switch is on: the created folder and every ancestor, root first.",
+            "items": {
+              "$ref": "#/components/schemas/FolderNode"
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
           }
         },
         "required": [

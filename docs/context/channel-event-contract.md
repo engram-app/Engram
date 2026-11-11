@@ -31,6 +31,18 @@ in any shipped client and were removed; a stray frame gets a
 `{"reason": "gone", "use": "crdt channel"}` error reply (catch-all — the
 channel never crashes on unknown frames, same posture as #862's stub).
 
+`folder_op {op: "move"|"create", op_id, folder_id, parent_id, name}` on
+`crdt:` (#2523 S4) exists only while the `folder_ops` runtime switch is on
+(`ServiceConfig.override(:folder_ops, true)`, default off); the join replies
+advertise it as `features.folder_ops`. Off, it gets the catch-all `bad_frame`
+reply like any unknown frame. Both ops ack `{folder_id, seq}`; refusals are
+`conflict`, `cycle`, `not_found`, `invalid_name` (plus `bad_frame`,
+`rate_limited`). Create is find-or-create by (parent, name).
+Owner: `Engram.Folders.Wire`. While on, the `crdt_create` reply also carries
+the note's `folder_id`, and `GET /api/sync/manifest` carries `folders: [{id,
+parent_id, name}]` plus a `folder_id` per note. The `crdt_create` reply and
+`POST /api/folders` also carry `folders`: the folder's whole chain, root first.
+
 ## Server → Client Broadcasts
 
 | Event | Payload | When | Purpose |
@@ -47,6 +59,8 @@ clients ignore it. Attachment events carry it too, from
 `Attachments.broadcast_attachment/5` (upserts, move legs) and
 `broadcast_delete/5` (tombstones).
 | `note_changed` (attachment) | attachment upsert/delete payloads (`attachments.ex`) | After an attachment write | Same topic as notes |
+| `folder_changed` | `{folder_id, parent_id, name, seq, deleted, device_id}` | After a folder rename, move or create from any surface, only while `folder_ops` is on | One event per folder; `device_id` for echo suppression (`Engram.Folders.Wire`) |
+| `note_changed` (folder nudge) | `{event_type: "upsert", kind: "note", path}`, no id/content/hash/seq | With each `folder_changed` | Old plugins (1.36.0 to 1.39.2) answer it with a seq catch-up; `path` is the folder's new path, never ending in `.md`/`.canvas` |
 | `notes.batch` (delete/move) | `{op: "delete"\|"move", ids, target_folder_id?}` | After batch delete / batch move | Batch-op notification |
 | `vault_created` | `{vault_id, ...}` (topic `user:{user_id}`) | A vault is created (`Engram.Vaults.broadcast_vault_created/2`) | FTUX listener — onboarding waits for this alongside `vault_populated` |
 | `vault_populated` | `{vault_id}` (topic `user:{user_id}`) | First note lands in an empty vault | FTUX listener |

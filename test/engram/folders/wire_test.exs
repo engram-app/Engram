@@ -1,0 +1,251 @@
+defmodule Engram.Folders.WireTest do
+  # `folder_changed` plus the old-plugin nudge from every folder surface (REST,
+  # MCP, the shared `Engram.Folders` entry points), and nothing at all while
+  # the `folder_ops` switch is off: prod must never half-enable it.
+  use EngramWeb.ConnCase, async: true
+
+  alias Engram.Folders
+  alias Engram.Folders.Rows
+  alias Engram.MCP.Handlers
+  alias Engram.Repo
+  alias Engram.ServiceConfig
+
+  setup :authed_api_conn
+
+  setup %{user: user, vault: vault} do
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    :ok = EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+    {:ok, _} = Folders.create_markers(user, vault, ["A", "B"])
+    flush_broadcasts()
+    %{user: user}
+  end
+
+  defp on!, do: ServiceConfig.put_override(:folder_ops, true)
+
+  defp id_of(user, vault, path),
+    do: Repo.with_tenant!(user.id, fn -> Rows.ids_by_path(user, vault.id, [path]) end)[path]
+
+  defp flush_broadcasts do
+    receive do
+      %Phoenix.Socket.Broadcast{} -> flush_broadcasts()
+    after
+      0 -> :ok
+    end
+  end
+
+  # Every broadcast that arrived, as {event, payload}.
+  defp broadcasts(acc \\ []) do
+    receive do
+      %Phoenix.Socket.Broadcast{event: e, payload: p} -> broadcasts([{e, p} | acc])
+    after
+      100 -> Enum.reverse(acc)
+    end
+  end
+
+  # The nudge is the `note_changed` form with no id (old plugins answer it with
+  # a seq catch-up); the cascade's per-note events all carry one.
+  defp nudge?({"note_changed", p}), do: not Map.has_key?(p, "id") and not Map.has_key?(p, :id)
+  defp nudge?(_), do: false
+
+  defp folder_changed(events), do: for({"folder_changed", p} <- events, do: p)
+  defp nudges(events), do: events |> Enum.filter(&nudge?/1) |> Enum.map(&elem(&1, 1))
+
+  describe "switch off (the default)" do
+    test "no surface emits folder_changed or the nudge", %{conn: conn, user: user, vault: vault} do
+      conn
+      |> post(~p"/api/folders/rename", %{"old_path" => "A", "new_path" => "A2"})
+      |> json_response(200)
+
+      {:ok, _, _} =
+        Handlers.handle("rename_folder", user, vault, %{"old_folder" => "B", "new_folder" => "B2"})
+
+      {:ok, _} = Folders.create_markers(user, vault, ["C"])
+      {:ok, %{folders: [%{id: c}]}} = Folders.create_markers(user, vault, ["D"])
+      {:ok, _} = Folders.batch_move(user, vault, [c], {:path, "A2"})
+      {:ok, _} = Folders.rename(user, vault, "A2", "A3")
+
+      events = broadcasts()
+      assert events != [], "the ops must still broadcast today's events"
+      assert folder_changed(events) == []
+      assert nudges(events) == []
+    end
+
+    test "the manifest carries no folders and no folder_id", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "A/n.md", "content" => "x"},
+          actor: "api"
+        )
+
+      body = conn |> get(~p"/api/sync/manifest") |> json_response(200)
+
+      refute Map.has_key?(body, "folders")
+      assert [note] = body["notes"]
+      refute Map.has_key?(note, "folder_id")
+    end
+
+    test "POST /folders carries no folders chain", %{conn: conn} do
+      body = conn |> post(~p"/api/folders", %{"folder" => "X/Y"}) |> json_response(201)
+      assert body == %{"folder" => %{"name" => "X/Y", "count" => 0}}
+    end
+
+    test "rename reports no seq", %{user: user, vault: vault} do
+      assert {:ok, counts} = Folders.rename(user, vault, "A", "A2")
+      refute Map.get(counts, :seq)
+    end
+  end
+
+  describe "switch on" do
+    setup do
+      on!()
+      :ok
+    end
+
+    test "a REST rename emits ONE folder_changed and ONE nudge of the addendum's shape",
+         %{conn: conn, user: user, vault: vault} do
+      a = id_of(user, vault, "A")
+      b = id_of(user, vault, "B")
+
+      conn
+      |> post(~p"/api/folders/rename", %{"old_path" => "A", "new_path" => "B/A"})
+      |> json_response(200)
+
+      events = broadcasts()
+      seq = Engram.Vaults.current_seq(user.id, vault.id)
+
+      assert [changed] = folder_changed(events)
+
+      assert Map.delete(changed, :traceparent) == %{
+               folder_id: a,
+               parent_id: b,
+               name: "A",
+               seq: seq,
+               deleted: false,
+               device_id: nil
+             }
+
+      assert [nudge] = nudges(events)
+      assert Map.delete(nudge, :traceparent) == %{event_type: "upsert", kind: "note", path: "B/A"}
+    end
+
+    test "an MCP rename emits them too", %{user: user, vault: vault} do
+      {:ok, _, _} =
+        Handlers.handle("rename_folder", user, vault, %{"old_folder" => "A", "new_folder" => "A2"})
+
+      events = broadcasts()
+      assert [%{name: "A2", parent_id: nil}] = folder_changed(events)
+      assert [%{path: "A2"}] = nudges(events)
+    end
+
+    test "a create and a batch move emit one each per folder", %{user: user, vault: vault} do
+      {:ok, %{folders: [%{id: c}]}} = Folders.create_markers(user, vault, ["C"])
+      assert [%{name: "C", parent_id: nil}] = folder_changed(broadcasts())
+
+      {:ok, _} = Folders.batch_move(user, vault, [c], {:path, "A"})
+      events = broadcasts()
+      assert [%{name: "C", parent_id: parent}] = folder_changed(events)
+      assert parent == id_of(user, vault, "A")
+      assert [%{path: "A/C"}] = nudges(events)
+    end
+
+    test "the manifest lists every folder and each note's folder_id",
+         %{conn: conn, user: user, vault: vault} do
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "A/Sub/n.md", "content" => "x"},
+          actor: "api"
+        )
+
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "r.md", "content" => "x"}, actor: "api")
+
+      a = id_of(user, vault, "A")
+      sub = id_of(user, vault, "A/Sub")
+
+      body = conn |> get(~p"/api/sync/manifest") |> json_response(200)
+
+      assert Enum.sort_by(body["folders"], & &1["name"]) == [
+               %{"id" => a, "parent_id" => nil, "name" => "A"},
+               %{"id" => id_of(user, vault, "B"), "parent_id" => nil, "name" => "B"},
+               %{"id" => sub, "parent_id" => a, "name" => "Sub"}
+             ]
+
+      by_path = Map.new(body["notes"], &{&1["path"], &1["folder_id"]})
+      assert by_path == %{"A/Sub/n.md" => sub, "r.md" => nil}
+    end
+
+    test "POST /folders returns the folder chain, root first", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      body = conn |> post(~p"/api/folders", %{"folder" => "A/New/Leaf"}) |> json_response(201)
+      a = id_of(user, vault, "A")
+      new = id_of(user, vault, "A/New")
+
+      assert body["folders"] == [
+               %{"id" => a, "parent_id" => nil, "name" => "A"},
+               %{"id" => new, "parent_id" => a, "name" => "New"},
+               %{"id" => id_of(user, vault, "A/New/Leaf"), "parent_id" => new, "name" => "Leaf"}
+             ]
+    end
+
+    # M1: the wire resolves ids to paths before the folder lock, so a move can
+    # race one that empties the path. `expect:` re-checks the ids under the
+    # lock; these drive the gap by resolving first, then changing the paths.
+    test "a move whose folder left its path in the gap is refused, nothing moves",
+         %{user: user, vault: vault} do
+      x = id_of(user, vault, "A")
+      b = id_of(user, vault, "B")
+      {:ok, _} = Folders.rename(user, vault, "A", "C")
+      {:ok, _} = Folders.create_markers(user, vault, ["A"])
+      y = id_of(user, vault, "A")
+
+      assert {:error, :not_found} = Folders.rename(user, vault, "A", "B/A", expect: {x, b})
+      assert id_of(user, vault, "A") == y
+      assert id_of(user, vault, "C") == x
+    end
+
+    test "a move whose parent left its path in the gap is refused, nothing moves",
+         %{user: user, vault: vault} do
+      a = id_of(user, vault, "A")
+      b = id_of(user, vault, "B")
+      {:ok, _} = Folders.rename(user, vault, "B", "B2")
+      {:ok, _} = Folders.create_markers(user, vault, ["B"])
+
+      assert {:error, :not_found} = Folders.rename(user, vault, "A", "B/A", expect: {a, b})
+      assert id_of(user, vault, "A") == a
+    end
+
+    test "control: a move whose ids still match goes through", %{user: user, vault: vault} do
+      a = id_of(user, vault, "A")
+      b = id_of(user, vault, "B")
+
+      assert {:ok, %{seq: seq}} = Folders.rename(user, vault, "A", "B/A", expect: {a, b})
+      assert is_integer(seq)
+      assert id_of(user, vault, "B/A") == a
+    end
+
+    test "rename returns the op's seq", %{user: user, vault: vault} do
+      assert {:ok, %{seq: seq}} = Folders.rename(user, vault, "A", "A2")
+      assert seq == Engram.Vaults.current_seq(user.id, vault.id)
+    end
+
+    test "a nudge path never ends in .md or .canvas", %{user: user, vault: vault} do
+      {:ok, _} = Folders.create_markers(user, vault, ["X.md", "Y.canvas", "Z.MD"])
+      created = nudges(broadcasts())
+      {:ok, _} = Folders.rename(user, vault, "X.md", "B/X2.md")
+      moved = nudges(broadcasts())
+
+      assert length(created) == 3
+      assert [_] = moved
+
+      for %{path: path} <- created ++ moved do
+        assert path != ""
+        refute path |> String.downcase() |> String.ends_with?([".md", ".canvas"])
+      end
+    end
+  end
+end

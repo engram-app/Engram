@@ -3,6 +3,7 @@ defmodule EngramWeb.FoldersController do
   use OpenApiSpex.ControllerSpecs
 
   alias Engram.Folders
+  alias Engram.Folders.Wire
   alias Engram.Notes
   alias EngramWeb.BatchOps
   alias EngramWeb.Plugs.Halt
@@ -147,11 +148,16 @@ defmodule EngramWeb.FoldersController do
   )
 
   def create(conn, %{"folder" => folder}) when is_binary(folder) do
-    case Folders.create_markers(conn.assigns.current_user, conn.assigns.current_vault, [folder]) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    case Folders.create_markers(user, vault, [folder]) do
       {:ok, %{folders: [%{name: name}]}} ->
-        conn
-        |> put_status(:created)
-        |> json(%{folder: %{name: name, count: 0}})
+        # `folders`: the folder-op wire's chain, only while its switch is on.
+        body =
+          Map.merge(%{folder: %{name: name, count: 0}}, Wire.created_reply(user, vault, name))
+
+        conn |> put_status(:created) |> json(body)
 
       {:ok, %{rejected: [_]}} ->
         conn
