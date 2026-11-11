@@ -1,15 +1,24 @@
 defmodule Engram.Workers.CimdRefresh do
   @moduledoc """
-  Daily refresh of the stored CIMD client document, and (`kind: "jwks"`,
-  every 5 min) of the JWKS, of every ACTIVE CIMD client. See `perform/1`.
+  Daily refresh of the stored CIMD client document of every client holding a
+  LIVE GRANT, and (`kind: "jwks"`, every 5 min) of the JWKS of every RECENTLY
+  USED one. See `perform/1`.
 
-  Active = a live (unrevoked) refresh token used in the last 30 days
-  (`active_cimd_clients/0`, shared by both sweeps). A client nobody uses (a
-  dead test registration whose host is gone) is not retried daily forever,
-  which also keeps its failure logs from tripping the connector-refused alert.
-  Skipped clients are not broken: the authorize path still calls
-  `Cimd.ensure_client/1`, so a skipped client refreshes on demand the next time
-  someone authorizes.
+  Live grant = at least one refresh token that is unrevoked and unexpired,
+  whenever it was last used (`live_grant_clients/1`, shared by both sweeps). A
+  dormant grant must keep its document fresh: the refresh-token exchange never
+  calls `ensure_client/1` and trusts the stored row (#1642). The JWKS sweep
+  layers a 30-day `last_used_at` rule on top, because a dormant client's JWKS
+  is fetched on demand in the token path.
+
+  A client with no live grant (a dead test registration whose host is gone) is
+  not retried daily forever, which also keeps its failure logs from tripping
+  the connector-refused alert. Nothing deletes or updates `oauth_clients`
+  here; the sweep only stops REFETCHING. A skipped client refreshes on demand:
+  the authorize path calls `Cimd.ensure_client/1`.
+
+  `total=` in the sweep log lines counts the clients swept (live grants for the
+  document sweep, recently used for JWKS), not every stored CIMD client.
 
   `Engram.OAuth.Cimd.ensure_client/1` is called from exactly one place,
   `Engram.OAuth.fetch_client/1`, which only the authorize path reaches. So
@@ -78,11 +87,11 @@ defmodule Engram.Workers.CimdRefresh do
   require Logger
 
   # The JWKS sweep: vendor fetches in flight at once and the per-fetch ceiling
-  # (the fetcher's own 3 s budget plus DNS and the persist). `@active_days` is
-  # how recently a client must have made a token request to be swept, by
-  # either sweep.
+  # (the fetcher's own 3 s budget plus DNS and the persist).
   @jwks_concurrency 4
   @jwks_fetch_timeout_ms 15_000
+
+  # How recently a client must have made a token request to get its JWKS swept.
   @active_days 30
 
   @impl Oban.Worker
@@ -127,46 +136,43 @@ defmodule Engram.Workers.CimdRefresh do
   # this sweep runs with no user in context at all.
   defp cimd_rows do
     Repo.all(
-      from(c in active_cimd_clients(), select: {c.cimd_url, c.cimd_fetched_at}),
+      from(c in live_grant_clients(), select: {c.cimd_url, c.cimd_fetched_at}),
       skip_tenant_check: true
     )
   end
 
-  # The one definition of "worth a vendor fetch", used by both sweeps: a CIMD
-  # client with a LIVE (unrevoked) grant used for a token request in the last
-  # `@active_days`. EXISTS is served by
-  # `oauth_refresh_tokens_client_id_last_used_at_index`, not a join that
-  # scanned every refresh token (second review #13). Binding is `:client`.
-  defp active_cimd_clients do
-    cutoff = DateTime.add(DateTime.utc_now(), -@active_days * 86_400, :second)
+  # The one definition of "has a live grant", used by both sweeps: a CIMD
+  # client with a refresh token (any user) that is unrevoked and unexpired.
+  # With `last_used_after`, that token must also have been used since then.
+  # ONE EXISTS, probed per CIMD client through
+  # `oauth_refresh_tokens_client_id_last_used_at_index` on `client_id`, the
+  # rest rechecked on the heap (a few rows per client). Binding is `:client`.
+  defp live_grant_clients(last_used_after \\ nil) do
+    now = DateTime.utc_now()
 
-    from(c in Client,
-      as: :client,
-      where:
-        not is_nil(c.cimd_url) and
-          exists(
-            from(rt in RefreshToken,
-              where:
-                rt.client_id == parent_as(:client).client_id and is_nil(rt.revoked_at) and
-                  rt.last_used_at > ^cutoff,
-              select: 1
-            )
-          )
-    )
+    live =
+      from(rt in RefreshToken,
+        where:
+          rt.client_id == parent_as(:client).client_id and is_nil(rt.revoked_at) and
+            rt.expires_at > ^now,
+        select: 1
+      )
+
+    live =
+      if last_used_after, do: where(live, [rt], rt.last_used_at > ^last_used_after), else: live
+
+    from(c in Client, as: :client, where: not is_nil(c.cimd_url) and exists(live))
   end
 
-  # #1974: the JWKS sweep. Every 5 min, so the token path finds a fresh
-  # persisted key set instead of fetching. One fetch per distinct URI; the
-  # result lands on every row naming it (`JwksCache.refresh_background/1`). A
-  # failure leaves the last good keys in place.
-  #
-  # Active clients only (`active_cimd_clients/0`), most recently used first, so
-  # a burst of registrations that never connect, or grants since disconnected,
-  # cost no vendor fetches. One that comes back fetches on demand in the token
+  # Recently used clients only (live grant used in the last `@active_days`),
+  # most recently used first, so a burst of registrations that never connect,
+  # or grants since disconnected, cost no vendor fetches. One that comes back fetches on demand in the token
   # path. Clients sharing a jwks_uri collapse to one URI, ordered by its most
   # recent use.
   defp jwks_uris do
-    from(c in active_cimd_clients(),
+    cutoff = DateTime.add(DateTime.utc_now(), -@active_days * 86_400, :second)
+
+    from(c in live_grant_clients(cutoff),
       where: not is_nil(c.jwks_uri),
       select: {
         c.jwks_uri,

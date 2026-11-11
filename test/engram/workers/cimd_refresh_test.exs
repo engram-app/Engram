@@ -143,19 +143,21 @@ defmodule Engram.Workers.CimdRefreshTest do
       assert tally == %{}
     end
 
-    # Same "live grant used in the last 30 days" rule as the JWKS sweep. Mox is
-    # strict: an unexpected fetch of a skipped client fails the test. Skipped
-    # clients still refresh on demand via the authorize path.
-    test "skips clients with no token, a revoked token, or a token idle 31 days" do
+    # A "live grant" = a refresh token that is unrevoked and unexpired, however
+    # long ago it was used (tokens live 90 days and the refresh exchange trusts
+    # the stored document, #1642). Mox is strict: an unexpected fetch of a
+    # skipped client fails the test. Skipped clients refresh on demand via the
+    # authorize path.
+    test "skips clients with no token, a revoked token, or only an expired token" do
       cimd_client(cimd_url: "https://never.example/c", cimd_fetched_at: aged(2))
 
       [cimd_url: "https://revoked.example/c", cimd_fetched_at: aged(2)]
       |> cimd_client()
       |> used(1, revoked_at: DateTime.utc_now(:second))
 
-      [cimd_url: "https://idle.example/c", cimd_fetched_at: aged(2)]
+      [cimd_url: "https://expired.example/c", cimd_fetched_at: aged(2)]
       |> cimd_client()
-      |> used(31)
+      |> used(95, expires_at: DateTime.truncate(aged(5), :second))
 
       assert {:ok, tally} = perform_job(CimdRefresh, %{})
       assert tally == %{}
@@ -168,6 +170,36 @@ defmodule Engram.Workers.CimdRefreshTest do
 
       assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{})
       assert DateTime.compare(reload(client).cimd_fetched_at, client.cimd_fetched_at) == :gt
+    end
+
+    # THE MAJOR REVIEW FINDING: a dormant but live 90-day grant still needs a
+    # fresh document; its next refresh-token exchange never refetches.
+    test "fetches a client whose live token was last used 60 days ago" do
+      cimd_client(cimd_fetched_at: aged(2)) |> used(60)
+
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
+
+      assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{})
+    end
+
+    test "fetches a client whose live token was never used" do
+      cimd_client(cimd_fetched_at: aged(2)) |> used(0, last_used_at: nil)
+
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
+
+      assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{})
+    end
+
+    # Rotation: the old token is consumed (revoked_at stays nil), the new one
+    # is live. Either alone keeps the client in the sweep.
+    test "fetches a client with a consumed token plus its live successor" do
+      client = cimd_client(cimd_fetched_at: aged(2))
+      used(client, 80, consumed_at: DateTime.utc_now(:second))
+      used(client, 0)
+
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
+
+      assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{})
     end
 
     test "is a no-op with no CIMD clients at all" do
@@ -306,6 +338,15 @@ defmodule Engram.Workers.CimdRefreshTest do
         end)
 
       assert log =~ "mcp_jwks_refresh_sweep"
+    end
+
+    # The JWKS sweep keeps its own 30-day rule: a live grant last used 60 days
+    # ago is a document-sweep client but NOT a JWKS one (fetched on demand).
+    test "skips a client whose live token was last used 60 days ago" do
+      [jwks_uri: "https://dormant.example/jwks.json"] |> cimd_client() |> used(60)
+
+      assert {:ok, tally} = perform_job(CimdRefresh, %{"kind" => "jwks"})
+      assert tally == %{}
     end
 
     # A disconnected grant is not a client anyone is using.
