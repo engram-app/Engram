@@ -82,8 +82,8 @@ defmodule Engram.NotesFanoutBoundsTest do
     end
 
     # The fan-out is an outbox: it commits with the rows it covers, so a
-    # crash between the commit and a separate enqueue cannot lose a reindex.
-    test "the repath and link-rewrite jobs insert inside the rename transaction", ctx do
+    # crash between the commit and a separate enqueue cannot lose a rewrite.
+    test "the link-rewrite jobs insert inside the rename transaction", ctx do
       %{user: user, vault: vault} = ctx
       seed(user, vault, "Docs")
 
@@ -95,7 +95,7 @@ defmodule Engram.NotesFanoutBoundsTest do
       [rename_txn] =
         Enum.filter(txns, fn stmts -> Enum.any?(stmts, &(&1 =~ "SET change_seq")) end)
 
-      assert Enum.count(rename_txn, &(&1 =~ ~r/^INSERT INTO .*oban_jobs/)) >= 2
+      assert Enum.any?(rename_txn, &(&1 =~ ~r/^INSERT INTO .*oban_jobs/))
     end
 
     # Folders.rename/4 runs the cascade inside its own transaction, which holds
@@ -126,7 +126,8 @@ defmodule Engram.NotesFanoutBoundsTest do
                      1_000
     end
 
-    test "enqueues repath + link-rewrite jobs in two bulk inserts, one job each per note", ctx do
+    test "enqueues the link-rewrite jobs in one bulk insert, one per note; no index job",
+         ctx do
       %{user: user, vault: vault} = ctx
       notes = seed(user, vault, "Docs")
       ids = notes |> Enum.map(& &1.id) |> Enum.sort()
@@ -134,90 +135,13 @@ defmodule Engram.NotesFanoutBoundsTest do
       {{:ok, _}, inserts} =
         ObanInsertCount.count(fn -> Notes.rename_folder(user, vault, "Docs", "Archive") end)
 
-      # Per-note inserts would be 2 * @n.
-      assert inserts <= 2
-      assert job_note_ids(RepathNoteIndex) == ids
+      # Per-note inserts would be @n.
+      assert inserts <= 1
 
       rewrites = all_enqueued(worker: RewriteNoteLinks)
       assert rewrites |> Enum.map(& &1.args["target_id"]) |> Enum.sort() == ids
-
-      # Debounce kept: repath is scheduled a few seconds out, hmac-only args.
-      for job <- all_enqueued(worker: RepathNoteIndex) do
-        assert DateTime.compare(job.scheduled_at, DateTime.utc_now()) == :gt
-        assert is_binary(job.args["old_path_hmac"])
-      end
-    end
-
-    test "a note with a pending repath job is not queued a second one", ctx do
-      %{user: user, vault: vault} = ctx
-      seed(user, vault, "Docs")
-
-      {:ok, _} = Notes.rename_folder(user, vault, "Docs", "Archive")
-      {:ok, _} = Notes.rename_folder(user, vault, "Archive", "Docs")
-
-      # The first job reads the note's current path when it runs, so it covers
-      # the second rename (this is what the worker's `unique` did).
-      assert length(all_enqueued(worker: RepathNoteIndex)) == @n
-      # RewriteNoteLinks has no `unique`: one per real move, both renames.
-      assert length(all_enqueued(worker: RewriteNoteLinks)) == 2 * @n
-    end
-  end
-
-  describe "rename cascade resilience" do
-    test "a failing pending-job lookup queues every note and never fails the rename", ctx do
-      %{user: user, vault: vault} = ctx
-      seed(user, vault, "Docs")
-      {:ok, _} = Notes.rename_folder(user, vault, "Docs", "Archive")
-      assert length(all_enqueued(worker: RepathNoteIndex)) == @n
-
-      Application.put_env(:engram, :enqueue_reject_pending, fn _, _, _ -> raise "pool gone" end)
-      on_exit(fn -> Application.delete_env(:engram, :enqueue_reject_pending) end)
-
-      test = self()
-      handler = {__MODULE__, make_ref()}
-
-      :telemetry.attach(
-        handler,
-        [:engram, :notes, :enqueue, :lookup_failed],
-        fn _, m, meta, _ -> send(test, {:lookup_failed, m, meta}) end,
-        nil
-      )
-
-      on_exit(fn -> :telemetry.detach(handler) end)
-
-      log =
-        ExUnit.CaptureLog.capture_log(fn ->
-          assert {:ok, _} = Notes.rename_folder(user, vault, "Archive", "Docs")
-        end)
-
-      # The number of notes that fell back, so a count-keyed alert fires.
-      assert_received {:lookup_failed, %{count: @n}, %{worker: "repath_note_index"}}
-
-      assert log =~ "pending lookup failed"
-      # Fell back to queueing every note: a duplicate is harmless, a lost job is not.
-      assert length(all_enqueued(worker: RepathNoteIndex)) == 2 * @n
-    end
-
-    test "an executing repath job does not suppress a new one", ctx do
-      %{user: user, vault: vault} = ctx
-      [first | _] = seed(user, vault, "Docs", 2)
-
-      {:ok, running} =
-        Oban.insert(RepathNoteIndex.new_debounced(first.id, user.id, old_path_hmac: "stale"))
-
-      {1, _} =
-        Repo.update_all(
-          from(j in Oban.Job, where: j.id == ^running.id),
-          [set: [state: "executing"]],
-          skip_tenant_check: true
-        )
-
-      {:ok, _} = Notes.rename_folder(user, vault, "Docs", "Archive")
-
-      mine = Enum.filter(all_enqueued(worker: RepathNoteIndex), &(&1.args["note_id"] == first.id))
-      assert length(mine) == 1
-      assert [%{args: %{"old_path_hmac" => hmac}}] = mine
-      assert hmac != "stale"
+      # R3a: a move makes no Qdrant write.
+      assert all_enqueued(worker: RepathNoteIndex) == []
     end
   end
 

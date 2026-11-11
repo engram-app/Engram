@@ -2,8 +2,9 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   @moduledoc """
   Oban worker: rebuild one note's keyword (sparse) vectors in place via
   `Indexing.resparse_note/2`. No embedder call and no Voyage spend. Enqueued
-  per note by `ReconcileEmbeddings` after a tokenizer change, and by
-  `RepathNoteIndex` after a rename moves a note's points.
+  per note by `ReconcileEmbeddings` after a tokenizer change or a DEK flip.
+  Not after a rename (R3a: a rename makes no Qdrant write; the stale path
+  prefix stays until the once-only rebuild).
 
   Reads the same decrypted `notes.content` facade the embed pipeline indexed
   from, so its chunks fingerprint-match the stored points.
@@ -68,10 +69,7 @@ defmodule Engram.Workers.RefreshKeywordVectors do
 
   @doc """
   The job for one note, at backfill priority (`EmbedNote.backfill_priority/0`).
-  Used by the keyword sweep and after a rename moves a note's points
-  (`RepathNoteIndex`): the keyword vector encodes the context prefix
-  (folder > title), and a rename leaves `keyword_version` as it was, so no
-  sweep would ever pick the note up.
+  Used by the keyword sweep.
   """
   def new_for_note(note_id, user_id),
     do:

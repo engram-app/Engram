@@ -513,12 +513,12 @@ defmodule Engram.Vector.QdrantLayoutTest do
       refute Map.has_key?(diff, "hnsw_config")
     end
 
+    # R3a: the tenant and the path only (the belts still match by it).
     test "payload indexes below 1.19.2: bare legacy schemas, then the v5 set" do
-      legacy = ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac)
+      legacy = ~w(user_id vault_id path_hmac)
 
       want =
         Enum.map(legacy, &{&1, "keyword"}) ++
-          [{"fm_timestamp", "integer"}, {"fm_created", "integer"}] ++
           Engram.Vector.PayloadKeys.index_fields()
 
       for v <- [@v1182, Version.parse!("1.19.1"), nil] do
@@ -529,8 +529,7 @@ defmodule Engram.Vector.QdrantLayoutTest do
     # A v3 (legacy-off) collection must not carry the legacy indexes: no
     # filter reads them there, and each costs disk on every point.
     test "legacy filters off: no legacy index; on: all of them, never note_id" do
-      legacy =
-        ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac fm_timestamp fm_created)
+      legacy = ~w(user_id vault_id path_hmac)
 
       for v <- [@v1182, @v1192, nil] do
         off = for {f, _} <- QdrantLayout.payload_indexes(v, false), do: f
@@ -553,18 +552,8 @@ defmodule Engram.Vector.QdrantLayoutTest do
       # the pass runs; everything else builds no extra edges.
       assert indexes["user_id"] == %{"type" => "keyword", "on_disk" => true}
 
-      for f <- ~w(vault_id path_hmac type_hmac folder_hmac tags_hmac) do
+      for f <- ~w(vault_id path_hmac) do
         assert indexes[f] == %{"type" => "keyword", "on_disk" => true, "enable_hnsw" => false}
-      end
-
-      for f <- ~w(fm_timestamp fm_created) do
-        assert indexes[f] == %{
-                 "type" => "integer",
-                 "lookup" => false,
-                 "range" => true,
-                 "on_disk" => true,
-                 "enable_hnsw" => false
-               }
       end
 
       assert indexes["u"] == %{"type" => "uuid", "is_tenant" => true, "on_disk" => true}
@@ -585,7 +574,9 @@ defmodule Engram.Vector.QdrantLayoutTest do
         assert Enum.all?(want, fn {k, v} -> have[k] == v end), "#{field}: #{inspect(have)}"
       end
 
-      assert map_size(schema) == length(QdrantLayout.payload_indexes(@v1192, true))
+      # The fixture holds the pre-R3a indexes too: an existing index is never
+      # dropped, so a live collection keeps them until R3b.
+      assert map_size(schema) >= length(QdrantLayout.payload_indexes(@v1192, true))
     end
   end
 

@@ -605,8 +605,6 @@ defmodule Engram.NotesTest do
 
     test "#738: note_changed broadcast from rename is JSON-safe for a note corrupt at rest",
          %{user: user, vault: vault} do
-      import Ecto.Query, only: [from: 2]
-
       # Legacy row: written before the #740 write-time scrub, so its content
       # decrypts to invalid UTF-8. Rename only changes the path, then re-broadcasts
       # the note's content over the sync Channel — exercising the read-boundary
@@ -2970,92 +2968,32 @@ defmodule Engram.NotesTest do
   end
 
   # ---------------------------------------------------------------------------
-  # #746 — rename must repath Qdrant points, not re-embed through Voyage
+  # A rename or move makes ZERO Qdrant writes (R3a): a point's payload is the
+  # note's identity `{u, v, n}`, which a rename does not change, and the
+  # keyword vectors' stale path prefix is accepted until the once-only rebuild.
+  # No re-embed either (#746).
   # ---------------------------------------------------------------------------
 
-  describe "rename does not re-embed (#746)" do
-    test "single-note rename enqueues RepathNoteIndex, not EmbedNote, and keeps embed_hash",
-         %{user: user, vault: vault} do
+  # The zero-call invariant (note/folder rename and move, plus every job they
+  # queue) lives in `Engram.RenameZeroIndexWritesTest`.
+  describe "rename index jobs" do
+    # The tombstone's points were deleted with it, so the restored note
+    # embeds fresh; still no repath.
+    test "crdt_create resurrect-rename embeds, never repaths", %{user: user, vault: vault} do
       note =
-        Engram.Fixtures.insert_note!(user, vault, %{path: "A/Note.md", content: "# x\n\nbody"})
+        Engram.Fixtures.insert_note!(user, vault, %{path: "A/Note1.md", content: "# x\n\nbody"})
 
-      import Ecto.Query
+      :ok = Engram.Notes.delete_note(user, vault, "A/Note1.md")
 
-      from(n in Engram.Notes.Note, where: n.id == ^note.id)
-      |> Engram.Repo.update_all([set: [embed_hash: note.content_hash]], skip_tenant_check: true)
-
-      assert {:ok, _} = Engram.Notes.rename_note(user, vault, "A/Note.md", "B/Note.md")
-
-      assert_enqueued(worker: Engram.Workers.RepathNoteIndex, args: %{note_id: note.id})
-      refute_enqueued(worker: Engram.Workers.EmbedNote)
-
-      reloaded = Engram.Fixtures.raw_note!(note.id)
-      assert reloaded.embed_hash == note.content_hash
-    end
-
-    test "folder rename enqueues RepathNoteIndex for each note, not EmbedNote",
-         %{user: user, vault: vault} do
-      note =
-        Engram.Fixtures.insert_note!(user, vault, %{path: "Old/Note.md", content: "# x\n\nbody"})
-
-      import Ecto.Query
-
-      from(n in Engram.Notes.Note, where: n.id == ^note.id)
-      |> Engram.Repo.update_all([set: [embed_hash: note.content_hash]], skip_tenant_check: true)
-
-      assert {:ok, _} = Engram.Notes.rename_folder(user, vault, "Old", "New")
-
-      assert_enqueued(worker: Engram.Workers.RepathNoteIndex, args: %{note_id: note.id})
-      refute_enqueued(worker: Engram.Workers.EmbedNote)
-
-      reloaded = Engram.Fixtures.raw_note!(note.id)
-      assert reloaded.embed_hash == note.content_hash
-    end
-
-    # #1612 — the web app renames/moves every note through crdt_create, so the
-    # live-relocate leg is the PRIMARY rename path and must repath too.
-    test "crdt_create live relocate enqueues RepathNoteIndex under the old path hmac",
-         %{user: user, vault: vault} do
-      note =
-        Engram.Fixtures.insert_note!(user, vault, %{path: "A/Note.md", content: "# x\n\nbody"})
-
-      assert {:ok, moved} = Engram.Notes.genesis_crdt_note(user, vault, note.id, "B/Note.md")
-      assert moved.path == "B/Note.md"
-
-      assert_enqueued(
-        worker: Engram.Workers.RepathNoteIndex,
-        args: %{note_id: note.id, old_path_hmac: path_hmac_b64(user, "A/Note.md")}
-      )
-    end
-
-    test "crdt_create resurrect-rename enqueues RepathNoteIndex under the tombstone path hmac",
-         %{user: user, vault: vault} do
-      note =
-        Engram.Fixtures.insert_note!(user, vault, %{path: "A/Note.md", content: "# x\n\nbody"})
-
-      :ok = Engram.Notes.delete_note(user, vault, "A/Note.md")
-
-      assert {:ok, _} = Engram.Notes.genesis_crdt_note(user, vault, note.id, "B/Note.md")
-
-      assert_enqueued(
-        worker: Engram.Workers.RepathNoteIndex,
-        args: %{note_id: note.id, old_path_hmac: path_hmac_b64(user, "A/Note.md")}
-      )
-    end
-
-    test "crdt_create at the note's own path does not enqueue RepathNoteIndex",
-         %{user: user, vault: vault} do
-      note =
-        Engram.Fixtures.insert_note!(user, vault, %{path: "A/Note.md", content: "# x\n\nbody"})
-
-      assert {:ok, _} = Engram.Notes.genesis_crdt_note(user, vault, note.id, "A/Note.md")
+      assert {:ok, _} = Engram.Notes.genesis_crdt_note(user, vault, note.id, "B/Note1.md")
 
       refute_enqueued(worker: Engram.Workers.RepathNoteIndex)
-    end
+      refute_enqueued(worker: Engram.Workers.RefreshKeywordVectors)
 
-    defp path_hmac_b64(user, path) do
-      {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
-      filter_key |> Engram.Crypto.hmac_field(path) |> Base.encode64()
+      # Exactly one embed, from the restore's own outbox (`move_note`'s
+      # NoteCommitted), not a second one from the move.
+      Oban.drain_queue(queue: :events)
+      assert [_] = all_enqueued(worker: Engram.Workers.EmbedNote, args: %{note_id: note.id})
     end
   end
 

@@ -410,10 +410,10 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert Engram.Fixtures.raw_note!(note.id).keyword_version == keyword
     end
 
-    # #2216 L1: a heal request (a NULL-clear by payload drift, a cluster
-    # diff or a DEK rotation) that lands while a pass is running survives
-    # the pass's stamp, so the cheap heal still runs.
-    test "a NULL-clear landing mid-pass is not overwritten by the stamp", ctx do
+    # R3a: the payload stamp is the identity hash, right for every writer, so
+    # a NULL-clear landing mid-pass is simply re-stamped; the version stamps
+    # the clear also cleared stay cleared.
+    test "a NULL-clear landing mid-pass ends with the identity stamp", ctx do
       note = sectioned_note(ctx, "The first section is unchanged.")
       index_counting(ctx.bypass, note)
       edit_section(ctx, "The first section was edited.")
@@ -427,8 +427,6 @@ defmodule Engram.Workers.EmbedNoteTest do
         {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
       end)
 
-      # Loaded with a stale payload stamp, so the pass rewrites it and the
-      # clear is a change it must keep (review L1).
       from(n in Note, where: n.id == ^note.id)
       |> Repo.update_all([set: [payload_hash: <<1>>]], skip_tenant_check: true)
 
@@ -438,7 +436,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       row = Engram.Fixtures.raw_note!(note.id)
       assert row.embed_hash == row.content_hash
       assert {row.chunker_version, row.keyword_version} == {nil, nil}
-      assert row.payload_hash == nil
+      assert row.payload_hash == Engram.Indexing.identity_hash(row)
     end
 
     test "a reused pass on a note at the target stamps the target", ctx do
@@ -834,15 +832,15 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      # The worker indexed the decrypted note: the v5 payloads carry its
-      # HMAC-derived filter ids and no text or title at all, plain or sealed.
+      # The worker indexed the decrypted note: the payload is its identity
+      # (`u`, `v`, `n`, R3a), no text or title at all, plain or sealed.
       assert_received {:upsert_body, body}
       points = body["points"]
       assert points != []
 
       Enum.each(points, fn p ->
         payload = p["payload"]
-        assert Map.has_key?(payload, "p")
+        assert Map.keys(payload) |> Enum.sort() == ~w(n u v)
         # Every upserted point names its note row (R2, Engram#2263).
         assert payload["n"] == String.replace(note.id, "-", "")
         refute Enum.any?(~w(text text_nonce title title_nonce), &Map.has_key?(payload, &1))

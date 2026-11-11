@@ -31,10 +31,16 @@ defmodule Engram.QdrantStub do
   A green, caught-up collection (`GET /collections/{col}` and its
   `/optimizations`), so `Engram.Rebuild.qdrant_pace/1` lets a paced worker
   (`RefreshKeywordVectors`) run. Route stubs win over a test's `:any` stub.
+  `payload_schema:` (a 0-arity fun) adds the collection's `payload_schema`,
+  read on every call (the `n` index guard of `NotePayloadStamps`).
   """
-  def stub_healthy(bypass, col \\ "engram_notes") do
+  def stub_healthy(bypass, col \\ "engram_notes", opts \\ []) do
+    schema = Keyword.get(opts, :payload_schema)
+
     Bypass.stub(bypass, "GET", "/collections/#{col}", fn conn ->
-      json(conn, %{"result" => %{"status" => "green", "optimizer_status" => "ok"}})
+      info = %{"status" => "green", "optimizer_status" => "ok"}
+      info = if schema, do: Map.put(info, "payload_schema", schema.()), else: info
+      json(conn, %{"result" => info})
     end)
 
     Bypass.stub(bypass, "GET", "/collections/#{col}/optimizations", fn conn ->

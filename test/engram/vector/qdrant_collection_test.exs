@@ -119,7 +119,7 @@ defmodule Engram.Vector.QdrantCollectionTest do
       assert create["optimizers_config"] == %{"max_optimization_threads" => 1}
       assert create["vectors"]["dense"]["datatype"] == "float16"
       assert indexes["user_id"] == "keyword"
-      assert indexes["fm_timestamp"] == "integer"
+      refute Map.has_key?(indexes, "fm_timestamp")
       assert indexes["u"] == %{"type" => "uuid", "on_disk" => true}
       refute Map.has_key?(indexes, "note_id")
     end
@@ -127,13 +127,12 @@ defmodule Engram.Vector.QdrantCollectionTest do
 
   # All tenant-scoped filters target payload fields that Qdrant Cloud
   # strict-mode requires an index for. ensure_collection must create them
-  # (idempotently) or every filtered op 400s on Cloud. See #626. `type_hmac`
-  # is the OKF frontmatter blind index (keyword); `fm_timestamp`/`fm_created`
-  # are the OKF frontmatter dates (integer, range-filterable). `folder_hmac`
-  # and `tags_hmac` are the folder/tag search filters (#1609).
-  # `note_id` is gone: no read path filters on it (v5, spec 3.3b).
-  @indexed_fields ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac)
-  @integer_indexed_fields ~w(fm_timestamp fm_created)
+  # (idempotently) or every filtered op 400s on Cloud. See #626. Since R3a
+  # the legacy set is the tenant and the path (the note belts); folder, tag,
+  # type and date filters resolve in Postgres. `note_id` is gone: no read
+  # path filters on it (v5, spec 3.3b).
+  @indexed_fields ~w(user_id vault_id path_hmac)
+  @integer_indexed_fields []
   # The v5 short-key indexes, on disk, with their typed schemas.
   @v5_fields Engram.Vector.PayloadKeys.index_fields()
   @all_count length(@indexed_fields) + length(@integer_indexed_fields) + length(@v5_fields)

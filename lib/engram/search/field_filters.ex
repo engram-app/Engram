@@ -2,23 +2,22 @@ defmodule Engram.Search.FieldFilters do
   @moduledoc """
   Search filters on any frontmatter key (2026-10-20 rulings): each filter is
   `%{key, op, value}` with `op` one of `eq` (default), `in`, `gt`, `gte`,
-  `lt`, `lte`, `after`, `before`. They match v5 points only (a v3/v4 point
-  carries no `fa`); an unknown key is an explicit error, never an empty
-  result.
+  `lt`, `lte`, `after`, `before`. Postgres resolves them
+  (`Engram.Search.NoteFilter`, over `note_attrs`); an unknown key is an
+  explicit error, never an empty result.
 
-  **Named fields** (and their aliases) route to the payload keys v5 already
-  writes: `type`, `tags`, `status`, `author`, `reviewed_by`, `source` (alias
+  **Named fields** (and their aliases): `type`, `tags`, `status`, `author`, `reviewed_by`, `source` (alias
   `resource`, `sources`) and `project` match exactly; `created` (`date`),
   `updated` (`timestamp`, `modified`), `reviewed`, `expires`
   (`stale_after`), `due` and `priority` range. `status: stable` is the
-  default and stored as no key, so it matches a missing `s`. `title`,
+  default, so it also matches a note with no status. `title`,
   `aliases`, `description`, `generated` and `verified` have no filter. A
   named key matches in any casing or width (NFKC + lower case) and under its
   localized names (`種類` is `type`, `Engram.Notes.KeyAliases`).
 
   **User-added keys** resolve to the per-user `key_id` through the dictionary
-  (`FrontmatterKeys.lookup/2`), one query per request for every filter, and
-  become nested `fa` conditions (key and value in the SAME entry). A key this
+  (`FrontmatterKeys.lookup/2`), one query per request for every filter; key
+  and value match in the SAME `note_attrs` row. A key this
   user never wrote is `{:unknown_field, key}`; while the account is at its
   key limit it may have been skipped, so it is `{:field_not_indexed, key}`.
 
@@ -37,8 +36,6 @@ defmodule Engram.Search.FieldFilters do
   alias Engram.Notes.KeyAliases
   alias Engram.Notes.OkfFields
   alias Engram.Vector.FilterId
-  alias Engram.Vector.PayloadKeys
-  alias Engram.Vector.Qdrant
 
   @ops ~w(eq in gt gte lt lte after before)
   @range_ops %{"gt" => :gt, "gte" => :gte, "lt" => :lt, "lte" => :lte}
@@ -97,19 +94,9 @@ defmodule Engram.Search.FieldFilters do
           | {:any, [spec()]}
 
   @doc """
-  The Qdrant conditions for `filters`, or the first error. `filter_key` is
-  the user's filter key (`Crypto.dek_filter_key/1`).
-  """
-  @spec to_conditions(Ecto.UUID.t(), binary(), [map()]) :: {:ok, [map()]} | {:error, error()}
-  def to_conditions(user_id, filter_key, filters) do
-    with {:ok, specs} <- to_specs(user_id, filter_key, filters),
-         do: {:ok, Enum.map(specs, &qdrant(&1, filter_key))}
-  end
-
-  @doc """
-  The parsed `filters` (`t:spec/0`), or the first error: the one parse both
-  the Qdrant conditions (`to_conditions/3`) and the Postgres resolver
-  (`Engram.Search.NoteFilter`) read.
+  The parsed `filters` (`t:spec/0`), or the first error: the one parse the
+  Postgres resolver (`Engram.Search.NoteFilter`) reads, and search validates
+  with before it spends any budget.
   """
   @spec to_specs(Ecto.UUID.t(), binary(), [map()]) :: {:ok, [spec()]} | {:error, error()}
   def to_specs(_user_id, _filter_key, []), do: {:ok, []}
@@ -219,8 +206,7 @@ defmodule Engram.Search.FieldFilters do
   end
 
   # A date-only field holds a day (its midnight): each bound is floored to
-  # its day here, in the store-neutral spec, so Postgres (seconds) and
-  # Qdrant (day numbers, `div_day/1`) compare the same days.
+  # its day here, in the spec, so a bound compares whole days.
   defp spec({:named, {:day, field}, key}, op, value, _ctx) do
     with {:ok, range} <- date_range(op, value, key) do
       days = Map.new(range, fn {o, t} -> {o, div_day(t) * @day} end)
@@ -280,46 +266,6 @@ defmodule Engram.Search.FieldFilters do
   end
 
   defp user_range(id, col, range), do: {:ok, {:range, nil, id, col, range}}
-
-  # -- Qdrant conditions ----------------------------------------------------
-
-  defp qdrant({:h, :type, _id, v}, _fk), do: Qdrant.match_filter(:type, b64(v))
-  defp qdrant({:h, :tags, _id, v}, _fk), do: Qdrant.match_filter(:tags, b64(v))
-  defp qdrant({:h, nil, id, v}, _fk), do: Qdrant.attr_filter(id, {:h, filter_id(v)})
-
-  defp qdrant({:h, field, _id, hmacs}, _fk) do
-    ids = filter_id(hmacs)
-    match = if length(ids) == 1, do: %{value: hd(ids)}, else: %{any: ids}
-    %{key: PayloadKeys.short(field), match: match}
-  end
-
-  defp qdrant({:status, stable?, hmacs}, fk) do
-    matches = if hmacs == [], do: [], else: [qdrant({:h, :status_id, nil, hmacs}, fk)]
-    empty = if stable?, do: [%{is_empty: %{key: PayloadKeys.short(:status_id)}}], else: []
-
-    case empty ++ matches do
-      [one] -> one
-      both -> %{should: both}
-    end
-  end
-
-  defp qdrant({:range, f, _id, :d, range}, _fk) when f in [:fm_created, :fm_timestamp],
-    do: Qdrant.range_filter(f, range)
-
-  # Date-only payload fields hold day numbers; the operator is kept, so a
-  # midnight bound maps to its day exactly.
-  defp qdrant({:range, f, _id, :d, range}, _fk) when f in [:fm_expires, :fm_due],
-    do: %{key: PayloadKeys.short(f), range: Map.new(range, fn {o, t} -> {o, div_day(t)} end)}
-
-  defp qdrant({:range, nil, id, col, range}, _fk), do: Qdrant.attr_filter(id, {col, range})
-  defp qdrant({:range, f, _id, _col, range}, _fk), do: %{key: PayloadKeys.short(f), range: range}
-  defp qdrant({:any, specs}, fk), do: %{should: Enum.map(specs, &qdrant(&1, fk))}
-
-  defp b64(v) when is_list(v), do: Enum.map(v, &Base.encode64/1)
-  defp b64(v), do: Base.encode64(v)
-
-  defp filter_id(v) when is_list(v), do: Enum.map(v, &FilterId.from_hmac/1)
-  defp filter_id(v), do: FilterId.from_hmac(v)
 
   # The `note_attrs.key_id` of a named payload field.
   @key_names %{
@@ -391,7 +337,7 @@ defmodule Engram.Search.FieldFilters do
   defp parse_date(_), do: nil
 
   # The same bound the indexing pass accepts (`FrontmatterAttrs.number/1`):
-  # a bignum would only come back from Qdrant as a 400.
+  # a bignum is no number any note holds.
   defp number?(v), do: (is_integer(v) and abs(v) < 1.0e308) or is_float(v)
 
   defp exact?(v), do: (is_binary(v) and v != "" and not date(v)) or is_boolean(v)

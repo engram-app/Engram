@@ -6,14 +6,13 @@ defmodule Engram.LegacyPoints do
   until each note is rewritten).
 
   A v3 index: random point ids on the chunk rows, no `chunk_points` rows, and
-  points whose payload is the legacy note payload
-  (`Engram.Indexing.expected_note_payload/1`) plus the chunk text, title and
+  points whose payload is the legacy note payload (`v3_note_payload/1`, what
+  the v3 writer built) plus the chunk text, title and
   heading encrypted per point (`Engram.Crypto.encrypt_qdrant_payload/4`).
   """
   import Ecto.Query, only: [from: 2]
 
   alias Engram.Crypto
-  alias Engram.Indexing
   alias Engram.Notes.{Chunk, ChunkPoint, Note}
   alias Engram.Repo
   alias Engram.Vector.Qdrant
@@ -70,12 +69,30 @@ defmodule Engram.LegacyPoints do
 
     base =
       raw
-      |> Indexing.expected_note_payload()
+      |> v3_note_payload()
       |> Map.merge(%{title: plain.title, heading_path: nil, text: text})
 
     {:ok, payload} = Crypto.encrypt_qdrant_payload(base, user, Qdrant.collection_name(), id)
     payload |> Jason.encode!() |> Jason.decode!()
   end
+
+  # The v3 writer's note-level payload: filter HMACs (base64) and plaintext
+  # dates, no ciphertext.
+  defp v3_note_payload(note) do
+    %{
+      user_id: to_string(note.user_id),
+      vault_id: to_string(note.vault_id),
+      path_hmac: b64(note.path_hmac),
+      folder_hmac: b64(note.folder_hmac),
+      tags_hmac: Enum.map(note.tags_hmac || [], &Base.encode64/1),
+      type_hmac: b64(note.type_hmac),
+      fm_timestamp: note.fm_timestamp && DateTime.to_unix(note.fm_timestamp),
+      fm_created: note.fm_created && DateTime.to_unix(note.fm_created)
+    }
+  end
+
+  defp b64(nil), do: nil
+  defp b64(bin), do: Base.encode64(bin)
 
   defp remap_vectors(%{vectors: vectors} = s, remap),
     do: %{s | vectors: Map.new(vectors, fn {id, v} -> {Map.get(remap, id, id), v} end)}

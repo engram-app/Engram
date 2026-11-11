@@ -151,18 +151,54 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   """
   @spec version_check(Ecto.UUID.t() | nil) :: {:ok, Oban.Job.t()} | {:error, term()}
   def version_check(vault_id \\ nil) do
+    :ok = request_version_check(vault_id)
+    queue_version_check(vault_id)
+  end
+
+  @doc """
+  `version_check/1`'s request row alone: one row, so a caller can write it
+  inside its own transaction and the request commits with the change that
+  needs it. Any later re-verify or sweep reads it; `queue_version_check/1`
+  after the commit only starts it sooner.
+
+  `not_before`: the request is not cleared before then, though runs still
+  sweep (notes inside an embed cooldown are skipped until it ends). A
+  repeated request keeps the later of the two.
+  """
+  @spec request_version_check(Ecto.UUID.t() | nil, DateTime.t() | nil) :: :ok
+  def request_version_check(vault_id \\ nil, not_before \\ nil) do
     # One request row per vault (a repeated restore of one vault rewrites the
     # same row), or one fleet-wide row for an index-version change.
     name = if vault_id, do: "#{@version_check_pending}:#{vault_id}", else: @version_check_pending
-    :ok = Cursor.put(name, %{"id" => Ecto.UUID.generate()})
-    # A vault's check rides the next plain sweep (scoped, cheap); only the
-    # fleet check needs the re-verify chain's hops.
-    version_check_job(vault_id)
+
+    request =
+      case latest(not_before, not_before(Cursor.get(name))) do
+        nil -> %{"id" => Ecto.UUID.generate()}
+        at -> %{"id" => Ecto.UUID.generate(), "not_before" => DateTime.to_iso8601(at)}
+      end
+
+    Cursor.put(name, request)
   end
 
-  defp version_check_job(vault_id) when is_binary(vault_id), do: kick()
+  defp not_before(%{"not_before" => at}) do
+    {:ok, at, _} = DateTime.from_iso8601(at)
+    at
+  end
 
-  defp version_check_job(nil) do
+  defp not_before(_request), do: nil
+
+  defp latest(nil, b), do: b
+  defp latest(a, nil), do: a
+  defp latest(a, b), do: if(DateTime.after?(a, b), do: a, else: b)
+
+  @doc "The job that runs a requested version check now (`request_version_check/2`)."
+  @spec queue_version_check(Ecto.UUID.t() | nil) :: {:ok, Oban.Job.t()} | {:error, term()}
+  # A vault's check rides the next plain sweep (scoped, cheap); only the
+  # fleet check needs the re-verify chain's hops.
+  def queue_version_check(vault_id \\ nil)
+  def queue_version_check(vault_id) when is_binary(vault_id), do: kick()
+
+  def queue_version_check(nil) do
     args = %{"mode" => "reverify"}
     Oban.insert(new(args, replace: replace_args(args)))
   end
@@ -556,9 +592,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   # A requested version check is done once a run with the version term found
   # nothing more. Compare-and-delete: a request made after this run read it
-  # stays, and gets its own run now.
-  defp settle_version_check(%{pending: [_ | _] = pending, version_term?: true}, false = _more?) do
-    if Enum.all?(pending, fn {name, value} -> Cursor.reset_if(name, value) end) do
+  # stays, and gets its own run now. A request still before its `not_before`
+  # stays for a later run (cron), which sweeps what its cooldowns held back.
+  defp settle_version_check(%{pending: [_ | _] = pending, version_term?: true} = run, false) do
+    due = Enum.reject(pending, fn {_name, value} -> waiting?(value, run.now) end)
+
+    if Enum.all?(due, fn {name, value} -> Cursor.reset_if(name, value) end) do
       :ok
     else
       enqueue(%{"mode" => "reverify"}, schedule_in: @chain_seconds)
@@ -566,6 +605,13 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   end
 
   defp settle_version_check(_run, _more?), do: :ok
+
+  defp waiting?(request, now) do
+    case not_before(request) do
+      nil -> false
+      at -> DateTime.after?(at, now)
+    end
+  end
 
   # The successor, in `@chain_seconds`, while there is work only this sweep
   # does: the re-verify while a page came back full or the gate was shut (up

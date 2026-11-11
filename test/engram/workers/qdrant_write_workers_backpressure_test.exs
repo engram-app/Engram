@@ -13,7 +13,7 @@ defmodule Engram.Workers.QdrantWriteWorkersBackpressureTest do
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.ServiceConfig
-  alias Engram.Workers.{DeleteNoteIndex, RefreshKeywordVectors, RepathNoteIndex}
+  alias Engram.Workers.{DeleteNoteIndex, RefreshKeywordVectors}
 
   setup :set_mox_global
   setup :verify_on_exit!
@@ -120,13 +120,6 @@ defmodule Engram.Workers.QdrantWriteWorkersBackpressureTest do
     |> assert_backpressure_snooze(ctx.ref)
   end
 
-  test "RepathNoteIndex snoozes when the payload PATCH is refused", ctx do
-    ctx.refuse.("POST", "/collections/engram_notes/points/payload")
-
-    perform_job(RepathNoteIndex, %{note_id: ctx.note.id, old_path_hmac: Base.encode64(<<7>>)})
-    |> assert_backpressure_snooze(ctx.ref)
-  end
-
   test "DeleteNoteIndex snoozes if a delete is ever refused", ctx do
     ctx.refuse.("POST", "/collections/engram_notes/points/delete")
     # Deleted, so the worker's resurrection check lets the delete run.
@@ -146,33 +139,12 @@ defmodule Engram.Workers.QdrantWriteWorkersBackpressureTest do
   end
 
   # A write still queued past its wait (Qdrant 200, status "wait_timeout")
-  # is not applied: every waited writer snoozes, burning no attempt, so
-  # Repath never reaches its final-attempt fallback, a paid re-embed
+  # is not applied: every waited writer snoozes, burning no attempt
   # (re-review N3).
   describe "wait_timeout" do
     defp assert_wait_snooze(result) do
       assert {:snooze, seconds} = result
       assert seconds in 30..90
-    end
-
-    test "RepathNoteIndex snoozes on its last attempt and never falls back to EmbedNote",
-         ctx do
-      ctx.wait_timeout.("POST", "/collections/engram_notes/points/payload")
-
-      perform_job(
-        RepathNoteIndex,
-        %{note_id: ctx.note.id, old_path_hmac: Base.encode64(<<7>>)},
-        attempt: 5,
-        max_attempts: 5
-      )
-      |> assert_wait_snooze()
-
-      # The fallback is an EmbedNote carrying the old path (the note's own
-      # write already enqueued a plain one in setup).
-      refute_enqueued(
-        worker: Engram.Workers.EmbedNote,
-        args: %{"old_path_hmac" => Base.encode64(<<7>>)}
-      )
     end
 
     test "RefreshKeywordVectors snoozes", ctx do

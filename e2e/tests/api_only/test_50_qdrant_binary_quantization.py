@@ -16,7 +16,8 @@ import requests
 
 from helpers.crypto_probe import (
     latest_note_path_hmac,
-    v5_path_id,
+    note_id_for,
+    v5_uuid,
     wait_for_chunks_committed,
     wait_for_qdrant_indexed,
 )
@@ -164,12 +165,14 @@ class TestSearchRoundTrip:
         if isinstance(result, dict):
             result = result.get("points", [])
 
-        # #590: raw Qdrant payload carries the path's filter id (`p`, the
-        # v5 form of path_hmac), not the plaintext source_path.
-        ids = [r.get("payload", {}).get("p", "?") for r in result]
-        assert v5_path_id(path_hmac) in ids, (
-            f"Expected the path id for '{note_path}' in Qdrant results. "
-            f"Got {len(result)} results with path ids: {ids}"
+        # R3a: a point's payload is the note's identity (`u`, `v`, `n`), no
+        # path and no plaintext, so match the hit by its note id `n`.
+        note_id = note_id_for(seeded_note["vault_id"], path_hmac)
+        assert note_id, f"no note row for {note_path!r}"
+        ids = [r.get("payload", {}).get("n", "?") for r in result]
+        assert v5_uuid(note_id) in ids, (
+            f"Expected the note id for '{note_path}' in Qdrant results. "
+            f"Got {len(result)} results with note ids: {ids}"
         )
 
 
