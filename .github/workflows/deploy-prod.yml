@@ -81,6 +81,11 @@ jobs:
       # A refused release is otherwise silent: every later job is skipped, so
       # their failure() notices never run, and release-please pushes these
       # tags unattended.
+      #
+      # The failure alerts in this file are INLINE on purpose, not a shared
+      # script: they must still post when the job's checkout failed, and a
+      # repo script only exists after a successful checkout. Do not extract
+      # them (test/scripts/deploy_prod_floor_wiring_test.sh fails if you do).
       - name: Notify rollback floor blocked (alerts)
         if: failure()
         env:
@@ -89,11 +94,20 @@ jobs:
           ACTOR: ${{ github.actor }}
         run: |
           set -uo pipefail
+          [ -n "$WEBHOOK" ] || { echo "No alerts webhook configured, skipping."; exit 0; }
           CONTENT="**DEPLOY BLOCKED** \`${TAG}\`
           Rollback floor check FAILED, prod is NOT moving. See docs/context/rollback-floor.md.
           Tagged by ${ACTOR}
           ${RUN_URL}"
-          bash scripts/discord_alert.sh "$CONTENT"
+          # flags:4 = SUPPRESS_EMBEDS. Discord auto-embeds every URL, so messages
+          # rendered as a stack of preview cards. Links stay clickable without them.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            -H 'User-Agent: engram-ci/1.0 (+https://github.com/engram-app/Engram)' \
+            --max-time 10 \
+            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram CI' '{content:$c,username:$u,flags:4}')" \
+            "$WEBHOOK") || code="000"
+          case "$code" in 2*) echo "Alert sent ($code)";; *) echo "::warning::Discord alert failed (HTTP $code)";; esac
 
   # Real-app proof gate. Before prod moves, run the FULL Obsidian e2e suite
   # (e2e-clerk / e2e-crdt / e2e-browser) against the EXACT commit this
@@ -276,11 +290,20 @@ jobs:
           ACTOR: ${{ github.actor }}
         run: |
           set -uo pipefail
+          [ -n "$WEBHOOK" ] || { echo "No alerts webhook configured — skipping."; exit 0; }
           CONTENT="**DEPLOY BLOCKED** \`${RELEASE}\`
           Release e2e gate FAILED — real-app proof is red, prod is NOT moving.
           Tagged by ${ACTOR}
           ${RUN_URL}"
-          bash scripts/discord_alert.sh "$CONTENT"
+          # flags:4 = SUPPRESS_EMBEDS. Discord auto-embeds every URL, so messages
+          # rendered as a stack of preview cards. Links stay clickable without them.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            -H 'User-Agent: engram-ci/1.0 (+https://github.com/engram-app/Engram)' \
+            --max-time 10 \
+            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram CI' '{content:$c,username:$u,flags:4}')" \
+            "$WEBHOOK") || code="000"
+          case "$code" in 2*) echo "Alert sent ($code)";; *) echo "::warning::Discord alert failed (HTTP $code)";; esac
 
   open-infra-pr:
     # BLOCKED on the real-app proof gate: a red full-Obsidian e2e (or a failed
@@ -573,11 +596,20 @@ jobs:
           ACTOR: ${{ github.actor }}
         run: |
           set -uo pipefail
+          [ -n "$WEBHOOK" ] || { echo "No alerts webhook configured — skipping."; exit 0; }
           CONTENT="**DEPLOY FAILED** \`${RELEASE}\`
           The image-bump PR was not opened — prod has not moved.
           Tagged by ${ACTOR}
           ${RUN_URL}"
-          bash scripts/discord_alert.sh "$CONTENT"
+          # flags:4 = SUPPRESS_EMBEDS. Discord auto-embeds every URL, so messages
+          # rendered as a stack of preview cards. Links stay clickable without them.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            -H 'User-Agent: engram-ci/1.0 (+https://github.com/engram-app/Engram)' \
+            --max-time 10 \
+            --data "$(jq -nc --arg c "$CONTENT" --arg u 'Engram CI' '{content:$c,username:$u,flags:4}')" \
+            "$WEBHOOK") || code="000"
+          case "$code" in 2*) echo "Alert sent ($code)";; *) echo "::warning::Discord alert failed (HTTP $code)";; esac
 
   create-release-notes:
     # BLOCKED on the real-app proof gate: a red full-Obsidian e2e fails

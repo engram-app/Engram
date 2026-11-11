@@ -34,8 +34,11 @@ export PATH="$TMP/bin:$PATH" GH_REPO=o/r
 
 [ "$(bash "$SCRIPT" release-v1)" = $'[allow-below-floor] incident: test\nsecond line' ] || fail "annotated message not printed"
 [ -z "$(bash "$SCRIPT" release-v2)" ] || fail "a lightweight tag printed a message"
-out=$(bash "$SCRIPT" release-v3) || fail "a tag made from an annotated tag exited non-zero"
+out=$(bash "$SCRIPT" release-v3 2>"$TMP/err") || fail "a tag made from an annotated tag exited non-zero"
 [ -z "$out" ] || fail "a lightweight tag inherited an annotated tag's message: $out"
+grep -q "::notice::.*release-v1.*release-v3" "$TMP/err" || fail "the dropped message left no notice: $(cat "$TMP/err")"
+out=$(bash "$SCRIPT" release-v1 2>"$TMP/err")
+[ ! -s "$TMP/err" ] || fail "a matching tag printed a notice: $(cat "$TMP/err")"
 out=$(bash "$SCRIPT" release-v5) || fail "an empty message exited non-zero"
 [ -z "$out" ] || fail "an empty message printed: $out"
 out=$(bash "$SCRIPT" release-v4) || fail "an API error exited non-zero"

@@ -3606,7 +3606,6 @@ jobs:
           bash test/scripts/check_release_floor_test.sh
           bash test/scripts/tag_message_test.sh
           bash test/scripts/check_floor_tag_on_main_test.sh
-          bash test/scripts/discord_alert_test.sh
           bash test/scripts/deploy_prod_floor_wiring_test.sh
 
       - name: Rollback floor names a real tag on main

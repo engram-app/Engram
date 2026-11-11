@@ -18,5 +18,10 @@ read -r obj_type obj_sha <<<"$ref"
 out=$(gh api "repos/${GH_REPO}/git/tags/${obj_sha}" -q '.tag + "\n" + .message' 2>/dev/null) || exit 0
 {
   read -r name
-  if [ "$name" = "$tag" ]; then cat; fi
+  if [ "$name" = "$tag" ]; then
+    cat
+  else
+    # stdout stays empty (gated); say why an override marker was ignored.
+    echo "::notice::tag ${tag} points at the tag object of ${name}: its message is not read, so no override applies. Create the tag under its own name (git tag -a ${tag} ...)." >&2
+  fi
 } <<<"$out"
