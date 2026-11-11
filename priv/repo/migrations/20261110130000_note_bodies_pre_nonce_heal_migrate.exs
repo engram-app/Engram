@@ -100,24 +100,39 @@ defmodule Engram.Repo.Migrations.NoteBodiesPreNonceHealMigrate do
   # Public for `NoteBodiesPreNonceHealTest`, which also passes
   # `:deadline_ms` and `:max_halvings`.
   def heal(repo, opts \\ []) do
+    started = now()
+
     ctx = %{
-      deadline: now() + Keyword.get(opts, :deadline_ms, @deadline_ms),
+      deadline: started + Keyword.get(opts, :deadline_ms, @deadline_ms),
       max_halvings: Keyword.get(opts, :max_halvings, @max_halvings)
     }
 
     %{rows: users} = repo.query!("SELECT id FROM users ORDER BY id")
 
-    {slow, late} =
+    needing =
       users
       |> Enum.map(&hd/1)
       |> Enum.chunk_every(@probe_batch)
       |> Enum.flat_map(&probe(repo, &1, ctx, @retries))
-      |> Enum.reduce({0, 0}, fn user_id, {slow, late} ->
-        case walk(repo, user_id, <<0::128>>, {@window, 0}, 0, ctx) do
-          {:done, more} -> {slow + more, late}
-          {:cut, more} -> {slow + more, late + 1}
+
+    {slow, late, healed} =
+      Enum.reduce(needing, {0, 0, 0}, fn user_id, {slow, late, healed} ->
+        case walk(repo, user_id, <<0::128>>, {@window, 0}, {0, 0}, ctx) do
+          {:done, {more, n}} -> {slow + more, late, healed + n}
+          {:cut, {more, n}} -> {slow + more, late + 1, healed + n}
         end
       end)
+
+    # Counts and timing only, never an id. `:boot` info lines ship to Loki
+    # (`Engram.Logger.Category`, spelled out as a migration calls no app
+    # module). Prod's post-release check reads it: staging never ran a heal.
+    Logger.info(
+      "note_bodies pre-nonce heal: #{length(users)} user(s) probed, " <>
+        "#{length(needing)} with work, #{healed} note(s) healed " <>
+        "(#{now() - started} ms)",
+      category: :boot,
+      loki_ship: true
+    )
 
     if slow + late > 0 do
       gaps =
@@ -187,39 +202,40 @@ defmodule Engram.Repo.Migrations.NoteBodiesPreNonceHealMigrate do
     needing
   end
 
-  # `{:done | :cut, slow}`: `:cut` once the deadline passed, `slow` the
-  # count of notes stepped over at the smallest window.
-  defp walk(repo, user_id, after_id, {size, halvings}, slow, ctx) do
+  # `{:done | :cut, {slow, healed}}`: `:cut` once the deadline passed,
+  # `slow` the count of notes stepped over at the smallest window, `healed`
+  # the count of body rows written.
+  defp walk(repo, user_id, after_id, {size, halvings}, {slow, healed} = acc, ctx) do
     case window(repo, user_id, after_id, size, ctx) do
       :expired ->
-        {:cut, slow}
+        {:cut, acc}
 
       [[nil, _]] ->
-        {:done, slow}
+        {:done, acc}
 
-      [[last, _]] ->
-        walk(repo, user_id, last, {size, halvings}, slow, ctx)
+      [[last, n]] ->
+        walk(repo, user_id, last, {size, halvings}, {slow, healed + n}, ctx)
 
       :too_slow ->
         cond do
           budget(ctx) == :expired ->
-            {:cut, slow}
+            {:cut, acc}
 
           halvings < ctx.max_halvings and size > 1 ->
-            walk(repo, user_id, after_id, {div(size, 2), halvings + 1}, slow, ctx)
+            walk(repo, user_id, after_id, {div(size, 2), halvings + 1}, acc, ctx)
 
           true ->
             tenant(repo, user_id, fn ->
               Enum.map(repo.query!(@window_rows, [user_id, after_id, size]).rows, &hd/1)
             end)
-            |> step_over(repo, user_id, slow, ctx)
+            |> step_over(repo, user_id, acc, ctx)
         end
     end
   end
 
-  defp step_over([], _repo, _user_id, slow, _ctx), do: {:done, slow}
+  defp step_over([], _repo, _user_id, acc, _ctx), do: {:done, acc}
 
-  defp step_over(ids, repo, user_id, slow, ctx) do
+  defp step_over(ids, repo, user_id, {slow, healed}, ctx) do
     note_ids = Enum.map(ids, &Ecto.UUID.load!/1)
 
     Logger.warning(
@@ -230,7 +246,7 @@ defmodule Engram.Repo.Migrations.NoteBodiesPreNonceHealMigrate do
       note_ids: note_ids
     )
 
-    walk(repo, user_id, List.last(ids), {@window, 0}, slow + length(ids), ctx)
+    walk(repo, user_id, List.last(ids), {@window, 0}, {slow + length(ids), healed}, ctx)
   end
 
   defp window(repo, user_id, after_id, size, ctx) do
