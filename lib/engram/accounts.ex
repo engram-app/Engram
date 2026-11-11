@@ -1234,8 +1234,13 @@ defmodule Engram.Accounts do
           case user
                |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
                |> Repo.update(skip_tenant_check: true) do
-            {:ok, u} -> u
-            {:error, cs} -> Repo.rollback(cs)
+            {:ok, u} ->
+              # Same transaction as the mark, as `Lifecycle` does.
+              :ok = Engram.OAuth.revoke_account_grants(u.id)
+              u
+
+            {:error, cs} ->
+              Repo.rollback(cs)
           end
         end
       end)
@@ -1257,15 +1262,16 @@ defmodule Engram.Accounts do
   # each other via the same advisory lock that gates bootstrap. Without it,
   # two concurrent demotes of different admins could each pass the
   # active_admin_count <= 1 check and leave zero admins.
+  #
+  # Owns the after-commit queue (`Repo.transaction_after_commit/1`): an
+  # after-commit callback queued inside (soft delete's grant-revoked events)
+  # runs once this commits, and never on a rollback.
   defp with_admin_lock(fun) do
-    Repo.transaction(
-      fn ->
-        acquire_admin_bootstrap_lock()
+    Repo.transaction_after_commit(fn ->
+      acquire_admin_bootstrap_lock()
 
-        fun.()
-      end,
-      skip_tenant_check: true
-    )
+      fun.()
+    end)
   end
 
   defp would_orphan_admins?(%User{role: "admin", suspended_at: nil, deleted_at: nil}),

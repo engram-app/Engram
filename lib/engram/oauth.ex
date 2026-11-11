@@ -960,13 +960,28 @@ defmodule Engram.OAuth do
     build_token_response(user, rt, refresh_raw, refresh_row)
   end
 
-  defp revoke_family(family_id, cause) do
-    {_n, changed} =
-      revoke_refresh_tokens(from(rt in RefreshToken, where: rt.family_id == ^family_id),
-        cause: cause,
-        skip_tenant_check: true
-      )
+  defp revoke_family(family_id, cause),
+    do: revoke_announced(from(rt in RefreshToken, where: rt.family_id == ^family_id), cause)
 
+  @doc """
+  Ends every live OAuth grant of `user_id` because the account was deleted
+  (cause `:account_deleted`): every soft-delete path calls it in the same
+  transaction as its `deleted_at` write, so both commit or neither does, and
+  the `mcp_oauth_grant_revoked` events run only after that commit. A delete
+  used to leave the grants live (`Accounts.revoke_all_user_tokens/1` covers
+  session and device tokens only), so a deleted account's MCP client kept
+  refreshing until the hard delete (review of #2574).
+  """
+  @spec revoke_account_grants(Ecto.UUID.t()) :: :ok
+  def revoke_account_grants(user_id) do
+    _ =
+      revoke_announced(from(rt in RefreshToken, where: rt.user_id == ^user_id), :account_deleted)
+
+    :ok
+  end
+
+  defp revoke_announced(query, cause) do
+    {_n, changed} = revoke_refresh_tokens(query, cause: cause, skip_tenant_check: true)
     :ok = grants_changed(changed)
     changed
   end
@@ -989,6 +1004,7 @@ defmodule Engram.OAuth do
           | :vault_deleted
           | :vault_purged
           | :client_revoke_rfc7009
+          | :account_deleted
           | kill_reason()
 
   @revoke_causes [
@@ -996,7 +1012,8 @@ defmodule Engram.OAuth do
                    :user_disconnect_grant,
                    :vault_deleted,
                    :vault_purged,
-                   :client_revoke_rfc7009
+                   :client_revoke_rfc7009,
+                   :account_deleted
                  ] ++ @kill_reasons
 
   @doc """
@@ -1251,6 +1268,7 @@ defmodule Engram.OAuth do
           | :pkce_verifier_missing
           | :pkce_mismatch
           | :user_not_found
+          | :user_deleted
           | :refresh_token_unknown
           | :refresh_token_revoked
           | :refresh_token_reuse
@@ -1438,9 +1456,15 @@ defmodule Engram.OAuth do
     end
   end
 
+  # The one user read of the token endpoint: code exchange and both rotation
+  # paths (`with_user/2`). A soft-deleted account is refused like a missing
+  # one, under its own reason: deletion ends its grants
+  # (`revoke_account_grants/1`), so this only meets a token that outlived
+  # that, and `user_not_found` stays the anomaly worth alerting on.
   defp fetch_user(user_id) do
     case Accounts.get_user(user_id) do
-      %Accounts.User{} = user -> {:ok, user}
+      %Accounts.User{deleted_at: nil} = user -> {:ok, user}
+      %Accounts.User{} -> grant_error(:user_deleted)
       _ -> grant_error(:user_not_found)
     end
   end
