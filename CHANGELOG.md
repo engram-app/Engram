@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.79.1](https://github.com/engram-app/Engram/compare/0.79.0...0.79.1) (2026-11-11)
+
+
+### Bug Fixes
+
+* **migrations:** stop boot-crashing 15s checkouts ([#2545](https://github.com/engram-app/Engram/issues/2545)) ([da0a028](https://github.com/engram-app/Engram/commit/da0a0280fcbb61c1d65ead89e038631b85f8fa02))
+
 ## [0.79.0](https://github.com/engram-app/Engram/compare/0.78.1...0.79.0) (2026-11-10)
 
 
