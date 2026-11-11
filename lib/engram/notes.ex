@@ -1137,15 +1137,7 @@ defmodule Engram.Notes do
           # longer holds. Refused to merge (a stale full-content push deletes
           # newer content convergently — 2026-07-07 reconnect clobber). Distinct
           # greppable key so the rate is monitorable in Loki.
-          Logger.warning(
-            "note_stale_base_rejected",
-            Metadata.with_category(:warning, :sync,
-              user_id: user.id,
-              vault_id: vault.id,
-              note_id: existing.id,
-              server_version: existing.version
-            )
-          )
+          log_stale_base(user, vault, existing, view, opts[:base_hash])
 
           {:error, :version_conflict, view || decrypt_or_raise!(existing, user)}
 
@@ -2759,6 +2751,39 @@ defmodule Engram.Notes do
   end
 
   defp unedited_merge(_prior, incoming, _user), do: {incoming, nil}
+
+  # base_hash == stored_hash with a different served_hash and read_source
+  # crdt_tail means a CRDT edit landed after the writer read: a correct refusal
+  # (#2541). A base matching neither is a client that held an older read.
+  defp log_stale_base(user, vault, existing, view, base_hash) do
+    served = view || existing
+
+    Logger.warning(
+      "note_stale_base_rejected",
+      Metadata.with_category(:warning, :sync,
+        user_id: user.id,
+        vault_id: vault.id,
+        note_id: existing.id,
+        server_version: existing.version,
+        base_hash: hash_prefix(base_hash),
+        stored_hash: hash_prefix(existing.content_hash),
+        served_hash: hash_prefix(served.content_hash),
+        read_source:
+          if(served.content_hash == existing.content_hash, do: "row", else: "crdt_tail")
+      )
+    )
+  end
+
+  # Enough of a hash to tell two apart. A client's base_hash is untrusted and
+  # can be anything, even note text, so only a hex prefix ever reaches a log.
+  defp hash_prefix(hash) when is_binary(hash) do
+    case Regex.run(~r/\A[0-9a-f]{16}/, hash) do
+      [prefix] -> prefix
+      nil -> "not_hex"
+    end
+  end
+
+  defp hash_prefix(nil), do: nil
 
   # PathSanitizer can silently rewrite an input path (drop `..`, strip illegal
   # chars, truncate). The note then lives at a path the client never asked for,

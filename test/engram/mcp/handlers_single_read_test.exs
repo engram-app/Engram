@@ -619,6 +619,100 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     assert count(text_of(user, vault, "a.md"), "LIVEEDIT") == 1
   end
 
+  # #2541, e2e test_84: a plugin's write to the note lands between a script's
+  # GET and its POST. The GET's hash no longer names what a reader is served,
+  # so the 409 is the right answer; replacing the note would erase that write.
+  # Same shape as the CI failure: the row did not move (version, mtime), the
+  # 409 serves the plugin's text from the tail. The re-read's hash then writes,
+  # so a GET hash is never refused on a note that held still.
+  test "REST POST 409s when a plugin write lands between its GET and POST", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    read = conn |> get("/api/notes/a.md") |> json_response(200)
+
+    {id, doc} = base_doc(user, vault)
+    land_tail(user, vault, id, doc, fn _ -> "# A\n\nplugin-content\n" end)
+
+    stale =
+      conn
+      |> post("/api/notes", %{
+        path: "a.md",
+        content: "# A\n\nfollowup\n",
+        mtime: 2.0,
+        base_hash: read["content_hash"]
+      })
+      |> json_response(409)
+
+    assert stale["server_note"]["content"] == "# A\n\nplugin-content\n"
+    assert stale["server_note"]["version"] == read["version"]
+    assert stale["server_note"]["mtime"] == read["mtime"]
+    refute stale["server_note"]["content_hash"] == read["content_hash"]
+
+    reread = conn |> get("/api/notes/a.md") |> json_response(200)
+    assert reread["content"] == "# A\n\nplugin-content\n"
+    assert reread["content_hash"] == stale["server_note"]["content_hash"]
+
+    conn
+    |> post("/api/notes", %{
+      path: "a.md",
+      content: "# A\n\nfollowup\n",
+      mtime: 3.0,
+      base_hash: reread["content_hash"]
+    })
+    |> json_response(200)
+
+    assert text_of(user, vault, "a.md") == "# A\n\nfollowup\n"
+  end
+
+  test "a stale-base refusal logs the three hashes and the read source", ctx do
+    %{conn: conn, user: user, vault: vault} = ctx
+    read = conn |> get("/api/notes/a.md") |> json_response(200)
+    {id, doc} = base_doc(user, vault)
+    land_tail(user, vault, id, doc, &(&1 <> "LIVEEDIT\n"))
+
+    {stale, log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        conn
+        |> post("/api/notes", %{
+          path: "a.md",
+          content: "x\n",
+          mtime: 2.0,
+          base_hash: read["content_hash"]
+        })
+        |> json_response(409)
+      end)
+
+    assert log =~ "note_stale_base_rejected"
+    assert log =~ "base_hash=#{String.slice(read["content_hash"], 0, 16)}"
+    assert log =~ "stored_hash=#{String.slice(read["content_hash"], 0, 16)}"
+    assert log =~ "served_hash=#{String.slice(stale["server_note"]["content_hash"], 0, 16)}"
+    assert log =~ "read_source=crdt_tail"
+  end
+
+  # A client's base_hash is untrusted and can be anything, even note text.
+  test "a stale-base refusal never logs a base_hash that is not a hash", ctx do
+    secret = "abcdef0123456789 secret note text"
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        ctx.conn
+        |> post("/api/notes", %{path: "a.md", content: "x\n", mtime: 2.0, base_hash: secret})
+        |> json_response(409)
+      end)
+
+    assert log =~ "base_hash=abcdef0123456789"
+    refute log =~ "secret note text"
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        ctx.conn
+        |> post("/api/notes", %{path: "a.md", content: "x\n", mtime: 2.0, base_hash: "my secret"})
+        |> json_response(409)
+      end)
+
+    assert log =~ "base_hash=not_hex"
+    refute log =~ "my secret"
+  end
+
   # #2480 review round 2: GET serves the ROW, not the tail projection, for a
   # non-markdown path and for a projection current_note/3 distrusts (a tail
   # that empties a non-empty note). The base check hashed the projection, so
