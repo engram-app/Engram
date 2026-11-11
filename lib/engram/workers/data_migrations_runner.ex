@@ -36,7 +36,6 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.LinkResolutionKeys,
     Engram.DataMigrations.NotePayloadStamps,
     Engram.DataMigrations.NoteSplit,
-    Engram.DataMigrations.NoteBodyColumnsNull,
     Engram.DataMigrations.NoteIndexState,
     Engram.DataMigrations.NoteSizes,
     Engram.DataMigrations.FolderTable,

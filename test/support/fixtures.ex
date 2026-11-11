@@ -445,8 +445,8 @@ defmodule Engram.Fixtures do
     end
 
     # While the notes ciphertext is set, the body must equal it whole. Once
-    # it is NULL (R8(b2): writers write only the body, the null batch clears
-    # older rows) the nonce is the notes side of the pair: the body holds an
+    # it is NULL (R8(b2): writers write only the body; the retired null batch
+    # cleared older rows) the nonce is the notes side of the pair: the body holds an
     # envelope under that nonce, or nothing when the nonce is NULL.
     differs = fn body, ct, nonce ->
       prefix =
@@ -617,8 +617,9 @@ defmodule Engram.Fixtures do
   @doc """
   Sets a note's `notes` content and CRDT state ciphertexts to the envelopes
   its body row holds: the row a release before R8(b2) (which still wrote
-  those columns) leaves. For the null batch (`NoteBodyColumnsNull`) and the
-  pre-split copy (`NoteSplit`). R8(c) drops the columns and this with them.
+  those columns) leaves. For the pre-split copy (`NoteSplit`, migration
+  20261107120000) and the readers that must ignore a dead copy. R8(e) drops
+  the columns and this with them.
   """
   def old_release_notes_copy!(note_id) do
     Engram.Repo.query!(

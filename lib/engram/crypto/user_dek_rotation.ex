@@ -137,9 +137,9 @@ defmodule Engram.Crypto.UserDekRotation do
     end
   end
 
-  # The sweep is now a writer of `crdt_state_ciphertext`, which trips the
-  # `notes_crdt_head_invalidate` BEFORE UPDATE trigger and NULLs the cached head
-  # for every synced note. Left NULL, the plugin's head-equality fast path can
+  # The sweep is now a writer of the CRDT state (a fresh `crdt_state_nonce`),
+  # which trips the `notes_crdt_head_invalidate` BEFORE UPDATE trigger and
+  # NULLs the cached head for every synced note. Left NULL, the plugin's head-equality fast path can
   # never hit and every live-bound note re-handshakes on every manifest
   # reconcile. `BackfillCrdtHead` re-warms it and is an idempotent no-op when
   # there is nothing to do. #1341.

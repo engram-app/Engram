@@ -9,6 +9,8 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealTest do
   """
   use Engram.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Engram.Notes
 
   @mod "Elixir.Engram.Repo.Migrations.NoteBodiesPreNonceHealMigrate"
@@ -81,6 +83,43 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealTest do
 
     assert content_ct(kept) == before
     assert content_ct(nonced) == [[nil]]
+  end
+
+  describe "the summary line prod's post-release check reads" do
+    setup do
+      previous = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous) end)
+    end
+
+    defp summary!(fun) do
+      log = capture_log([level: :info], fun)
+      assert [line] = Regex.scan(~r/note_bodies pre-nonce heal: .*\(\d+ ms\)/, log)
+      hd(line)
+    end
+
+    defp users, do: Repo.aggregate("users", :count)
+
+    test "a run that heals one note logs its counts", %{user: u, vault: v} do
+      note = write!(u, v, "pre.md", "pre text")
+      Engram.Fixtures.pre_nonce_null_body!(note.id)
+      n = users()
+
+      line = summary!(fn -> assert :ok = heal!() end)
+
+      assert line =~ "#{n} user(s) probed, 1 with work, 1 note(s) healed ("
+      refute line =~ note.id
+      refute line =~ u.id
+    end
+
+    test "a run with no work logs zeros", %{user: u, vault: v} do
+      write!(u, v, "kept.md", "kept text")
+      n = users()
+
+      line = summary!(fn -> assert :ok = heal!() end)
+
+      assert line =~ "#{n} user(s) probed, 0 with work, 0 note(s) healed ("
+    end
   end
 
   # A repo that misbehaves as `plan/1` says:

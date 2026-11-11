@@ -10,12 +10,13 @@ defmodule Engram.Notes.NoteBody do
   `notes_sync_body` trigger, N+1 dropped the trigger (20261104000000), R8(b1)
   (release A) moved every writer to `put!/2`, R8(b2) stopped writing
   `notes.content_ciphertext` / `crdt_state_ciphertext` (those `Note` fields
-  are virtual, a raw write drops them, `notes_row/1`;
-  `Engram.DataMigrations.NoteBodyColumnsNull` nulls the older rows), and
-  R8(c) (this release) stops reading them: migration 20261107120000 gives
-  every note its body row before boot, so nothing here falls back to the
-  `notes` ciphertexts or copies from them. R8(d) drops the two columns. The
-  nonces and `crdt_head` are still written on `notes` (the fences below).
+  are virtual, a raw write drops them, `notes_row/1`), R8(c) stopped
+  reading them (migration 20261107120000 gives every note its body row
+  before boot), and R8(d) (this release) removed the last database objects
+  and code that named them (migration 20261111000100; the null batch is
+  retired, so an install may keep dead copies there). R8(e) drops the two
+  columns. The nonces and `crdt_head` are still written on `notes` (the
+  fences below).
   Rollback floor: 0.76 (the first release that reads bodies from here).
 
   Wave 3 migrate-data (`docs/context/notes-chunks-hyperopt.md` 6.1 step 2):
@@ -28,8 +29,7 @@ defmodule Engram.Notes.NoteBody do
   ciphertext by its 13-byte nonce field, not its bytes. Every encryption
   takes a fresh nonce, so only a write that changes a ciphertext but keeps
   its nonce (no app writer does; a restore or a hand edit could) goes
-  unseen. Reading the bytes would de-TOAST every body on every check. The
-  null batch alone also compares length and tag before it drops a copy.
+  unseen. Reading the bytes would de-TOAST every body on every check.
 
   `content_ct` / `crdt_ct` hold `nonce || ciphertext`
   (`Engram.Crypto.Envelope.split_merged/1`). The read splits them back in
@@ -372,8 +372,9 @@ defmodule Engram.Notes.NoteBody do
   it). A CRDT state given without a
   head resets the head, as the `notes_crdt_head_invalidate` trigger does on
   `notes`. Fields not given are left as they are; a missing body row is
-  inserted whole, its other fields from the `notes` columns. The owner and
-  key version always follow the `notes` row.
+  inserted with the ciphertexts not given NULL and the head from
+  `notes.crdt_head`. The owner and key version always follow the `notes`
+  row.
 
   One statement per set of given fields; same telemetry and options as
   `sync!/3`.
