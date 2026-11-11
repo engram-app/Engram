@@ -7,28 +7,17 @@ edition = "2021"
 # and web app as wasm32. No rustler, no RNG: callers pass the nonce in, so the
 # wasm build imports nothing from its host. CI links it into a wasm32 cdylib
 # (native/wasm_guard) and fails on any import, to keep it that way.
-#
-# `envelope` (default) is the crypto and its C deps (ring, zstd). The web
-# app's wasm (native/web_wasm) turns it off: the frontmatter fence alone is
-# pure Rust, needs no C toolchain and builds to a few KB.
-[features]
-default = ["envelope"]
-envelope = ["dep:ring", "dep:zstd", "dep:getrandom"]
-
 [dependencies]
-ring = { version = "0.17", optional = true }
-zstd = { version = "0.14.3", default-features = false, optional = true }
+ring = "0.17"
+zstd = { version = "0.14.3", default-features = false }
 
 # ring links getrandom 0.2, which refuses to compile for wasm32-unknown-unknown
 # unless told where entropy comes from. `custom` makes that a host-supplied
 # hook (`__getrandom_custom`), resolved only if something calls ring's RNG;
 # the core never does. Target-gated: native builds are unaffected.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-getrandom = { version = "0.2", features = ["custom"], optional = true }
+getrandom = { version = "0.2", features = ["custom"] }
 
 [dev-dependencies]
 # Only for the ignored AES-GCM microbench (envelope.rs), ring's baseline.
 aes-gcm = "0.11"
-# The shared frontmatter fixture table (frontmatter.rs tests).
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"

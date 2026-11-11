@@ -35,14 +35,6 @@ defmodule EngramWeb.CSPTest do
       assert header =~ "frame-ancestors 'none'"
     end
 
-    # The SPA's frontmatter fence split is WebAssembly; compiling it needs
-    # 'wasm-unsafe-eval', which allows no JS eval, so 'unsafe-eval' stays out.
-    test "script-src allows WebAssembly compilation, never JS eval" do
-      src = CSP.header() |> script_src() |> String.split(" ")
-      assert "'wasm-unsafe-eval'" in src
-      refute "'unsafe-eval'" in src
-    end
-
     test "always whitelists Cloudflare Turnstile (Clerk bot-protection)" do
       Application.put_env(:engram, :clerk_issuer, nil)
 

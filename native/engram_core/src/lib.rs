@@ -3,9 +3,7 @@
 //! its own (callers draw nonces), no unsafe.
 #![cfg_attr(not(test), forbid(unsafe_code))]
 
-#[cfg(feature = "envelope")]
 pub mod envelope;
-pub mod frontmatter;
 
-#[cfg(all(test, feature = "envelope"))]
+#[cfg(test)]
 mod peak;

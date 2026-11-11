@@ -1,21 +1,12 @@
 # One workspace, one lockfile, one toolchain (rust-toolchain.toml here):
 # engram_core is the pure-Rust engine shared with the wasm clients;
 # engram_native is the NIF that wraps it; wasm_guard is CI-only (the wasm32
-# import check); web_wasm is the web app's fence-split wasm. Rustler builds
-# engram_native as a member; its artifact lands in native/target.
+# import check). Rustler builds engram_native as a member; its artifact lands
+# in native/target.
 [workspace]
-members = ["engram_core", "engram_native", "wasm_guard", "web_wasm"]
+members = ["engram_core", "engram_native", "wasm_guard"]
 resolver = "2"
 
 [profile.release]
 lto = true
 codegen-units = 1
-
-# web_wasm (native/web_wasm/build.sh): small and reproducible. Its own
-# profile because the NIF needs unwinding panics (rustler catches them).
-[profile.wasm]
-inherits = "release"
-opt-level = "s"
-panic = "abort"
-strip = true
-debug = false

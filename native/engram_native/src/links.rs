@@ -770,10 +770,16 @@ mod tests {
         assert!(!external("\u{17F}:x.md") && !external("\u{212A}a:y.md"));
     }
 
-    // The old frontmatter regex had `u`, where PCRE's `\s` includes U+180E.
+    // The shared fence rule (#1884), not the old regex: that took any `\s`
+    // around the fences (U+180E too) and missed a close at end of text.
     #[test]
-    fn frontmatter_whitespace_includes_u180e() {
-        assert_eq!(matches("---\u{180E}\n[[a]]\n---\n"), vec![]);
+    fn frontmatter_uses_the_shared_fence_rule() {
+        // `---` plus U+180E is not an opening fence: `[[a]]` is body.
+        assert_eq!(matches("---\u{180E}\n[[a]]\n---\n").len(), 1);
+        // A close at end of text still hides the block's links.
+        assert_eq!(matches("---\n[[a]]\n---"), vec![]);
+        // A BOM before the fence still opens it, as for the chunker.
+        assert_eq!(matches("\u{FEFF}---\n[[a]]\n---\nb"), vec![]);
     }
 
     #[test]
