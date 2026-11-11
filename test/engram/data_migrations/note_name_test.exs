@@ -169,6 +169,23 @@ defmodule Engram.DataMigrations.NoteNameTest do
     assert div(us, 1000) >= 1_500
   end
 
+  test "a hop that crosses tables measures its ceiling from the hop's start", %{
+    user: u,
+    vault: v
+  } do
+    for i <- 1..2, do: note!(u, v, "X/#{i}.md")
+    n_minus_1_insert!()
+    Engram.ServiceConfig.put_override(:note_name_backfill_writes_per_s, 2)
+
+    {us, _} = :timer.tc(fn -> BackfillNoteNames.hop(%{}, pause_ms: 0, batch_size: 2) end)
+
+    # 2 notes then folder "X": 3 rows at 2 a second is 1.5 s from the hop's
+    # start. A clock restarted per table waited 1 s, then 1.5 s more.
+    ms = div(us, 1000)
+    assert ms >= 1_400
+    assert ms < 2_300
+  end
+
   test "database pressure holds a hop: nothing written, the same hop re-inserted later", %{
     user: u,
     vault: v

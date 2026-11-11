@@ -138,6 +138,7 @@ defmodule Engram.Workers.BackfillNoteNames do
     }
 
     o = %{
+      started: Throttle.now_ms(),
       max_rows: Keyword.get(opts, :max_rows, NoteName.max_rows()),
       writes_per_s: Keyword.get(opts, :writes_per_s, NoteName.writes_per_s()),
       batch: Keyword.get(opts, :batch_size, @batch_size),
@@ -146,9 +147,8 @@ defmodule Engram.Workers.BackfillNoteNames do
       fleet: fleet
     }
 
-    started = Throttle.now_ms()
     result = walk(st, o)
-    log(result, st.t, started)
+    log(result, st.t, o.started)
     elem(result, 0)
   end
 
@@ -177,6 +177,8 @@ defmodule Engram.Workers.BackfillNoteNames do
            pause_ms: o.pause_ms,
            writes: & &1.hop_fixed,
            writes_per_s: o.writes_per_s,
+           # `hop_fixed` spans the tables this hop crossed: measure from its start.
+           started_ms: o.started,
            batch_size: o.batch,
            fun_in_tenant: false
          ) do

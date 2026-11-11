@@ -38,8 +38,12 @@ defmodule Engram.Backfill.PacedChain do
   hop waits off its deficit too, so a chain whose next hop starts at once
   still keeps to the ceiling.
 
-  Options: `:stop?` (required), `:continue?`, `:pause_ms`, `:writes_per_s`
-  and `:writes`, and `IdWindows.reduce/5`'s `:batch_size` and
+  `:started_ms` (`Throttle.now_ms/0` clock, default now) is when the hop
+  began: a hop that walks several tables passes its own start, so `writes`
+  counted across tables are measured against the whole hop.
+
+  Options: `:stop?` (required), `:continue?`, `:pause_ms`, `:writes_per_s`,
+  `:writes` and `:started_ms`, and `IdWindows.reduce/5`'s `:batch_size` and
   `:fun_in_tenant`.
   """
   @spec walk(module(), cursor(), acc, (list(), IdWindows.ctx(), acc -> acc), keyword()) ::
@@ -49,7 +53,8 @@ defmodule Engram.Backfill.PacedChain do
     stop? = Keyword.fetch!(opts, :stop?)
     continue? = Keyword.get(opts, :continue?, fn -> true end)
     pause = Keyword.get(opts, :pause_ms, @pause_ms)
-    wait = waiter(pause, Keyword.get(opts, :writes_per_s), Keyword.get(opts, :writes))
+    started = Keyword.get_lazy(opts, :started_ms, &Throttle.now_ms/0)
+    wait = waiter(pause, Keyword.get(opts, :writes_per_s), Keyword.get(opts, :writes), started)
 
     fun = fn ids, ctx, {_state, at, acc} ->
       if continue?.() do
@@ -78,13 +83,17 @@ defmodule Engram.Backfill.PacedChain do
     end
   end
 
-  defp waiter(pause, nil, _writes), do: fn _acc, stop -> if stop, do: 0, else: pause end
+  defp waiter(pause, nil, _writes, _started), do: fn _acc, stop -> if stop, do: 0, else: pause end
 
-  defp waiter(pause, per_s, writes) when is_function(writes, 1) do
-    started = Throttle.now_ms()
-
+  defp waiter(pause, per_s, writes, started) when is_function(writes, 1) do
     fn acc, stop ->
-      Throttle.wait_ms(started, writes.(acc), per_s, if(stop, do: 0, else: pause), Throttle.now_ms())
+      Throttle.wait_ms(
+        started,
+        writes.(acc),
+        per_s,
+        if(stop, do: 0, else: pause),
+        Throttle.now_ms()
+      )
     end
   end
 
