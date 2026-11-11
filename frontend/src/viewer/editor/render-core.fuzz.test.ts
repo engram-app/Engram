@@ -58,6 +58,8 @@ const FRAGMENTS = [
 	"> quote\n>> deeper\n",
 	"see ![[pic.png]] now\n",
 	"\n",
+	"text\n\n    code\n    more\n",
+	"1. x\n   > q\n  > 1.  - y\n",
 ];
 const INSERTS = [
 	"```",
@@ -98,22 +100,26 @@ function sig(p: Placed[]) {
 }
 
 describe("render core fuzz", () => {
-	test("incremental equals a fresh build after structural edits (120 docs x 6 edits)", () => {
+	test("incremental equals a fresh build after structural edits (160 docs x 6 edits)", () => {
 		const failures: string[] = [];
-		for (let seed = 1; seed <= 120 && failures.length < 3; seed++) {
+		for (let seed = 1; seed <= 160 && failures.length < 3; seed++) {
 			const r = rng(seed);
 			const doc = Array.from({ length: 4 + r(10) }, () => pick(r, FRAGMENTS)).join("");
 			let s = settle(EditorState.create({ doc, extensions: ext }));
 			for (let step = 0; step < 6; step++) {
 				const len = s.doc.length;
 				const at = r(len + 1);
-				const kind = r(3);
+				const kind = r(4);
+				const lineEdge = s.doc.lineAt(at);
 				const changes =
-					kind === 0
-						? { from: at, insert: pick(r, INSERTS) }
-						: kind === 1
-							? { from: at, to: Math.min(len, at + 1 + r(6)) }
-							: { from: at, to: Math.min(len, at + r(4)), insert: pick(r, INSERTS) };
+					kind === 3
+						? // Enter at a line edge, e.g. on the blank line above a block.
+							{ from: r(2) ? lineEdge.from : lineEdge.to, insert: "\n" }
+						: kind === 0
+							? { from: at, insert: pick(r, INSERTS) }
+							: kind === 1
+								? { from: at, to: Math.min(len, at + 1 + r(6)) }
+								: { from: at, to: Math.min(len, at + r(4)), insert: pick(r, INSERTS) };
 				s = s.update({ changes }).state;
 				s = s.update({ selection: { anchor: r(s.doc.length + 1) } }).state;
 				// Sometimes compare before the parser finishes, as a lagging view would.

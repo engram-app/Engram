@@ -174,3 +174,21 @@ test("an edit whose resync point is a block starting mid-line keeps that line's 
 	s = settle(s.update({ changes: { from: 8, to: 9, insert: "```" } }).state);
 	expect(diffFromFresh(s, lext, railsField)).toEqual([]);
 });
+
+describe("where an incremental re-render stops", () => {
+	const md = markdown({ base: markdownLanguage });
+
+	test("Enter on the blank line above an indented code block keeps its first line styled", () => {
+		const iext = [md, indentedCodeLines];
+		const s0 = parsedState("text\n\n    code\n    more\n", iext);
+		const s = settle(s0.update({ changes: { from: 6, insert: "\n" } }).state);
+		expect(diffFromFresh(s, iext, indentedCodeLines)).toEqual([]);
+	});
+
+	test.each([12, 13])("a newline at %i in a quote inside a list keeps the rails", (at) => {
+		const lext = [md, listRails];
+		const s0 = parsedState("1. x\n   > q\n  > 1.  - y\n", lext);
+		const s = settle(s0.update({ changes: { from: at, insert: "\n" } }).state);
+		expect(diffFromFresh(s, lext, railsField)).toEqual([]);
+	});
+});
