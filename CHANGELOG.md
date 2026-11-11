@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.81.0](https://github.com/engram-app/Engram/compare/0.80.0...0.81.0) (2026-11-11)
+
+
+### Features
+
+* **channel:** folder_ops wire behind a runtime switch (S4 support) ([#2533](https://github.com/engram-app/Engram/issues/2533)) ([e874924](https://github.com/engram-app/Engram/commit/e8749242ee13432f51de7b9a0d12b9eaf3a07a42))
+* **folders:** R9 release D, drop the notes_set_folder_ref triggers ([#2524](https://github.com/engram-app/Engram/issues/2524)) ([afb9dd7](https://github.com/engram-app/Engram/commit/afb9dd7debf1b89eb076c159a2a6a242140a7337))
+* **notes:** R8(d) remove every reference to the notes body ciphertext columns ([#2513](https://github.com/engram-app/Engram/issues/2513)) ([7f9cf3c](https://github.com/engram-app/Engram/commit/7f9cf3ca431f6ac39b6b7573c010260a0a8a763d))
+
+
+### Bug Fixes
+
+* **migrations:** R8c repair, window, probe bugs ([#2550](https://github.com/engram-app/Engram/issues/2550)) ([c1ad13a](https://github.com/engram-app/Engram/commit/c1ad13a44e38eae88c376b93999016e872f2fc2d))
+* **notes:** a by-path write with base_hash answers 409 instead of creating a duplicate ([#2539](https://github.com/engram-app/Engram/issues/2539)) ([6012182](https://github.com/engram-app/Engram/commit/60121829247a22e7afcfb6b6f885c36a92919e01))
+* **notes:** diagnose create-race stale-base 409 ([#2548](https://github.com/engram-app/Engram/issues/2548)) ([65eb2db](https://github.com/engram-app/Engram/commit/65eb2dbfb44c8a01d3a52e68311a9ca797d8a7e0))
+* **qdrant:** match a note's points by note id, path hash only without n ([#2515](https://github.com/engram-app/Engram/issues/2515)) ([bc0ca3f](https://github.com/engram-app/Engram/commit/bc0ca3fd74a74a742fcf6668c5bbcd651122182f))
+
 ## [0.80.0](https://github.com/engram-app/Engram/compare/0.79.1...0.80.0) (2026-11-11)
 
 
