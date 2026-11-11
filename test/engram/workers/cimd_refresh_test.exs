@@ -143,24 +143,62 @@ defmodule Engram.Workers.CimdRefreshTest do
       assert tally == %{}
     end
 
-    # A "live grant" = a refresh token that is unrevoked and unexpired, however
-    # long ago it was used (tokens live 90 days and the refresh exchange trusts
-    # the stored document, #1642). Mox is strict: an unexpected fetch of a
-    # skipped client fails the test. Skipped clients refresh on demand via the
-    # authorize path.
-    test "skips clients with no token, a revoked token, or only an expired token" do
-      cimd_client(cimd_url: "https://never.example/c", cimd_fetched_at: aged(2))
+    # The document sweep skips a client only when it is DEAD: no live grant
+    # (a refresh token that is unrevoked and unexpired, however long ago it was
+    # used) AND a last good fetch older than `dead_after_days/0`. Mox is
+    # strict: an unexpected fetch of a skipped client fails the test.
+    defp stale, do: CimdRefresh.dead_after_days() + 1
 
-      [cimd_url: "https://revoked.example/c", cimd_fetched_at: aged(2)]
+    # Cell: no live grant, stale fetch = skipped (three ways to lack a grant).
+    test "skips a dead client: no token, revoked token, or expired token, stale fetch" do
+      cimd_client(cimd_url: "https://never.example/c", cimd_fetched_at: aged(stale()))
+
+      [cimd_url: "https://revoked.example/c", cimd_fetched_at: aged(stale())]
       |> cimd_client()
       |> used(1, revoked_at: DateTime.utc_now(:second))
 
-      [cimd_url: "https://expired.example/c", cimd_fetched_at: aged(2)]
+      [cimd_url: "https://expired.example/c", cimd_fetched_at: aged(stale())]
       |> cimd_client()
       |> used(95, expires_at: DateTime.truncate(aged(5), :second))
 
       assert {:ok, tally} = perform_job(CimdRefresh, %{})
       assert tally == %{}
+    end
+
+    # Cell: no grant, fresh fetch = swept. A healthy vendor nobody connected
+    # yet keeps its early-warning refresh.
+    test "fetches a never-connected client whose last good fetch is recent" do
+      client = cimd_client(cimd_fetched_at: aged(1))
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
+
+      assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{})
+      assert DateTime.compare(reload(client).cimd_fetched_at, client.cimd_fetched_at) == :gt
+    end
+
+    test "fetches a client that was never fetched (cimd_fetched_at NULL)" do
+      cimd_client(cimd_fetched_at: nil)
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
+
+      assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{})
+    end
+
+    # The boundary: a document exactly `dead_after_days/0` old is dead by the
+    # time the sweep runs (the cutoff is taken after the row was aged).
+    test "boundary: exactly dead_after_days old is skipped, a minute younger is swept" do
+      cimd_client(
+        cimd_url: "https://edge.example/c",
+        cimd_fetched_at: aged(CimdRefresh.dead_after_days())
+      )
+
+      client =
+        cimd_client(
+          cimd_fetched_at: DateTime.add(aged(CimdRefresh.dead_after_days()), 60, :second)
+        )
+
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
+
+      assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{})
+      assert DateTime.compare(reload(client).cimd_fetched_at, client.cimd_fetched_at) == :gt
     end
 
     test "fetches a client with a live token used within 30 days" do
@@ -172,34 +210,66 @@ defmodule Engram.Workers.CimdRefreshTest do
       assert DateTime.compare(reload(client).cimd_fetched_at, client.cimd_fetched_at) == :gt
     end
 
-    # THE MAJOR REVIEW FINDING: a dormant but live 90-day grant still needs a
-    # fresh document; its next refresh-token exchange never refetches.
-    test "fetches a client whose live token was last used 60 days ago" do
-      cimd_client(cimd_fetched_at: aged(2)) |> used(60)
+    # Cell: live grant, stale fetch = swept. A dormant 90-day grant still needs
+    # a fresh document; its next refresh-token exchange never refetches (#1642).
+    # The 60-day fetch age keeps the "not dead" fallback from rescuing it.
+    test "fetches a stale client whose live token was last used 60 days ago" do
+      cimd_client(cimd_fetched_at: aged(60)) |> used(60)
 
       expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
 
       assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{})
     end
 
-    test "fetches a client whose live token was never used" do
-      cimd_client(cimd_fetched_at: aged(2)) |> used(0, last_used_at: nil)
+    test "fetches a stale client whose live token was never used" do
+      cimd_client(cimd_fetched_at: aged(60)) |> used(0, last_used_at: nil)
 
       expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
 
       assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{})
     end
 
-    # Rotation: the old token is consumed (revoked_at stays nil), the new one
-    # is live. Either alone keeps the client in the sweep.
-    test "fetches a client with a consumed token plus its live successor" do
-      client = cimd_client(cimd_fetched_at: aged(2))
-      used(client, 80, consumed_at: DateTime.utc_now(:second))
-      used(client, 0)
+    # Rotation leaves the old token consumed with `revoked_at` still nil, and
+    # it is live until it expires. Alone, with a stale fetch, only the grant
+    # predicate can keep this client in the sweep: a predicate that also
+    # required `consumed_at IS NULL` would skip it.
+    test "fetches a stale client whose only token is consumed but unrevoked and unexpired" do
+      cimd_client(cimd_fetched_at: aged(60))
+      |> used(80, consumed_at: DateTime.utc_now(:second))
 
       expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
 
       assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{})
+    end
+
+    # The authorize path: `Engram.OAuth.fetch_client/1` is private
+    # and only calls `Cimd.ensure_client/1`, so that is the entry point here. A
+    # client the sweep skips still refetches a row past its TTL on demand.
+    test "a client the sweep skips still refreshes on demand at the authorize path" do
+      client = cimd_client(cimd_fetched_at: aged(stale()))
+
+      assert {:ok, tally} = perform_job(CimdRefresh, %{})
+      assert tally == %{}
+
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
+      assert {:ok, refreshed} = Engram.OAuth.Cimd.ensure_client(@url)
+      assert DateTime.compare(refreshed.cimd_fetched_at, client.cimd_fetched_at) == :gt
+    end
+
+    # Recovery with no manual step: a dead client (host was down 7+ days, no
+    # grant) is skipped; once somebody tries to connect and the host answers,
+    # the authorize path moves `cimd_fetched_at` to now and the NEXT sweep
+    # includes it again. A dead client nobody tries to connect stays skipped
+    # until then: the authorize attempt is what revives it.
+    test "a skipped client rejoins the sweep once an authorize reaches a recovered host" do
+      cimd_client(cimd_fetched_at: aged(stale()))
+      assert {:ok, tally} = perform_job(CimdRefresh, %{})
+      assert tally == %{}
+
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
+      assert {:ok, _} = Engram.OAuth.Cimd.ensure_client(@url)
+
+      assert {:ok, %{unchanged: 1}} = perform_job(CimdRefresh, %{})
     end
 
     test "is a no-op with no CIMD clients at all" do

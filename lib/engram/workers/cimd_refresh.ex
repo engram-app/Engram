@@ -1,24 +1,30 @@
 defmodule Engram.Workers.CimdRefresh do
   @moduledoc """
-  Daily refresh of the stored CIMD client document of every client holding a
-  LIVE GRANT, and (`kind: "jwks"`, every 5 min) of the JWKS of every RECENTLY
-  USED one. See `perform/1`.
+  Daily refresh of the stored CIMD client document, and (`kind: "jwks"`, every
+  5 min) of the JWKS of every RECENTLY USED client. See `perform/1`.
 
   Live grant = at least one refresh token that is unrevoked and unexpired,
-  whenever it was last used (`live_grant_clients/1`, shared by both sweeps). A
-  dormant grant must keep its document fresh: the refresh-token exchange never
-  calls `ensure_client/1` and trusts the stored row (#1642). The JWKS sweep
-  layers a 30-day `last_used_at` rule on top, because a dormant client's JWKS
-  is fetched on demand in the token path.
+  whenever it was last used (`live_grant_client_ids/1`, the one subquery both sweeps use). A dormant
+  grant must keep its document fresh: the refresh-token exchange never calls
+  `ensure_client/1` and trusts the stored row (#1642). The JWKS sweep layers a
+  30-day `last_used_at` rule on top, because a dormant client's JWKS is
+  fetched on demand in the token path.
 
-  A client with no live grant (a dead test registration whose host is gone) is
-  not retried daily forever, which also keeps its failure logs from tripping
-  the connector-refused alert. Nothing deletes or updates `oauth_clients`
-  here; the sweep only stops REFETCHING. A skipped client refreshes on demand:
-  the authorize path calls `Cimd.ensure_client/1`.
+  The DOCUMENT sweep refreshes a client unless it is demonstrably DEAD: no
+  live grant AND `cimd_fetched_at` older than `dead_after_days/0`. A healthy
+  vendor nobody has connected yet keeps its daily early-warning refresh. Only
+  a host unreachable for a week with no grant stops being retried (it would
+  otherwise log four failure lines a day forever and trip the
+  connector-refused alert). `cimd_fetched_at` only moves on a successful
+  fetch, and NULL (never fetched) counts as not dead. A document exactly
+  `dead_after_days/0` old by the time the sweep runs is dead.
 
-  `total=` in the sweep log lines counts the clients swept (live grants for the
-  document sweep, recently used for JWKS), not every stored CIMD client.
+  Skipped = dead. Nothing deletes or updates `oauth_clients` here; the sweep
+  only stops REFETCHING. A skipped client refreshes on demand: the authorize
+  path calls `Cimd.ensure_client/1`.
+
+  `total=` in the sweep log lines counts the clients swept, not every stored
+  CIMD client.
 
   `Engram.OAuth.Cimd.ensure_client/1` is called from exactly one place,
   `Engram.OAuth.fetch_client/1`, which only the authorize path reaches. So
@@ -91,8 +97,23 @@ defmodule Engram.Workers.CimdRefresh do
   @jwks_concurrency 4
   @jwks_fetch_timeout_ms 15_000
 
-  # How recently a client must have made a token request to get its JWKS swept.
-  @active_days 30
+  # Defaults for the two tunables below, read through `active_days/0` and
+  # `dead_after_days/0` (the repo's `Application.get_env` convention for worker
+  # knobs, `:cimd_active_days` / `:cimd_dead_after_days`).
+  @default_active_days 30
+  @default_dead_after_days 7
+
+  @doc "How recently a client must have made a token request to get its JWKS swept."
+  @spec active_days() :: pos_integer()
+  def active_days, do: Application.get_env(:engram, :cimd_active_days, @default_active_days)
+
+  @doc """
+  Document sweep: a client with no live grant whose last good fetch is older
+  than this many days is dead and no longer retried daily.
+  """
+  @spec dead_after_days() :: pos_integer()
+  def dead_after_days,
+    do: Application.get_env(:engram, :cimd_dead_after_days, @default_dead_after_days)
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(10)
@@ -136,44 +157,47 @@ defmodule Engram.Workers.CimdRefresh do
   # this sweep runs with no user in context at all.
   defp cimd_rows do
     Repo.all(
-      from(c in live_grant_clients(), select: {c.cimd_url, c.cimd_fetched_at}),
+      from(c in cimd_clients(),
+        where:
+          c.client_id in subquery(live_grant_client_ids()) or is_nil(c.cimd_fetched_at) or
+            c.cimd_fetched_at > ^days_ago(dead_after_days()),
+        select: {c.cimd_url, c.cimd_fetched_at}
+      ),
       skip_tenant_check: true
     )
   end
 
-  # The one definition of "has a live grant", used by both sweeps: a CIMD
-  # client with a refresh token (any user) that is unrevoked and unexpired.
-  # With `last_used_after`, that token must also have been used since then.
-  # ONE EXISTS, probed per CIMD client through
-  # `oauth_refresh_tokens_client_id_last_used_at_index` on `client_id`, the
-  # rest rechecked on the heap (a few rows per client). Binding is `:client`.
-  defp live_grant_clients(last_used_after \\ nil) do
-    now = DateTime.utc_now()
+  defp cimd_clients, do: from(c in Client, where: not is_nil(c.cimd_url))
 
+  # The one definition of "has a live grant", used by both sweeps: the ids of
+  # clients with a refresh token (any user) that is unrevoked and unexpired.
+  # With `last_used_after`, that token must also have been used since then. An
+  # IN subquery (not EXISTS) because the document sweep ORs it with the
+  # not-dead rule. A small, once-a-day semi-join over `oauth_refresh_tokens`
+  # (~7k rows); the JWKS sweep reaches it every 5 min over the same rows.
+
+  defp live_grant_client_ids(last_used_after \\ nil) do
     live =
       from(rt in RefreshToken,
-        where:
-          rt.client_id == parent_as(:client).client_id and is_nil(rt.revoked_at) and
-            rt.expires_at > ^now,
-        select: 1
+        where: is_nil(rt.revoked_at) and rt.expires_at > ^DateTime.utc_now(),
+        select: rt.client_id
       )
 
-    live =
-      if last_used_after, do: where(live, [rt], rt.last_used_at > ^last_used_after), else: live
-
-    from(c in Client, as: :client, where: not is_nil(c.cimd_url) and exists(live))
+    if last_used_after, do: where(live, [rt], rt.last_used_at > ^last_used_after), else: live
   end
 
-  # Recently used clients only (live grant used in the last `@active_days`),
+  defp days_ago(days), do: DateTime.add(DateTime.utc_now(), -days * 86_400, :second)
+
+  # Recently used clients only (live grant used in the last `active_days/0`),
   # most recently used first, so a burst of registrations that never connect,
   # or grants since disconnected, cost no vendor fetches. One that comes back fetches on demand in the token
   # path. Clients sharing a jwks_uri collapse to one URI, ordered by its most
   # recent use.
   defp jwks_uris do
-    cutoff = DateTime.add(DateTime.utc_now(), -@active_days * 86_400, :second)
-
-    from(c in live_grant_clients(cutoff),
-      where: not is_nil(c.jwks_uri),
+    from(c in cimd_clients(),
+      where:
+        c.client_id in subquery(live_grant_client_ids(days_ago(active_days()))) and
+          not is_nil(c.jwks_uri),
       select: {
         c.jwks_uri,
         # `utc_wall`: Ecto casts this to `timestamp`, which would read a
