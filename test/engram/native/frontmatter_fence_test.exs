@@ -23,15 +23,17 @@ defmodule Engram.Native.FrontmatterFenceTest do
 
   # Each case that holds `title: T` and `[[In]]` puts them in the block when
   # there is one, so the title is T exactly when a block was found, and the
-  # link counts exactly when none was.
-  test "title, tags and links use the same fence" do
-    for %{name: name, input: input} <- @cases, String.contains?(input, "title: T") do
+  # link counts exactly when none was. One test per case, so a red run names
+  # every case that differs.
+  for %{name: name, input: input} <- @cases, String.contains?(input, "title: T") do
+    test "title, tags and links use the same fence: #{name}" do
+      input = unquote(input)
       {block, _} = input |> String.trim_leading(@bom) |> Frontmatter.split()
       {title, _tags} = Native.note_meta(input)
-      assert (title == "T") == (block != nil), "#{name}: title #{inspect(title)}"
+      assert title == "T" == (block != nil), "title #{inspect(title)}"
 
       linked = Enum.any?(Parser.extract(input), &(&1.target == "In"))
-      assert linked == (block == nil), "#{name}: link #{if linked, do: "kept", else: "dropped"}"
+      assert linked == (block == nil), "link #{if linked, do: "kept", else: "dropped"}"
     end
   end
 end
