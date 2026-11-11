@@ -52,18 +52,50 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   key, so bytes written for it decrypt once the row is the owner's again.
   Each path is logged with the note ids; the repair repeats until the user
   has no such note, and a note still unreadable after that logs a warning.
-  Never a raise: a raising migration blocks every boot (zero operator
-  action).
+  Never a raise for that: a raising migration blocks every boot (zero
+  operator action), and no retry would change the answer.
+
+  The one raise is lock contention, which a later boot can get past. A
+  window that hits a lock timeout or deadlock is retried twice. A user that
+  still fails is skipped: the migration continues through the other users,
+  retries the skipped users in a final pass, and raises at the end with the
+  count, so it is not recorded and the next boot resumes. Finishing instead
+  would record it, it would never run again, and that user's notes would be
+  left with no body once readers stop falling back to the `notes` columns.
+  The cost is a failed boot while the contention lasts. Locks are only taken
+  where rows need writing, so a database with nothing to split cannot reach
+  this.
 
   Prod (2026-11-07): 0 notes without a body row and 0 body rows under
-  another owner, so it inserts nothing, takes no table lock, and reads each
-  user's note ids twice (the walk and the check). Rerun-safe; no `down` work (the rows
-  are what every release from 0.76 on writes). Calls no app module.
+  another owner, so it inserts nothing and takes no table lock. Rerun-safe;
+  no `down` work (the rows are what every release from 0.76 on writes).
+  Calls no app module.
+
+  No connection is held across the walk: each window is its own short
+  transaction, with `lock_timeout` set inside it. A `checkout` around every
+  user inherited DBConnection's 15s and crashed boot at 1,637 users.
+
+  Before any walk, one tenanted `EXISTS` per user (in batches of #{200} users
+  per short transaction) picks out the users with a note that reads with no
+  body, a body row under another owner included; only those are walked.
+
+  A pre-check skips all of that when no note needs anything, but only on a
+  connection that can see every tenant: a superuser or BYPASSRLS role, or one
+  that may `SET ROLE engram_maintenance`, whose `maintenance_all` policies
+  show it every row. Any other role sees no row without a tenant, so the same
+  query would answer "nothing to do" on every database; it goes per user
+  instead. A pre-check that cannot see costs time, never a body.
   """
 
   require Logger
 
   @window 1_000
+  # One window: 1,000 whole bodies copied at worst, on a self-hoster's disk.
+  @window_timeout_ms 120_000
+  @window_retries 2
+  @probe_batch 200
+  @progress_every 250
+  @contention [:lock_not_available, :deadlock_detected]
 
   # The merged layout of one `notes` (ciphertext, nonce) pair, as
   # `NoteBody` built it (from the dropped `notes_sync_body` trigger).
@@ -111,6 +143,42 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   WHERE n.user_id = $1 AND n.kind = 'note'
     AND NOT EXISTS (SELECT 1 FROM note_bodies x WHERE x.note_id = n.id AND x.user_id = n.user_id)
   ORDER BY n.id LIMIT #{@window}
+  """
+
+  # The same question for one user, in that user's tenant context. A body row
+  # under another owner is hidden by the policy, so it reads as missing.
+  @user_left """
+  SELECT EXISTS (
+    SELECT 1 FROM notes n
+    WHERE n.user_id = $1 AND n.kind = 'note'
+      AND NOT EXISTS (SELECT 1 FROM note_bodies x WHERE x.note_id = n.id AND x.user_id = n.user_id)
+  )
+  """
+
+  # The same question over every user. Only true to its answer on a
+  # connection `@visibility` says can see them all.
+  @any_left """
+  SELECT EXISTS (
+    SELECT 1 FROM notes n
+    WHERE n.kind = 'note'
+      AND NOT EXISTS (SELECT 1 FROM note_bodies x WHERE x.note_id = n.id AND x.user_id = n.user_id)
+  )
+  """
+
+  # Whether this connection bypasses RLS, and whether it can become a role
+  # that a policy shows every row. CASE, not AND: `pg_has_role` raises on an
+  # unknown role and AND does not promise to test the name first.
+  @visibility """
+  SELECT
+    (SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user),
+    CASE WHEN to_regrole('engram_maintenance') IS NULL THEN false
+      ELSE pg_has_role('engram_maintenance', 'SET')
+        AND has_table_privilege('engram_maintenance', 'notes', 'SELECT')
+        AND has_table_privilege('engram_maintenance', 'note_bodies', 'SELECT')
+        AND (SELECT count(*) = 2 FROM pg_policy
+             WHERE polname = 'maintenance_all'
+               AND polrelid IN ('notes'::regclass, 'note_bodies'::regclass))
+    END
   """
 
   # True when body column `body` holds the envelope under the `notes` nonce
@@ -181,16 +249,118 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   @doc false
   # The whole migration on `repo`; public for `SelfHostJumpTest`.
   def complete_split(repo) do
-    repo.checkout(fn ->
-      repo.query!("SET lock_timeout = '5s'")
+    if work_remains?(repo) do
+      %{rows: users} = repo.query!("SELECT id FROM users ORDER BY id")
+      split_users(repo, Enum.map(users, &hd/1))
+    end
 
-      try do
-        %{rows: users} = repo.query!("SELECT id FROM users ORDER BY id")
-        Enum.each(users, fn [user_id] -> user!(repo, user_id) end)
-      after
-        repo.query!("RESET lock_timeout")
-      end
+    :ok
+  end
+
+  defp split_users(repo, users) do
+    started = System.monotonic_time(:millisecond)
+    pending = users_needing_work(repo, users)
+    boot_log("walk started: #{length(pending)} of #{length(users)} users need work", started)
+
+    case pending |> walk_users(repo, started) |> walk_users(repo, started) do
+      [] ->
+        boot_log("walk finished: #{length(pending)} users", started)
+
+      still ->
+        raise "note_bodies split: #{length(still)} user(s) still need work after retries " <>
+                "(lock contention); not recording this migration, the next boot resumes"
+    end
+  end
+
+  defp users_needing_work(repo, users) do
+    users
+    |> Enum.chunk_every(@probe_batch)
+    |> Enum.flat_map(fn batch ->
+      {:ok, needing} =
+        repo.transaction(
+          fn ->
+            needing = Enum.filter(batch, &user_left?(repo, &1))
+            repo.query!("SELECT set_config('app.current_tenant', '', true)")
+            needing
+          end,
+          timeout: @window_timeout_ms
+        )
+
+      needing
     end)
+  end
+
+  defp user_left?(repo, user_id) do
+    repo.query!("SELECT set_config('app.current_tenant', $1::uuid::text, true)", [user_id])
+    %{rows: [[left?]]} = repo.query!(@user_left, [user_id])
+    left?
+  end
+
+  # Returns the users skipped for lock contention.
+  defp walk_users(users, repo, started) do
+    total = length(users)
+
+    users
+    |> Enum.with_index(1)
+    |> Enum.reject(fn {user_id, done} ->
+      split? = split_user?(repo, user_id)
+
+      if rem(done, @progress_every) == 0 do
+        boot_log("walk progress: #{done} of #{total} users", started)
+      end
+
+      split?
+    end)
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  defp split_user?(repo, user_id) do
+    user!(repo, user_id)
+    true
+  rescue
+    e in Postgrex.Error ->
+      if contention?(e), do: false, else: reraise(e, __STACKTRACE__)
+  end
+
+  defp contention?(%Postgrex.Error{postgres: %{code: code}}), do: code in @contention
+  defp contention?(_error), do: false
+
+  # Counts and timing only, never a user id. `:boot` info lines ship to Loki
+  # (`Engram.Logger.Category`, spelled out as a migration calls no app module).
+  defp boot_log(message, started) do
+    elapsed = System.monotonic_time(:millisecond) - started
+    Logger.info("note_bodies split #{message} (#{elapsed} ms)", category: :boot, loki_ship: true)
+  end
+
+  # True unless a connection that can see every tenant found nothing to do.
+  # One anti-join over `notes`, so `timeout: :infinity` on that statement alone.
+  defp work_remains?(repo) do
+    case repo.query!(@visibility).rows do
+      [[true, _]] -> any_left?(repo)
+      [[_, true]] -> any_left_as_maintenance?(repo)
+      _ -> true
+    end
+  end
+
+  defp any_left?(repo) do
+    %{rows: [[any?]]} = repo.query!(@any_left, [], timeout: :infinity)
+    any?
+  end
+
+  # The role is cleared before the transaction ends, like the tenant below.
+  defp any_left_as_maintenance?(repo) do
+    {:ok, any?} =
+      repo.transaction(
+        fn ->
+          repo.query!("SET LOCAL ROLE engram_maintenance")
+          any? = any_left?(repo)
+          repo.query!("SELECT set_config('role', 'none', true)")
+          any?
+        end,
+        timeout: :infinity
+      )
+
+    any?
   end
 
   defp user!(repo, user_id) do
@@ -268,15 +438,31 @@ defmodule Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate do
   # One transaction in `user_id`'s RLS context; the tenant is cleared before
   # it ends (a test runs this in a sandbox, where it would outlive a
   # savepoint).
-  defp tenant(repo, user_id, fun) do
-    {:ok, result} =
-      repo.transaction(fn ->
-        repo.query!("SELECT set_config('app.current_tenant', $1::uuid::text, true)", [user_id])
+  defp tenant(repo, user_id, fun, retries \\ @window_retries) do
+    in_tenant(repo, user_id, fun)
+  rescue
+    e in Postgrex.Error ->
+      if retries > 0 and contention?(e),
+        do: tenant(repo, user_id, fun, retries - 1),
+        else: reraise(e, __STACKTRACE__)
+  end
 
-        result = fun.()
-        repo.query!("SELECT set_config('app.current_tenant', '', true)")
-        result
-      end)
+  defp in_tenant(repo, user_id, fun) do
+    {:ok, result} =
+      repo.transaction(
+        fn ->
+          repo.query!(
+            "SELECT set_config('app.current_tenant', $1::uuid::text, true), " <>
+              "set_config('lock_timeout', '5s', true)",
+            [user_id]
+          )
+
+          result = fun.()
+          repo.query!("SELECT set_config('app.current_tenant', '', true)")
+          result
+        end,
+        timeout: @window_timeout_ms
+      )
 
     result
   end

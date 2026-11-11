@@ -645,22 +645,26 @@ defmodule Engram.Fixtures do
 
     # By name at runtime: migrations are not compiled with the app.
     mod = String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate")
+    repo = Keyword.get(opts, :repo, Engram.Repo)
 
-    case Keyword.fetch(opts, :role) do
-      {:ok, role} ->
+    case {opts[:only_load], Keyword.fetch(opts, :role)} do
+      {true, _} ->
+        :ok
+
+      {_, {:ok, role}} ->
         # SESSION AUTHORIZATION, not SET ROLE: a role reset lands back on
         # this role, not the suite's superuser (rls-enforcement-testing-traps
         # trap 6). In the sandbox transaction, so `LOCAL` lasts the run.
         Engram.Repo.query!("SET LOCAL SESSION AUTHORIZATION #{role}")
 
         try do
-          mod.complete_split(Engram.Repo)
+          mod.complete_split(repo)
         after
           Engram.Repo.query!("SET LOCAL SESSION AUTHORIZATION DEFAULT")
         end
 
-      :error ->
-        mod.complete_split(Engram.Repo)
+      {_, :error} ->
+        mod.complete_split(repo)
     end
   end
 

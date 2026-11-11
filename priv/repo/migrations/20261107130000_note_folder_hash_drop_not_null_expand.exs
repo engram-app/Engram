@@ -9,22 +9,58 @@
 defmodule Engram.Repo.Migrations.NoteFolderHashDropNotNullExpand do
   use Ecto.Migration
 
+  @disable_ddl_transaction true
+  @disable_migration_lock true
+
   @moduledoc """
   R9 schema prep: `notes.folder_hmac` becomes nullable so a later release can
   stop writing it on notes (a note's folder is its `folder_ref_id`).
   20261107130100 moves the marker requirement into the kind-shape check and
   makes `notes_set_folder_ref()` keep a hashless note's reference. Calls no
   app module (N-1 gate).
+
+  No DDL transaction, as a lock timeout would abort one and leave nothing to
+  retry in. One pinned connection, so the `lock_timeout` reaches the statement
+  and is reset after. Rerun-safe.
   """
 
-  def up do
-    execute "SET lock_timeout = '5s'"
-    execute "ALTER TABLE notes ALTER COLUMN folder_hmac DROP NOT NULL"
-    execute "RESET lock_timeout"
+  @timeout_ms 120_000
+  @lock_retries 2
+
+  def up, do: drop_not_null(repo())
+
+  @doc false
+  # Public for `NoteFolderHashPrepTimeoutTest`.
+  def drop_not_null(repo) do
+    repo.checkout(
+      fn ->
+        repo.query!("SET lock_timeout = '5s'")
+
+        try do
+          run(repo, @lock_retries)
+        after
+          repo.query!("RESET lock_timeout")
+        end
+      end,
+      timeout: @timeout_ms
+    )
   end
 
   # Stays nullable: SET NOT NULL would fail on a note a later release wrote
   # without a hash, and the column being nullable changes nothing for a
   # writer that always sets it.
   def down, do: :ok
+
+  defp run(repo, retries) do
+    repo.query!("ALTER TABLE notes ALTER COLUMN folder_hmac DROP NOT NULL", [],
+      timeout: @timeout_ms
+    )
+
+    :ok
+  rescue
+    e in Postgrex.Error ->
+      if retries > 0 and match?(%{postgres: %{code: :lock_not_available}}, e),
+        do: run(repo, retries - 1),
+        else: reraise(e, __STACKTRACE__)
+  end
 end

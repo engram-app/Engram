@@ -281,4 +281,316 @@ defmodule Engram.DataMigrations.SelfHostJumpTest do
     refute log =~ "still read with no body"
     assert read!(u, v, "owned.md") == "owned text"
   end
+
+  # A repo with no `checkout`: the walk over every user once ran inside one,
+  # which inherited DBConnection's 15s and crashed boot at prod's user count.
+  defmodule NoCheckoutRepo do
+    @moduledoc false
+    defdelegate query!(sql), to: Engram.Repo
+    defdelegate query!(sql, params), to: Engram.Repo
+    defdelegate query!(sql, params, opts), to: Engram.Repo
+    defdelegate transaction(fun), to: Engram.Repo
+    defdelegate transaction(fun, opts), to: Engram.Repo
+  end
+
+  # Fails the body insert with a lock timeout: forever for the user in
+  # `:always`, or the first `:times` calls for anyone. `:persistent_term`, as
+  # a migration runs in its own process.
+  defmodule FlakyRepo do
+    @moduledoc false
+    @key {__MODULE__, :plan}
+
+    def plan(plan) do
+      :persistent_term.put(@key, :counters.new(1, []))
+      :persistent_term.put({__MODULE__, :spec}, plan)
+    end
+
+    defdelegate query!(sql), to: Engram.Repo
+    defdelegate query!(sql, params, opts), to: Engram.Repo
+    defdelegate transaction(fun), to: Engram.Repo
+    defdelegate transaction(fun, opts), to: Engram.Repo
+
+    def query!(sql, [user_id | _] = params) do
+      if String.contains?(sql, "INSERT INTO note_bodies") and fail?(user_id) do
+        raise %Postgrex.Error{
+          postgres: %{
+            code: :lock_not_available,
+            pg_code: "55P03",
+            severity: "ERROR",
+            message: "lock timeout"
+          }
+        }
+      end
+
+      Engram.Repo.query!(sql, params)
+    end
+
+    def query!(sql, params), do: Engram.Repo.query!(sql, params)
+
+    defp fail?(user_id) do
+      counter = :persistent_term.get(@key)
+      spec = :persistent_term.get({__MODULE__, :spec})
+      :counters.add(counter, 1, 1)
+
+      user_id == spec[:always] or :counters.get(counter, 1) <= Keyword.get(spec, :times, 0)
+    end
+  end
+
+  # The real runner, so "not recorded" is what Ecto does with the raise.
+  defmodule FlakyMigration do
+    @moduledoc false
+    use Ecto.Migration
+    @disable_ddl_transaction true
+    @disable_migration_lock true
+
+    def up do
+      mod =
+        String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate")
+
+      mod.complete_split(FlakyRepo)
+    end
+  end
+
+  describe "the pre-check and the walk" do
+    # What the pre-check would be with no thought for RLS.
+    @blind_exists """
+    SELECT EXISTS (
+      SELECT 1 FROM notes n
+      WHERE n.kind = 'note'
+        AND NOT EXISTS (SELECT 1 FROM note_bodies x
+                        WHERE x.note_id = n.id AND x.user_id = n.user_id))
+    """
+    @migrator "r8c_migrator"
+    @statement_bound 8
+
+    # Prod's shape: owns `note_bodies`, no superuser, no BYPASSRLS, so FORCE
+    # RLS binds it. `maintenance?` adds what lets it see every tenant.
+    defp migrator!(maintenance?) do
+      Repo.query!("CREATE ROLE #{@migrator} NOSUPERUSER NOBYPASSRLS NOINHERIT")
+
+      Repo.query!(
+        "GRANT SELECT, INSERT, UPDATE ON users, notes, note_bodies, note_index_state TO #{@migrator}"
+      )
+
+      Repo.query!("ALTER TABLE note_bodies OWNER TO #{@migrator}")
+
+      if maintenance? do
+        Repo.query!("GRANT engram_maintenance TO #{@migrator} WITH INHERIT FALSE, SET TRUE")
+      end
+    end
+
+    # The tenant is cleared first: one set by an earlier write in this sandbox
+    # transaction would leak forward and make the role see rows.
+    defp as_migrator(fun) do
+      Repo.query!("SELECT set_config('app.current_tenant', '', true)")
+      Repo.query!("SET LOCAL SESSION AUTHORIZATION #{@migrator}")
+
+      try do
+        fun.()
+      after
+        Repo.query!("SET LOCAL SESSION AUTHORIZATION DEFAULT")
+      end
+    end
+
+    defp statements(fun) do
+      test_pid = self()
+      handler = "count-statements-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :repo, :query],
+        fn _event, _measure, _meta, _cfg ->
+          if self() == test_pid, do: Process.put(:statements, Process.get(:statements, 0) + 1)
+        end,
+        nil
+      )
+
+      Process.put(:statements, 0)
+      fun.()
+      :telemetry.detach(handler)
+      Process.get(:statements)
+    end
+
+    defp grows?(opts) do
+      few = statements(fn -> Engram.Fixtures.complete_split!(opts) end)
+      for _ <- 1..2_000, do: insert(:user)
+      many = statements(fn -> Engram.Fixtures.complete_split!(opts) end)
+      {few, many}
+    end
+
+    test "nothing to split, as a role that sees every row: bounded statements", %{
+      user: u,
+      vault: v
+    } do
+      _ = write!(u, v, "kept.md", "kept text")
+
+      {few, many} = grows?([])
+
+      assert many == few
+      assert many <= @statement_bound
+    end
+
+    test "nothing to split, as a maintenance member under RLS: bounded statements", %{
+      user: u,
+      vault: v
+    } do
+      _ = write!(u, v, "kept.md", "kept text")
+      migrator!(true)
+
+      {few, many} = grows?(role: @migrator)
+
+      assert many == few
+      assert many <= @statement_bound
+    end
+
+    test "no connection is held across the walk", %{user: u, vault: v} do
+      _ = write!(u, v, "held.md", "held text")
+      written = bodies(u)
+      pre_split!(u)
+
+      Engram.Fixtures.complete_split!(repo: NoCheckoutRepo)
+
+      assert bodies(u) == written
+    end
+
+    test "as a role that cannot see every tenant, nothing to split costs 2 statements a user",
+         %{user: u, vault: v} do
+      _ = write!(u, v, "kept.md", "kept text")
+      migrator!(false)
+      users = 300
+
+      few = statements(fn -> Engram.Fixtures.complete_split!(role: @migrator) end)
+      for _ <- 1..users, do: insert(:user)
+      many = statements(fn -> Engram.Fixtures.complete_split!(role: @migrator) end)
+
+      assert many - few <= 2 * users + 8
+    end
+
+    test "a window that hits a lock timeout is retried", %{user: u, vault: v} do
+      _ = write!(u, v, "retry.md", "retry text")
+      written = bodies(u)
+      pre_split!(u)
+      FlakyRepo.plan(times: 2)
+
+      Engram.Fixtures.complete_split!(repo: FlakyRepo)
+
+      assert bodies(u) == written
+    end
+
+    test "a user that keeps failing: others done, count raised, migration not recorded", %{
+      user: u,
+      vault: v
+    } do
+      _ = write!(u, v, "stuck.md", "stuck text")
+      pre_split!(u)
+
+      {:ok, other} = Engram.Crypto.ensure_user_dek(insert(:user))
+      insert(:user_limit_override, user: other, key: "vaults_cap", value: %{"v" => -1})
+      {:ok, other_vault, _} = Engram.Vaults.register_vault(other, "Other", Ecto.UUID.generate())
+      _ = write!(other, other_vault, "done.md", "done text")
+      written = bodies(other)
+      pre_split!(other)
+
+      Engram.Fixtures.complete_split!(role: nil, only_load: true)
+      FlakyRepo.plan(always: Ecto.UUID.dump!(u.id))
+      version = 99_999_999_999_991
+
+      error =
+        assert_raise RuntimeError, fn ->
+          Ecto.Migrator.up(Repo, version, FlakyMigration, log: false)
+        end
+
+      assert error.message =~ "1 user"
+      refute error.message =~ u.id
+      assert bodies(other) == written
+      assert bodies(u) == []
+
+      assert Repo.query!("SELECT count(*) FROM schema_migrations WHERE version = $1", [version]).rows ==
+               [[0]]
+    end
+
+    test "the walk logs progress on a Loki-shipped boot line, with no user ids", %{
+      user: u,
+      vault: v
+    } do
+      _ = write!(u, v, "log.md", "log text")
+      pre_split!(u)
+      for _ <- 1..250, do: insert(:user)
+      Engram.Fixtures.complete_split!(role: nil, only_load: true)
+
+      mod =
+        String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteBodiesCompleteSplitMigrate")
+
+      Logger.put_module_level(mod, :info)
+      on_exit(fn -> Logger.delete_module_level(mod) end)
+      migrator!(false)
+
+      {_, events} =
+        Engram.Test.LogCapture.with_events(fn ->
+          Engram.Fixtures.complete_split!(role: @migrator)
+        end)
+
+      lines =
+        for %{meta: %{category: :boot} = meta, msg: {:string, text}} <- events do
+          assert meta.loki_ship == true
+          IO.chardata_to_string(text)
+        end
+
+      assert Enum.any?(lines, &(&1 =~ "walk started"))
+      assert Enum.any?(lines, &(&1 =~ "walk finished"))
+      refute Enum.any?(lines, &(&1 =~ u.id))
+    end
+
+    # CONTROL: this is what makes the tests below able to fail. The suite's
+    # role sees the missing body, the migrator's role, with no tenant, does
+    # not: a pre-check written this way would skip every database.
+    test "CONTROL: an untenanted EXISTS is blind under RLS while rows need the split", %{
+      user: u,
+      vault: v
+    } do
+      _ = write!(u, v, "blind.md", "blind text")
+      pre_split!(u)
+      migrator!(false)
+
+      assert Repo.query!(@blind_exists).rows == [[true]]
+      assert as_migrator(fn -> Repo.query!(@blind_exists).rows end) == [[false]]
+    end
+
+    test "CONTROL: the migrator's role sees zero notes with no tenant", %{user: u, vault: v} do
+      _ = write!(u, v, "zero.md", "zero text")
+      migrator!(true)
+
+      assert as_migrator(fn -> Repo.query!("SELECT count(*) FROM notes").rows end) == [[0]]
+    end
+
+    for maintenance? <- [true, false] do
+      test "pre-split rows complete under RLS (maintenance member: #{maintenance?})", %{
+        user: u,
+        vault: v
+      } do
+        _ = write!(u, v, "split.md", "split text")
+        written = bodies(u)
+        pre_split!(u)
+        assert bodies(u) == []
+        migrator!(unquote(maintenance?))
+
+        Engram.Fixtures.complete_split!(role: @migrator)
+
+        assert bodies(u) == written
+        assert read!(u, v, "split.md") == "split text"
+      end
+
+      test "a foreign-owner body is repaired under RLS (maintenance member: #{maintenance?})",
+           %{user: u, vault: v} do
+        note = write!(u, v, "owned.md", "owned text")
+        foreign_body!(note)
+        assert read!(u, v, "owned.md") == nil
+        migrator!(unquote(maintenance?))
+
+        Engram.Fixtures.complete_split!(role: @migrator)
+
+        assert read!(u, v, "owned.md") == "owned text"
+      end
+    end
+  end
 end
