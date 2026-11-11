@@ -71,8 +71,9 @@ interface TextRenderer<T> {
 	/**
 	 * An edit of lines [from, to] lies strictly inside `token` (neither its first
 	 * nor its last line). True if the token still stands as it was, so the core
-	 * re-decorates it instead of rescanning it: a keystroke inside a 5000-line
-	 * fence then costs the edited lines, not the fence.
+	 * leaves it instead of rescanning it: a keystroke inside a 5000-line fence
+	 * then costs the edited lines, not the fence. Only for tokens that draw
+	 * nothing themselves (their decorations are not redone).
 	 */
 	keep?: (state: EditorState, token: Token<unknown>, from: number, to: number) => boolean;
 }
@@ -236,11 +237,10 @@ function rescan(
 	return end;
 }
 
-/** An old token the edit lies strictly inside, that the renderer says still stands: re-decorate it, no rescan. */
+/** An old token the edit lies strictly inside, that the renderer says still stands: no rescan. */
 function kept(
 	state: EditorState,
 	r: TextRenderer<unknown>,
-	layer: Layer,
 	old: RangeSet<TokenMark<unknown>>,
 	span: Span,
 ): boolean {
@@ -258,13 +258,11 @@ function kept(
 		}
 	});
 	const [t] = around;
-	if (!(t && r.keep(state, t, first.from, last.to))) {
-		return false;
-	}
-	const decos: Range<Decoration>[] = [];
-	decorateTokens(state, r, [t], decos);
-	layer.decos = patch(layer.decos, t.from, t.to, decos);
-	return true;
+	// Nothing to redo: keep is only for tokens that draw nothing themselves (a
+	// fence's other content, an unpaired `$$`), and the decorations of other
+	// tokens inside it were mapped with the edit. Re-patching [t.from, t.to)
+	// here would wipe those.
+	return Boolean(t && r.keep(state, t, first.from, last.to));
 }
 
 function renderTree(state: EditorState, tree: Tree, tree$: [TreeRenderer, Layer][], spans: Span[]) {
@@ -389,6 +387,43 @@ function narrowed(
 	return [first.from, last.to + 1];
 }
 
+/** The outermost unit that starts exactly at `pos`, or null. */
+function unitStarting(tree: Tree, pos: number): SyntaxNode | null {
+	let found: SyntaxNode | null = null;
+	for (let n: SyntaxNode | null = tree.resolve(pos, 1); n && n.from === pos; n = n.parent) {
+		if (isUnit(n)) {
+			found = n;
+		}
+	}
+	return found;
+}
+
+/**
+ * Where the old and new trees agree again after an edit's region ends at `hi`:
+ * the first unit boundary at which both trees start the same unit (name and
+ * mapped extent). An edit can change a LATER unit, e.g. break an HTML block so
+ * a ``` below now opens a fence to the end of the note; stopping at `hi` left
+ * everything under it stale. Costs the units that really changed.
+ */
+function resync(tr: Transaction, before: Tree, tree: Tree, hi: number): number {
+	const back = tr.changes.invertedDesc;
+	let at = hi;
+	while (at < tree.length) {
+		const now = unitStarting(tree, at);
+		const was = unitStarting(before, back.mapPos(at, 1));
+		const wasTo = was ? tr.changes.mapPos(was.to, 1) : -1;
+		if (now && was && now.name === was.name && now.to === wasTo) {
+			return at;
+		}
+		const end = Math.max(now?.to ?? at, wasTo, at + 1);
+		if (end >= tree.length) {
+			return tree.length;
+		}
+		[, at] = blockRegion(tr.state, tree, end, end);
+	}
+	return at;
+}
+
 function treeSpans(tr: Transaction, startLen: number, tree: Tree): Span[] {
 	const { state } = tr;
 	const spans: Span[] = [];
@@ -402,7 +437,8 @@ function treeSpans(tr: Transaction, startLen: number, tree: Tree): Span[] {
 			}
 			const [a, b] = blockRegion(tr.startState, before, fromA, toA);
 			const [c, d] = blockRegion(state, tree, fromB, toB);
-			spans.push([Math.min(tr.changes.mapPos(a, -1), c), Math.max(tr.changes.mapPos(b, 1), d)]);
+			const lo = Math.min(tr.changes.mapPos(a, -1), c);
+			spans.push([lo, resync(tr, before, tree, Math.max(tr.changes.mapPos(b, 1), d))]);
 		});
 	}
 	// The parser got further than last time: render what it newly covers.
@@ -491,7 +527,7 @@ function update(value: CoreState, tr: Transaction): CoreState {
 		}
 		let floor = 0;
 		for (const span of mergeSpans([...edits, ...(r.usesTree ? tSpans : [])])) {
-			if (span[1] < floor || kept(state, r, layer, old, span)) {
+			if (span[1] < floor || kept(state, r, old, span)) {
 				continue;
 			}
 			floor = rescan(state, r, layer, old, span, floor);

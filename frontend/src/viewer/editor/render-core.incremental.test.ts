@@ -86,3 +86,24 @@ describe("decorations hold while the parser lags", () => {
 		expect(placed(s.field(railsField)).length).toBeGreaterThan(0);
 	}, 60_000);
 });
+
+describe("an edit that changes a later block", () => {
+	const md = markdown({ base: markdownLanguage });
+
+	test("breaking a fence opener lets a later ``` open to the end: comments below follow", () => {
+		const cext = [md, commentDecoration];
+		let s = parsedState("```js\na\nc %%\nd\n```\n\n%%\nblock\n%%\n\n%%\nblock\n%%\n", cext);
+		s = settle(s.update({ changes: { from: 1, insert: "---" } }).state);
+		expect(diffFromFresh(s, cext, commentDecoration)).toEqual([]);
+	});
+
+	test("unmaking an HTML block lets a later ``` open to the end: indented code below follows", () => {
+		const iext = [md, indentedCodeLines];
+		let s = parsedState(
+			"%%\nblock\ncomment```\n%%\n\n<div>\nhtml\n```re\n</div>\n\n%%\nblock\ncomment\n%%\n\n$$ lone\nmore\nmore\n\n\tcode1\n\tcode2\n\tcode3\n\n\tcode1```\tcode2\n\tcode3\n",
+			iext,
+		);
+		s = settle(s.update({ changes: { from: 27, to: 30, insert: "- " } }).state);
+		expect(diffFromFresh(s, iext, indentedCodeLines)).toEqual([]);
+	});
+});
