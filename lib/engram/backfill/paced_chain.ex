@@ -42,8 +42,12 @@ defmodule Engram.Backfill.PacedChain do
   began: a hop that walks several tables passes its own start, so `writes`
   counted across tables are measured against the whole hop.
 
+  `:clock` (0-arity, ms, default `Throttle.now_ms/0`) and `:sleep` (1-arity,
+  default `Process.sleep/1`) are the seams a test injects to check the waits
+  without sleeping.
+
   Options: `:stop?` (required), `:continue?`, `:pause_ms`, `:writes_per_s`,
-  `:writes` and `:started_ms`, and `IdWindows.reduce/5`'s `:batch_size` and
+  `:writes`, `:started_ms`, `:clock` and `:sleep`, and `IdWindows.reduce/5`'s `:batch_size` and
   `:fun_in_tenant`.
   """
   @spec walk(module(), cursor(), acc, (list(), IdWindows.ctx(), acc -> acc), keyword()) ::
@@ -53,8 +57,12 @@ defmodule Engram.Backfill.PacedChain do
     stop? = Keyword.fetch!(opts, :stop?)
     continue? = Keyword.get(opts, :continue?, fn -> true end)
     pause = Keyword.get(opts, :pause_ms, @pause_ms)
-    started = Keyword.get_lazy(opts, :started_ms, &Throttle.now_ms/0)
-    wait = waiter(pause, Keyword.get(opts, :writes_per_s), Keyword.get(opts, :writes), started)
+    clock = Keyword.get(opts, :clock, &Throttle.now_ms/0)
+    sleep = Keyword.get(opts, :sleep, &Process.sleep/1)
+    started = Keyword.get_lazy(opts, :started_ms, clock)
+
+    wait =
+      waiter(pause, Keyword.get(opts, :writes_per_s), Keyword.get(opts, :writes), started, clock)
 
     fun = fn ids, ctx, {_state, at, acc} ->
       if continue?.() do
@@ -65,7 +73,7 @@ defmodule Engram.Backfill.PacedChain do
         # A stopping window waits off its ceiling deficit too (never the
         # pause): the owner may start its successor at once.
         ms = wait.(acc, stop)
-        if ms > 0, do: Process.sleep(ms)
+        if ms > 0, do: sleep.(ms)
 
         if stop, do: {:halt, {:stopped, at, acc}}, else: {:cont, {:walking, at, acc}}
       else
@@ -83,16 +91,17 @@ defmodule Engram.Backfill.PacedChain do
     end
   end
 
-  defp waiter(pause, nil, _writes, _started), do: fn _acc, stop -> if stop, do: 0, else: pause end
+  defp waiter(pause, nil, _writes, _started, _clock),
+    do: fn _acc, stop -> if stop, do: 0, else: pause end
 
-  defp waiter(pause, per_s, writes, started) when is_function(writes, 1) do
+  defp waiter(pause, per_s, writes, started, clock) when is_function(writes, 1) do
     fn acc, stop ->
       Throttle.wait_ms(
         started,
         writes.(acc),
         per_s,
         if(stop, do: 0, else: pause),
-        Throttle.now_ms()
+        clock.()
       )
     end
   end

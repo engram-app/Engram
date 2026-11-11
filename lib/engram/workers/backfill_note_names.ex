@@ -112,7 +112,8 @@ defmodule Engram.Workers.BackfillNoteNames do
   One hop of the chain from `args` (a fresh walk for `%{}`). Returns
   `{:next, args}` for the successor, `:done` (ledger marked done) or
   `:stopped`. Options (tests): `:max_rows`, `:writes_per_s`, `:batch_size`,
-  `:budget_ms`, `:pause_ms`, `:fleet` (`NoteName.fleet_ready?/1`).
+  `:budget_ms`, `:pause_ms`, `:fleet` (`NoteName.fleet_ready?/1`), and
+  PacedChain's `:clock` / `:sleep` seams.
   """
   @spec hop(map(), keyword()) :: {:next, map()} | :done | :stopped
   def hop(args, opts \\ []) do
@@ -137,8 +138,12 @@ defmodule Engram.Workers.BackfillNoteNames do
       windows: 0
     }
 
+    clock = Keyword.get(opts, :clock, &Throttle.now_ms/0)
+
     o = %{
-      started: Throttle.now_ms(),
+      clock: clock,
+      sleep: Keyword.get(opts, :sleep, &Process.sleep/1),
+      started: clock.(),
       max_rows: Keyword.get(opts, :max_rows, NoteName.max_rows()),
       writes_per_s: Keyword.get(opts, :writes_per_s, NoteName.writes_per_s()),
       batch: Keyword.get(opts, :batch_size, @batch_size),
@@ -148,7 +153,7 @@ defmodule Engram.Workers.BackfillNoteNames do
     }
 
     result = walk(st, o)
-    log(result, st.t, o.started)
+    log(result, st.t, o.clock.() - o.started)
     elem(result, 0)
   end
 
@@ -179,6 +184,8 @@ defmodule Engram.Workers.BackfillNoteNames do
            writes_per_s: o.writes_per_s,
            # `hop_fixed` spans the tables this hop crossed: measure from its start.
            started_ms: o.started,
+           clock: o.clock,
+           sleep: o.sleep,
            batch_size: o.batch,
            fun_in_tenant: false
          ) do
@@ -229,11 +236,11 @@ defmodule Engram.Workers.BackfillNoteNames do
   # The pass line (`Throttle.log_pass/2`). Rows left are not counted: the
   # name columns have no index, so a count would walk the table; `walk_left`
   # says whether this walk has left any behind.
-  defp log({result, st}, first_table, started) do
+  defp log({result, st}, first_table, elapsed_ms) do
     Throttle.log_pass("note_name",
       written: st.hop_fixed,
       held: :none,
-      elapsed_ms: Throttle.now_ms() - started,
+      elapsed_ms: elapsed_ms,
       result: elem_result(result),
       windows: st.windows,
       from_table: Enum.at(@tables, first_table),

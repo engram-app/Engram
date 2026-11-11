@@ -177,13 +177,17 @@ defmodule Engram.DataMigrations.NoteNameTest do
     n_minus_1_insert!()
     Engram.ServiceConfig.put_override(:note_name_backfill_writes_per_s, 2)
 
-    {us, _} = :timer.tc(fn -> BackfillNoteNames.hop(%{}, pause_ms: 0, batch_size: 2) end)
+    # A clock that moves only when the hop sleeps, so the requested waits
+    # are exact and nothing really sleeps.
+    Process.put(:fake_ms, 0)
+    clock = fn -> Process.get(:fake_ms) end
+    sleep = fn ms -> Process.put(:fake_ms, Process.get(:fake_ms) + ms) end
 
-    # 2 notes then folder "X": 3 rows at 2 a second is 1.5 s from the hop's
-    # start. A clock restarted per table waited 1 s, then 1.5 s more.
-    ms = div(us, 1000)
-    assert ms >= 1_400
-    assert ms < 2_300
+    BackfillNoteNames.hop(%{}, pause_ms: 0, batch_size: 2, clock: clock, sleep: sleep)
+
+    # 2 notes then folder "X": 3 rows at 2 a second is 1,500 ms from the
+    # hop's start. A clock restarted per table asked for 1,000 then 1,500.
+    assert Process.get(:fake_ms) == 1_500
   end
 
   test "database pressure holds a hop: nothing written, the same hop re-inserted later", %{
