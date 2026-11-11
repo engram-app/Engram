@@ -439,13 +439,15 @@ function resync(tr: Transaction, before: Tree, tree: Tree, hi: number): number {
 		const now = unitStarting(tree, at);
 		const was = unitStarting(before, back.mapPos(at, 1));
 		const wasTo = was ? tr.changes.mapPos(was.to, 1) : -1;
+		// Stop at the LINE start: a unit can start mid-line (a quote inside a list
+		// item), and the line decorations of that line sit before it.
 		if (now && was && now.name === was.name && now.to === wasTo) {
-			return at;
+			return tr.state.doc.lineAt(at).from;
 		}
 		const inner = innerUnit(tree, at);
 		const oldInner = innerUnit(before, back.mapPos(at, 1));
 		if (inner && oldInner && inner === mapInner(tr, oldInner)) {
-			return at;
+			return tr.state.doc.lineAt(at).from;
 		}
 		const end = Math.max(now?.to ?? at, wasTo, at + 1);
 		if (end >= tree.length) {
@@ -622,7 +624,9 @@ function enterBlock(view: EditorView, forward: boolean): boolean {
 	const range = state.selection.main;
 	// Shift+Arrow is selecting, not navigating; hijacking it would collapse the
 	// selection being built.
-	if (!range.empty) {
+	// Several cursors move together through the default motion; taking over
+	// here would collapse them to one.
+	if (!range.empty || state.selection.ranges.length > 1) {
 		return false;
 	}
 	const { doc } = state;

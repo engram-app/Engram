@@ -1,4 +1,4 @@
-import { EditorState, type Extension } from "@codemirror/state";
+import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { afterEach, describe, expect, test } from "vitest";
 import { attachmentEmbeds } from "./attachment-embed";
@@ -113,4 +113,17 @@ describe("ArrowDown walks one line per press past rendered blocks", () => {
 			.join("\n");
 		expect(css).toMatch(/div\.cm-katex-widget[^{]*\{[^}]*display: flow-root/u);
 	});
+});
+
+test("several cursors are left to the default motion, not collapsed into one", () => {
+	view = new EditorView({
+		state: EditorState.create({
+			doc: "above\n$$\nx^2\n$$\nmid\nbelow",
+			extensions: [katexDecoration, EditorState.allowMultipleSelections.of(true)],
+			selection: EditorSelection.create([EditorSelection.cursor(0), EditorSelection.cursor(20)]),
+		}),
+		parent: document.body,
+	});
+	expect(press(view, "ArrowDown")).toBe(false);
+	expect(view.state.selection.ranges).toHaveLength(2);
 });

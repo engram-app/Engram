@@ -167,3 +167,10 @@ describe("final review cases", () => {
 		expect(diffFromFresh(settle(after), ext, railsField)).toEqual([]);
 	});
 });
+
+test("an edit whose resync point is a block starting mid-line keeps that line's rails", () => {
+	const lext = [markdown({ base: markdownLanguage }), listRails];
+	let s = parsedState("1. x\n   > q\n  > 1.  - y\n", lext);
+	s = settle(s.update({ changes: { from: 8, to: 9, insert: "```" } }).state);
+	expect(diffFromFresh(s, lext, railsField)).toEqual([]);
+});
