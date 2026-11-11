@@ -43,7 +43,10 @@ fn open_fence(s: &[u8]) -> Option<usize> {
 /// consumes, its line ending included. `at_eof` when it ends the text.
 fn close_fence(line: &[u8]) -> Option<(usize, bool)> {
     let rest = line.strip_prefix(b"---")?;
-    let blanks = rest.iter().take_while(|&&b| b == b' ' || b == b'\t').count();
+    let blanks = rest
+        .iter()
+        .take_while(|&&b| b == b' ' || b == b'\t')
+        .count();
     let mut n = 3 + blanks;
     if line.get(n) == Some(&b'\r') {
         n += 1;
@@ -118,13 +121,20 @@ mod tests {
     #[test]
     fn after_a_bom_the_rule_is_the_same() {
         for c in cases() {
-            let with = format!("\u{FEFF}{}", c.input.strip_prefix('\u{FEFF}').unwrap_or(&c.input));
+            let with = format!(
+                "\u{FEFF}{}",
+                c.input.strip_prefix('\u{FEFF}').unwrap_or(&c.input)
+            );
             let plain = &with[3..];
             let (block, body) = parts(&with, split_after_bom(with.as_bytes()));
             let (want_block, want_body) = parts(plain, split(plain.as_bytes()));
             assert_eq!(block, want_block, "{}", c.name);
             // No frontmatter: the whole text (BOM included) is body.
-            let want_body = if want_block.is_none() { &with } else { want_body };
+            let want_body = if want_block.is_none() {
+                &with
+            } else {
+                want_body
+            };
             assert_eq!(body, want_body, "{}", c.name);
         }
     }
