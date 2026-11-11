@@ -14,7 +14,7 @@ credential called; cost is metered where it is incurred.
 
 | Limit | Free | Starter | Pro | Where it is enforced |
 |---|---|---|---|---|
-| `ai_searches_per_day` (THE cost meter) | 20 | unlimited | unlimited | `Engram.Search.search/4`, every transport |
+| `ai_searches_per_day` (THE cost meter) | 50 | unlimited | unlimited | `Engram.Search.search/4`, every transport |
 | `notes_cap` | 2,000 | 20,000 | 40,000 | note creates and restores (`Notes.check_notes_cap/2`); edits, reads and deletes of an over-cap account are never refused |
 | `index_points_cap` (search points, chunk rows) | 12,000 | 120,000 | 240,000 | `Indexing` floor + daily budget sweep (10:02 re-verify, always on); points cap = `notes_cap` x 6 |
 | `note_points_cap` (points per note, merged past it) | 128 | 1,024 | 1,024 | `Indexing.cap_chunks/3` |

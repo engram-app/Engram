@@ -227,8 +227,8 @@ export default {
 	"Device swap cooldown active": "Probíhá režim čekání pro změnu zařízení",
 	"Wait before swapping devices, or upgrade.": "Počkejte, než změníte zařízení, nebo upgradujte.",
 	"Daily AI search limit reached": "Denní limit vyhledávání pomocí AI byl dosažen",
-	"Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
-		"Váš bezplatný plán zahrnuje 20 vyhledávání pomocí AI denně, sdílených mezi webovou aplikací, pluginem Obsidian a klienty MCP. Upgradujte pro neomezený počet.",
+	"Your Free plan includes 50 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
+		"Váš bezplatný plán zahrnuje 50 AI vyhledávání denně, sdílených mezi webovou aplikací, pluginem Obsidian a klienty MCP. Upgradujte pro neomezený počet.",
 	"Free plan: text attachments only": "Bezplatný plán: pouze textové přílohy",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"Váš bezplatný plán umožňuje připojovat textové soubory (.md, .txt, .csv, .html, kód). Upgradujte pro připojování obrázků, audia, videa, PDF a kancelářských dokumentů.",
@@ -284,10 +284,10 @@ export default {
 	"Your current plan": "Váš aktuální tarif",
 	"You're on this plan": "Používáte tento tarif",
 	Popular: "Oblíbené",
-	"2,000 notes · 20 AI searches a day · 1 vault":
-		"2 000 poznámek · 20 AI vyhledávání denně · 1 trezor",
+	"2,000 notes · 50 AI searches a day · 1 vault":
+		"2 000 poznámek · 50 AI vyhledávání denně · 1 trezor",
 	"2,000 notes, all searchable": "2 000 poznámek, všechny vyhledávatelné",
-	"20 AI searches a day": "20 AI vyhledávání denně",
+	"50 AI searches a day": "50 AI vyhledávání denně",
 	"1 vault": "1 trezor",
 	"1 GB attachments": "1 GB příloh",
 	"2 devices": "2 zařízení",

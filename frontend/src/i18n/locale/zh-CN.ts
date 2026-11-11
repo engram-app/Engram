@@ -196,8 +196,8 @@ export default {
 	"Device swap cooldown active": "设备切换冷却中",
 	"Wait before swapping devices, or upgrade.": "等待后再切换设备，或升级。",
 	"Daily AI search limit reached": "每日 AI 搜索次数已达",
-	"Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
-		"免费版每天提供 20 次 AI 搜索，可在网页应用、Obsidian 插件和 MCP 客户端中使用。升级以获得无限次数。",
+	"Your Free plan includes 50 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
+		"你的免费计划包含每天 50 次 AI 搜索，可在网页应用、Obsidian 插件和 MCP 客户端中使用。升级到付费版，享受无限次。",
 	"Free plan: text attachments only": "免费版：仅支持文本附件",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"免费版支持附加文本文件（.md, .txt, .csv, .html, 代码）。升级以附加图片、音频、视频、PDF 和 Office 文档。",
@@ -251,9 +251,9 @@ export default {
 	"Your current plan": "你当前的套餐",
 	"You're on this plan": "你正在使用此套餐",
 	Popular: "常用",
-	"2,000 notes · 20 AI searches a day · 1 vault": "2000 笔记 · 每天 20 次 AI 搜索 · 1 个仓库",
+	"2,000 notes · 50 AI searches a day · 1 vault": "2000 笔记 · 每天 50 次 AI 搜索 · 1 个仓库",
 	"2,000 notes, all searchable": "2000 笔记，全部可搜索",
-	"20 AI searches a day": "每天 20 次 AI 搜索",
+	"50 AI searches a day": "每天 50 次 AI 搜索",
 	"1 vault": "1 个仓库",
 	"1 GB attachments": "1 GB 附件",
 	"2 devices": "2 个设备",

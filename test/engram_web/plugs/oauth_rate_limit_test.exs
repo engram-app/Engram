@@ -17,6 +17,7 @@ defmodule EngramWeb.Plugs.OAuthRateLimitTest do
 
   @client_limit 300
   @ip_limit 3_000
+  @authorize_limit 300
 
   setup do
     for key <- [:rate_limit_override, :oauth_ip_rate_limit_override] do
@@ -97,11 +98,38 @@ defmodule EngramWeb.Plugs.OAuthRateLimitTest do
     assert limited?(token(Ecto.UUID.generate()))
   end
 
-  test "authorize stays strictly per IP" do
-    for _ <- 1..10,
-        do: get(build_conn(), "/oauth/authorize", %{"client_id" => Ecto.UUID.generate()})
+  # Everyone behind one NAT draws from this bucket, and it stays per IP: fresh
+  # client ids must not buy fresh allowance.
+  test "the 11th authorize in a minute from one IP passes" do
+    for _ <- 1..10, do: authorize()
 
-    assert get(build_conn(), "/oauth/authorize", %{"client_id" => Ecto.UUID.generate()}).status ==
-             429
+    refute authorize().status == 429
+  end
+
+  test "authorize allows #{@authorize_limit} per IP and refuses the next" do
+    for _ <- 1..@authorize_limit, do: refute(authorize().status == 429)
+
+    assert authorize().status == 429
+  end
+
+  # The consent page fetches this on the way to approval, so everyone behind
+  # one network address connecting the same client shares it.
+  test "the 11th client lookup in a minute from one IP passes" do
+    client_id = Ecto.UUID.generate()
+    for _ <- 1..10, do: client_lookup(client_id)
+
+    refute client_lookup(client_id).status == 429
+  end
+
+  test "client lookup allows #{@authorize_limit} per IP and refuses the next" do
+    for _ <- 1..@authorize_limit, do: refute(client_lookup(Ecto.UUID.generate()).status == 429)
+
+    assert client_lookup(Ecto.UUID.generate()).status == 429
+  end
+
+  defp client_lookup(client_id), do: get(build_conn(), "/api/oauth/clients/#{client_id}")
+
+  defp authorize do
+    get(build_conn(), "/oauth/authorize", %{"client_id" => Ecto.UUID.generate()})
   end
 end

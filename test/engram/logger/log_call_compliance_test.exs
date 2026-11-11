@@ -291,6 +291,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram_web/plugs/",
     "lib/engram_web/presence.ex",
     "lib/engram_web/rate_limiter.ex",
+    # Bucket keys from a route, an IP and a hashed credential. No Logger call,
+    # never touches note content, a note path, a title or a query.
+    "lib/engram_web/keyed_rate_limit.ex",
     # The channel/batch-delete rate check: user id, device id, a class atom
     # and counts. No Logger call, never touches content, path, title or a
     # query.

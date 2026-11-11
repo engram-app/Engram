@@ -215,8 +215,8 @@ export default {
 	"Wait before swapping devices, or upgrade.":
 		"デバイスの切り替えまでお待ちいただくか、アップグレードしてください。",
 	"Daily AI search limit reached": "1日のAI検索上限に達しました",
-	"Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
-		"無料プランでは、ウェブアプリ、Obsidianプラグイン、MCPクライアント全体で1日20回のAI検索が利用可能です。無制限にするには、アップグレードしてください。",
+	"Your Free plan includes 50 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
+		"無料プランでは、ウェブアプリ、Obsidianプラグイン、およびMCPクライアント全体で、1日50回のAI検索が利用可能です。無制限の検索をご希望の場合は、アップグレードしてください。",
 	"Free plan: text attachments only": "無料プラン：テキスト添付ファイルのみ",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"無料プランでは、テキストファイル（.md、.txt、.csv、.html、コード）を添付できます。画像、音声、動画、PDF、Officeドキュメントを添付するには、アップグレードしてください。",
@@ -272,9 +272,9 @@ export default {
 	"Your current plan": "現在のプラン",
 	"You're on this plan": "このプランを利用中",
 	Popular: "人気",
-	"2,000 notes · 20 AI searches a day · 1 vault": "2000ノート · 1日20回AI検索 · 1つの保管庫",
+	"2,000 notes · 50 AI searches a day · 1 vault": "2,000ノート · 1日50回AI検索 · 1つの保管庫",
 	"2,000 notes, all searchable": "2000ノート、すべて検索可能",
-	"20 AI searches a day": "1日20回AI検索",
+	"50 AI searches a day": "1日50回のAI検索",
 	"1 vault": "1つの保管庫",
 	"1 GB attachments": "1 GBの添付ファイル",
 	"2 devices": "2台のデバイス",

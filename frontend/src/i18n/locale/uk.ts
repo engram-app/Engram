@@ -231,8 +231,8 @@ export default {
 	"Wait before swapping devices, or upgrade.":
 		"Зачекайте, перш ніж перемикатися між пристроями або оновлювати.",
 	"Daily AI search limit reached": "Досягнуто денний ліміт пошуку за допомогою ШІ",
-	"Your Free plan includes 20 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
-		"Ваш безкоштовний план включає 20 пошуків за допомогою ШІ на день, що діють у веб-додатку, плагіні Obsidian та клієнтах MCP. Оновіть, щоб отримати необмежену кількість.",
+	"Your Free plan includes 50 AI searches per day, shared across the web app, the Obsidian plugin, and MCP clients. Upgrade for unlimited.":
+		"Ваш безкоштовний план включає 50 AI-запитів на день, що діють для веб-додатка, плагіна Obsidian та клієнтів MCP. Оновіть, щоб отримати необмежену кількість.",
 	"Free plan: text attachments only": "Безкоштовний план: лише текстові вкладення",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"Ваш безкоштовний план дозволяє додавати текстові файли (.md, .txt, .csv, .html, код). Оновіть, щоб додавати зображення, аудіо, відео, PDF-файли та офісні документи.",
@@ -289,10 +289,10 @@ export default {
 	"Your current plan": "Ваш поточний тарифний план",
 	"You're on this plan": "Ви користуєтеся цим тарифним планом",
 	Popular: "Популярні",
-	"2,000 notes · 20 AI searches a day · 1 vault":
-		"2000 заміток · 20 запитів до ШІ на день · 1 сховище",
+	"2,000 notes · 50 AI searches a day · 1 vault":
+		"2000 заміток · 50 AI-запитів на день · 1 сховище",
 	"2,000 notes, all searchable": "2000 заміток, усі доступні для пошуку",
-	"20 AI searches a day": "20 AI-запитів на день",
+	"50 AI searches a day": "50 AI-запитів на день",
 	"1 vault": "1 сховище",
 	"1 GB attachments": "1 ГБ вкладень",
 	"2 devices": "2 пристрої",

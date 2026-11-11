@@ -112,8 +112,8 @@ defmodule EngramWeb.Router do
 
     # Keyed per client on token/revoke and per IP elsewhere (#1974): vendor
     # backends share IPs, so a per-IP token limit refused every user of a
-    # connector at once. Tagged `purpose: :oauth`; the 429 is deliberately
-    # unlogged, so the metric tag is the whole signal (#1643).
+    # connector at once. Tagged `purpose: :oauth`; the metric tag is what
+    # alerts, the request log carries the 429 line (#1643).
     plug EngramWeb.Plugs.OAuthRateLimit
 
     # Not all of this pipeline answers JSON. `GET /oauth/authorize` renders
@@ -229,6 +229,14 @@ defmodule EngramWeb.Router do
     }
 
     plug :put_csp_header
+  end
+
+  pipeline :rate_limit_oauth_clients do
+    plug EngramWeb.Plugs.OAuthRateLimit
+  end
+
+  pipeline :rate_limit_device_auth do
+    plug EngramWeb.Plugs.DeviceAuthRateLimit
   end
 
   defp put_csp_header(conn, _opts) do
@@ -358,11 +366,16 @@ defmodule EngramWeb.Router do
   end
 
   scope "/api", EngramWeb do
-    # Device flow — unauthenticated, rate limited
-    pipe_through [:api, :rate_limit_auth]
+    # Device flow: unauthenticated, limited per credential so people sharing
+    # one network address do not share a bucket.
+    pipe_through [:api, :rate_limit_device_auth]
     post "/auth/device", DeviceAuthController, :start
     post "/auth/device/token", DeviceAuthController, :token
     post "/auth/token/refresh", DeviceAuthController, :refresh
+  end
+
+  scope "/api", EngramWeb do
+    pipe_through [:api, :rate_limit_auth]
 
     # Self-host install census collector (SaaS only; self-host answers 404).
     post "/telemetry/ping", InstallPingController, :create
@@ -641,9 +654,9 @@ defmodule EngramWeb.Router do
   # OAuth public client metadata — surfaces `client_name` to the SPA
   # consent UI without exposing it in the redirect URL bar. Public
   # because client_id is itself public (returned by DCR); client_name
-  # is non-secret. Rate-limited per IP to deter enumeration.
+  # is non-secret. Rate-limited per IP across all ids to deter enumeration.
   scope "/api/oauth", EngramWeb do
-    pipe_through [:api, :rate_limit_auth]
+    pipe_through [:api, :rate_limit_oauth_clients]
 
     get "/clients/:client_id", OAuthClientsController, :show
   end
