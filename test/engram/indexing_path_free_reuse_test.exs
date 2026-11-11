@@ -24,6 +24,7 @@ defmodule Engram.IndexingPathFreeReuseTest do
   alias Engram.Indexing
   alias Engram.Notes
   alias Engram.Notes.Chunk
+  alias Engram.Notes.ChunkPoint
   alias Engram.Parsers.Markdown
 
   setup :set_mox_global
@@ -307,7 +308,6 @@ defmodule Engram.IndexingPathFreeReuseTest do
 
         group_spans(big_groups(e, path, legacy: true)) == group_spans(big_groups(e, path, [])) and
           case pick do
-            :moved -> n != m
             :removed -> n < m
             :added -> n > m
             :kept -> n == m
@@ -505,7 +505,6 @@ defmodule Engram.IndexingPathFreeReuseTest do
     # the group count or moves one group boundary (the edited chunk gains or
     # loses `rem(hash, g) == 0`): both are local changes.
     for {label, pick} <- [
-          {"an edit that moves the group count", :moved},
           {"an edit that removes a group boundary", :removed},
           {"an edit that adds a group boundary", :added},
           {"an edit that keeps the group count", :kept}
@@ -532,6 +531,14 @@ defmodule Engram.IndexingPathFreeReuseTest do
       legacy = big_groups(content, path, legacy: true)
       assert Enum.any?(legacy, &Map.get(&1, :merged, false)), "HARNESS: not merged"
       legacy_rows!(ctx, note, legacy)
+
+      # No checksum: resparse's position-and-offsets fallback (`same_text?/3`)
+      # could otherwise match every row without the legacy twins.
+      ids = Enum.map(rows(note), & &1.qdrant_point_id)
+
+      Repo.update_all(from(p in ChunkPoint, where: p.point_id in ^ids), [set: [slice_sum: nil]],
+        skip_tenant_check: true
+      )
 
       user = Repo.reload!(ctx.user, skip_tenant_check: true)
       assert {:ok, count, 0} = Indexing.resparse_note(fresh(note, ctx), user)

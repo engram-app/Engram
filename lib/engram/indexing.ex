@@ -733,8 +733,11 @@ defmodule Engram.Indexing do
   # `span/1` of the chunk `merge_group/1` makes of `members`.
   defp group_span([one]), do: span(one)
 
-  defp group_span([first | _] = members),
-    do: {first.char_start, members |> Enum.map(& &1.char_end) |> Enum.max(), true}
+  defp group_span([first | _] = members), do: {first.char_start, group_end(members), true}
+
+  # Where a group of `members` ends (a frontmatter chunk ends at 0, so not
+  # simply the last one's): one rule for every chunk built from a group.
+  defp group_end(members), do: members |> Enum.map(& &1.char_end) |> Enum.max()
 
   # Bytes of the members' `embed_text`s bound the merged one's from above
   # (each carries its own prefix plus "\n\n"), so a group that fits by this
@@ -805,7 +808,7 @@ defmodule Engram.Indexing do
       text: text,
       context_text: [prefix(first.context_text, first.text), text],
       embed_text: [prefix(first.embed_text, first.text), embed],
-      char_end: members |> Enum.map(& &1.char_end) |> Enum.max(),
+      char_end: group_end(members),
       token_count: members |> Enum.map(&UsageMeters.estimate_tokens(&1.text)) |> Enum.sum(),
       merged: true,
       members: Enum.map(members, &Map.delete(&1, :crumbed))
@@ -1040,7 +1043,7 @@ defmodule Engram.Indexing do
          %{
            position: position,
            char_start: members |> Enum.map(& &1.char_start) |> Enum.min(),
-           char_end: members |> Enum.map(& &1.char_end) |> Enum.max(),
+           char_end: group_end(members),
            heading_path: nil,
            text: "",
            embed_text: "",
