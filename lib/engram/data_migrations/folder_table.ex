@@ -91,6 +91,14 @@ defmodule Engram.DataMigrations.FolderTable do
   # 3: heals references to soft-deleted folder rows (see the moduledoc).
   def version, do: 3
 
+  @doc """
+  Kill switch: the `folder_table_backfill` service override (default on);
+  off, the runner runs no pass. The drain's per-user repair runs only once the
+  ledger is done, so it is not gated here.
+  """
+  @impl true
+  def enabled?, do: Engram.ServiceConfig.get(:folder_table_backfill, true) == true
+
   @impl true
   def run_pass, do: run_pass([])
 

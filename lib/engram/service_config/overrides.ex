@@ -60,6 +60,7 @@ defmodule Engram.ServiceConfig.Overrides do
     payload_backfill_points_per_min: {:integer, 1..100_000},
     rebuild_max_disk_percent: {:integer, 1..100},
     file_times_backfill: :boolean,
+    folder_table_backfill: :boolean,
     # Every paced backfill chain's pressure gate (`Engram.Backfill.Throttle`).
     backfill_max_queue_ms: {:integer, 1..60_000},
     backfill_max_xact_s: {:integer, 1..86_400},
