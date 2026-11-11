@@ -28,8 +28,22 @@ import uuid
 
 import pytest
 
+from helpers.latency import DELIVERY_TIMEOUT
 from helpers.log_oracle import wait_for_delivery
 from helpers.vault import wait_for_content
+
+
+def wait_until_settled(api_sync, path: str, vaults, timeout: float = DELIVERY_TIMEOUT) -> None:
+    """Poll until the server and every vault hold one identical text."""
+    deadline = time.monotonic() + timeout
+    server = disks = None
+    while time.monotonic() < deadline:
+        server = api_sync.get_note(path)["content"]
+        disks = [(v / path).read_text(encoding="utf-8") for v in vaults]
+        if all(disk == server for disk in disks):
+            return
+        time.sleep(0.2)
+    raise AssertionError(f"race never settled: server={server!r} disks={disks!r}")
 
 
 @pytest.mark.asyncio
@@ -80,6 +94,13 @@ async def test_create_race_adopts_winner_and_receives(vault_a, vault_b, cdp_a, c
     note = api_sync.wait_for_note(path)
     assert note is not None
     wait_for_delivery(vault_b, path, api_sync)
+
+    # push_file_now resolves once the edit is in A's doc, not once the server
+    # has it, so it can land between the follow-up's GET and POST. That 409 is
+    # correct (Engram#2541). Server and disks agreeing means nothing is left in
+    # flight: A's write is on A's disk, so the server only matches once it has
+    # it (or A took the server's text).
+    wait_until_settled(api_sync, path, (vault_a, vault_b))
 
     # THE incident pin: A's receive path must be alive after the race. Before
     # plugin #197 the loser kept its dead local mint, so this API edit would
