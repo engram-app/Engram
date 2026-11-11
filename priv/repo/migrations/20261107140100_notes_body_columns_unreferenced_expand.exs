@@ -34,6 +34,8 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedExpand do
   a partial run is redone from the top. Calls no app module (N-1 gate).
   """
 
+  @lock_retries 2
+
   @shape_v4 """
   ALTER TABLE notes ADD CONSTRAINT notes_kind_shape_v4_check CHECK (
     (kind = 'note'   AND path_hmac           IS NOT NULL
@@ -116,12 +118,24 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedExpand do
         repo.query!("SET lock_timeout = '5s'")
 
         try do
-          Enum.each(statements, &repo.query!(&1, [], timeout: :infinity))
+          Enum.each(statements, &run(repo, &1, @lock_retries))
         after
           repo.query!("RESET lock_timeout")
         end
       end,
       timeout: :infinity
     )
+  end
+
+  # A statement that hits its lock_timeout (55P03) is retried, so a busy
+  # table does not crash boot. Only that statement: it changed nothing, and
+  # starting over would repeat the VALIDATE scan.
+  defp run(repo, statement, retries) do
+    repo.query!(statement, [], timeout: :infinity)
+  rescue
+    e in Postgrex.Error ->
+      if retries > 0 and match?(%{postgres: %{code: :lock_not_available}}, e),
+        do: run(repo, statement, retries - 1),
+        else: reraise(e, __STACKTRACE__)
   end
 end
