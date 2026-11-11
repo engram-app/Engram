@@ -33,7 +33,10 @@ import { type DraggedVaultItem, linkTextFor } from "./vault-item-drag";
 // ancestor. 16px on .cm-content prevents iOS Safari auto-zoom. Transparent
 // background so the card shows through.
 const editorTheme = EditorView.theme({
-	"&": { height: "auto", backgroundColor: "transparent" },
+	// color: oneDarkTheme paints the root #abb2bf, which only plain paragraphs
+	// inherit (headings and lists take --atomic-editor-fg), so in dark mode body
+	// text read dimmer than the rest. One body colour for every line, both modes.
+	"&": { height: "auto", backgroundColor: "transparent", color: "var(--atomic-editor-fg)" },
 	".cm-scroller": {
 		fontFamily: "inherit",
 		// Inert while the page owns the scrollbar; the styling rules below are
