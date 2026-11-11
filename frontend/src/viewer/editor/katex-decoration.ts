@@ -75,10 +75,11 @@ export const katexRenderer: TextRenderer<MathSpan | null> = {
 					const paired = q > s + 2 && doc.sliceString(q + 1, q + 2) === "$";
 					if (!paired && q !== s + 2) {
 						// Unpaired `$$`: no span yet, but typing a `$$` anywhere up to the
-						// next `$` would close it. An unrendered token over that stretch
+						// next `$` would close it. Ends BEFORE that `$`, which may open
+						// inline math of its own. An unrendered token over that stretch
 						// makes the core rescan from here when it happens, the way an
 						// unclosed fence or comment does.
-						emit({ from: s, to: q < 0 ? doc.length : q + 1, value: null });
+						emit({ from: s, to: q < 0 ? doc.length : q, value: null });
 					}
 					if (paired) {
 						emit({

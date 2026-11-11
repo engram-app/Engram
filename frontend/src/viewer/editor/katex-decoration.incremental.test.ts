@@ -64,4 +64,10 @@ describe("math renders incrementally", () => {
 		expect(diff(s)).toEqual([]);
 		expect(placed(s.field(katexDecoration)).map(([f, t]) => [f, t])).toEqual([[7, 16]]);
 	});
+
+	test("a keystroke below an unpaired $$ keeps the next inline math", () => {
+		let s = parsedState("$$ lone\nmid\nmid\nline $y$\n", ext, 0);
+		s = s.update({ changes: { from: 9, insert: "x" } }).state;
+		expect(diff(s)).toEqual([]);
+	});
 });
