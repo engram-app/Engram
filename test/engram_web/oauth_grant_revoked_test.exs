@@ -292,6 +292,79 @@ defmodule EngramWeb.OAuthGrantRevokedTest do
     end
   end
 
+  # The response a client sees, captured on base `a12733340` (2026-11-11) and
+  # pinned here: status, every header but `x-request-id` (the only volatile
+  # one; values differ per request), and the raw body bytes.
+  @json_headers [
+    {"access-control-allow-headers",
+     "authorization, content-type, x-vault-id, x-device-id, x-idempotency-key, traceparent, if-none-match"},
+    {"access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS"},
+    {"access-control-allow-origin", "*"},
+    {"access-control-expose-headers", "retry-after"},
+    {"access-control-max-age", "86400"},
+    {"cache-control", "no-store"},
+    {"content-security-policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"},
+    {"content-type", "application/json; charset=utf-8"},
+    {"referrer-policy", "origin"},
+    {"x-content-type-options", "nosniff"},
+    {"x-frame-options", "DENY"},
+    {"x-permitted-cross-domain-policies", "none"}
+  ]
+
+  @revoke_headers @json_headers
+                  |> List.keydelete("content-type", 0)
+                  |> List.keyreplace(
+                    "cache-control",
+                    0,
+                    {"cache-control", "max-age=0, private, must-revalidate"}
+                  )
+
+  defp stable_headers(conn),
+    do: conn.resp_headers |> List.keydelete("x-request-id", 0) |> Enum.sort()
+
+  describe "responses are unchanged" do
+    test "a refused refresh", %{client: client, user: user} do
+      {rt, family_id} = grant(client, user)
+      :ok = Connections.revoke_oauth_grant(user.id, family_id)
+      conn = refresh(client, rt)
+
+      assert conn.status == 400
+      assert conn.resp_body == ~s({"error":"invalid_grant"})
+      assert stable_headers(conn) == @json_headers
+    end
+
+    test "a successful refresh", %{client: client, user: user} do
+      {rt, _family_id} = grant(client, user)
+      conn = refresh(client, rt)
+
+      assert conn.status == 200
+      assert stable_headers(conn) == @json_headers
+      body = Jason.decode!(conn.resp_body)
+
+      assert Map.keys(body) |> Enum.sort() ==
+               ~w(access_token expires_in refresh_token scope token_type)
+
+      assert body["token_type"] == "Bearer"
+      assert body["expires_in"] == 900
+      assert body["scope"] == "mcp"
+    end
+
+    test "/oauth/revoke", %{client: client, user: user} do
+      {rt, _family_id} = grant(client, user)
+
+      conn =
+        post(build_conn(), "/oauth/revoke", %{
+          "token" => rt,
+          "token_type_hint" => "refresh_token",
+          "client_id" => client.client_id
+        })
+
+      assert conn.status == 200
+      assert conn.resp_body == ""
+      assert stable_headers(conn) == @revoke_headers
+    end
+  end
+
   describe "mcp_oauth_token_failed on refresh" do
     test "a refused refresh of a known token carries its grant_id", %{client: client, user: user} do
       {rt, family_id} = grant(client, user)
@@ -311,5 +384,245 @@ defmodule EngramWeb.OAuthGrantRevokedTest do
       assert props["reason"] == "refresh_token_unknown"
       refute Map.has_key?(props, "grant_id")
     end
+  end
+
+  # Review of #2565: with no transaction owning the after-commit queue, the
+  # event ran inline between the revoke and `grants_changed/1`, so a raise in
+  # analytics skipped the cache eviction, the socket drop and (whole-app with
+  # a vault) the second revoke. A poisoned `:user` cache entry makes
+  # `Engram.Analytics` raise, as in `onboarding_test.exs`.
+  describe "analytics that raises cannot stop a revoke" do
+    setup %{user: user} do
+      on_exit(fn -> Engram.Cache.evict(:user, user.id) end)
+      Phoenix.PubSub.subscribe(Engram.PubSub, "user_socket:#{user.id}")
+      :ok
+    end
+
+    defp poison(user), do: Engram.Cache.put(:user, user.id, :not_a_user)
+
+    defp revoked?(%RefreshToken{id: id}),
+      do: Repo.get(RefreshToken, id, skip_tenant_check: true).revoked_at != nil
+
+    test "Settings: whole-app disconnect over a vault still ends every grant", %{
+      client: client,
+      user: user
+    } do
+      vault = insert(:vault, user: user)
+
+      legacy =
+        insert(:oauth_refresh_token,
+          user_id: user.id,
+          client_id: client.client_id,
+          vault_id: vault.id,
+          vault_ids: [vault.id]
+        )
+
+      leveled =
+        insert(:oauth_refresh_token,
+          user_id: user.id,
+          client_id: client.client_id,
+          vault_ids: ["00000000-0000-0000-0000-000000000000"],
+          vault_access: %{vault.id => "read"},
+          default_access: "none"
+        )
+
+      for t <- [legacy, leveled], do: Engram.Cache.put(:oauth_grant, t.family_id, :live)
+      poison(user)
+
+      assert :ok = Connections.revoke_oauth_family(user.id, client.client_id, vault.id)
+
+      assert revoked?(legacy) and revoked?(leveled)
+      assert Engram.Cache.get(:oauth_grant, legacy.family_id) == :miss
+      assert Engram.Cache.get(:oauth_grant, leveled.family_id) == :miss
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+    end
+
+    test "Settings: one-grant disconnect", %{client: client, user: user} do
+      {_rt, family_id} = grant(client, user)
+      Engram.Cache.put(:oauth_grant, family_id, :live)
+      poison(user)
+
+      assert :ok = Connections.revoke_oauth_grant(user.id, family_id)
+      assert Engram.Cache.get(:oauth_grant, family_id) == :miss
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+    end
+
+    test "/oauth/revoke still answers 200 and evicts", %{client: client, user: user} do
+      {rt, family_id} = grant(client, user)
+      Engram.Cache.put(:oauth_grant, family_id, :live)
+      poison(user)
+
+      conn =
+        post(build_conn(), "/oauth/revoke", %{
+          "token" => rt,
+          "token_type_hint" => "refresh_token",
+          "client_id" => client.client_id
+        })
+
+      assert conn.status == 200
+      assert conn.resp_body == ""
+      assert stable_headers(conn) == @revoke_headers
+      assert Engram.Cache.get(:oauth_grant, family_id) == :miss
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+    end
+
+    # Called directly: the controller's own `mcp_oauth_token_failed` is a
+    # separate, pre-existing inline call this change does not touch.
+    test "a reuse kill still answers invalid_grant", %{client: client, user: user} do
+      {rt1, family_id} = grant(client, user)
+      assert refresh(client, rt1).status == 200
+      age_consumed(rt1, 120)
+      Engram.Cache.put(:oauth_grant, family_id, :live)
+      poison(user)
+
+      assert {:error, {:invalid_grant, :refresh_token_reuse}} =
+               OAuth.rotate_refresh_token(rt1, client.client_id,
+                 user_agent: "codex-mcp-client/0.163.0"
+               )
+
+      assert Engram.Cache.get(:oauth_grant, family_id) == :miss
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+    end
+
+    test "a code replay still answers invalid_grant", %{client: client, user: user} do
+      {code, verifier} = code_for(client, user)
+
+      build_conn()
+      |> post("/oauth/token", exchange_body(client, code, verifier))
+      |> json_response(200)
+
+      [code_row] =
+        Repo.all(from(c in AuthorizationCode, where: c.user_id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      at = DateTime.utc_now() |> DateTime.add(-120) |> DateTime.truncate(:second)
+      code_row |> Ecto.Changeset.change(consumed_at: at) |> Repo.update!(skip_tenant_check: true)
+      poison(user)
+
+      assert {:error, {:invalid_grant, :code_replay_revoked}} =
+               OAuth.exchange_authorization_code(exchange_body(client, code, verifier))
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+    end
+  end
+
+  describe "one event per grant per user action" do
+    test "a whole-app disconnect over legacy and leveled grants counts each grant once", %{
+      client: client,
+      user: user
+    } do
+      vault = insert(:vault, user: user)
+      both = Ecto.UUID.generate()
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: vault.id,
+        vault_ids: [vault.id]
+      )
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_ids: ["00000000-0000-0000-0000-000000000000"],
+        vault_access: %{vault.id => "read"},
+        default_access: "none"
+      )
+
+      # One family with a row of each shape (a grant re-leveled mid-lineage).
+      for attrs <- [
+            [vault_id: vault.id, vault_ids: [vault.id]],
+            [
+              vault_ids: ["00000000-0000-0000-0000-000000000000"],
+              vault_access: %{vault.id => "read"},
+              default_access: "none"
+            ]
+          ] do
+        insert(
+          :oauth_refresh_token,
+          [user_id: user.id, client_id: client.client_id, family_id: both] ++ attrs
+        )
+      end
+
+      :ok = Connections.revoke_oauth_family(user.id, client.client_id, vault.id)
+
+      revoked = events(@event)
+      grant_ids = Enum.map(revoked, & &1.props["grant_id"])
+      assert length(revoked) == 3
+      assert grant_ids == Enum.uniq(grant_ids)
+      assert OAuth.grant_id(both) in grant_ids
+      assert Enum.all?(revoked, &(&1.props["families"] == 3))
+    end
+
+    test "a vault purge over legacy and leveled grants counts each grant once", %{
+      client: client,
+      user: user
+    } do
+      vault = insert(:vault, user: user)
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: vault.id,
+        vault_ids: [vault.id]
+      )
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_ids: ["00000000-0000-0000-0000-000000000000"],
+        vault_access: %{vault.id => "read"},
+        default_access: "none"
+      )
+
+      assert Connections.drop_vault_from_grants(user.id, vault.id, cause: :vault_purged) == 2
+
+      revoked = events(@event)
+      assert length(revoked) == 2
+      assert Enum.all?(revoked, &(&1.props["families"] == 2))
+    end
+  end
+
+  describe "rolled back, nothing ended" do
+    test "a revoke inside a transaction that rolls back emits nothing", %{
+      client: client,
+      user: user
+    } do
+      vault = insert(:vault, user: user)
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: vault.id,
+        vault_ids: [vault.id]
+      )
+
+      {_rt, family_id} = grant(client, user)
+
+      {:error, :undo} =
+        Repo.transaction_after_commit(fn ->
+          1 = Connections.drop_vault_from_grants(user.id, vault.id, cause: :vault_purged)
+          :ok = Connections.revoke_oauth_grant(user.id, family_id)
+          Repo.rollback(:undo)
+        end)
+
+      assert events(@event) == []
+    end
+  end
+
+  # The grant id rides the request process, which a keep-alive connection
+  # (and this test) reuses: one request's grant must not label the next.
+  test "a grant_id does not carry over to the next request", %{client: client, user: user} do
+    {rt, family_id} = grant(client, user)
+    :ok = Connections.revoke_oauth_grant(user.id, family_id)
+    assert_invalid_grant(refresh(client, rt))
+
+    {:error, _} = OAuth.rotate_refresh_token(rt, client.client_id)
+    assert_invalid_grant(refresh(client, "engram_oauth_rt_nope"))
+
+    [known, unknown] = events("mcp_oauth_token_failed")
+    assert known.props["grant_id"] == OAuth.grant_id(family_id)
+    refute Map.has_key?(unknown.props, "grant_id")
   end
 end

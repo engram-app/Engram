@@ -180,8 +180,11 @@ defmodule Engram.Connections do
         # sentinel), so it is judged on its levels instead: any grant that can
         # reach the vault at all, read, write or through its new-vaults policy,
         # dies whole. Narrowing it would mean rewriting levels the user chose.
-        revoke_rows(legacy, :user_disconnect_client) ++
-          revoke_families(leveled_reaching(query, vault_id), :user_disconnect_client)
+        # One revoke for both shapes: one event per grant per click, and a
+        # family with a row of each shape is counted once.
+        legacy
+        |> or_families(leveled_reaching(query, vault_id))
+        |> revoke_rows(:user_disconnect_client)
       else
         revoke_rows(query, :user_disconnect_client)
       end
@@ -208,13 +211,18 @@ defmodule Engram.Connections do
         do: t.family_id
   end
 
-  # Revokes every not-yet-revoked row of each family, consumed rotation
-  # predecessors included, keyed on `family_id` rather than a row-id list.
-  defp revoke_families([], _cause), do: []
+  # `query`'s rows plus every not-yet-revoked row of each of `families`,
+  # consumed rotation predecessors included, keyed on `family_id` rather
+  # than a row-id list. A family's rows share its user and client, so the
+  # base filters of `query` hold for them.
+  defp or_families(query, []), do: query
 
-  defp revoke_families(families, cause) do
-    from(t in RefreshToken, where: t.family_id in ^families, where: is_nil(t.revoked_at))
-    |> revoke_rows(cause)
+  defp or_families(query, families) do
+    base = from(t in RefreshToken, where: is_nil(t.revoked_at))
+
+    from(t in base,
+      where: t.id in subquery(from(q in query, select: q.id)) or t.family_id in ^families
+    )
   end
 
   # Marks the rows of `query` revoked and returns `{family_id, user_id}` per
@@ -461,11 +469,13 @@ defmodule Engram.Connections do
 
     live = List.delete(Vaults.active_vault_ids(user_id), vault_id)
 
-    revoked =
-      revoke_rows(only_vault, cause) ++
-        (from(t in RefreshToken, where: t.user_id == ^user_id, where: is_nil(t.revoked_at))
-         |> leveled_reaching(vault_id, &(not Permissions.reaches_anything?(&1, live)))
-         |> revoke_families(cause))
+    # One revoke for both shapes, so each grant is one event (see
+    # `revoke_oauth_family/3`).
+    leveled =
+      from(t in RefreshToken, where: t.user_id == ^user_id, where: is_nil(t.revoked_at))
+      |> leveled_reaching(vault_id, &(not Permissions.reaches_anything?(&1, live)))
+
+    revoked = only_vault |> or_families(leveled) |> revoke_rows(cause)
 
     case narrowed ++ revoked do
       [] when kick_owner ->
