@@ -47,8 +47,9 @@ jobs:
   #
   # DEFENSE IN DEPTH ONLY. A tag push runs the deploy-prod.yml OF THE TAGGED
   # COMMIT, so a rollback to a commit from before this job existed runs a
-  # workflow with no floor gate at all. The gate that will see every prod move
-  # is engram-infra's check on the image-bump PR (pending: engram-infra#1806).
+  # workflow with no floor gate at all. The gate that sees every prod move
+  # is engram-infra's required `engram-rollback-floor` check on the image-bump
+  # PR (live since engram-infra#1806 merged 2026-11-11).
   #
   # Incident override, the [skip-release-e2e] pattern: an ANNOTATED tag whose
   # message contains `[allow-below-floor]` deploys below the floor with a
