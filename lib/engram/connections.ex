@@ -182,9 +182,10 @@ defmodule Engram.Connections do
         # dies whole. Narrowing it would mean rewriting levels the user chose.
         # One revoke for both shapes: one event per grant per click, and a
         # family with a row of each shape is counted once.
-        legacy
-        |> or_families(leveled_reaching(query, vault_id))
-        |> revoke_rows(:user_disconnect_client)
+        revoke_rows(
+          [legacy | family_rows(leveled_reaching(query, vault_id))],
+          :user_disconnect_client
+        )
       else
         revoke_rows(query, :user_disconnect_client)
       end
@@ -211,23 +212,18 @@ defmodule Engram.Connections do
         do: t.family_id
   end
 
-  # `query`'s rows plus every not-yet-revoked row of each of `families`,
-  # consumed rotation predecessors included, keyed on `family_id` rather
-  # than a row-id list. A family's rows share its user and client, so the
-  # base filters of `query` hold for them.
-  defp or_families(query, []), do: query
+  # Every not-yet-revoked row of each family, consumed rotation predecessors
+  # included, keyed on `family_id` rather than a row-id list: a query list for
+  # `revoke_rows/2`, empty when there is no family.
+  defp family_rows([]), do: []
 
-  defp or_families(query, families) do
-    base = from(t in RefreshToken, where: is_nil(t.revoked_at))
+  defp family_rows(families),
+    do: [from(t in RefreshToken, where: t.family_id in ^families, where: is_nil(t.revoked_at))]
 
-    from(t in base,
-      where: t.id in subquery(from(q in query, select: q.id)) or t.family_id in ^families
-    )
-  end
-
-  # Marks the rows of `query` revoked and returns `{family_id, user_id}` per
-  # changed row, for `Engram.OAuth.grants_changed/1`. Every revoke here goes
-  # through it, so none can forget the cache eviction or the socket
+  # Marks the rows of `query` (one query, or a list for one user action)
+  # revoked and returns `{family_id, user_id}` per changed row, for
+  # `Engram.OAuth.grants_changed/1`. Every revoke here goes through it, so
+  # none can forget the cache eviction or the socket
   # disconnect, and through `OAuth.revoke_refresh_tokens/2`, so none can miss
   # a successor a concurrent rotation is committing (#1974). `cause` is the
   # `OAuth.revoke_cause()` its `mcp_oauth_grant_revoked` events carry.
@@ -475,7 +471,7 @@ defmodule Engram.Connections do
       from(t in RefreshToken, where: t.user_id == ^user_id, where: is_nil(t.revoked_at))
       |> leveled_reaching(vault_id, &(not Permissions.reaches_anything?(&1, live)))
 
-    revoked = only_vault |> or_families(leveled) |> revoke_rows(cause)
+    revoked = revoke_rows([only_vault | family_rows(leveled)], cause)
 
     case narrowed ++ revoked do
       [] when kick_owner ->

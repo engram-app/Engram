@@ -625,4 +625,19 @@ defmodule EngramWeb.OAuthGrantRevokedTest do
     assert known.props["grant_id"] == OAuth.grant_id(family_id)
     refute Map.has_key?(unknown.props, "grant_id")
   end
+
+  # The token controller's own `mcp_oauth_token_failed` is attributed to the
+  # token's user, so a raising re-read reached the response: a 500 where
+  # RFC 6749 says 400. `Engram.Analytics` now keeps its "never raises".
+  test "a refused refresh is still a 400 when analytics raises", %{client: client, user: user} do
+    {rt, family_id} = grant(client, user)
+    :ok = Connections.revoke_oauth_grant(user.id, family_id)
+    Engram.Cache.put(:user, user.id, :not_a_user)
+    on_exit(fn -> Engram.Cache.evict(:user, user.id) end)
+
+    conn = refresh(client, rt)
+    assert conn.status == 400
+    assert conn.resp_body == ~s({"error":"invalid_grant"})
+    assert stable_headers(conn) == @json_headers
+  end
 end

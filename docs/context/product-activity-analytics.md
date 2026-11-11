@@ -16,6 +16,16 @@ an opt-out or email change. `Engram.Observability.PostHog` is the vendor
 adapter; `test/lint/analytics_boundary_test.exs` fails if anything else calls
 it. Replacing PostHog means rewriting that one adapter.
 
+Every event-recording entry point (`track/3`, `track_throttled/5`,
+`track_folded/6` and the functions built on them, `track_anonymous/2`,
+`record_client_event/3`) runs its body through one private guard, so the
+module never raises into a caller (added 2026-11-11, review of #2565: a
+raising user re-read turned the OAuth token endpoint's 400 into a 500). A
+failure is not silent: one `analytics event dropped` warning with `event` and
+`reason` (the exception's module or the exit kind, via
+`Metadata.safe_reason/1`; never props, never the user). There is no
+analytics-failure metric; grep that line in Loki.
+
 Every event is also stored in our own `analytics_events` table (same opt-out
 and throttling, free text dropped), whether or not PostHog is configured. See
 `customer-insights.md`.

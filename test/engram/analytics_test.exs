@@ -240,4 +240,50 @@ defmodule Engram.AnalyticsTest do
       assert log =~ "erasure is not configured"
     end
   end
+
+  # Review of #2565: `track/3` says "never raises", but a raise anywhere
+  # below it (the user re-read, the limiter, the event log) reached the
+  # caller, and on the OAuth token endpoint that turned a 400 into a 500.
+  # A poisoned `:user` cache entry makes the re-read raise, as in
+  # `onboarding_test.exs`.
+  describe "never raises" do
+    setup do
+      user = insert(:user)
+      Engram.Cache.put(:user, user.id, :not_a_user)
+      on_exit(fn -> Engram.Cache.evict(:user, user.id) end)
+      %{user: user}
+    end
+
+    defp dropped?(%{msg: {:string, s}}), do: IO.iodata_to_binary(s) == "analytics event dropped"
+    defp dropped?(_), do: false
+
+    test "track/3 returns :ok and logs one warning naming the event and the kind", %{user: user} do
+      {result, events} =
+        Engram.Test.LogCapture.with_events(fn ->
+          Analytics.track(user, "note_created", %{vault_id: "v1"})
+        end)
+
+      assert result == :ok
+      assert [warning] = Enum.filter(events, &dropped?/1)
+      assert warning.level == :warning
+      assert warning.meta[:event] == "note_created"
+      assert warning.meta[:reason] == "CaseClauseError"
+      refute Map.has_key?(warning.meta, :vault_id)
+      refute Map.has_key?(warning.meta, :user_id)
+    end
+
+    test "the throttled and folded paths too", %{user: user} do
+      {results, events} =
+        Engram.Test.LogCapture.with_events(fn ->
+          [
+            Analytics.track_throttled(user, "limit_hit", "k", 60_000, %{}),
+            Analytics.track_activity(user, :web),
+            Analytics.record_client_event(%Engram.Accounts.User{id: user.id}, "x", %{})
+          ]
+        end)
+
+      assert results == [:ok, :ok, :ok]
+      assert length(Enum.filter(events, &dropped?/1)) == 3
+    end
+  end
 end

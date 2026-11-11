@@ -982,7 +982,8 @@ defmodule Engram.OAuth do
                  ] ++ @kill_reasons
 
   @doc """
-  Revokes the live refresh tokens `query` selects, safely against a rotation
+  Revokes the live refresh tokens `query` selects (or each of a list of
+  queries, in order, in ONE transaction: one user action), safely against a rotation
   in flight: it takes each owner's grant lock (`lock_grants!/1`), as rotation
   does, then locks the rows (`FOR UPDATE`, by id), then revokes with a fresh statement, whose snapshot includes a
   successor that rotation just committed. Every revoke goes through this.
@@ -990,12 +991,13 @@ defmodule Engram.OAuth do
 
   `cause:` is required: why the grant ends (`revoke_cause()`). Each grant
   (family) this ends emits one `mcp_oauth_grant_revoked` after commit
-  (`track_ended/2`); nothing when no row was live.
+  (`track_ended/2`), once however many of the queries hit it; nothing when
+  no row was live.
 
   Returns the count and `{family_id, user_id}` per revoked row. The caller
   passes that list to `grants_changed/1`, once, after its other writes.
   """
-  @spec revoke_refresh_tokens(Ecto.Queryable.t(), keyword()) ::
+  @spec revoke_refresh_tokens(Ecto.Queryable.t() | [Ecto.Queryable.t()], keyword()) ::
           {non_neg_integer(), [{Ecto.UUID.t(), Ecto.UUID.t()}]}
   def revoke_refresh_tokens(query, opts) do
     {cause, opts} = Keyword.pop!(opts, :cause)
@@ -1003,7 +1005,7 @@ defmodule Engram.OAuth do
     if cause not in @revoke_causes,
       do: raise(ArgumentError, "unknown revoke cause: #{inspect(cause)}")
 
-    live = from(t in query, where: is_nil(t.revoked_at))
+    lives = for q <- List.wrap(query), do: from(t in q, where: is_nil(t.revoked_at))
 
     # Owns the after-commit queue when no caller does, so the event below
     # always runs after commit under the queue's rescue: analytics can never
@@ -1015,18 +1017,29 @@ defmodule Engram.OAuth do
         # Rotation's lock order: grant lock, then rows, rows by id. Locking
         # rows first could deadlock with a rotation (one side aborted, and
         # the match above raised). Users sorted so two revokes agree too.
-        from(t in live, select: t.user_id, distinct: true, order_by: t.user_id)
-        |> Repo.all(opts)
+        lives
+        |> Enum.flat_map(
+          &Repo.all(from(t in &1, select: t.user_id, distinct: true, order_by: t.user_id), opts)
+        )
+        |> Enum.uniq()
+        |> Enum.sort()
         |> Enum.each(&lock_grants!/1)
 
-        Repo.all(from(t in live, select: t.id, order_by: t.id, lock: "FOR UPDATE"), opts)
-
+        # Each query is re-read after the one before it committed its update,
+        # so a row two of them select is revoked (and counted) once.
         result =
-          Repo.update_all(
-            from(t in live, select: {t.family_id, t.user_id, t.client_id}),
-            [set: [revoked_at: DateTime.utc_now(:second)]],
-            opts
-          )
+          Enum.reduce(lives, {0, []}, fn live, {n, rows} ->
+            Repo.all(from(t in live, select: t.id, order_by: t.id, lock: "FOR UPDATE"), opts)
+
+            {m, more} =
+              Repo.update_all(
+                from(t in live, select: {t.family_id, t.user_id, t.client_id}),
+                [set: [revoked_at: DateTime.utc_now(:second)]],
+                opts
+              )
+
+            {n + m, rows ++ more}
+          end)
 
         :ok = track_ended(elem(result, 1), cause)
         result
