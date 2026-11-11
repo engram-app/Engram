@@ -5,7 +5,7 @@ defmodule Engram.MixProject do
     [
       app: :engram,
       # x-release-please-start-version
-      version: "0.79.0",
+      version: "0.79.1",
       # x-release-please-end-version
       # 1.16+: Engram.Text uses String.replace_invalid/1.
       elixir: "~> 1.16",
