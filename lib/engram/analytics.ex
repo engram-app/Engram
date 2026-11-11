@@ -28,6 +28,7 @@ defmodule Engram.Analytics do
   alias Engram.Analytics.EventLog
   alias Engram.Analytics.Folds
   alias Engram.Analytics.PersonProperties
+  alias Engram.Logger.Metadata
   alias Engram.Observability.PostHog
   alias Engram.Workers.PostHogErasure
 
@@ -56,7 +57,7 @@ defmodule Engram.Analytics do
   @doc "Record `event` for `user`. Fire-and-forget; never raises."
   @spec track(map(), String.t(), map()) :: :ok
   def track(user, event, props \\ %{}) do
-    if recording?(), do: emit(user, event, props), else: :ok
+    guarded(event, fn -> if recording?(), do: emit(user, event, props), else: :ok end)
   end
 
   @doc """
@@ -66,17 +67,21 @@ defmodule Engram.Analytics do
   """
   @spec record_client_event(User.t(), String.t(), map()) :: :ok
   def record_client_event(%User{} = user, event, props) do
-    case person(user) do
-      {nil, _user_id} -> :ok
-      {_distinct_id, user_id} -> EventLog.record(user_id, event, props)
-    end
+    guarded(event, fn ->
+      case person(user) do
+        {nil, _user_id} -> :ok
+        {_distinct_id, user_id} -> EventLog.record(user_id, event, props)
+      end
+    end)
   end
 
   @doc "Record an event attached to no person (e.g. a deleted account's exit reason)."
   @spec track_anonymous(String.t(), map()) :: :ok
   def track_anonymous(event, props) do
-    :ok = EventLog.record(nil, event, props)
-    PostHog.capture_anonymous(event, props)
+    guarded(event, fn ->
+      :ok = EventLog.record(nil, event, props)
+      PostHog.capture_anonymous(event, props)
+    end)
   end
 
   @doc """
@@ -103,16 +108,18 @@ defmodule Engram.Analytics do
   """
   @spec track_folded(map(), String.t(), String.t(), pos_integer(), map(), map()) :: :ok
   def track_folded(%{id: id} = user, event, dedupe, window_ms, props, counts) do
-    if recording?() do
-      key = {event, id, dedupe}
-      :ok = Folds.add(key, counts, props)
+    guarded(event, fn ->
+      if recording?() do
+        key = {event, id, dedupe}
+        :ok = Folds.add(key, counts, props)
 
-      track_throttled(user, event, dedupe, window_ms, fn ->
-        Map.merge(props, Folds.take(key, Map.keys(counts)))
-      end)
-    else
-      :ok
-    end
+        track_throttled(user, event, dedupe, window_ms, fn ->
+          Map.merge(props, Folds.take(key, Map.keys(counts)))
+        end)
+      else
+        :ok
+      end
+    end)
   end
 
   def track_folded(_user, _event, _dedupe, _window_ms, _props, _counts), do: :ok
@@ -156,19 +163,21 @@ defmodule Engram.Analytics do
   @spec track_throttled(map(), String.t(), String.t(), pos_integer(), map() | (-> map())) ::
           :ok
   def track_throttled(%{id: id} = user, event, dedupe, window_ms, props) do
-    with true <- recording?(),
-         {:allow, _} <-
-           EngramWeb.RateLimiter.hit(
-             "ph:#{event}:#{id}:#{dedupe}",
-             window_ms,
-             1,
-             :analytics_activity
-           ) do
-      props = if is_function(props, 0), do: props.(), else: props
-      emit(user, event, props)
-    else
-      _ -> :ok
-    end
+    guarded(event, fn ->
+      with true <- recording?(),
+           {:allow, _} <-
+             EngramWeb.RateLimiter.hit(
+               "ph:#{event}:#{id}:#{dedupe}",
+               window_ms,
+               1,
+               :analytics_activity
+             ) do
+        props = if is_function(props, 0), do: props.(), else: props
+        emit(user, event, props)
+      else
+        _ -> :ok
+      end
+    end)
   end
 
   def track_throttled(_user, _event, _dedupe, _window_ms, _props), do: :ok
@@ -302,6 +311,28 @@ defmodule Engram.Analytics do
 
   # Both sinks get the event, or neither: a nil distinct id (opted out, no
   # email, deleted) means nothing is recorded anywhere.
+  # The "never raises" contract, in one place: every event-recording entry
+  # point runs its body through here (review of #2565: a raising re-read
+  # turned the OAuth token endpoint's 400 into a 500). Not a silent swallow:
+  # one warning naming the event and the failure's kind, never its props or
+  # message (`Metadata.safe_reason/1`), and nothing about the user. No
+  # analytics-failure metric exists; the log line is the signal.
+  defp guarded(event, fun) do
+    _ = fun.()
+    :ok
+  rescue
+    e -> dropped(event, Metadata.safe_reason(e))
+  catch
+    kind, reason -> dropped(event, "#{kind}: #{Metadata.safe_exit_reason(reason)}")
+  end
+
+  defp dropped(event, reason) do
+    Logger.warning(
+      "analytics event dropped",
+      Metadata.with_category(:warning, :lifecycle, event: event, reason: reason)
+    )
+  end
+
   defp emit(user, event, props) do
     case person(user) do
       {nil, _user_id} ->

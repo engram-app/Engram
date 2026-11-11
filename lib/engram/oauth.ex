@@ -738,7 +738,7 @@ defmodule Engram.OAuth do
         grant_error(:refresh_token_unknown)
 
       %RefreshToken{} = rt ->
-        put_grant_user_id(rt.user_id)
+        put_grant(rt.user_id, rt.family_id)
         rotate_existing(rt, internal_client_id(client_id, rt.client_id), opts)
     end
   end
@@ -784,13 +784,19 @@ defmodule Engram.OAuth do
       Repo.transaction_after_commit(fn ->
         lock_grants!(rt.user_id)
 
-        case lock_row(rt) do
-          nil -> {:error, :refresh_token_unknown}
-          locked -> decide(locked, opts[:ip])
-        end
+        outcome =
+          case lock_row(rt) do
+            nil -> {:error, :refresh_token_unknown}
+            locked -> decide(locked, opts[:ip])
+          end
+
+        # Logged and counted after commit through the queue's rescue: a
+        # failing log or analytics call can never turn the answer into a 500.
+        Repo.after_commit(fn -> report(outcome, rt, opts[:user_agent]) end)
+        outcome
       end)
 
-    report(outcome, rt, opts[:user_agent])
+    answer(outcome)
   end
 
   @doc """
@@ -805,17 +811,21 @@ defmodule Engram.OAuth do
   @spec lock_grants!(Ecto.UUID.t()) :: :ok
   def lock_grants!(user_id), do: Repo.advisory_lock!("oauth_grants:#{user_id}")
 
-  defp report({:ok, response}, _rt, _ua), do: {:ok, response}
+  # What the client is told. Its side effects are `report/3`'s.
+  defp answer({:ok, response}), do: {:ok, response}
+  defp answer({:ok, response, {:grace, _ip_matched}}), do: {:ok, response}
+  defp answer({:error, :refresh_token_reuse}), do: grant_error(:refresh_token_reuse)
 
-  defp report({:ok, response, {:grace, ip_matched}}, rt, _ua) do
-    log_reuse(rt, within_grace: true, ip_matched: ip_matched)
-    {:ok, response}
-  end
+  defp answer({:error, killed}) when killed in [:revoked_after_use, :superseded_reuse],
+    do: grant_error(:refresh_token_revoked)
 
-  defp report({:error, :refresh_token_reuse}, rt, ua) do
-    log_reuse(rt, within_grace: false, killed: :refresh_reuse, user_agent: ua)
-    grant_error(:refresh_token_reuse)
-  end
+  defp answer({:error, reason}), do: grant_error(reason)
+
+  defp report({:ok, _response, {:grace, ip_matched}}, rt, _ua),
+    do: log_reuse(rt, within_grace: true, ip_matched: ip_matched)
+
+  defp report({:error, :refresh_token_reuse}, rt, ua),
+    do: log_reuse(rt, within_grace: false, killed: :refresh_reuse, user_agent: ua)
 
   defp report({:error, :revoked_after_use}, rt, ua) do
     log_reuse(rt,
@@ -824,8 +834,6 @@ defmodule Engram.OAuth do
       killed: :revoked_after_use,
       user_agent: ua
     )
-
-    grant_error(:refresh_token_revoked)
   end
 
   defp report({:error, :superseded_reuse}, rt, ua) do
@@ -835,11 +843,9 @@ defmodule Engram.OAuth do
       killed: :superseded_reuse,
       user_agent: ua
     )
-
-    grant_error(:refresh_token_revoked)
   end
 
-  defp report({:error, reason}, _rt, _ua), do: grant_error(reason)
+  defp report(_outcome, _rt, _ua), do: :ok
 
   # Revoked first, even when also consumed: Disconnect, RFC 7009 or an
   # earlier replay. Each revokes every row of the family, consumed ones
@@ -862,7 +868,7 @@ defmodule Engram.OAuth do
       {:ok, response, {:grace, ip_matched}}
     else
       _not_eligible ->
-        _ = revoke_family(rt.family_id)
+        _ = revoke_family(rt.family_id, :refresh_reuse)
         {:error, :refresh_token_reuse}
     end
   end
@@ -897,7 +903,8 @@ defmodule Engram.OAuth do
   # (Disconnect, RFC 7009, an earlier replay), presenting any of its tokens
   # changes nothing and is not logged again.
   defp refuse_revoked(rt, family_live) do
-    killed = revoke_family(rt.family_id) != []
+    cause = if rt.consumed_at, do: :revoked_after_use, else: :superseded_reuse
+    killed = revoke_family(rt.family_id, cause) != []
 
     cond do
       killed and rt.consumed_at -> {:error, :revoked_after_use}
@@ -935,9 +942,10 @@ defmodule Engram.OAuth do
     end
   end
 
-  defp revoke_family(family_id) do
+  defp revoke_family(family_id, cause) do
     {_n, changed} =
       revoke_refresh_tokens(from(rt in RefreshToken, where: rt.family_id == ^family_id),
+        cause: cause,
         skip_tenant_check: true
       )
 
@@ -950,40 +958,128 @@ defmodule Engram.OAuth do
     |> Repo.one(skip_tenant_check: true)
   end
 
+  @kill_reasons [:refresh_reuse, :revoked_after_use, :superseded_reuse, :code_replay]
+
+  @typedoc """
+  Why a grant ended: the required `cause:` of `revoke_refresh_tokens/2` and
+  the `cause` of `mcp_oauth_grant_revoked`. A closed set named for what
+  happened, never taken from a request. The reuse kills are `kill_reason()`.
+  """
+  @type revoke_cause ::
+          :user_disconnect_client
+          | :user_disconnect_grant
+          | :vault_deleted
+          | :vault_purged
+          | :client_revoke_rfc7009
+          | kill_reason()
+
+  @revoke_causes [
+                   :user_disconnect_client,
+                   :user_disconnect_grant,
+                   :vault_deleted,
+                   :vault_purged,
+                   :client_revoke_rfc7009
+                 ] ++ @kill_reasons
+
   @doc """
-  Revokes the live refresh tokens `query` selects, safely against a rotation
+  Revokes the live refresh tokens `query` selects (or each of a list of
+  queries, in order, in ONE transaction: one user action), safely against a rotation
   in flight: it takes each owner's grant lock (`lock_grants!/1`), as rotation
   does, then locks the rows (`FOR UPDATE`, by id), then revokes with a fresh statement, whose snapshot includes a
   successor that rotation just committed. Every revoke goes through this.
   `opts` are passed to every statement.
 
+  `cause:` is required: why the grant ends (`revoke_cause()`). Each grant
+  (family) this ends emits one `mcp_oauth_grant_revoked` after commit
+  (`track_ended/2`), once however many of the queries hit it; nothing when
+  no row was live.
+
   Returns the count and `{family_id, user_id}` per revoked row. The caller
   passes that list to `grants_changed/1`, once, after its other writes.
   """
-  @spec revoke_refresh_tokens(Ecto.Queryable.t(), keyword()) ::
+  @spec revoke_refresh_tokens(Ecto.Queryable.t() | [Ecto.Queryable.t()], keyword()) ::
           {non_neg_integer(), [{Ecto.UUID.t(), Ecto.UUID.t()}]}
-  def revoke_refresh_tokens(query, opts \\ []) do
-    live = from(t in query, where: is_nil(t.revoked_at))
+  def revoke_refresh_tokens(query, opts) do
+    {cause, opts} = Keyword.pop!(opts, :cause)
 
-    {:ok, result} =
-      Repo.transaction(fn ->
+    if cause not in @revoke_causes,
+      do: raise(ArgumentError, "unknown revoke cause: #{inspect(cause)}")
+
+    lives = for q <- List.wrap(query), do: from(t in q, where: is_nil(t.revoked_at))
+
+    # Owns the after-commit queue when no caller does, so the event below
+    # always runs after commit under the queue's rescue: analytics can never
+    # raise into a revoke, or skip what its caller does next (eviction,
+    # socket drop, a second revoke). Inside a caller's transaction it joins
+    # that queue, and a rollback drops it.
+    {:ok, {n, revoked}} =
+      Repo.transaction_after_commit(fn ->
         # Rotation's lock order: grant lock, then rows, rows by id. Locking
         # rows first could deadlock with a rotation (one side aborted, and
         # the match above raised). Users sorted so two revokes agree too.
-        from(t in live, select: t.user_id, distinct: true, order_by: t.user_id)
-        |> Repo.all(opts)
+        lives
+        |> Enum.flat_map(
+          &Repo.all(from(t in &1, select: t.user_id, distinct: true, order_by: t.user_id), opts)
+        )
+        |> Enum.uniq()
+        |> Enum.sort()
         |> Enum.each(&lock_grants!/1)
 
-        Repo.all(from(t in live, select: t.id, order_by: t.id, lock: "FOR UPDATE"), opts)
+        # Each query is re-read after the one before it committed its update,
+        # so a row two of them select is revoked (and counted) once.
+        result =
+          Enum.reduce(lives, {0, []}, fn live, {n, rows} ->
+            Repo.all(from(t in live, select: t.id, order_by: t.id, lock: "FOR UPDATE"), opts)
 
-        Repo.update_all(
-          from(t in live, select: {t.family_id, t.user_id}),
-          [set: [revoked_at: DateTime.utc_now(:second)]],
-          opts
-        )
+            {m, more} =
+              Repo.update_all(
+                from(t in live, select: {t.family_id, t.user_id, t.client_id}),
+                [set: [revoked_at: DateTime.utc_now(:second)]],
+                opts
+              )
+
+            {n + m, rows ++ more}
+          end)
+
+        :ok = track_ended(elem(result, 1), cause)
+        result
       end)
 
-    result
+    {n, Enum.map(revoked, fn {family_id, user_id, _client_id} -> {family_id, user_id} end)}
+  end
+
+  # Reuse kills are reported where they are already counted
+  # (`emit_family_revoked/4`), which holds the client family and User-Agent:
+  # no lookup on the token path, and the event agrees with the counter.
+  defp track_ended(_revoked, cause) when cause in @kill_reasons, do: :ok
+  defp track_ended([], _cause), do: :ok
+
+  defp track_ended(revoked, cause) do
+    grants = Enum.uniq_by(revoked, &elem(&1, 0))
+    families = length(grants)
+
+    Repo.after_commit(fn ->
+      labels =
+        grants |> Enum.map(&elem(&1, 2)) |> Enum.uniq() |> Map.new(&{&1, client_family(&1)})
+
+      for {family_id, user_id, client_id} <- grants do
+        track_grant_revoked(user_id, family_id, cause, %{
+          client: labels[client_id],
+          families: families
+        })
+      end
+    end)
+  end
+
+  # One `mcp_oauth_grant_revoked` per ended grant. Only ever called from an
+  # after-commit callback (`track_ended/2`, `report/3`), whose queue rescues.
+  # Every prop is a closed label or a non-secret hash (`grant_id/1`).
+  defp track_grant_revoked(user_id, family_id, cause, props) do
+    Engram.Analytics.track(
+      %Accounts.User{id: user_id},
+      "mcp_oauth_grant_revoked",
+      Map.merge(props, %{cause: Atom.to_string(cause), grant_id: grant_id(family_id)})
+    )
   end
 
   # #1974: a client whose rotation response was lost retries with the token it
@@ -1079,7 +1175,9 @@ defmodule Engram.OAuth do
       Metadata.with_category(:warning, :lifecycle, metadata)
     )
 
-    if opts[:killed], do: emit_family_revoked(opts[:killed], family, opts[:user_agent])
+    if opts[:killed],
+      do:
+        emit_family_revoked(opts[:killed], {rt.user_id, rt.family_id}, family, opts[:user_agent])
   end
 
   @typedoc "Why reuse detection killed a family: the `reason` tag of `family_revoked`."
@@ -1087,7 +1185,7 @@ defmodule Engram.OAuth do
 
   @doc "Every `kill_reason()`, for seeding the metric's series at boot."
   @spec kill_reasons() :: [kill_reason(), ...]
-  def kill_reasons, do: [:refresh_reuse, :revoked_after_use, :superseded_reuse, :code_replay]
+  def kill_reasons, do: @kill_reasons
 
   # One event per family a reuse check KILLED (2026-10-24 triage): the alert
   # keyed on rejected refresh exchanges fired on one kill, because a client
@@ -1095,11 +1193,27 @@ defmodule Engram.OAuth do
   # is counted here once, by the presentation whose revoke changed rows.
   # Tags are closed sets: `client_agent` is `McpClient.agent/2`, `reason` a
   # `kill_reason()`. PromEx: `engram_prom_ex_oauth_family_revoked_total`.
-  @spec emit_family_revoked(kill_reason(), String.t(), String.t() | nil) :: :ok
-  defp emit_family_revoked(reason, family, user_agent) do
+  # Runs from an after-commit callback (`report/3`, `check_unconsumed/2`),
+  # so it also emits that grant's `mcp_oauth_grant_revoked` (cause = the
+  # kill reason) under the queue's rescue.
+  @spec emit_family_revoked(
+          kill_reason(),
+          {Ecto.UUID.t(), Ecto.UUID.t()},
+          String.t(),
+          String.t() | nil
+        ) :: :ok
+  defp emit_family_revoked(reason, {user_id, family_id}, family, user_agent) do
+    agent = McpClient.agent(user_agent, family)
+
     :telemetry.execute([:engram, :oauth, :family_revoked], %{count: 1}, %{
       reason: reason,
-      client_agent: McpClient.agent(user_agent, family)
+      client_agent: agent
+    })
+
+    track_grant_revoked(user_id, family_id, reason, %{
+      client: family,
+      client_agent: agent,
+      families: 1
     })
   end
 
@@ -1133,12 +1247,15 @@ defmodule Engram.OAuth do
 
   @grant_id_key :engram_oauth_grant_id
 
-  defp put_grant_user_id(user_id), do: Process.put(@grant_user_key, user_id)
-
-  defp put_code_user_id({:ok, %AuthorizationCode{id: id, user_id: user_id}}) do
-    Process.put(@grant_id_key, grant_id(id))
-    put_grant_user_id(user_id)
+  # `grant_row_id` is a code id or a refresh family id: one and the same for
+  # a grant (the family id IS the code id), so `grant_id/1` joins them.
+  defp put_grant(user_id, grant_row_id) do
+    Process.put(@grant_id_key, grant_id(grant_row_id))
+    Process.put(@grant_user_key, user_id)
   end
+
+  defp put_code_user_id({:ok, %AuthorizationCode{id: id, user_id: user_id}}),
+    do: put_grant(user_id, id)
 
   defp put_code_user_id(_), do: :ok
 
@@ -1150,8 +1267,9 @@ defmodule Engram.OAuth do
   def take_grant_user_id, do: Process.delete(@grant_user_key)
 
   @doc """
-  The `grant_id/1` of the code the last code exchange in this process found,
-  if any, and forgets it. For `mcp_oauth_token_issued` / `_failed`.
+  The `grant_id/1` of the code or refresh token the last grant attempt in
+  this process found, if any, and forgets it. For `mcp_oauth_token_issued` /
+  `_failed`. An unknown refresh token names no grant, so none.
   """
   @spec take_grant_id() :: String.t() | nil
   def take_grant_id, do: Process.delete(@grant_id_key)
@@ -1202,17 +1320,25 @@ defmodule Engram.OAuth do
 
     if DateTime.diff(now, consumed_at) > @refresh_reuse_grace_seconds and
          DateTime.compare(now, code.expires_at) != :gt do
-      {revoked, changed} =
-        revoke_refresh_tokens(from(r in RefreshToken, where: r.family_id == ^code.id),
-          skip_tenant_check: true
-        )
+      # Counted only when this replay is what killed the family, after
+      # commit through the queue's rescue, like every revoke's event.
+      {:ok, {_revoked, changed}} =
+        Repo.transaction_after_commit(fn ->
+          result =
+            revoke_refresh_tokens(from(r in RefreshToken, where: r.family_id == ^code.id),
+              cause: :code_replay,
+              skip_tenant_check: true
+            )
+
+          if elem(result, 0) > 0,
+            do: Repo.after_commit(fn -> emit_code_replay_kill(code, user_agent) end)
+
+          result
+        end)
 
       # Like every other revoke: the grant's access tokens stop at once on
       # this node (the NOTIFY evicts peers), and the owner's sockets drop.
       :ok = grants_changed(changed)
-
-      # Counted only when this replay is what killed the family.
-      if revoked > 0, do: emit_code_replay_kill(code, user_agent)
 
       Logger.warning(
         "oauth_code_replay_revoked",
@@ -1229,7 +1355,13 @@ defmodule Engram.OAuth do
   end
 
   defp emit_code_replay_kill(code, user_agent),
-    do: emit_family_revoked(:code_replay, client_family(code.client_id), user_agent)
+    do:
+      emit_family_revoked(
+        :code_replay,
+        {code.user_id, code.id},
+        client_family(code.client_id),
+        user_agent
+      )
 
   # The `McpClient` family of an internal client id, for labels. Keyed by
   # client id, before any user context: no tenant to scope to.
@@ -1657,7 +1789,7 @@ defmodule Engram.OAuth do
       # whole family goes. `grants_changed/1` evicts the cached grant (its
       # access tokens answer 401 at once) and disconnects its sockets.
       %RefreshToken{client_id: ^owner} = rt ->
-        _ = revoke_family(rt.family_id)
+        _ = revoke_family(rt.family_id, :client_revoke_rfc7009)
         :ok
 
       _ ->

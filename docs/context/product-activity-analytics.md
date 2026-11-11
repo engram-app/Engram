@@ -16,6 +16,16 @@ an opt-out or email change. `Engram.Observability.PostHog` is the vendor
 adapter; `test/lint/analytics_boundary_test.exs` fails if anything else calls
 it. Replacing PostHog means rewriting that one adapter.
 
+Every event-recording entry point (`track/3`, `track_throttled/5`,
+`track_folded/6` and the functions built on them, `track_anonymous/2`,
+`record_client_event/3`) runs its body through one private guard, so the
+module never raises into a caller (added 2026-11-11, review of #2565: a
+raising user re-read turned the OAuth token endpoint's 400 into a 500). A
+failure is not silent: one `analytics event dropped` warning with `event` and
+`reason` (the exception's module or the exit kind, via
+`Metadata.safe_reason/1`; never props, never the user). There is no
+analytics-failure metric; grep that line in Loki.
+
 Every event is also stored in our own `analytics_events` table (same opt-out
 and throttling, free text dropped), whether or not PostHog is configured. See
 `customer-insights.md`.
@@ -31,6 +41,8 @@ and throttling, free text dropped), whether or not PostHog is configured. See
 | `device_connected` | every device-code exchange | none | `platform` (`desktop` `mobile`, else null), `device_number` (live device-flow families incl. this one, null if the count failed; a re-link leaves the old family live until revoked/expired; 2+ = multi-device) |
 | `device_disconnected` | a device family or Obsidian OAuth grant revoked | none | `via` (`device_flow` `oauth`) |
 | `mcp_client_disconnected` | an MCP grant or an API key revoked | none | `via` (`oauth` `api_key`), `client` (family, oauth only) |
+| `mcp_oauth_grant_revoked` | an OAuth grant (one refresh-token family) ended, any cause, after commit; one per grant, none when nothing was live | none | `cause` (`Engram.OAuth.revoke_cause()`, see `mcp-oauth.md`), `grant_id` (`OAuth.grant_id/1` of the family id, the same key as `mcp_oauth_token_failed`), `client` (family), `families` (grants the same user action ended: each action is ONE revoke, so a whole-app disconnect over legacy and leveled grants, or one vault delete or purge, counts each grant once; a reuse kill is always 1; never sum it, count events), `client_agent` (reuse kills only) |
+| `mcp_oauth_token_failed` | a refused `/oauth/token` request | none | `grant_type`, `auth_method`, `error`, `reason`, `client`, `registration`, `client_agent`; `grant_id` when the code or refresh token named a known row (refresh tokens: added on branch `fix/revoke-cause-attribution`, 2026-11-11, unreleased; absent for `refresh_token_unknown`) |
 | `note_created` | a REST or MCP write, or a web-editor CRDT create, makes a note | none (Obsidian CRDT creates: 1 per person per vault per hour, folded) | `vault_id`, `surface` (`web` `obsidian_sync` `mcp` `api` `welcome` `other`), `calls` (Obsidian only: creates since the last event) |
 | `note_edited` | a web-editor CRDT edit or create (Obsidian edits are `surface_active{obsidian_sync}`) | 1 per person per vault per hour | `vault_id`, `surface` (`web`) |
 | `mcp_oauth_authorize_started` / `mcp_oauth_authorize_rejected` | `GET /oauth/authorize` accepted / refused (anonymous) | rejected: 1 per reason per minute (a scanner costs one limiter hit; volume is in the refusal telemetry) | `client` (bucketed family, `other` if unknown), `reason` (our OAuth error code, rejected only) |
