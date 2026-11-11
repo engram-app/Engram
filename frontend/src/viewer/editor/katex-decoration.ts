@@ -1,4 +1,4 @@
-import { Decoration, WidgetType } from "@codemirror/view";
+import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import katex from "katex";
 import { INLINE_MATH } from "../../lib/math-delimiters";
 import { defineRenderer, searchForward, type TextRenderer } from "./render-core";
@@ -133,4 +133,16 @@ export const katexRenderer: TextRenderer<MathSpan | null> = {
 // On the render core: a StateField underneath, because block math replaces line
 // breaks. A keystroke rescans from the line before it to where the scan agrees
 // with the old one again; a caret move re-decorates only the spans it touches.
-export const katexDecoration = defineRenderer(katexRenderer);
+//
+// flow-root: KaTeX gives `.katex-display` a 1em top and bottom margin, which
+// collapsed through the widget's div. CM6 measures a block widget's border
+// box, margins excluded, so its heightmap came out 2em short per display block
+// and every line below sat lower on screen than CM6 thought: vertical motion,
+// which maps a y coordinate through the heightmap, then skipped a line on every
+// ArrowDown for the rest of the note (and clicks landed on the wrong line). A
+// block formatting context keeps the margin inside the measured box. Same trap
+// as mermaid.css's padding-not-margin note.
+export const katexDecoration = defineRenderer(
+	katexRenderer,
+	EditorView.baseTheme({ "div.cm-katex-widget": { display: "flow-root" } }),
+);
