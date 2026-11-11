@@ -1,0 +1,16 @@
+# The web app's wasm32 layer over engram_core: the frontmatter fence split,
+# as a plain `extern "C"` ABI (no wasm-bindgen, no JS glue). The built
+# module is committed at frontend/src/crdt/frontmatter-fence.wasm; build.sh
+# makes it, and CI rebuilds it and fails if the committed bytes differ.
+[package]
+name = "web_wasm"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# No `envelope`: pure Rust, no C toolchain.
+engram_core = { path = "../engram_core", default-features = false }

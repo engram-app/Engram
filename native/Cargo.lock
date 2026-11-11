@@ -254,6 +254,8 @@ dependencies = [
  "aes-gcm",
  "getrandom 0.2.17",
  "ring",
+ "serde",
+ "serde_json",
  "zstd",
 ]
 
@@ -986,6 +988,13 @@ dependencies = [
 
 [[package]]
 name = "wasm_guard"
+version = "0.0.0"
+dependencies = [
+ "engram_core",
+]
+
+[[package]]
+name = "web_wasm"
 version = "0.0.0"
 dependencies = [
  "engram_core",

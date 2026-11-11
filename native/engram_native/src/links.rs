@@ -12,8 +12,8 @@
 //!
 //! Code ranges come from pulldown-cmark (CommonMark), replacing the old
 //! ```` ```...``` ````, `~~~...~~~` and `` `...` `` regexes, which missed
-//! longer fences, indented code and multi-backtick spans. Frontmatter keeps
-//! its regex.
+//! longer fences, indented code and multi-backtick spans. Frontmatter is
+//! the shared fence rule (`engram_core::frontmatter`).
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -23,10 +23,11 @@ use std::collections::HashSet;
 /// Markdown: a = label, b = raw destination inside the parentheses.
 pub type Raw = (usize, u8, usize, usize, usize, usize);
 
+/// Where the body starts: the shared fence rule after a BOM
+/// (`engram_core::frontmatter`). The old regex took any whitespace around
+/// the fences (U+180E too) and missed a closing fence at end of text.
 fn frontmatter_len(s: &str) -> usize {
-    re!(r"(?s)\A---[\s\x{180E}]*\n.*?\n---[\s\x{180E}]*\n")
-        .find(s)
-        .map_or(0, |m| m.end())
+    crate::frontmatter::split_after_bom(s.as_bytes()).map_or(0, |f| f.2)
 }
 
 /// Sorted, non-overlapping (start, end) byte ranges a link may not start in.
