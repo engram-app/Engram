@@ -153,6 +153,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Touching sobelow or `.sobelow-skips`, or regenerating skips after a line shift (fingerprints defend locations not provenance; `rm` before `--mark-skip-all`) → `docs/context/sobelow-silent-no-op-and-fingerprint-skips.md`
 
 **Deploy & Infra**
+- Every boot crash-loops on `checked out the connection for longer than 15000ms` with no slow query, writing a data migration that loops over users (checkout timeout, RLS pre-check, never log-and-continue, real boot budget), a group on one shared network gets 429s, testing a per-minute limiter, or a planned patch release shipped as a minor (any `feat:` commit) → `docs/context/boot-migration-and-shared-ip-limits.md`
 - AWS ECS deploy, backups, observability, security checklist → `docs/context/deploy-prod.md`
 - `git push` of a `release-v*` tag is rejected as `already exists` (release-please cuts the tag itself on release-PR merge), or `deploy-prod.yml` / `terraform apply` is green and you are about to call prod deployed (neither waits for the ECS rollout), or verifying a rollout/WORKER tier without AWS credentials, or Loki's newest line stopped after a deploy → `docs/context/deploy-prod.md`
 - Checking whether a frontend change shipped by grepping the deployed SPA, or a `version` field that won't move after a deploy (the entry bundle proves nothing — routes are lazy chunks; trust `build_sha`) → `docs/context/frontend-ship-verification-bundle-grep.md`
