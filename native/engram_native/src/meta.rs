@@ -229,8 +229,9 @@ fn non_string_scalar(item: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    /// Golden-set rows whose embedded chunks move (see the test below).
-    const GOLDEN_CHANGED: usize = 8;
+    /// Golden-set rows (by index) whose embedded chunks move (see the test
+    /// below): the rows whose golden title changed in #1884.
+    const GOLDEN_CHANGED: [usize; 8] = [1473, 2932, 3026, 3240, 3715, 4870, 5552, 7990];
 
     // Every distinct tag is stored on the note and copied into each Qdrant
     // point's payload (x64 per upsert batch): 8 MB of unique `#tN` was 1.16M
@@ -408,6 +409,19 @@ mod tests {
                 "fixture u180e_after_close_is_not_a_close",
             ]
         );
-        assert_eq!(changed.len(), 3 + GOLDEN_CHANGED, "{changed:?}");
+        let golden: Vec<String> = GOLDEN_CHANGED
+            .iter()
+            .map(|i| format!("golden {i}"))
+            .collect();
+        assert_eq!(
+            changed
+                .iter()
+                .filter(|n| n.starts_with("golden"))
+                .copied()
+                .collect::<Vec<_>>(),
+            golden,
+            "{changed:?}"
+        );
+        assert_eq!(changed.len(), 3 + GOLDEN_CHANGED.len(), "{changed:?}");
     }
 }
