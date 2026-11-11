@@ -9,6 +9,8 @@ defmodule Engram.Migrations.NoteFolderHashPrepTimeoutTest do
   """
   use Engram.DataCase, async: false
 
+  alias Engram.LockTimeoutRepo
+
   defmodule ShortDefaultRepo do
     @moduledoc false
     def checkout(fun, opts \\ []) do
@@ -17,32 +19,6 @@ defmodule Engram.Migrations.NoteFolderHashPrepTimeoutTest do
 
     defdelegate query!(sql), to: Engram.Repo
     defdelegate query!(sql, params, opts), to: Engram.Repo
-  end
-
-  # Refuses the first statement it is given with a lock timeout, `:times` times.
-  defmodule LockedRepo do
-    @moduledoc false
-    def checkout(fun, opts), do: Engram.Repo.checkout(fun, opts)
-    defdelegate query!(sql), to: Engram.Repo
-
-    def query!(sql, params, opts) do
-      left = :persistent_term.get({__MODULE__, :left})
-
-      if left > 0 do
-        :persistent_term.put({__MODULE__, :left}, left - 1)
-
-        raise %Postgrex.Error{
-          postgres: %{
-            code: :lock_not_available,
-            pg_code: "55P03",
-            severity: "ERROR",
-            message: "lock timeout"
-          }
-        }
-      end
-
-      Engram.Repo.query!(sql, params, opts)
-    end
   end
 
   setup_all do
@@ -60,11 +36,11 @@ defmodule Engram.Migrations.NoteFolderHashPrepTimeoutTest do
   test "DROP NOT NULL that hits its lock timeout is retried, then gives up" do
     mod = String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteFolderHashDropNotNullExpand")
 
-    :persistent_term.put({LockedRepo, :left}, 2)
-    assert :ok = mod.drop_not_null(LockedRepo)
+    LockTimeoutRepo.refuse(2)
+    assert :ok = mod.drop_not_null(LockTimeoutRepo)
 
-    :persistent_term.put({LockedRepo, :left}, 3)
-    assert_raise Postgrex.Error, fn -> mod.drop_not_null(LockedRepo) end
+    LockTimeoutRepo.refuse(3)
+    assert_raise Postgrex.Error, fn -> mod.drop_not_null(LockTimeoutRepo) end
   end
 
   test "the checkout sets its own timeout, longer than the default" do
@@ -78,10 +54,10 @@ defmodule Engram.Migrations.NoteFolderHashPrepTimeoutTest do
     mod =
       String.to_existing_atom("Elixir.Engram.Repo.Migrations.NoteFolderHashNullablePrepExpand")
 
-    :persistent_term.put({LockedRepo, :left}, 2)
-    assert :ok = mod.with_lock_timeout(LockedRepo, ["SELECT 1"])
+    LockTimeoutRepo.refuse(2)
+    assert :ok = mod.with_lock_timeout(LockTimeoutRepo, ["SELECT 1"])
 
-    :persistent_term.put({LockedRepo, :left}, 3)
-    assert_raise Postgrex.Error, fn -> mod.with_lock_timeout(LockedRepo, ["SELECT 1"]) end
+    LockTimeoutRepo.refuse(3)
+    assert_raise Postgrex.Error, fn -> mod.with_lock_timeout(LockTimeoutRepo, ["SELECT 1"]) end
   end
 end

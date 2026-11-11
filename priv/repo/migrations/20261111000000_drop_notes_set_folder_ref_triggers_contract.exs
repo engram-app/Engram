@@ -1,6 +1,9 @@
 defmodule Engram.Repo.Migrations.DropNotesSetFolderRefTriggersContract do
   use Ecto.Migration
 
+  @disable_ddl_transaction true
+  @disable_migration_lock true
+
   @moduledoc """
   R9 release D contract: drops `notes_set_folder_ref` (INSERT or UPDATE OF
   `folder_hmac`), `notes_set_folder_ref_on_restore` (a restore) and their
@@ -23,10 +26,15 @@ defmodule Engram.Repo.Migrations.DropNotesSetFolderRefTriggersContract do
   restored note; a soft delete returns before the probe.
 
   `DROP TRIGGER` takes ACCESS EXCLUSIVE on `notes` for a catalog change
-  only: no scan, no rewrite, under `lock_timeout` 5s. Nothing retries a lock
-  timeout: the migration raises, the task exits at boot, ECS replaces it,
-  and repeated failures trip the circuit breaker and roll the deploy back.
-  Rerun-safe (`IF EXISTS`), so a replacement task starts clean. Calls no
+  only: no scan, no rewrite, under `lock_timeout` 5s. A statement that hits
+  it (55P03) is retried twice (`LockTimeoutRetry`), so a busy `notes` table
+  does not fail boot; after that the migration raises, the task exits, ECS
+  replaces it, and repeated failures trip the circuit breaker and roll the
+  deploy back. No DDL transaction, so one statement can be retried alone:
+  each leaves a state every release down to the floor runs on (writers set
+  `folder_ref_id` themselves), and `notes_folder_ref_live_only` is replaced
+  in one `CREATE OR REPLACE TRIGGER`, so it is never missing. Rerun-safe
+  (`IF EXISTS`, `OR REPLACE`), so a replacement task starts clean. Calls no
   app module (N-1 gate). Down restores the release C function and both
   triggers.
   """
@@ -55,49 +63,62 @@ defmodule Engram.Repo.Migrations.DropNotesSetFolderRefTriggersContract do
   $$
   """
 
-  def up do
-    execute "SET lock_timeout = '5s'"
-    execute "DROP TRIGGER IF EXISTS notes_set_folder_ref ON notes"
-    execute "DROP TRIGGER IF EXISTS notes_set_folder_ref_on_restore ON notes"
-    execute "DROP FUNCTION IF EXISTS notes_set_folder_ref()"
-    live_only_trigger("folder_ref_id, deleted_at")
-    execute "RESET lock_timeout"
+  def up, do: run_up(repo())
+  def down, do: run_down(repo())
+
+  @doc false
+  # Public for `DropFolderRefTriggersLockTest`.
+  def run_up(repo) do
+    with_lock_timeout(repo, [
+      "DROP TRIGGER IF EXISTS notes_set_folder_ref ON notes",
+      "DROP TRIGGER IF EXISTS notes_set_folder_ref_on_restore ON notes",
+      "DROP FUNCTION IF EXISTS notes_set_folder_ref()",
+      live_only_trigger("folder_ref_id, deleted_at")
+    ])
   end
 
-  def down do
-    execute "SET lock_timeout = '5s'"
-    live_only_trigger("folder_ref_id")
-    execute @set_ref
-    execute "DROP TRIGGER IF EXISTS notes_set_folder_ref ON notes"
-
-    execute """
-    CREATE TRIGGER notes_set_folder_ref
-      BEFORE INSERT OR UPDATE OF folder_hmac ON notes
-      FOR EACH ROW WHEN (NEW.kind = 'note')
-      EXECUTE FUNCTION notes_set_folder_ref()
-    """
-
-    execute "DROP TRIGGER IF EXISTS notes_set_folder_ref_on_restore ON notes"
-
-    execute """
-    CREATE TRIGGER notes_set_folder_ref_on_restore
-      BEFORE UPDATE OF deleted_at ON notes
-      FOR EACH ROW
-      WHEN (NEW.kind = 'note' AND OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL)
-      EXECUTE FUNCTION notes_set_folder_ref()
-    """
-
-    execute "RESET lock_timeout"
+  @doc false
+  def run_down(repo) do
+    with_lock_timeout(repo, [
+      live_only_trigger("folder_ref_id"),
+      @set_ref,
+      """
+      CREATE OR REPLACE TRIGGER notes_set_folder_ref
+        BEFORE INSERT OR UPDATE OF folder_hmac ON notes
+        FOR EACH ROW WHEN (NEW.kind = 'note')
+        EXECUTE FUNCTION notes_set_folder_ref()
+      """,
+      """
+      CREATE OR REPLACE TRIGGER notes_set_folder_ref_on_restore
+        BEFORE UPDATE OF deleted_at ON notes
+        FOR EACH ROW
+        WHEN (NEW.kind = 'note' AND OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL)
+        EXECUTE FUNCTION notes_set_folder_ref()
+      """
+    ])
   end
 
   defp live_only_trigger(columns) do
-    execute "DROP TRIGGER IF EXISTS notes_folder_ref_live_only ON notes"
-
-    execute """
-    CREATE TRIGGER notes_folder_ref_live_only
+    """
+    CREATE OR REPLACE TRIGGER notes_folder_ref_live_only
       BEFORE INSERT OR UPDATE OF #{columns} ON notes
       FOR EACH ROW
       EXECUTE FUNCTION folder_ref_live_only()
     """
+  end
+
+  defp with_lock_timeout(repo, statements) do
+    repo.checkout(
+      fn ->
+        repo.query!("SET lock_timeout = '5s'")
+
+        try do
+          Enum.each(statements, &repo.query!(&1, [], timeout: :infinity))
+        after
+          repo.query!("RESET lock_timeout")
+        end
+      end,
+      timeout: :infinity
+    )
   end
 end
