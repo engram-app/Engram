@@ -112,5 +112,17 @@
   "input": "\n---\ntitle: T\n[[In]]\n---\nbody",
   "block": null,
   "body": "\n---\ntitle: T\n[[In]]\n---\nbody"
+ },
+ {
+  "name": "bom_after_the_open_stays_in_the_block",
+  "input": "---\n\ufeffa: 1\n---\nb",
+  "block": "\ufeffa: 1\n",
+  "body": "b"
+ },
+ {
+  "name": "bom_after_the_close_stays_in_the_body",
+  "input": "---\na: 1\n---\n\ufeffbody",
+  "block": "a: 1\n",
+  "body": "\ufeffbody"
  }
 ]

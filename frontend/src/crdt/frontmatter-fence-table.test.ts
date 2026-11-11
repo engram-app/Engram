@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
-import { splitFrontmatter, splitFrontmatterTs } from "./frontmatter-codec";
-import { loadFenceWasm, resetFenceWasm } from "./frontmatter-fence";
+import { expect, test } from "vitest";
+import { splitFrontmatter } from "./frontmatter-codec";
 
-// The one fence rule's table, also asserted by native/engram_core's Rust
-// tests and test/engram/native/frontmatter_fence_test.exs.
+// The one fence rule's table, the same file native/engram_core's Rust tests
+// and test/engram/native/frontmatter_fence_test.exs assert, so this TS copy
+// cannot drift from the backend.
 interface Case {
 	name: string;
 	input: string;
@@ -19,43 +19,6 @@ const CASES: Case[] = JSON.parse(
 	),
 );
 
-const wasmBytes = readFileSync(join(__dirname, "frontmatter-fence.wasm"));
-const fromBytes = async () => (await WebAssembly.instantiate(wasmBytes)).instance;
-
-afterEach(resetFenceWasm);
-
-describe("the shared fence table", () => {
-	test.each(CASES)("TS path: $name", ({ input, block, body }) => {
-		expect(splitFrontmatterTs(input)).toEqual({ fmBlock: block, body });
-	});
-
-	test.each(CASES)("wasm path: $name", async ({ input, block, body }) => {
-		await loadFenceWasm(fromBytes);
-		expect(splitFrontmatter(input)).toEqual({ fmBlock: block, body });
-	});
-});
-
-describe("the wasm split", () => {
-	test("offsets survive multi-byte text and a note past the initial memory", async () => {
-		await loadFenceWasm(fromBytes);
-		const note = `---\ntitle: 日本 🎉\n---\n${"é€".repeat(200_000)}`;
-		expect(splitFrontmatter(note)).toEqual(splitFrontmatterTs(note));
-		expect(splitFrontmatter(note).fmBlock).toBe("title: 日本 🎉\n");
-	});
-
-	test("a lone surrogate takes the TS path, unchanged", async () => {
-		await loadFenceWasm(fromBytes);
-		const note = "---\na: \uD800\n---\nb\uDC00";
-		expect(splitFrontmatter(note)).toEqual({ fmBlock: "a: \uD800\n", body: "b\uDC00" });
-	});
-
-	test("a module that fails the self-check is not used", async () => {
-		const broken = async () => {
-			const { instance } = await WebAssembly.instantiate(wasmBytes);
-			const ex = instance.exports;
-			return { exports: { ...ex, fm_split: () => 0 } };
-		};
-		await expect(loadFenceWasm(broken)).rejects.toThrow(/self-check/);
-		expect(splitFrontmatter("---\r\na: 1\r\n---\r\nb")).toEqual({ fmBlock: "a: 1\r\n", body: "b" });
-	});
+test.each(CASES)("splitFrontmatter follows the shared table: $name", ({ input, block, body }) => {
+	expect(splitFrontmatter(input)).toEqual({ fmBlock: block, body });
 });

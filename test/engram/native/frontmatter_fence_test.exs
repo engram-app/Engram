@@ -13,7 +13,7 @@ defmodule Engram.Native.FrontmatterFenceTest do
          |> File.read!()
          |> Jason.decode!(keys: :atoms)
 
-  @bom "﻿"
+  @bom "\uFEFF"
 
   test "Frontmatter.split/1 follows the shared table" do
     for %{name: name, input: input, block: block, body: body} <- @cases do

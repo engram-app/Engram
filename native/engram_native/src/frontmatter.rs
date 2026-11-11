@@ -1,7 +1,6 @@
 //! `Engram.Notes.Frontmatter.split/1`: where a note's leading YAML block
 //! ends, as byte offsets, so the Elixir side slices sub-binaries instead of
-//! copying a large body. The rule itself is `engram_core::frontmatter`,
-//! shared with the web app's wasm.
+//! copying a large body. The rule itself is `engram_core::frontmatter`.
 
 pub use engram_core::frontmatter::{split, split_after_bom, Split};
 

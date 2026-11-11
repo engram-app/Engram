@@ -1,11 +1,10 @@
-// Mirrors the backend Elixir Engram.Notes.Frontmatter (and the plugin's
-// src/crdt/frontmatter-codec.ts). Keep byte-compatible: a divergence corrupts
-// notes across web/plugin/backend. Shared vectors in
-// frontmatter-codec.vectors.ts pin the contract. The fence split is the Rust
-// rule (frontmatter-fence.ts runs it as wasm); splitFrontmatterTs is its
-// fallback, and native/engram_core/fixtures/frontmatter_fence.json pins both.
+// Mirrors the backend Elixir Engram.Notes.Frontmatter. Keep byte-compatible:
+// a divergence corrupts notes across web/plugin/backend. Shared vectors in
+// frontmatter-codec.vectors.ts pin the contract. splitFrontmatter is a TS copy
+// of the Rust fence rule (native/engram_core/src/frontmatter.rs); the fixture
+// table native/engram_core/fixtures/frontmatter_fence.json pins both. (The
+// plugin's copy still opens only on LF: a follow-up there.)
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
-import { fenceSplit } from "./frontmatter-fence";
 
 const FENCE = "---";
 const CLOSE_MID = /\n---[ \t]*\r?\n/;
@@ -62,11 +61,6 @@ function openFence(s: string): number {
 }
 
 export function splitFrontmatter(raw: string): { fmBlock: string | null; body: string } {
-	return fenceSplit(raw) ?? splitFrontmatterTs(raw);
-}
-
-/** The fence rule in TS, for when the wasm is not loaded. */
-export function splitFrontmatterTs(raw: string): { fmBlock: string | null; body: string } {
 	const start = openFence(raw);
 	if (start === 0) {
 		return { fmBlock: null, body: raw };

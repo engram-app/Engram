@@ -994,13 +994,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "web_wasm"
-version = "0.0.0"
-dependencies = [
- "engram_core",
-]
-
-[[package]]
 name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

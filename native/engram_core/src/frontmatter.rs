@@ -1,8 +1,8 @@
 //! The one frontmatter fence rule. The backend splits notes with it
-//! (`Engram.Notes.Frontmatter.split/1`, the chunker, title/tags, links) and
-//! the web app runs the same code as wasm32 (`native/web_wasm`). The shared
-//! fixture table `fixtures/frontmatter_fence.json` is asserted by this
-//! crate, the NIF tests and the web vitest, so the copies cannot drift.
+//! (`Engram.Notes.Frontmatter.split/1`, the chunker, title/tags, links). The
+//! web app keeps a TS copy (`splitFrontmatter`); the shared fixture table
+//! `fixtures/frontmatter_fence.json` is asserted by this crate, the NIF
+//! tests and the web vitest, so the copies cannot drift.
 //!
 //! The rule, in Obsidian's terms (checked against app 1.12.7):
 //! - Opens only at byte 0 on a line that is exactly `---`, LF or CRLF.
@@ -19,7 +19,7 @@
 //!
 //! Scans bytes, so invalid UTF-8 splits byte for byte; every fence byte is
 //! ASCII, so on valid text each offset is a char boundary. Hand-written, no
-//! `regex`: the wasm build stays a few KB.
+//! `regex`, so a wasm32 client could link it at a few KB.
 
 /// (block_start, block_end, body_start, add_newline). The block is
 /// `s[block_start..block_end]` plus "\n" when `add_newline`; None: no
@@ -60,8 +60,8 @@ fn close_fence(line: &[u8]) -> Option<(usize, bool)> {
 
 pub fn split(s: &[u8]) -> Split {
     let start = open_fence(s)?;
-    // `get`, not indexing, here and below: no panic path, so the wasm
-    // carries no panic formatting (half its size).
+    // `get`, not indexing, here and below: no panic path (a wasm32 build
+    // then carries no panic formatting).
     let rest = s.get(start..)?;
     if let Some(n) = open_fence(rest) {
         return Some((start, start, start + n, false));
