@@ -130,6 +130,26 @@ defmodule EngramWeb.ClientAnalyticsEventsTest do
     assert [%Event{event: "upgrade_link_clicked"}] = stored()
   end
 
+  test "stores an upgrade click from the avatar menu", %{conn: conn} do
+    conn =
+      send_events(conn, [
+        %{"event" => "upgrade_link_clicked", "props" => %{"source" => "user_menu"}}
+      ])
+
+    assert response(conn, 204)
+    assert [%Event{event: "upgrade_link_clicked"}] = stored()
+  end
+
+  test "stores an upgrade click from the sidebar footer", %{conn: conn} do
+    conn =
+      send_events(conn, [
+        %{"event" => "upgrade_link_clicked", "props" => %{"source" => "sidebar_footer"}}
+      ])
+
+    assert response(conn, 204)
+    assert [%Event{event: "upgrade_link_clicked"}] = stored()
+  end
+
   test "refuses a malformed body or more than 20 events", %{conn: conn} do
     many = for _ <- 1..21, do: %{"event" => "plugin_listing_opened"}
 

@@ -1,4 +1,4 @@
-import { LogOut, MessageSquare, Monitor, Moon, Settings, Sun } from "lucide-react";
+import { LogOut, MessageSquare, Monitor, Moon, Settings, Sparkles, Sun } from "lucide-react";
 import { useState } from "react";
 import { Link, useLocation } from "react-router";
 import {
@@ -15,6 +15,8 @@ import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import type { MsgKey } from "@/i18n/ui-text";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
+import { useOpenBilling } from "../billing/use-open-billing";
+import { usePlan } from "../billing/use-plan";
 import { useConfig } from "../config-context";
 import { FeedbackDialog } from "../feedback/feedback-dialog";
 import { isMember } from "../lib/is-member";
@@ -47,6 +49,12 @@ export default function UserMenu() {
 	// Feedback goes to the hosted service's analytics; a self-hosted server
 	// (billing off) has none, so the form would thank the user for nothing.
 	const { billingEnabled } = useConfig();
+	// The menu names your plan under the email and offers Upgrade on every plan
+	// below Pro, the top one: Starter users can still move up.
+	const plan = usePlan();
+	const planName = plan?.name ?? null;
+	const canUpgrade = plan !== null && plan.tier !== "pro";
+	const openBilling = useOpenBilling("user_menu");
 
 	return (
 		<>
@@ -64,10 +72,22 @@ export default function UserMenu() {
 					)}
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="end" side="right" className="w-64 p-1.5">
-					<DropdownMenuLabel className="truncate px-3 py-2 font-normal text-muted-foreground text-sm">
-						{user?.email}
+					<DropdownMenuLabel className="px-3 py-2 font-normal text-muted-foreground text-sm">
+						<span className="block truncate">{user?.email}</span>
+						{planName ? (
+							<span className="block text-xs">{t("{plan} plan", { plan: t(planName) })}</span>
+						) : null}
 					</DropdownMenuLabel>
 					<DropdownMenuSeparator />
+					{canUpgrade ? (
+						<DropdownMenuItem
+							className="gap-2.5 px-3 py-2.5 font-medium text-primary text-sm"
+							onSelect={openBilling}
+						>
+							<Sparkles className="size-4" />
+							{t("Upgrade")}
+						</DropdownMenuItem>
+					) : null}
 					<DropdownMenuItem asChild className="gap-2.5 px-3 py-2.5 text-sm">
 						<Link to={settingsTo("account", location.search)}>
 							<Settings className="size-4" />

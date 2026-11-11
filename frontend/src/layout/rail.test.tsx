@@ -22,6 +22,11 @@ vi.mock("../config-context", async () => {
 vi.mock("../auth/use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ user: { email: "todd@example.com" }, logout: vi.fn() }),
 }));
+// The user menu reads the plan for its pill; this test renders no QueryClient.
+vi.mock("../api/queries", async () => {
+	const actual = await vi.importActual<typeof import("../api/queries")>("../api/queries");
+	return { ...actual, useBillingStatus: () => ({ data: { tier: "free" } }) };
+});
 
 // Both the rail view and the active right-hand tool persist to localStorage, so
 // without this the tool one test opens is still open in the next one.

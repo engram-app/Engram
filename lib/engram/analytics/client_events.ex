@@ -17,7 +17,7 @@ defmodule Engram.Analytics.ClientEvents do
     "checkout_method" => ~w(card apple_pay google_pay paypal unknown),
     "tier" => ~w(starter pro),
     "mcp_client" => ~w(chatgpt claude cursor other),
-    "upgrade_source" => ~w(checklist paywall direct),
+    "upgrade_source" => ~w(checklist paywall user_menu sidebar_footer direct),
     "cadence" => ~w(monthly annual),
     "limit_reason" => ~w(notes_cap_exceeded vaults_cap_exceeded attachments_disabled
       attachments_quota_exceeded file_too_large concurrent_devices_exceeded device_swap_cooldown

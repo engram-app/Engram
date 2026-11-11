@@ -49,8 +49,15 @@ export const CHECKOUT_TIERS = ["starter", "pro"] as const;
 export const CHECKOUT_CADENCES = ["monthly", "annual"] as const;
 
 // Where an "Upgrade" link was clicked: the post-wizard checklist, the 402
-// paywall dialog, or nowhere ("direct": billing opened unprompted).
-export const UPGRADE_SOURCES = ["checklist", "paywall", "direct"] as const;
+// paywall dialog, the avatar menu, the Free sidebar footer, or
+// nowhere ("direct": billing opened unprompted).
+export const UPGRADE_SOURCES = [
+	"checklist",
+	"paywall",
+	"user_menu",
+	"sidebar_footer",
+	"direct",
+] as const;
 export type UpgradeSource = (typeof UPGRADE_SOURCES)[number];
 
 // The 402 `reason`s the paywall dialog has copy for (billing/limit-copy.ts),

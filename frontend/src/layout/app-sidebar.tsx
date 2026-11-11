@@ -2,6 +2,7 @@ import FilesPanel from "./files-panel";
 import LazySearchPanel from "./lazy-search-panel";
 import Rail from "./rail";
 import { useRailView } from "./rail-view-context";
+import UpgradeFooter from "./upgrade-footer";
 
 export default function AppSidebarPanel() {
 	const { view, sidebarOpen } = useRailView();
@@ -13,6 +14,7 @@ export default function AppSidebarPanel() {
 			<div className="min-h-0 flex-1">
 				{view === "files" ? <FilesPanel /> : <LazySearchPanel />}
 			</div>
+			<UpgradeFooter className="border-border border-t px-3 py-2" />
 		</div>
 	);
 }

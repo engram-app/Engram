@@ -23,6 +23,7 @@ import { useRailView } from "./rail-view-context";
 import RightToolPanel from "./right-tool-panel";
 import { RIGHT_TOOLS, useRightTools } from "./right-tools-context";
 import SidebarViewToggle from "./sidebar-view-toggle";
+import UpgradeFooter from "./upgrade-footer";
 import UserMenu from "./user-menu";
 import VaultSwitcher from "./vault-switcher";
 
@@ -138,6 +139,7 @@ export default function MobileLayout() {
 									<VaultSwitcher className="min-w-0 flex-1 border-t-0" />
 									<UserMenu />
 								</section>
+								<UpgradeFooter className="border-border border-t px-3 py-2" />
 							</FolderTreeProvider>
 						</SheetContent>
 					</Sheet>
