@@ -3,8 +3,6 @@
 //! instead of copying a large body. Scans bytes, as the Elixir regexes did:
 //! invalid UTF-8 splits exactly as before, and every fence is ASCII, so on
 //! valid text each offset is a char boundary.
-use regex::bytes::Regex;
-use std::sync::OnceLock;
 
 /// (block_start, block_end, body_start, add_newline). The block is
 /// `s[block_start..block_end]` plus "\n" when `add_newline`; None: no
@@ -23,8 +21,6 @@ fn open_fence(s: &[u8]) -> Option<usize> {
 }
 
 pub fn split(s: &[u8]) -> Split {
-    static LINE: OnceLock<Regex> = OnceLock::new();
-    static EOF: OnceLock<Regex> = OnceLock::new();
     let start = open_fence(s)?;
     let rest = &s[start..];
     // `---` straight after the opening fence: an empty block.
@@ -32,12 +28,11 @@ pub fn split(s: &[u8]) -> Split {
         return Some((start, start, start + n, false));
     }
     // A closing fence line (trailing blanks and CR allowed), else one at EOF.
-    let line = LINE.get_or_init(|| Regex::new(r"\n---[ \t]*\r?\n").unwrap());
-    if let Some(m) = line.find(rest) {
+    if let Some(m) = re!(bytes r"\n---[ \t]*\r?\n").find(rest) {
         return Some((start, start + m.start(), start + m.end(), true));
     }
-    let eof = EOF.get_or_init(|| Regex::new(r"\n---[ \t]*\r?\z").unwrap());
-    eof.find(rest)
+    re!(bytes r"\n---[ \t]*\r?\z")
+        .find(rest)
         .map(|m| (start, start + m.start(), s.len(), true))
 }
 

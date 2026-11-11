@@ -7,18 +7,9 @@
 //! ranges (pulldown-cmark, as for links) instead of the old ```` ``` ````,
 //! `~~~` and `` ` `` regexes.
 use crate::links::{code_ranges, SEGMENT};
-use regex::Regex;
 use std::borrow::Cow;
 use std::collections::HashSet;
-use std::sync::OnceLock;
 use unicode_segmentation::UnicodeSegmentation;
-
-macro_rules! re {
-    ($pat:expr) => {{
-        static RE: OnceLock<Regex> = OnceLock::new();
-        RE.get_or_init(|| Regex::new($pat).unwrap())
-    }};
-}
 
 // The Elixir regexes without the `u` flag ran in byte mode, where `\s` and
 // `\d` are ASCII only.

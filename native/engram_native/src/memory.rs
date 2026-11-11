@@ -92,4 +92,20 @@ mod tests {
         // counter is exact.
         assert_eq!(T_LIVE.with(|l| l.get()), base);
     }
+
+    // A shared regex's cache pool moved caches between threads, so bytes one
+    // thread allocated were freed on another and a peak grew with whatever
+    // ran beside it (#2186). `re!` gives each thread a regex of its own.
+    #[test]
+    fn each_thread_searches_with_its_own_regex() {
+        fn a() -> usize {
+            let r: &regex::Regex = re!(r"a+");
+            assert!(r.is_match("baa"));
+            r as *const regex::Regex as usize
+        }
+        let here = a();
+        assert_eq!(a(), here, "one regex per thread, not per call");
+        let there = std::thread::spawn(a).join().unwrap();
+        assert_ne!(there, here, "two threads share a regex and its cache pool");
+    }
 }
