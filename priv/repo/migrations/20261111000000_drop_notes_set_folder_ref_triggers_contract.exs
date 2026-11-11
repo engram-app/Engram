@@ -1,5 +1,10 @@
+# Shared with 20261111000100 (R8(d)); see the file for why it is not in lib/.
+Code.require_file("lock_timeout_retry.exs", __DIR__)
+
 defmodule Engram.Repo.Migrations.DropNotesSetFolderRefTriggersContract do
   use Ecto.Migration
+
+  alias Engram.Repo.Migrations.LockTimeoutRetry
 
   @disable_ddl_transaction true
   @disable_migration_lock true
@@ -69,7 +74,7 @@ defmodule Engram.Repo.Migrations.DropNotesSetFolderRefTriggersContract do
   @doc false
   # Public for `DropFolderRefTriggersLockTest`.
   def run_up(repo) do
-    with_lock_timeout(repo, [
+    LockTimeoutRetry.with_lock_timeout(repo, [
       "DROP TRIGGER IF EXISTS notes_set_folder_ref ON notes",
       "DROP TRIGGER IF EXISTS notes_set_folder_ref_on_restore ON notes",
       "DROP FUNCTION IF EXISTS notes_set_folder_ref()",
@@ -79,7 +84,7 @@ defmodule Engram.Repo.Migrations.DropNotesSetFolderRefTriggersContract do
 
   @doc false
   def run_down(repo) do
-    with_lock_timeout(repo, [
+    LockTimeoutRetry.with_lock_timeout(repo, [
       live_only_trigger("folder_ref_id"),
       @set_ref,
       """
@@ -105,20 +110,5 @@ defmodule Engram.Repo.Migrations.DropNotesSetFolderRefTriggersContract do
       FOR EACH ROW
       EXECUTE FUNCTION folder_ref_live_only()
     """
-  end
-
-  defp with_lock_timeout(repo, statements) do
-    repo.checkout(
-      fn ->
-        repo.query!("SET lock_timeout = '5s'")
-
-        try do
-          Enum.each(statements, &repo.query!(&1, [], timeout: :infinity))
-        after
-          repo.query!("RESET lock_timeout")
-        end
-      end,
-      timeout: :infinity
-    )
   end
 end
