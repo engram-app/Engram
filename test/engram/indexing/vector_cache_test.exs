@@ -101,7 +101,7 @@ defmodule Engram.Indexing.VectorCacheTest do
       assert %{^key => _} = VectorCache.get_many(user.id, dek, [key])
     end
 
-    test "a 10 MiB note's worth of vectors (6,000) writes and reads back in one lookup" do
+    test "a 10 MiB note's worth of vectors (6,000) reads back in bounded batches" do
       {user, dek} = user_and_dek()
       vec = vector(11)
 
@@ -114,8 +114,45 @@ defmodule Engram.Indexing.VectorCacheTest do
       :ok = VectorCache.put_many(user.id, nil, dek, entries)
       keys = Enum.map(entries, &elem(&1, 0))
 
-      {:ok, hits} = count_queries(fn -> VectorCache.get_many(user.id, dek, keys) end)
+      {queries, hits} = count_queries(fn -> VectorCache.get_many(user.id, dek, keys) end)
       assert map_size(hits) == 6_000
+      assert Enum.all?(entries, fn {key, _, _} -> hits[key] == vec end)
+
+      # One query per batch of keys, so a lookup's cost per query is fixed
+      # whatever the note size (#2364: one query for every key hit the DB
+      # timeout on a 10 MB note).
+      assert queries == ceil(6_000 / VectorCache.rows_per_query())
+      assert queries > 1
+    end
+
+    # #2532: a connection is held per batch, never for the whole lookup, so
+    # the hold time is fixed whatever the note size.
+    test "each batch of a lookup is its own tenant transaction" do
+      {user, dek} = user_and_dek()
+      vec = vector(3)
+
+      entries =
+        for i <- 1..2_500 do
+          digest = VectorCache.digest("row #{i}", @opts)
+          {VectorCache.key_for_digest(@ck, digest), digest, vec}
+        end
+
+      :ok = VectorCache.put_many(user.id, nil, dek, entries)
+      keys = Enum.map(entries, &elem(&1, 0))
+
+      {hits, queries} =
+        Engram.QueryRecorder.record(fn -> VectorCache.get_many(user.id, dek, keys) end)
+
+      assert map_size(hits) == 2_500
+
+      lookups =
+        for txn <- Engram.QueryRecorder.transactions(queries),
+            n = Enum.count(txn, &(&1 =~ "FROM embedding_cache WHERE")),
+            n > 0,
+            do: n
+
+      assert lookups == List.duplicate(1, ceil(2_500 / VectorCache.rows_per_query())),
+             Engram.QueryRecorder.format(queries)
     end
 
     test "emits hit and miss counts" do
@@ -340,9 +377,7 @@ defmodule Engram.Indexing.VectorCacheTest do
 
     result = fun.()
     :telemetry.detach(inspect(ref))
-    count = drain(ref, 0)
-    assert count == 1, "expected ONE embedding_cache query, got #{count}"
-    {:ok, result}
+    {drain(ref, 0), result}
   end
 
   defp drain(ref, n) do
