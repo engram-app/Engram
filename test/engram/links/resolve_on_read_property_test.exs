@@ -40,13 +40,15 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
   # stamp no longer matches, which readers must ignore, never trust.
   # :mixed = each row its own state, so one basename holds current rows
   # beside missing and stale ones (a backfill or rolling deploy midway).
-  defp damage_keys(_user, :fresh), do: :ok
+  # Only this run's vault: the user, and so its earlier runs' rows, is
+  # shared across the property.
+  defp damage_keys(_user, _vault, :fresh), do: :ok
 
-  defp damage_keys(user, :mixed) do
+  defp damage_keys(user, vault, :mixed) do
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
         for schema <- [Engram.Notes.Note, Engram.Attachments.Attachment, Engram.Links.NoteLink],
-            id <- Repo.all(from(r in schema, select: r.id)) do
+            id <- Repo.all(from(r in in_vault(schema, vault), select: r.id)) do
           case Enum.at([:fresh, :missing, :stale], :erlang.phash2(id, 3)) do
             :fresh -> :ok
             state -> damage(schema, from(r in schema, where: r.id == ^id), state)
@@ -55,13 +57,15 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
       end)
   end
 
-  defp damage_keys(user, state) do
+  defp damage_keys(user, vault, state) do
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
         for schema <- [Engram.Notes.Note, Engram.Attachments.Attachment, Engram.Links.NoteLink],
-            do: damage(schema, schema, state)
+            do: damage(schema, in_vault(schema, vault), state)
       end)
   end
+
+  defp in_vault(schema, vault), do: from(r in schema, where: r.vault_id == ^vault.id)
 
   defp damage(schema, query, state) do
     junk = :crypto.strong_rand_bytes(32)
@@ -78,6 +82,11 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
   end
 
   property "links and backlinks agree with resolve_target/4" do
+    # One user (and DEK) for the whole property, a fresh vault per run: the
+    # user fixture is a wrapped-key write and several statements, and every
+    # read below is vault-scoped, so runs stay independent without it.
+    {:ok, user} = Fixtures.user_with_dek_fixture()
+
     check all(
             notes <- uniq_list_of(note_path(), min_length: 1, max_length: 8),
             atts <- uniq_list_of(att_path(), max_length: 3),
@@ -85,7 +94,6 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
             keys <- member_of([:fresh, :missing, :stale, :mixed]),
             max_runs: 80
           ) do
-      {:ok, user} = Fixtures.user_with_dek_fixture()
       vault = insert(:vault, user: user)
       enters = count_tenant_enters()
 
@@ -125,7 +133,7 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
         end)
       )
 
-    damage_keys(user, keys)
+    damage_keys(user, vault, keys)
 
     links = Links.links_for_note(user, src.id)
 
