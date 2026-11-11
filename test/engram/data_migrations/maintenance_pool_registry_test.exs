@@ -25,12 +25,20 @@ defmodule Engram.DataMigrations.MaintenancePoolRegistryTest do
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.Backfill.TenantScan
   alias Engram.Crypto
+  alias Engram.DataMigrations.FolderTable
   alias Engram.Repo
-  alias Engram.Workers.DataMigrationsRunner
+  alias Engram.Repo.Maintenance
+  alias Engram.Workers.{BackfillCrdtState, DataMigrationsRunner, ReconcileNotePayloads}
 
   # Both pools share the repo telemetry prefix (the test pool takes
   # `Repo.config/0`); the event's `repo` names the pool.
   @query_event [:engram, :repo, :query]
+
+  @entry_points [
+    {ReconcileNotePayloads, :queue_window, 2},
+    {FolderTable, :scope, 2},
+    {BackfillCrdtState, :enqueue_missing, 0}
+  ]
 
   defmodule BrokenOnFleet do
     @moduledoc false
@@ -54,7 +62,9 @@ defmodule Engram.DataMigrations.MaintenancePoolRegistryTest do
   end
 
   setup do
-    Engram.Test.MaintenancePool.start!()
+    # `stacktrace: true`: each fleet query's telemetry names its callers, so
+    # the named entry points below can be checked without a tracer.
+    Engram.Test.MaintenancePool.start!(stacktrace: true)
 
     jobs_before =
       Sandbox.unboxed_run(Repo, fn -> Repo.one(from(j in Oban.Job, select: max(j.id))) || 0 end)
@@ -96,8 +106,14 @@ defmodule Engram.DataMigrations.MaintenancePoolRegistryTest do
     :telemetry.attach(
       handler,
       @query_event,
-      fn _, _, %{repo: repo}, _ ->
-        if repo == Engram.Repo.Maintenance, do: send(test_pid, :fleet_query)
+      fn _, _, %{repo: repo} = meta, _ ->
+        if repo == Maintenance do
+          send(test_pid, :fleet_query)
+
+          for {m, f, a, _} <- meta[:stacktrace] || [],
+              {m, f, a} in @entry_points,
+              do: send(test_pid, {:entry_point, {m, f, a}})
+        end
       end,
       nil
     )
@@ -215,6 +231,20 @@ defmodule Engram.DataMigrations.MaintenancePoolRegistryTest do
     rows = exercise(DataMigrationsRunner.migrations())
     report(rows)
     assert failures(rows) == []
+
+    # ponytail: three named fleet entry points (the ones the counts alone do
+    # not name), each seen issuing a query on the maintenance pool; extend
+    # @entry_points when another needs naming.
+    assert entry_points_hit() == MapSet.new(@entry_points)
+  end
+
+  # The named entry points a fleet query was issued from.
+  defp entry_points_hit(acc \\ MapSet.new()) do
+    receive do
+      {:entry_point, mfa} -> entry_points_hit(MapSet.put(acc, mfa))
+    after
+      0 -> acc
+    end
   end
 
   test "the guard catches a fleet-only failure" do
