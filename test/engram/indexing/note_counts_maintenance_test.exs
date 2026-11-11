@@ -18,18 +18,10 @@ defmodule Engram.Indexing.NoteCountsMaintenanceTest do
   alias Engram.Notes.{Chunk, NoteIndexState}
   alias Engram.Repo
   alias Engram.Repo.Maintenance
+  alias Engram.Test.MaintenancePool
 
   setup do
-    config =
-      Keyword.merge(Repo.config(),
-        pool: DBConnection.ConnectionPool,
-        pool_size: 1,
-        after_connect: {Postgrex, :query!, ["SET SESSION AUTHORIZATION engram_maintenance", []]}
-      )
-
-    start_supervised!({Maintenance, config})
-    Application.put_env(:engram, :maintenance_repo_enabled, true)
-    on_exit(fn -> Application.delete_env(:engram, :maintenance_repo_enabled) end)
+    MaintenancePool.start!()
 
     {user, vault, note} =
       Sandbox.unboxed_run(Repo, fn ->

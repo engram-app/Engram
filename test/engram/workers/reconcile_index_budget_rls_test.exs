@@ -31,7 +31,7 @@ defmodule Engram.Workers.ReconcileIndexBudgetRlsTest do
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
   alias Engram.Repo
-  alias Engram.Repo.Maintenance
+  alias Engram.Test.MaintenancePool
   alias Engram.Workers.{RebuildStaleNote, ReconcileEmbeddings}
 
   @moduletag :rls_unsafe
@@ -74,16 +74,7 @@ defmodule Engram.Workers.ReconcileIndexBudgetRlsTest do
   end
 
   defp with_maintenance_role do
-    config =
-      Keyword.merge(Repo.config(),
-        pool: DBConnection.ConnectionPool,
-        pool_size: 1,
-        after_connect: {Postgrex, :query!, ["SET SESSION AUTHORIZATION engram_maintenance", []]}
-      )
-
-    start_supervised!({Maintenance, config})
-    Application.put_env(:engram, :maintenance_repo_enabled, true)
-    on_exit(fn -> Application.delete_env(:engram, :maintenance_repo_enabled) end)
+    MaintenancePool.start!()
   end
 
   # A Free-tier dense note at its content with `rows` chunk rows.

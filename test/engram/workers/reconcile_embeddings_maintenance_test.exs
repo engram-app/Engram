@@ -19,7 +19,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsMaintenanceTest do
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
   alias Engram.Repo
-  alias Engram.Repo.Maintenance
+  alias Engram.Test.MaintenancePool
   alias Engram.Workers.{EmbedNote, ReconcileEmbeddings, RefreshKeywordVectors}
 
   # Tags the committed users so a run that died before its on_exit can be
@@ -27,10 +27,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsMaintenanceTest do
   @email_prefix "reconcile-maintenance-test-"
 
   setup do
-    config = Keyword.merge(Repo.config(), pool: DBConnection.ConnectionPool, pool_size: 1)
-    start_supervised!({Maintenance, config})
-    Application.put_env(:engram, :maintenance_repo_enabled, true)
-    on_exit(fn -> Application.delete_env(:engram, :maintenance_repo_enabled) end)
+    MaintenancePool.start!(role: :owner)
 
     delete_committed!()
     on_exit(&delete_committed!/0)

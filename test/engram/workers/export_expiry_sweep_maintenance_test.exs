@@ -24,14 +24,11 @@ defmodule Engram.Workers.ExportExpirySweepMaintenanceTest do
   alias Engram.Repo
   alias Engram.Repo.Maintenance
   alias Engram.Storage.InMemory
+  alias Engram.Test.MaintenancePool
   alias Engram.Workers.ExportExpirySweep
 
   setup do
-    config = Keyword.merge(Repo.config(), pool: DBConnection.ConnectionPool, pool_size: 1)
-    start_supervised!({Maintenance, config})
-
-    Application.put_env(:engram, :maintenance_repo_enabled, true)
-    on_exit(fn -> Application.delete_env(:engram, :maintenance_repo_enabled) end)
+    MaintenancePool.start!(role: :owner)
 
     InMemory.ensure_table()
     key = "exports/maintenance-sweep-#{System.unique_integer([:positive])}.zip"
