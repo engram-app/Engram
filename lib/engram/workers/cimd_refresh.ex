@@ -26,8 +26,9 @@ defmodule Engram.Workers.CimdRefresh do
   `total=` in the sweep log lines counts the clients swept, not every stored
   CIMD client.
 
-  `Engram.OAuth.Cimd.ensure_client/1` is called from exactly one place,
-  `Engram.OAuth.fetch_client/1`, which only the authorize path reaches. So
+  Before this sweep, `Engram.OAuth.Cimd.ensure_client/1` was called from exactly
+  one place, `Engram.OAuth.fetch_client/1`, which only the authorize path
+  reaches. So
   `cimd_fetched_at` measured time since a user last ran the interactive flow,
   NOT whether the vendor was reachable. A client living on 90-day refresh
   tokens could hold a document we last read months ago, and nothing would
@@ -39,10 +40,11 @@ defmodule Engram.Workers.CimdRefresh do
   `none` after a key compromise — could not land that change until somebody
   happened to re-authorize (#1642).
 
-  This sweep makes the clock mean what it says. It calls the SAME
-  `ensure_client/1` the authorize path calls, so a row inside its TTL (the document's clamped `max-age`, 5 min to 24h) is a
-  no-op and anything older is refetched, validated and stored through one code
-  path. Deliberately no second fetch implementation: a private one here would
+  This sweep makes the clock mean what it says. It calls
+  `Cimd.ensure_client_status/1`, the function `ensure_client/1` (the authorize
+  path) is a thin wrapper over, so a row inside its TTL (the document's clamped
+  `max-age`, 5 min to 24h) is a no-op and anything older is refetched,
+  validated and stored through one code path. Deliberately no second fetch implementation: a private one here would
   be free to drift from the validation the authorize path applies, which is the
   2026-08-04 mistake in a new place.
 
