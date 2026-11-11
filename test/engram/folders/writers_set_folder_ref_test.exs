@@ -1,16 +1,14 @@
 defmodule Engram.Folders.WritersSetFolderRefTest do
   # R9.5 step 2: every writer of a note's or attachment's path sets
-  # `folder_ref_id` itself, so the `notes_set_folder_ref` trigger (and its
-  # restore twin) can be dropped by the contract step. The triggers stay as the
-  # previous release's backstop; these tests DISABLE both and drive every write
-  # path, then check every live row of the vault against the folder tree.
+  # `folder_ref_id` itself. Release D dropped the `notes_set_folder_ref`
+  # trigger and its restore twin (20261111000000); these tests drive every
+  # write path without them, then check every live row of the vault against
+  # the folder tree.
   #
   # The writes run as the prod-like `engram_app` (no SUPERUSER, no BYPASSRLS)
   # under FORCE RLS, through `Engram.RlsCase`
-  # (docs/context/rls-enforcement-testing-traps.md). Only the DISABLE runs as
-  # the suite's superuser (it needs the table owner), inside the sandbox
-  # transaction, so it rolls back with the test. `async: false`: ALTER TABLE
-  # takes an ACCESS EXCLUSIVE lock on `notes` until then.
+  # (docs/context/rls-enforcement-testing-traps.md). `async: false`: the
+  # prod-role helper commits.
   use Engram.DataCase, async: false
 
   import Engram.RlsCase
@@ -29,9 +27,6 @@ defmodule Engram.Folders.WritersSetFolderRefTest do
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     vault = insert(:vault, user: user)
-
-    for t <- ~w(notes_set_folder_ref notes_set_folder_ref_on_restore),
-        do: Repo.query!("ALTER TABLE notes DISABLE TRIGGER #{t}")
 
     %{user: user, vault: vault}
   end

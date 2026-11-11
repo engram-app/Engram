@@ -8,16 +8,15 @@ defmodule Engram.Folders.Rows do
   `Repo.with_tenant/2` (the table has FORCE row security). Writers call
   `ensure/4` (or `ensure_all/3`) inside the transaction that writes the note or
   attachment and set its `folder_ref_id` from the result in the same write, so
-  the composite foreign key finds the row. The `notes_set_folder_ref` trigger
-  derives the same value from `folder_hmac`; it stays only as the previous
-  release's backstop during a rolling deploy.
+  the composite foreign key finds the row. Nothing derives it in the database
+  (the `notes_set_folder_ref` trigger was dropped in R9 release D).
 
   Names are one path SEGMENT, encrypted under the account's per-user DEK with
   AAD `Crypto.aad_for_row(:folders, :name, id)` (the key scheme of
   `notes.folder_ciphertext`). `name_hmac` lives in its own domain so a segment
   hash never equals a `path_hmac`. `full_path_hmac` is the HMAC of the whole
-  path and equals `notes.folder_hmac`: it is what the trigger and the
-  previous release's rows join on, and it is rewritten for a renamed subtree.
+  path and equals a marker's `folder_hmac` (and a note's, while note writes
+  still set it); it is rewritten for a renamed subtree.
 
   The stored paths (`notes.path_*` / `folder_*`, attachment `path_*`) stay
   authoritative and are still written everywhere; a folder row is a second,

@@ -35,22 +35,24 @@ defmodule Engram.Insights.SnapshotNotesPassTest do
     [f1, f2, f3, f4, t1, t2, t3] = for _ <- 1..7, do: h()
 
     rich = insert(:vault, user: user)
-    # Each note folder has its row, so `notes_set_folder_ref` gives the notes
-    # their reference (the count reads references, not hashes).
-    for f <- [f1, f2, f4], do: FolderRows.insert!(user, rich, h(), full_path_hmac: f)
+    # Each note folder has its row and the note its reference, as a writer
+    # sets it (the count reads references, not hashes).
+    [r1, r2, r4] =
+      for f <- [f1, f2, f4], do: FolderRows.insert!(user, rich, h(), full_path_hmac: f)
+
     note = &insert(:note, Keyword.merge([user: user, vault: rich], &1))
-    note.(folder_hmac: f1, tags_hmac: [t1, t2])
-    note.(folder_hmac: f1, tags_hmac: [t2])
-    note.(folder_hmac: f4, tags_hmac: [t3, t3])
-    note.(folder_hmac: f2, tags_hmac: [])
+    note.(folder_hmac: f1, folder_ref_id: r1, tags_hmac: [t1, t2])
+    note.(folder_hmac: f1, folder_ref_id: r1, tags_hmac: [t2])
+    note.(folder_hmac: f4, folder_ref_id: r4, tags_hmac: [t3, t3])
+    note.(folder_hmac: f2, folder_ref_id: r2, tags_hmac: [])
     # A folder marker counts as a folder; its tags never count.
     note.(@marker ++ [folder_hmac: f3, tags_hmac: [h()]])
     # Deleted rows count for neither.
     note.(folder_hmac: h(), tags_hmac: [h()], deleted_at: DateTime.utc_now())
 
     untagged = insert(:vault, user: user)
-    FolderRows.insert!(user, untagged, h(), full_path_hmac: f2)
-    insert(:note, user: user, vault: untagged, folder_hmac: f2, tags_hmac: [])
+    u2 = FolderRows.insert!(user, untagged, h(), full_path_hmac: f2)
+    insert(:note, user: user, vault: untagged, folder_hmac: f2, folder_ref_id: u2, tags_hmac: [])
 
     markers_only = insert(:vault, user: user)
     insert(:note, @marker ++ [user: user, vault: markers_only, folder_hmac: f1, tags_hmac: []])
@@ -129,8 +131,7 @@ defmodule Engram.Insights.SnapshotNotesPassTest do
     {:ok, _} = Notes.create_folder_marker(user, vault, "A")
     {:ok, _} = Notes.create_folder_marker(user, vault, "Empty")
 
-    # Triggers off: `notes_set_folder_ref` would re-derive the reference from
-    # the hash written here.
+    # Triggers off: only the hash changes (no derived key, no reference).
     Repo.query!("SET LOCAL session_replication_role = replica")
 
     Repo.query!("UPDATE notes SET folder_hmac = $1 WHERE vault_id = $2 AND kind = 'note'", [

@@ -192,9 +192,8 @@ defmodule Engram.Notes.Note do
     field :folder_id, :binary_id
     # The folder ROW this note sits in (migration 20261029000100). Never cast:
     # every writer that sets a path puts it from `Rows.ensure/4` in the same
-    # write; the `notes_set_folder_ref` trigger derives the same value from
-    # `folder_hmac` for the previous release. NULL = root, or a folder with no
-    # row yet.
+    # write (nothing derives it in the database since R9 release D). NULL =
+    # root, or a folder with no row yet.
     field :folder_ref_id, Ecto.UUID
     field :basename_id, :binary_id
     field :path_ci_id, :binary_id
