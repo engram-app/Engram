@@ -1,8 +1,7 @@
-import { type EditorState, type Range, StateField } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
+import { Decoration, WidgetType } from "@codemirror/view";
 import katex from "katex";
 import { INLINE_MATH } from "../../lib/math-delimiters";
-import { selectionTouches } from "./decoration-utils";
+import { defineRenderer, searchForward, type TextRenderer } from "./render-core";
 import "katex/dist/katex.min.css";
 
 class MathWidget extends WidgetType {
@@ -33,54 +32,91 @@ class MathWidget extends WidgetType {
 	}
 }
 
-// Match $$...$$ (block) or $...$ (inline, no newline). Minimal, deliberately not
-// a full TeX tokenizer. Inline follows pandoc's delimiter rules (lib/math-
-// delimiters.ts) so two prices on a line are not one math span.
-const MATH_RE = new RegExp(String.raw`\$\$(?<block>[^$]+)\$\$|${INLINE_MATH.source}`, "g");
+interface MathSpan {
+	tex: string;
+	/** Written as `$$…$$`. */
+	display: boolean;
+}
 
-function buildMath(state: EditorState): DecorationSet {
-	const ranges: Range<Decoration>[] = [];
-	const sel = state.selection;
-	const text = state.sliceDoc(0);
-	for (const m of text.matchAll(MATH_RE)) {
-		const start = m.index ?? 0;
-		const end = start + m[0].length;
-		// Reveal raw when the cursor/selection intersects the span.
-		const active = selectionTouches(sel, start, end);
-		if (active) {
-			continue;
+// `$…$` per pandoc's rules (lib/math-delimiters.ts), tried at one position.
+const INLINE_AT = new RegExp(INLINE_MATH.source, "y");
+
+/**
+ * Math spans, matched exactly as the regex `\$\$[^$]+\$\$|<inline>` would over the
+ * whole note, but walking lines from a neutral point. A `$$` opens a display
+ * span that ends at the next `$` if a second `$` follows it, wherever that is
+ * (it may be lines down); otherwise it is tried as inline math. Inline math
+ * never crosses a line. A line start outside a span is neutral.
+ */
+export const katexRenderer: TextRenderer<MathSpan> = {
+	kind: "text",
+	reveal: true,
+	scan(state, from, emit, neutral) {
+		const { doc } = state;
+		let pos = from;
+		while (pos <= doc.length) {
+			const line = doc.lineAt(pos);
+			if (pos === line.from && pos > from && neutral(pos)) {
+				return;
+			}
+			const { text } = line;
+			let i = pos - line.from;
+			let next = line.to + 1; // where to continue: the next line, unless a span crosses lines
+			while (i < text.length) {
+				const j = text.indexOf("$", i);
+				if (j < 0) {
+					break;
+				}
+				const s = line.from + j;
+				if (text[j + 1] === "$") {
+					const q = searchForward(doc, s + 2, "$");
+					if (q > s + 2 && doc.sliceString(q + 1, q + 2) === "$") {
+						emit({
+							from: s,
+							to: q + 2,
+							value: { tex: doc.sliceString(s + 2, q).trim(), display: true },
+						});
+						if (q + 2 > line.to) {
+							next = q + 2;
+							break;
+						}
+						i = q + 2 - line.from;
+						continue;
+					}
+				}
+				INLINE_AT.lastIndex = j;
+				const m = INLINE_AT.exec(text);
+				if (m) {
+					emit({
+						from: s,
+						to: s + m[0].length,
+						value: { tex: (m.groups?.inline ?? "").trim(), display: false },
+					});
+					i = j + m[0].length;
+					continue;
+				}
+				i = j + 1;
+			}
+			pos = next;
 		}
-		const { block: blockTex, inline: inlineTex } = m.groups ?? {};
-		const tex = (blockTex ?? inlineTex ?? "").trim();
-		// A `$$…$$` match is display math ONLY when it occupies whole lines (its own
-		// paragraph). Then it becomes a block widget — the one decoration shape that
+	},
+	decorate(state, t) {
+		const { doc } = state;
+		// A `$$…$$` span is display math ONLY when it occupies whole lines (its own
+		// paragraph). Then it becomes a block widget, the one decoration shape that
 		// MUST live in a StateField, never a ViewPlugin (CM6 rejects line-break-
 		// spanning / block decorations from plugins). Mid-line `$$x$$` stays an
 		// inline replace so we never emit an invalid block decoration.
 		const wholeLine =
-			blockTex !== undefined &&
-			state.doc.lineAt(start).from === start &&
-			state.doc.lineAt(end).to === end;
+			t.value.display && doc.lineAt(t.from).from === t.from && doc.lineAt(t.to).to === t.to;
 		const spec = wholeLine
-			? { widget: new MathWidget(tex, true), block: true }
-			: { widget: new MathWidget(tex, false) };
-		ranges.push(Decoration.replace(spec).range(start, end));
-	}
-	// `true` = let RangeSet sort. Regex scans discover ranges out of document
-	// order, and an unsorted set throws.
-	return Decoration.set(ranges, true);
-}
-
-// StateField (not ViewPlugin): block math replaces line breaks, which CM6 only
-// permits from the decorations facet fed by a state field. Rebuild on any doc or
-// selection change so the reveal-on-cursor behaviour still works.
-export const katexDecoration = StateField.define<DecorationSet>({
-	create: (state) => buildMath(state),
-	update(value, tr) {
-		if (tr.docChanged || tr.selection) {
-			return buildMath(tr.state);
-		}
-		return value;
+			? { widget: new MathWidget(t.value.tex, true), block: true }
+			: { widget: new MathWidget(t.value.tex, false) };
+		return [Decoration.replace(spec).range(t.from, t.to)];
 	},
-	provide: (f) => EditorView.decorations.from(f),
-});
+};
+
+// On the render core: a StateField underneath, because block math replaces line
+// breaks. A keystroke rescans from the line before it to where the scan agrees
+// with the old one again; a caret move re-decorates only the spans it touches.
+export const katexDecoration = defineRenderer(katexRenderer);
