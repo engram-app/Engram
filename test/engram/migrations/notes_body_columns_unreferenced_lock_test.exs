@@ -42,7 +42,8 @@ defmodule Engram.Migrations.NotesBodyColumnsUnreferencedLockTest do
   end
 
   defp migration,
-    do: String.to_existing_atom("Elixir.Engram.Repo.Migrations.NotesBodyColumnsUnreferencedExpand")
+    do:
+      String.to_existing_atom("Elixir.Engram.Repo.Migrations.NotesBodyColumnsUnreferencedExpand")
 
   test "a statement that hits its lock timeout is retried, then succeeds" do
     :persistent_term.put({LockedRepo, :left}, 2)
