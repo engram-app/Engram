@@ -1,40 +1,8 @@
 //! `Engram.Notes.Frontmatter.split/1`: where a note's leading YAML block
-//! ends. Byte offsets, not strings, so the Elixir side slices sub-binaries
-//! instead of copying a large body. Scans bytes, as the Elixir regexes did:
-//! invalid UTF-8 splits exactly as before, and every fence is ASCII, so on
-//! valid text each offset is a char boundary.
+//! ends, as byte offsets, so the Elixir side slices sub-binaries instead of
+//! copying a large body. The rule itself is `engram_core::frontmatter`.
 
-/// (block_start, block_end, body_start, add_newline). The block is
-/// `s[block_start..block_end]` plus "\n" when `add_newline`; None: no
-/// frontmatter, the whole note is body.
-pub type Split = Option<(usize, usize, usize, bool)>;
-
-/// The opening fence only at byte 0, with either line ending.
-fn open_fence(s: &[u8]) -> Option<usize> {
-    if s.starts_with(b"---\r\n") {
-        Some(5)
-    } else if s.starts_with(b"---\n") {
-        Some(4)
-    } else {
-        None
-    }
-}
-
-pub fn split(s: &[u8]) -> Split {
-    let start = open_fence(s)?;
-    let rest = &s[start..];
-    // `---` straight after the opening fence: an empty block.
-    if let Some(n) = open_fence(rest) {
-        return Some((start, start, start + n, false));
-    }
-    // A closing fence line (trailing blanks and CR allowed), else one at EOF.
-    if let Some(m) = re!(bytes r"\n---[ \t]*\r?\n").find(rest) {
-        return Some((start, start + m.start(), start + m.end(), true));
-    }
-    re!(bytes r"\n---[ \t]*\r?\z")
-        .find(rest)
-        .map(|m| (start, start + m.start(), s.len(), true))
-}
+pub use engram_core::frontmatter::{split, split_after_bom, Split};
 
 /// The block (with its trailing newline) and the body, as strings.
 pub fn parts(s: &str) -> (Option<String>, &str) {

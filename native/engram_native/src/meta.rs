@@ -15,10 +15,13 @@ use unicode_segmentation::UnicodeSegmentation;
 // `\d` are ASCII only.
 const ASCII_WS: &str = r"[\t\n\x0B\x0C\r ]";
 
-/// `~r/\A---\r?\n(.*?)\r?\n---/s`: (frontmatter body, end of the match).
+/// (frontmatter block without its last line break, body start), by the
+/// shared fence rule after a BOM (`engram_core::frontmatter`). The old
+/// `\A---\r?\n(.*?)\r?\n---` also closed on `---foo` and `----`.
 fn frontmatter(s: &str) -> Option<(&str, usize)> {
-    let c = re!(r"(?s)\A---\r?\n(.*?)\r?\n---").captures(s)?;
-    Some((c.get(1)?.as_str(), c.get(0)?.end()))
+    let (start, end, body, _) = crate::frontmatter::split_after_bom(s.as_bytes())?;
+    let block = &s[start..end];
+    Some((block.strip_suffix('\r').unwrap_or(block), body))
 }
 
 /// Frontmatter `title:`, else the first `# heading` outside code. The
@@ -226,6 +229,10 @@ fn non_string_scalar(item: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Golden-set rows (by index) whose embedded chunks move (see the test
+    /// below): the rows whose golden title changed in #1884.
+    const GOLDEN_CHANGED: [usize; 8] = [1473, 2932, 3026, 3240, 3715, 4870, 5552, 7990];
+
     // Every distinct tag is stored on the note and copied into each Qdrant
     // point's payload (x64 per upsert batch): 8 MB of unique `#tN` was 1.16M
     // tags, ~55 MB of filter hashes PER POINT. Real notes have tens.
@@ -262,5 +269,159 @@ mod tests {
             .min()
             .unwrap();
         assert!(best.as_secs() < 3, "{best:?}");
+    }
+
+    // #1884 merge gate: the shared fence rule moves no embedded chunk text
+    // on normal notes. The chunk path (`Markdown.parse/3`) takes two
+    // fence-derived inputs: the body split (`frontmatter::parts` in
+    // `chunker.rs` Job::new) and the title (`Native.note_title`, this
+    // module), which is the breadcrumb prefix of every embedded string.
+    // Fingerprints are computed in Elixir from the chunk tuple, so equal
+    // chunks mean equal fingerprints. Old rules frozen from origin/main.
+    mod old {
+        /// origin/main `frontmatter.rs` split (the chunker's).
+        pub fn split(s: &[u8]) -> crate::frontmatter::Split {
+            let open = |s: &[u8]| {
+                if s.starts_with(b"---\r\n") {
+                    Some(5)
+                } else if s.starts_with(b"---\n") {
+                    Some(4)
+                } else {
+                    None
+                }
+            };
+            let start = open(s)?;
+            let rest = &s[start..];
+            if let Some(n) = open(rest) {
+                return Some((start, start, start + n, false));
+            }
+            if let Some(m) = re!(bytes r"\n---[ \t]*\r?\n").find(rest) {
+                return Some((start, start + m.start(), start + m.end(), true));
+            }
+            re!(bytes r"\n---[ \t]*\r?\z")
+                .find(rest)
+                .map(|m| (start, start + m.start(), s.len(), true))
+        }
+
+        /// origin/main `meta.rs:28` title.
+        pub fn title(s: &str) -> Option<String> {
+            let fm = re!(r"(?s)\A---\r?\n(.*?)\r?\n---")
+                .captures(s)
+                .map(|c| (c.get(1).unwrap().as_str(), c.get(0).unwrap().end()));
+            if let Some(t) = fm.and_then(|(fm, _)| super::super::fm_title(fm)) {
+                return Some(t);
+            }
+            let body = &s[fm.map_or(0, |f| f.1)..];
+            super::super::heading_title(body, &super::super::code_of(body))
+        }
+    }
+
+    // `Markdown.parse/3` before the NIF: CRLF to LF, one leading BOM dropped.
+    fn normalise(s: &str) -> String {
+        let s = s.replace("\r\n", "\n");
+        s.strip_prefix('\u{FEFF}').unwrap_or(&s).to_string()
+    }
+
+    fn chunks(content: &str, title: Option<String>) -> Vec<crate::chunker::Chunk> {
+        let mut out = Vec::new();
+        let title = title.unwrap_or_default();
+        crate::chunker::each_chunk(content, "", &title, &[], None, false, &mut out);
+        out
+    }
+
+    #[test]
+    fn the_fence_rule_moves_no_embedded_chunk_on_normal_notes() {
+        let normal = [
+            "# Plain note\n\nSome text with a [[link]] and #tag.\n",
+            "---\ntitle: Weekly review\ntags: [work]\n---\n# Weekly review\n\n## Done\n\n- a\n- b\n",
+            "---\r\ntitle: Windows note\r\n---\r\nBody line\r\n",
+            "\u{FEFF}---\ntitle: BOM note\n---\n# H\n\ntext\n",
+            "---\naliases: [x]\n---\n\n```\n# not a title\n```\n# Real\n",
+            "---\ntitle: Only frontmatter\n---",
+            "---\n---\nEmpty block then body\n",
+            "No frontmatter at all\n\n---\n\nA thematic break above.\n",
+        ];
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../engram_core/fixtures/frontmatter_fence.json"
+        ))
+        .unwrap();
+        let golden: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../test/support/fixtures/note_meta_golden.json"
+        ))
+        .unwrap();
+        let mut corpus: Vec<(String, String)> = normal
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (format!("normal {i}"), s.to_string()))
+            .collect();
+        for c in fixture.as_array().unwrap() {
+            let name = format!("fixture {}", c["name"].as_str().unwrap());
+            corpus.push((name, c["input"].as_str().unwrap().to_string()));
+        }
+        for (i, c) in golden.as_array().unwrap().iter().enumerate() {
+            corpus.push((
+                format!("golden {i}"),
+                c["input"].as_str().unwrap().to_string(),
+            ));
+        }
+
+        let mut changed = Vec::new();
+        for (name, raw) in &corpus {
+            let s = normalise(raw);
+            // The body split the chunker uses is unchanged on every row.
+            assert_eq!(
+                crate::frontmatter::split(s.as_bytes()),
+                old::split(s.as_bytes()),
+                "{name}"
+            );
+            if chunks(&s, super::title(&s)) != chunks(&s, old::title(&s)) {
+                // A changed title means the old regex closed on a fence line
+                // the shared rule rejects: `---` then something non-blank.
+                let close = re!(r"(?s)\A---\r?\n.*?\r?\n---([^\n]*)")
+                    .captures(&s)
+                    .map(|c| c[1].to_string());
+                assert!(
+                    close
+                        .as_deref()
+                        .is_some_and(|t| !t.trim_matches([' ', '\t']).is_empty()),
+                    "{name}: {s:?}"
+                );
+                changed.push(name.as_str());
+            }
+        }
+        // Every changed row is a frontmatter closed by a line that is `---`
+        // plus non-blank text (`---foo`, `----`, `---` U+180E): the old
+        // title regex closed there, the shared rule does not, so the title
+        // (the embedded breadcrumb prefix) moves. No normal note moves.
+        assert!(
+            changed.iter().all(|n| !n.starts_with("normal")),
+            "{changed:?}"
+        );
+        assert_eq!(
+            changed
+                .iter()
+                .filter(|n| n.starts_with("fixture"))
+                .copied()
+                .collect::<Vec<_>>(),
+            [
+                "fixture close_with_suffix_is_not_a_close",
+                "fixture four_dashes_is_not_a_close",
+                "fixture u180e_after_close_is_not_a_close",
+            ]
+        );
+        let golden: Vec<String> = GOLDEN_CHANGED
+            .iter()
+            .map(|i| format!("golden {i}"))
+            .collect();
+        assert_eq!(
+            changed
+                .iter()
+                .filter(|n| n.starts_with("golden"))
+                .copied()
+                .collect::<Vec<_>>(),
+            golden,
+            "{changed:?}"
+        );
+        assert_eq!(changed.len(), 3 + GOLDEN_CHANGED.len(), "{changed:?}");
     }
 }

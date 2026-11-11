@@ -1,0 +1,17 @@
+/* Pele diagram colours (mermaid-render.ts). Mapped onto the app's own tokens,
+ * which flip under `.dark`, so a theme change recolours a drawn diagram with
+ * no re-render. Shared by Reading mode and the editor widget. No --pele-font:
+ * renderMermaid measures with the container's own font, and Pele needs the CSS
+ * font to match what it measured. */
+.pele {
+	--pele-bg: transparent;
+	--pele-fg: var(--foreground);
+	--pele-muted: var(--muted-foreground);
+	--pele-line: var(--foreground);
+	--pele-surface: var(--card);
+	--pele-surface-alt: var(--muted);
+	--pele-border: var(--border);
+	--pele-accent: var(--primary);
+	--pele-critical: var(--destructive);
+	--pele-error: var(--destructive);
+}

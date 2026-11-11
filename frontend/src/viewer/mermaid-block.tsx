@@ -1,26 +1,23 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { Trans } from "@/i18n/trans";
-import { useTheme } from "../theme/theme-provider";
 import { drawMermaid } from "./mermaid-render";
 
 export default function MermaidBlock({ code }: { code: string }) {
 	const ref = useRef<HTMLDivElement>(null);
 	const [error, setError] = useState<string | null>(null);
-	const { resolved } = useTheme();
-
-	// Keyed on `resolved`: switching light/dark has to re-draw, because the
-	// palette is baked into the SVG rather than applied as CSS. A layout effect
-	// so drawMermaid's height reservation is in place before the first paint.
+	// Not keyed on the theme: Pele colours come from CSS variables, so a
+	// light/dark flip recolours without a re-draw. A layout effect so
+	// drawMermaid's height reservation is in place before the first paint.
 	useLayoutEffect(() => {
 		const target = ref.current;
 		if (!target) {
 			return;
 		}
-		return drawMermaid(target, "reading", code, resolved === "dark", {
+		return drawMermaid(target, "reading", code, {
 			drawn: () => setError(null),
 			failed: (err) => setError(err instanceof Error ? err.message : String(err)),
 		});
-	}, [code, resolved]);
+	}, [code]);
 
 	// The target div stays MOUNTED even while erroring, rather than being swapped
 	// for the <pre>. Returning early on error unmounted it, so `ref.current` was
@@ -33,7 +30,7 @@ export default function MermaidBlock({ code }: { code: string }) {
 		<>
 			{error ? (
 				<pre className="rounded border border-red-300 bg-red-50 p-3 text-red-700 text-xs dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
-					{/* Mermaid's parse error is third-party English: verbatim, tagged as such. */}
+					{/* The diagram error is third-party English: verbatim, tagged as such. */}
 					<Trans text="Mermaid error: {error}" slots={{ error: <span lang="en">{error}</span> }} />
 					{`\n\n${code}`}
 				</pre>

@@ -1,34 +1,5 @@
-import type { Range } from "@codemirror/state";
-import {
-	Decoration,
-	type DecorationSet,
-	type EditorView,
-	ViewPlugin,
-	type ViewUpdate,
-} from "@codemirror/view";
-
-// Atomic renders every blockquote line with one flat rail (no nesting). We set
-// a `--bq-depth` custom property per quote line; blockquote-depth.css reads it
-// to indent and draw one rail per nesting level. View-only: only line
-// attributes, never a document change — safe over the yCollab Y.Text binding.
-function buildBlockquoteDecorations(view: EditorView): DecorationSet {
-	const ranges: Range<Decoration>[] = [];
-	// ponytail: whole-doc scan (matches Atomic's own approach; fine for typical
-	// note sizes). Line decorations must be added at line-start in ascending order.
-	const { doc } = view.state;
-	for (let n = 1; n <= doc.lines; n++) {
-		const line = doc.line(n);
-		const depth = blockquoteDepth(line.text);
-		if (depth > 0) {
-			ranges.push(
-				Decoration.line({ attributes: { style: `--bq-depth:${depth}` } }).range(line.from),
-			);
-		}
-	}
-	// `true` = let RangeSet sort. Regex scans discover ranges out of document
-	// order, and an unsorted set throws.
-	return Decoration.set(ranges, true);
-}
+import { Decoration } from "@codemirror/view";
+import { defineRenderer, type TextRenderer } from "./render-core";
 
 /**
  * Count a line's blockquote nesting depth from its leading `>` markers.
@@ -43,20 +14,29 @@ export function blockquoteDepth(lineText: string): number {
 	return (prefix[0].match(/>/g) ?? []).length;
 }
 
-export const blockquoteDepthPlugin = ViewPlugin.fromClass(
-	class {
-		decorations: DecorationSet;
-		constructor(view: EditorView) {
-			this.decorations = buildBlockquoteDecorations(view);
-		}
-		update(u: ViewUpdate) {
-			// Whole-doc scan → whole-doc line decorations: no viewport dependency,
-			// so only a doc change can alter the output. (Offscreen line decos are
-			// already in the RangeSet and render as lines scroll into view.)
-			if (u.docChanged) {
-				this.decorations = buildBlockquoteDecorations(u.view);
+// Atomic renders every blockquote line with one flat rail (no nesting). We set
+// a `--bq-depth` custom property per quote line; blockquote-depth.css reads it
+// to indent and draw one rail per nesting level. View-only: only line
+// attributes, never a document change, so safe over the yCollab Y.Text binding.
+// One token per quote line; a line carries no state, so every line is neutral.
+export const blockquoteRenderer: TextRenderer<number> = {
+	kind: "text",
+	scan(state, from, emit, neutral) {
+		const { doc } = state;
+		for (let n = doc.lineAt(from).number; n <= doc.lines; n++) {
+			const line = doc.line(n);
+			if (line.from > from && neutral(line.from)) {
+				return;
+			}
+			const depth = blockquoteDepth(line.text);
+			if (depth > 0) {
+				emit({ from: line.from, to: line.to, value: depth });
 			}
 		}
 	},
-	{ decorations: (v) => v.decorations },
-);
+	decorate: (_state, t) => [
+		Decoration.line({ attributes: { style: `--bq-depth:${t.value}` } }).range(t.from),
+	],
+};
+
+export const blockquoteDepthPlugin = defineRenderer(blockquoteRenderer);

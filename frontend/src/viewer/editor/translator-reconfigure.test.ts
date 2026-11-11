@@ -12,9 +12,7 @@ import { translator, translatorCompartment } from "./translator";
 
 // Mocked at the library, not at mermaid-render: the real module's lazy draw is
 // what is under test, and a hand-listed mock of it drifted with every export.
-vi.mock("mermaid", () => ({
-	default: { initialize: () => undefined, render: () => Promise.reject(new Error("bad diagram")) },
-}));
+vi.mock("pele/lazy", () => ({ renderAsync: () => Promise.reject(new Error("bad diagram")) }));
 
 // A language switch must repaint widgets that are ALREADY on screen, in place:
 // same view, same doc, same selection.

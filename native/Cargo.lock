@@ -254,6 +254,8 @@ dependencies = [
  "aes-gcm",
  "getrandom 0.2.17",
  "ring",
+ "serde",
+ "serde_json",
  "zstd",
 ]
 

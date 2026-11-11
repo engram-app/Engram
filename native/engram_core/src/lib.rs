@@ -4,6 +4,7 @@
 #![cfg_attr(not(test), forbid(unsafe_code))]
 
 pub mod envelope;
+pub mod frontmatter;
 
 #[cfg(test)]
 mod peak;

@@ -33,7 +33,10 @@ import { type DraggedVaultItem, linkTextFor } from "./vault-item-drag";
 // ancestor. 16px on .cm-content prevents iOS Safari auto-zoom. Transparent
 // background so the card shows through.
 const editorTheme = EditorView.theme({
-	"&": { height: "auto", backgroundColor: "transparent" },
+	// color: oneDarkTheme paints the root #abb2bf, which only plain paragraphs
+	// inherit (headings and lists take --atomic-editor-fg), so in dark mode body
+	// text read dimmer than the rest. One body colour for every line, both modes.
+	"&": { height: "auto", backgroundColor: "transparent", color: "var(--atomic-editor-fg)" },
 	".cm-scroller": {
 		fontFamily: "inherit",
 		// Inert while the page owns the scrollbar; the styling rules below are
@@ -307,16 +310,29 @@ export default function NoteEditor({
 	// and detach yCollab.
 	const onShortcutRef = useRef(onFrontmatterShortcut);
 	onShortcutRef.current = onFrontmatterShortcut;
+	// Same treatment for the link callbacks, for a stronger reason: they live in
+	// the decorations compartment, and reconfiguring it rebuilds the markdown
+	// language and re-parses the whole note (the doc flashes unhighlighted).
+	// Callers re-render with new identities on every edit, so the compartment
+	// must only ever see these stable wrappers and swap on a mode change alone.
+	const linksRef = useRef({ resolveWikiLink, openWikiLink, wikiCompletionPaths, openMarkdownLink });
+	linksRef.current = { resolveWikiLink, openWikiLink, wikiCompletionPaths, openMarkdownLink };
+	const links = useRef({
+		resolveWikiLink: (name: string) => linksRef.current.resolveWikiLink(name),
+		openWikiLink: (name: string) => linksRef.current.openWikiLink(name),
+		wikiCompletionPaths: () => linksRef.current.wikiCompletionPaths(),
+		openMarkdownLink: (href: string) => linksRef.current.openMarkdownLink(href),
+	}).current;
 
 	// Create the view only when the bound doc or theme changes (NOT on mode).
-	// mode/resolveWikiLink intentionally excluded: a mode switch must reconfigure
-	// the decorationsCompartment on the existing view (below), never recreate it
+	// mode intentionally excluded: a mode switch must reconfigure the
+	// decorationsCompartment on the existing view (below), never recreate it
 	// -- recreating here would detach yCollab and re-seed the doc on every toggle.
 	// onView intentionally excluded too (read via onViewRef): it's an escape
 	// hatch for the toolbar, not a doc/theme dependency -- including it would
 	// tear down and recreate the view (yCollab-detach hazard) whenever the
 	// caller passes a differently-identitied callback.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: mode/resolveWikiLink/openWikiLink/wikiCompletionPaths/openMarkdownLink/resolveAttachment/onView are intentionally excluded, see comment above.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: mode is intentionally excluded, see comment above.
 	useEffect(() => {
 		const parent = hostRef.current;
 		if (!parent) {
@@ -328,10 +344,10 @@ export default function NoteEditor({
 				awareness,
 				resolved === "dark",
 				mode,
-				resolveWikiLink,
-				openWikiLink,
-				wikiCompletionPaths,
-				openMarkdownLink,
+				links.resolveWikiLink,
+				links.openWikiLink,
+				links.wikiCompletionPaths,
+				links.openMarkdownLink,
 				translateText,
 				() => Boolean(onShortcutRef.current?.()),
 				resolveAttachment,
@@ -367,32 +383,30 @@ export default function NoteEditor({
 		viewRef.current?.dispatch({ effects: translatorCompartment.reconfigure(translator.of(next)) });
 	}, [renderedLocale]);
 
-	// Swap the decoration layer live when mode changes — view stays, yCollab stays.
+	// Swap the decoration layer live when mode changes — view stays, yCollab
+	// stays. Mode is the ONLY trigger (see linksRef above), and the mount render
+	// is skipped: the view was just built for this mode, a reconfigure would
+	// only re-parse the note a second time.
+	const seenMode = useRef(mode);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: links and resolveAttachment are stable for the component's lifetime; mode is the sole trigger, see comment above.
 	useEffect(() => {
-		const view = viewRef.current;
-		if (!view) {
+		if (seenMode.current === mode) {
 			return;
 		}
-		view.dispatch({
+		seenMode.current = mode;
+		viewRef.current?.dispatch({
 			effects: decorationsCompartment.reconfigure(
 				decorationsFor(
 					mode,
-					resolveWikiLink,
-					openWikiLink,
-					wikiCompletionPaths,
-					openMarkdownLink,
+					links.resolveWikiLink,
+					links.openWikiLink,
+					links.wikiCompletionPaths,
+					links.openMarkdownLink,
 					resolveAttachment,
 				),
 			),
 		});
-	}, [
-		mode,
-		resolveWikiLink,
-		openWikiLink,
-		wikiCompletionPaths,
-		openMarkdownLink,
-		resolveAttachment,
-	]);
+	}, [mode]);
 
 	// data-file-drop: the upload provider leaves OS-file drops on this element to
 	// the editor (see attachment-upload/provider).

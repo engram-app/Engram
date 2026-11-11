@@ -12,8 +12,8 @@
 //!
 //! Code ranges come from pulldown-cmark (CommonMark), replacing the old
 //! ```` ```...``` ````, `~~~...~~~` and `` `...` `` regexes, which missed
-//! longer fences, indented code and multi-backtick spans. Frontmatter keeps
-//! its regex.
+//! longer fences, indented code and multi-backtick spans. Frontmatter is
+//! the shared fence rule (`engram_core::frontmatter`).
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -23,10 +23,11 @@ use std::collections::HashSet;
 /// Markdown: a = label, b = raw destination inside the parentheses.
 pub type Raw = (usize, u8, usize, usize, usize, usize);
 
+/// Where the body starts: the shared fence rule after a BOM
+/// (`engram_core::frontmatter`). The old regex took any whitespace around
+/// the fences (U+180E too) and missed a closing fence at end of text.
 fn frontmatter_len(s: &str) -> usize {
-    re!(r"(?s)\A---[\s\x{180E}]*\n.*?\n---[\s\x{180E}]*\n")
-        .find(s)
-        .map_or(0, |m| m.end())
+    crate::frontmatter::split_after_bom(s.as_bytes()).map_or(0, |f| f.2)
 }
 
 /// Sorted, non-overlapping (start, end) byte ranges a link may not start in.
@@ -769,10 +770,16 @@ mod tests {
         assert!(!external("\u{17F}:x.md") && !external("\u{212A}a:y.md"));
     }
 
-    // The old frontmatter regex had `u`, where PCRE's `\s` includes U+180E.
+    // The shared fence rule (#1884), not the old regex: that took any `\s`
+    // around the fences (U+180E too) and missed a close at end of text.
     #[test]
-    fn frontmatter_whitespace_includes_u180e() {
-        assert_eq!(matches("---\u{180E}\n[[a]]\n---\n"), vec![]);
+    fn frontmatter_uses_the_shared_fence_rule() {
+        // `---` plus U+180E is not an opening fence: `[[a]]` is body.
+        assert_eq!(matches("---\u{180E}\n[[a]]\n---\n").len(), 1);
+        // A close at end of text still hides the block's links.
+        assert_eq!(matches("---\n[[a]]\n---"), vec![]);
+        // A BOM before the fence still opens it, as for the chunker.
+        assert_eq!(matches("\u{FEFF}---\n[[a]]\n---\nb"), vec![]);
     }
 
     #[test]

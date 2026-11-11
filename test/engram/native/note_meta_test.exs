@@ -8,6 +8,8 @@ defmodule Engram.Native.NoteMetaTest do
   # hand cases plus 8,000 fuzzed strings built from frontmatter, YAML
   # scalars, quotes, inline tags and Unicode. The inputs avoid code syntax,
   # because code-range detection is the one intended change, tested below.
+  # Since #1884, 27 fuzz entries follow the shared fence rule
+  # (frontmatter_fence_test.exs): the old regex closed on `---foo`.
   @golden "test/support/fixtures/note_meta_golden.json"
           |> File.read!()
           |> Jason.decode!(keys: :atoms)

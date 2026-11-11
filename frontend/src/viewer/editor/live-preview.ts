@@ -33,7 +33,7 @@ import { indentedCodeLines } from "./indented-code";
 import { katexDecoration } from "./katex-decoration";
 import { linkOpenHandler, openExternal } from "./link-open";
 import { listRails } from "./list-rails";
-import { mermaidDecoration, mermaidKeymap } from "./mermaid-decoration";
+import { mermaidDecoration } from "./mermaid-decoration";
 import { mdLinkCompletionSource, wikiCompletionSource } from "./wiki-completion";
 
 /**
@@ -182,10 +182,8 @@ export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
 		// in the editor while Reading mode drew the diagram. Ours, like the two
 		// above: a view-only widget that reveals its source on cursor entry.
 		mermaidDecoration,
-		// Lets ArrowUp/Down enter a rendered diagram instead of stepping over it.
-		// A block replace has no position inside it for the caret to land on, so
-		// without this the block is reachable only by clicking.
-		mermaidKeymap,
+		// (ArrowUp/Down into a rendered widget comes with the render core; see
+		// enterBlock in render-core.ts.)
 		blockquoteDepthPlugin,
 		indentedCodeLines,
 		listRails,

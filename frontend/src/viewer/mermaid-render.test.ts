@@ -1,53 +1,35 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const initialize = vi.fn();
-const render = vi.fn(async (..._args: unknown[]) => ({ svg: '<svg data-drawn=""></svg>' }));
-vi.mock("mermaid", () => ({ default: { initialize, render } }));
+const renderAsync = vi.fn(async (..._args: unknown[]) => ({ svg: '<svg data-drawn=""></svg>' }));
+vi.mock("pele/lazy", () => ({ renderAsync }));
 
 const { drawMermaid, renderMermaid, rememberMermaidHeight, rememberedMermaidHeight } = await import(
 	"./mermaid-render"
 );
 
 afterEach(() => {
-	render.mockClear();
+	renderAsync.mockClear();
 	document.body.replaceChildren();
 });
 
 describe("renderMermaid", () => {
-	// Mermaid 12 defaults `layout` to "elk", which downloads a 1.4 MB layout
-	// engine for every diagram. Obsidian draws with dagre; so do we. A diagram
-	// can still opt into ELK through its own config.
-	it("lays diagrams out with dagre, never the ELK default", async () => {
-		await renderMermaid("graph TD; A-->B", false);
-		await renderMermaid("graph TD; A-->B", true);
-		expect(initialize).toHaveBeenCalled();
-		for (const [config] of initialize.mock.calls) {
-			expect(config).toMatchObject({ layout: "dagre" });
-		}
+	// Diagrams are note content. Pele's security page: keep the options ours,
+	// and the hooks it inserts unfiltered (icons, math) are never passed.
+	it("renders with remote images and links off, and no unfiltered hooks", async () => {
+		await renderMermaid("graph TD; A-->B");
+		const [, options] = renderAsync.mock.calls[0] ?? [];
+		expect(options).toMatchObject({ images: false, links: false });
+		expect(options).not.toHaveProperty("icons");
+		expect(options).not.toHaveProperty("math");
 	});
 
-	it("gives every render its own DOM id", async () => {
-		await renderMermaid("graph TD", false);
-		await renderMermaid("graph TD", false);
-		const [first, second] = render.mock.calls.map(([id]) => id);
+	it("gives every render its own id prefix, so two diagrams on a page never share ids", async () => {
+		await renderMermaid("graph TD");
+		await renderMermaid("graph TD");
+		const [first, second] = renderAsync.mock.calls.map(
+			([, o]) => (o as { idPrefix: string }).idPrefix,
+		);
 		expect(first).not.toBe(second);
-	});
-});
-
-// Without a container, mermaid measures each diagram in a scratch div appended
-// to <body>. That overflowed the page for the length of a render, so the
-// window scrollbar flashed in and out and narrowed the note while it was there.
-describe("render scratch space", () => {
-	it("measures in a clipped, fixed container instead of <body>", async () => {
-		await renderMermaid("graph TD; A-->B", false);
-		const [call] = render.mock.calls;
-		const [, , container] = call ?? [];
-		expect(container).toBeInstanceOf(HTMLElement);
-		const el = container as HTMLElement;
-		expect(el.isConnected).toBe(true);
-		expect(el.style.position).toBe("fixed");
-		expect(el.style.overflow).toBe("hidden");
-		expect(el.style.height).toBe("0px");
 	});
 });
 
@@ -59,7 +41,7 @@ describe("drawMermaid", () => {
 		const el = document.createElement("div");
 		document.body.append(el);
 		const drawn = vi.fn();
-		drawMermaid(el, "reading", "graph LR", false, { ...noop, drawn });
+		drawMermaid(el, "reading", "graph LR", { ...noop, drawn });
 		expect(el.style.minHeight).toBe("120px");
 		await vi.waitFor(() => expect(drawn).toHaveBeenCalledOnce());
 		expect(el.querySelector("svg")).not.toBeNull();
@@ -69,19 +51,19 @@ describe("drawMermaid", () => {
 	it("leaves the element alone once cancelled", async () => {
 		const el = document.createElement("div");
 		const drawn = vi.fn();
-		const cancel = drawMermaid(el, "reading", "graph RL", false, { ...noop, drawn });
+		const cancel = drawMermaid(el, "reading", "graph RL", { ...noop, drawn });
 		cancel();
-		await renderMermaid("graph RL", false);
+		await renderMermaid("graph RL");
 		expect(drawn).not.toHaveBeenCalled();
 		expect(el.innerHTML).toBe("");
 	});
 
 	it("reports a failed draw and drops the reservation", async () => {
-		render.mockRejectedValueOnce(new Error("Parse error"));
+		renderAsync.mockRejectedValueOnce(new Error("Parse error"));
 		rememberMermaidHeight("editor", "graph BAD", 90);
 		const el = document.createElement("div");
 		const failed = vi.fn();
-		drawMermaid(el, "editor", "graph BAD", false, { ...noop, failed });
+		drawMermaid(el, "editor", "graph BAD", { ...noop, failed });
 		await vi.waitFor(() => expect(failed).toHaveBeenCalledOnce());
 		expect(el.style.minHeight).toBe("");
 	});
