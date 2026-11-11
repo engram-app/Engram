@@ -48,9 +48,11 @@ const INLINE_AT = new RegExp(INLINE_MATH.source, "y");
  * (it may be lines down); otherwise it is tried as inline math. Inline math
  * never crosses a line. A line start outside a span is neutral.
  */
-export const katexRenderer: TextRenderer<MathSpan> = {
+export const katexRenderer: TextRenderer<MathSpan | null> = {
 	kind: "text",
 	reveal: true,
+	// An unpaired `$$` holds until a `$` is typed inside it.
+	keep: (state, t, from, to) => t.value === null && !state.sliceDoc(from, to).includes("$"),
 	scan(state, from, emit, neutral) {
 		const { doc } = state;
 		let pos = from;
@@ -70,7 +72,15 @@ export const katexRenderer: TextRenderer<MathSpan> = {
 				const s = line.from + j;
 				if (text[j + 1] === "$") {
 					const q = searchForward(doc, s + 2, "$");
-					if (q > s + 2 && doc.sliceString(q + 1, q + 2) === "$") {
+					const paired = q > s + 2 && doc.sliceString(q + 1, q + 2) === "$";
+					if (!paired && q !== s + 2) {
+						// Unpaired `$$`: no span yet, but typing a `$$` anywhere up to the
+						// next `$` would close it. An unrendered token over that stretch
+						// makes the core rescan from here when it happens, the way an
+						// unclosed fence or comment does.
+						emit({ from: s, to: q < 0 ? doc.length : q + 1, value: null });
+					}
+					if (paired) {
 						emit({
 							from: s,
 							to: q + 2,
@@ -101,6 +111,9 @@ export const katexRenderer: TextRenderer<MathSpan> = {
 		}
 	},
 	decorate(state, t) {
+		if (t.value === null) {
+			return [];
+		}
 		const { doc } = state;
 		// A `$$…$$` span is display math ONLY when it occupies whole lines (its own
 		// paragraph). Then it becomes a block widget, the one decoration shape that

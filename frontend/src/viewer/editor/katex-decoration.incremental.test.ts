@@ -53,4 +53,15 @@ describe("math renders incrementally", () => {
 			expect(diff(s)).toEqual([]);
 		}
 	});
+
+	test("display math typed top to bottom, one key at a time, renders", () => {
+		let s = parsedState("intro\n\n", ext, 7);
+		for (const ch of "$$\nx^2\n$$\n\nafter") {
+			const at = s.selection.main.head;
+			s = s.update({ changes: { from: at, insert: ch }, selection: { anchor: at + 1 } }).state;
+		}
+		s = s.update({ selection: { anchor: 0 } }).state;
+		expect(diff(s)).toEqual([]);
+		expect(placed(s.field(katexDecoration)).map(([f, t]) => [f, t])).toEqual([[7, 16]]);
+	});
 });
