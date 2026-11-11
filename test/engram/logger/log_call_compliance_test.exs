@@ -318,6 +318,8 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/prom_ex/",
     "lib/engram/spa_integrity.ex",
     "lib/engram/telemetry.ex",
+    # Except oban_discard_handler.ex, which renders an exception message and is
+    # listed in @content_paths (in_scope?/1 wins, so it is scanned).
     "lib/engram/telemetry/",
 
     # Infrastructure and runtime — no note data reaches these.

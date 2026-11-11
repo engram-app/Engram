@@ -270,6 +270,39 @@ defmodule Engram.Telemetry.ObanDiscardHandlerTest do
     end
   end
 
+  # The prod Loki rule `oban-discard` (engram-infra
+  # main/envs/prod/grafana_alerts.tf) filters
+  # `metadata_category="oban" | severity=~"warning|error"` and posts "job
+  # discarded". A retry must not match it; a real discard must.
+  describe "Loki oban-discard rule routing" do
+    defp discard_rule_match?(%{level: level, meta: meta}),
+      do: level in [:warning, :error] and meta[:category] == :oban
+
+    defp handler_events(attempt) do
+      worker = inspect(FailingWorker)
+
+      {_, events} =
+        Engram.Test.LogCapture.with_events(fn ->
+          perform_job(FailingWorker, %{}, attempt: attempt, repo: Engram.Repo)
+        end)
+
+      Enum.filter(events, &(&1.meta[:worker] == worker))
+    end
+
+    test "the retry line is outside the rule" do
+      assert [event] = handler_events(1)
+      assert event.level == :warning
+      assert event.meta[:category] == :oban_retry
+      refute discard_rule_match?(event)
+    end
+
+    test "the final-discard line is inside the rule" do
+      assert [event] = handler_events(3)
+      assert event.meta[:reason_label] == :oban_discarded
+      assert discard_rule_match?(event)
+    end
+  end
+
   describe "handle_event/4 on worker-resolution failures" do
     # The staging 2026-11-11 shape: a node without the worker module. The
     # error is Oban's own, and its text is the whole diagnosis.
