@@ -229,6 +229,132 @@ defmodule Engram.IndexingPathFreeReuseTest do
     end
   end
 
+  # The cases below model an UNMOVED note 0.81.0 indexed, its rows on
+  # their legacy fingerprints, then one edit. The legacy parse stands in for 0.81.0's (pinned byte for byte by
+  # the frozen legacy golden set).
+  defp legacy_rows!(ctx, note, groups) do
+    for {g, hmac} <- Enum.zip(groups, fingerprints(groups, ctx.user)) do
+      # A merged group's `member_hmacs`: its members' own legacy
+      # fingerprints, leading 16 hex, as 0.81.0 wrote them.
+      members =
+        if Map.get(g, :merged, false),
+          do: g.members |> fingerprints(ctx.user) |> Enum.map(&binary_part(&1, 0, 16))
+
+      Repo.update_all(
+        from(c in Chunk, where: c.note_id == ^note.id and c.position == ^g.position),
+        [set: [context_hmac: hmac, member_hmacs: members]],
+        skip_tenant_check: true
+      )
+    end
+  end
+
+  # `[:engram, :indexing, :chunks]` counts by outcome for one pass.
+  defp capture_outcomes(fun) do
+    id = "p1-#{System.unique_integer()}"
+    me = self()
+    handler = fn _, %{count: c}, %{outcome: o}, _ -> send(me, {:outcome, o, c}) end
+    :telemetry.attach(id, [:engram, :indexing, :chunks], handler, nil)
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(id)
+    end
+
+    Stream.repeatedly(fn ->
+      receive do
+        {:outcome, o, c} -> {o, c}
+      after
+        0 -> nil
+      end
+    end)
+    |> Enum.take_while(& &1)
+    |> Enum.reduce(%{}, fn {o, c}, acc -> Map.update(acc, o, c, &(&1 + c)) end)
+  end
+
+  # 500 sections over 512 B each: a Free note merges them (cap 128).
+  defp big_sections(edit) do
+    Enum.map_join(1..500, "\n\n", fn i ->
+      word = if i == edit, do: "edited", else: "plain"
+      "## S#{i}\n\nsection#{i} #{word} body text here. #{@pad}"
+    end)
+  end
+
+  defp big_groups(content, path, opts),
+    do: content |> Markdown.parse(path, opts) |> Indexing.cap_chunks(128)
+
+  defp group_spans(groups),
+    do: Enum.map(groups, &{&1.char_start, &1.char_end, Map.get(&1, :merged, false)})
+
+  # An unmoved merged note on its legacy rows, edited at the first section
+  # whose edit moves the group count as `pick` says; and, for the cost to
+  # compare against, the same content and edit on a migrated note.
+  defp merged_legacy_edit(ctx, pick) do
+    path = "Work/Big Plan.md"
+    content = big_sections(0)
+    note = put(ctx, path, content)
+    index!(note, ctx)
+    legacy = big_groups(content, path, legacy: true)
+    m = length(legacy)
+    assert group_spans(legacy) == group_spans(big_groups(content, path, [])), "HARNESS"
+    assert Enum.any?(legacy, &Map.get(&1, :merged, false)), "HARNESS: not merged"
+    legacy_rows!(ctx, note, legacy)
+
+    i =
+      Enum.find(1..500, fn i ->
+        e = big_sections(i)
+        n = length(big_groups(e, path, []))
+
+        group_spans(big_groups(e, path, legacy: true)) == group_spans(big_groups(e, path, [])) and
+          case pick do
+            :moved -> n != m
+            :removed -> n < m
+            :added -> n > m
+            :kept -> n == m
+          end
+      end)
+
+    assert i, "HARNESS: no #{pick} edit"
+    edited = big_sections(i)
+    n = length(big_groups(edited, path, []))
+
+    base = put(ctx, "Work/Big Plan Base.md", content)
+    index!(base, ctx)
+    reset(ctx)
+    put(ctx, "Work/Big Plan Base.md", edited)
+    base_out = capture_outcomes(fn -> index!(base, ctx) end)
+    base_sent = length(flush_voyage())
+
+    reset(ctx)
+    put(ctx, path, edited)
+    out = capture_outcomes(fn -> index!(note, ctx) end)
+    sent = length(flush_voyage())
+
+    %{
+      sent: sent,
+      base_sent: base_sent,
+      out: out,
+      info:
+        "edit S#{i}, #{m} -> #{n} groups; migrated: Voyage #{base_sent} " <>
+          "#{inspect(base_out)}; legacy: Voyage #{sent} #{inspect(out)}"
+    }
+  end
+
+  # What `legacy_twins/2` pairs on (span, then text), legacy vs R3c.
+  defp twin_report(content, path) do
+    old = Markdown.parse(content, path, legacy: true)
+    new = Markdown.parse(content, path)
+
+    Enum.zip_with(old, new, fn o, n ->
+      %{
+        span: {o.char_start, o.char_end} == {n.char_start, n.char_end},
+        text: o.text == n.text,
+        old_head: o.embed_text |> String.split("\n") |> hd(),
+        new_head: n.embed_text |> String.split("\n") |> hd()
+      }
+    end)
+  end
+
   describe "a note indexed before R3c (the legacy candidate)" do
     for {label, path, content} <- [
           {"a foldered note with an H1", "Health/Iron Panel.md", "# Iron Panel\n\n"},
@@ -321,6 +447,95 @@ defmodule Engram.IndexingPathFreeReuseTest do
       assert length(sent) in 1..3, "the edit's group only, Voyage got #{length(sent)}"
       kept = Enum.count(rows(note), &(before[&1.position] == &1.qdrant_point_id))
       assert kept >= map_size(before) - 3
+    end
+
+    test "an unmoved small legacy note, H1 = file name (control)", ctx do
+      path = "Health/Iron Panel.md"
+      note = put(ctx, path, "# Iron Panel\n\n" <> body("Beta"))
+      index!(note, ctx)
+      legacy_rows!(ctx, note, Markdown.parse(fresh(note, ctx).content, path, legacy: true))
+      assert_one_chunk_edit(ctx, note, "# Iron Panel\n\n" <> body("Beta Edited"))
+    end
+
+    test "an unmoved legacy note whose H1 is not its file name, coalesced sections", ctx do
+      path = "Projects/Meeting Notes.md"
+
+      at = fn at, edit ->
+        "# Weekly Sync\n\n" <>
+          Enum.map_join(1..30, "\n\n", fn i ->
+            w = if i == at, do: edit, else: "Item"
+            "## Topic #{i}\n\n### Detail #{i}\n\n#{w} #{i}: a short line about this topic."
+          end)
+      end
+
+      # The section to edit: the first whose edit changes one chunk only
+      # (greedy coalescing can shift a member into the next chunk).
+      one_chunk? = fn k ->
+        a = Markdown.parse(at.(k, "Beta"), path)
+        b = Markdown.parse(at.(k, "Beta Edited"), path)
+
+        length(a) == length(b) and
+          Enum.count(Enum.zip(a, b), fn {x, y} -> x.text != y.text end) == 1
+      end
+
+      k = Enum.find(1..30, one_chunk?)
+      assert k, "HARNESS: no single-chunk edit"
+      doc = &at.(k, &1)
+
+      note = put(ctx, path, doc.("Beta"))
+      index!(note, ctx)
+      legacy = Markdown.parse(fresh(note, ctx).content, path, legacy: true)
+      assert Enum.any?(legacy, &(&1.section_count > 1)), "HARNESS: no coalescing"
+      # Both modes take the H1 as the title, so every chunk pairs by span
+      # and text with its legacy twin.
+      report = twin_report(doc.("Beta Edited"), path)
+
+      assert Enum.all?(report, &(&1.span and &1.text and &1.old_head == &1.new_head)),
+             inspect(report)
+
+      legacy_rows!(ctx, note, legacy)
+      reset(ctx)
+      outcomes = capture_outcomes(fn -> assert_one_chunk_edit(ctx, note, doc.("Beta Edited")) end)
+      assert outcomes.legacy == length(legacy) - 1, inspect(outcomes)
+    end
+
+    # Free: 128 points a note. An unmoved merged note on its legacy rows
+    # takes a one-section edit; it must re-embed no more than the same edit
+    # on a migrated note (rows on R3c fingerprints). The edit either keeps
+    # the group count or moves one group boundary (the edited chunk gains or
+    # loses `rem(hash, g) == 0`): both are local changes.
+    for {label, pick} <- [
+          {"an edit that moves the group count", :moved},
+          {"an edit that removes a group boundary", :removed},
+          {"an edit that adds a group boundary", :added},
+          {"an edit that keeps the group count", :kept}
+        ] do
+      test "a merged legacy note, #{label}: only the edited group re-embeds", ctx do
+        %{sent: sent, base_sent: base, out: out, info: info} =
+          merged_legacy_edit(ctx, unquote(pick))
+
+        assert sent <= base,
+               "legacy note re-embedded #{sent} inputs, a migrated one #{base} (#{info})"
+
+        assert Map.get(out, :legacy, 0) > 0, "no legacy reuse: #{inspect(out)}"
+      end
+    end
+
+    # `resparse_note/2` on an UNEDITED merged legacy note regroups by the
+    # stored row count (`merged_like/2`) and pairs the legacy twins: every
+    # point must still match.
+    test "a resparse of an unedited merged legacy note matches every point", ctx do
+      path = "Work/Big Plan.md"
+      content = big_sections(0)
+      note = put(ctx, path, content)
+      index!(note, ctx)
+      legacy = big_groups(content, path, legacy: true)
+      assert Enum.any?(legacy, &Map.get(&1, :merged, false)), "HARNESS: not merged"
+      legacy_rows!(ctx, note, legacy)
+
+      user = Repo.reload!(ctx.user, skip_tenant_check: true)
+      assert {:ok, count, 0} = Indexing.resparse_note(fresh(note, ctx), user)
+      assert count == length(legacy)
     end
 
     # Without the legacy twins a rotation would rekey only R3c fingerprints
