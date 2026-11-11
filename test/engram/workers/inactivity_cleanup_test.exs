@@ -47,6 +47,12 @@ defmodule Engram.Workers.InactivityCleanupTest do
     )
   end
 
+  # A user whose final notice went out `days` ago: past the grace period by
+  # default, so the soft-delete sweep may delete them.
+  defp final_noticed_user(days \\ 11) do
+    insert(:user, inactivity_warning_80_at: DateTime.add(DateTime.utc_now(), -days * 86_400))
+  end
+
   describe "60-day warning sweep" do
     test "sends warning #1 + stamps timestamp for Free user inactive 60-79 days" do
       user = insert(:user)
@@ -155,7 +161,7 @@ defmodule Engram.Workers.InactivityCleanupTest do
 
   describe "90-day soft-delete sweep" do
     test "drops Qdrant + stamps users.deleted_at + emails the user" do
-      user = insert(:user)
+      user = final_noticed_user()
       set_last_active(user.id, 95)
 
       expect(Engram.Email.ProviderMock, :send, fn _to, subject, _html, _opts ->
@@ -182,6 +188,118 @@ defmodule Engram.Workers.InactivityCleanupTest do
 
       reloaded = Accounts.get_user!(user.id)
       assert is_nil(reloaded.deleted_at)
+    end
+  end
+
+  # #2566: the soft delete used to fire on the inactivity threshold alone, so
+  # a user who reached it without a final notice was deleted unwarned.
+  describe "soft delete needs a final notice in this idle period" do
+    defp expect_final_notice(user) do
+      expect(Engram.Email.ProviderMock, :send, fn to, subject, _html, _opts ->
+        assert to == user.email
+        assert subject =~ "final notice"
+        :ok
+      end)
+    end
+
+    defp assert_warned_not_deleted(user) do
+      reloaded = Repo.reload!(user)
+      assert is_nil(reloaded.deleted_at)
+      assert %DateTime{} = reloaded.inactivity_warning_80_at
+    end
+
+    test "120 days idle with no warning stamps: final notice, not deleted" do
+      user = insert(:user)
+      set_last_active(user.id, 120)
+      expect_final_notice(user)
+
+      InactivityCleanup.__sweep_soft__()
+
+      assert_warned_not_deleted(user)
+    end
+
+    test "a lapsed paid user, now Free and idle past 90 days: warned, not deleted" do
+      user = insert(:user)
+      set_last_active(user.id, 120)
+      insert(:subscription, user: user, tier: "pro", status: "canceled")
+      expect_final_notice(user)
+
+      InactivityCleanup.__sweep_soft__()
+
+      assert_warned_not_deleted(user)
+    end
+
+    test "an inactivity_delete_days override below the rungs: warned, not deleted" do
+      user = insert(:user)
+      set_last_active(user.id, 35)
+
+      insert(:user_limit_override,
+        user: user,
+        key: "inactivity_delete_days",
+        value: %{"v" => 30}
+      )
+
+      expect_final_notice(user)
+
+      InactivityCleanup.__sweep_soft__()
+
+      assert_warned_not_deleted(user)
+    end
+
+    test "a final notice from an earlier idle period does not count" do
+      user = final_noticed_user(200)
+      set_last_active(user.id, 120)
+      expect_final_notice(user)
+
+      InactivityCleanup.__sweep_soft__()
+
+      reloaded = Repo.reload!(user)
+      assert is_nil(reloaded.deleted_at)
+      assert DateTime.diff(DateTime.utc_now(), reloaded.inactivity_warning_80_at) < 60
+    end
+
+    test "a final notice inside the grace period: neither deleted nor mailed again" do
+      user = final_noticed_user(3)
+      set_last_active(user.id, 120)
+
+      # No Mox expect: send/4 must not be called.
+      InactivityCleanup.__sweep_soft__()
+
+      assert is_nil(Repo.reload!(user).deleted_at)
+    end
+
+    test "a final notice older than the grace period: deleted" do
+      user = final_noticed_user(11)
+      set_last_active(user.id, 120)
+      expect(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts -> :ok end)
+
+      InactivityCleanup.__sweep_soft__()
+
+      assert %DateTime{} = Repo.reload!(user).deleted_at
+    end
+
+    test "the grace period is read from ServiceConfig" do
+      Engram.ServiceConfig.put_override(:inactivity_delete_grace_days, 20)
+      user = final_noticed_user(11)
+      set_last_active(user.id, 120)
+
+      InactivityCleanup.__sweep_soft__()
+
+      assert is_nil(Repo.reload!(user).deleted_at)
+    end
+
+    test "kill switch off: nobody deleted, the warning rungs still run" do
+      Engram.ServiceConfig.put_override(:inactivity_soft_delete, false)
+      due = final_noticed_user(11)
+      set_last_active(due.id, 120)
+      rung = insert(:user)
+      set_last_active(rung.id, 85)
+      expect_final_notice(rung)
+
+      assert :ok = perform_job(InactivityCleanup, %{})
+
+      assert is_nil(Repo.reload!(due).deleted_at)
+      assert %DateTime{} = Repo.reload!(rung).inactivity_warning_80_at
     end
   end
 
@@ -288,7 +406,7 @@ defmodule Engram.Workers.InactivityCleanupTest do
     end
 
     test "inactivity_delete_days=60 override soft-deletes earlier than Free default" do
-      user = insert(:user)
+      user = final_noticed_user()
       set_last_active(user.id, 65)
 
       insert(:user_limit_override,
@@ -308,7 +426,7 @@ defmodule Engram.Workers.InactivityCleanupTest do
 
   describe "after Lifecycle refactor" do
     test "sweep_soft_delete fires :account telemetry with :inactivity reason" do
-      user = insert(:user)
+      user = final_noticed_user()
       set_last_active(user.id, 95)
 
       expect(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts -> :ok end)
@@ -344,8 +462,8 @@ defmodule Engram.Workers.InactivityCleanupTest do
     # A raise inside one user's soft delete used to abort the whole run, so
     # every later user waited for tomorrow (and forever, if the bad row stayed).
     test "one user's failing soft delete does not abort the sweep" do
-      a = insert(:user)
-      b = insert(:user)
+      a = final_noticed_user()
+      b = final_noticed_user()
       set_last_active(a.id, 95)
       set_last_active(b.id, 95)
 
@@ -422,7 +540,7 @@ defmodule Engram.Workers.InactivityCleanupTest do
     end
 
     test "legacy :abuse telemetry still fires alongside" do
-      user = insert(:user)
+      user = final_noticed_user()
       set_last_active(user.id, 95)
 
       expect(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts -> :ok end)
@@ -478,7 +596,7 @@ defmodule Engram.Workers.InactivityCleanupTest do
     end
 
     test "soft-delete sweep" do
-      users = for _ <- 1..2, do: insert(:user)
+      users = for _ <- 1..2, do: final_noticed_user()
       Enum.each(users, &set_last_active(&1.id, 95))
 
       {handler, succeeded} = first_call_fails(fn -> raise "provider down" end, fn _ -> :ok end)
