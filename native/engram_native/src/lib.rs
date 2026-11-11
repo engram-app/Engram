@@ -9,8 +9,16 @@
 /// a NIF's peak climbed with what ran beside it: the chunker's 10x test read
 /// 4.7 MB alone and 12-13.6 MB in CI (#2186). A clone has a pool of its own,
 /// so here every thread allocates and frees its own cache.
-/// ponytail: one clone (a few hundred bytes) and one cache per regex per
-/// thread, kept for the thread's life; dirty schedulers never exit.
+/// Cost per thread: the clone itself is small (a few hundred bytes); the
+/// real cost is its cache, whose lazy DFAs grow up to ~2 MiB per regex per
+/// direction (regex-automata's default `hybrid_cache_capacity`) on large
+/// input, as the shared pool's caches already grew under contention.
+/// ponytail: the clone is `Box::leak`ed, so each thread keeps its regexes
+/// (25 `re!` call sites, one each on first use) for the process lifetime.
+/// The BEAM's dirty and normal schedulers live as long as the node; a
+/// short-lived thread (a test harness thread, any thread spawned later)
+/// leaks at most those 25 clones and their caches. Own them in the thread
+/// local if threads ever come and go in production.
 macro_rules! re {
     (bytes $pat:expr) => {
         re!(@ regex::bytes::Regex, $pat)
