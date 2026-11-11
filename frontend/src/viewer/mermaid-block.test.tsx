@@ -3,11 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import MermaidBlock from "./mermaid-block";
 import { rememberMermaidHeight } from "./mermaid-render";
 
-vi.mock("mermaid", () => ({
-	default: {
-		initialize: () => undefined,
-		render: () => Promise.reject(new Error("Parse error on line 2")),
-	},
+vi.mock("pele/lazy", () => ({
+	renderAsync: () => Promise.reject(new Error("Parse error on line 2")),
 }));
 vi.mock("../theme/theme-provider", () => ({ useTheme: () => ({ resolved: "light" }) }));
 

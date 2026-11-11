@@ -18,17 +18,15 @@ const drawCancels = new WeakMap<HTMLElement, () => void>();
 class MermaidWidget extends WidgetType {
 	constructor(
 		private readonly code: string,
-		private readonly dark: boolean,
 		private readonly t: Translate,
 	) {
 		super();
 	}
 
-	// Includes `dark`: the palette is baked into the SVG rather than applied as
-	// CSS, so a theme flip has to produce a NEW widget or the diagram keeps the
-	// old colours. buildMermaid reads the theme, which is what makes this differ.
+	// No theme here: Pele colours come from CSS variables (mermaid-theme.css),
+	// so a light/dark flip recolours the drawn SVG and the widget stays.
 	eq(other: MermaidWidget) {
-		return other.code === this.code && other.dark === this.dark && other.t === this.t;
+		return other.code === this.code && other.t === this.t;
 	}
 
 	toDOM(view: EditorView) {
@@ -42,7 +40,7 @@ class MermaidWidget extends WidgetType {
 		// Cancelled in destroy() if the widget goes first.
 		drawCancels.set(
 			el,
-			drawMermaid(el, "editor", this.code, this.dark, {
+			drawMermaid(el, "editor", this.code, {
 				drawn: measure,
 				failed: (err) => {
 					this.showError(el, err);
@@ -83,17 +81,6 @@ class MermaidWidget extends WidgetType {
 	ignoreEvent() {
 		return false;
 	}
-}
-
-// Read at build time, not inside the widget, so `eq` can see it change. The app
-// puts `.dark` on <html> (see theme/resolve.ts).
-//
-// ponytail: sampling the DOM rather than subscribing to the theme store. The
-// field rebuilds on any doc or selection change, so a theme flip repaints on the
-// next keystroke or cursor move rather than instantly. If that lag ever grates,
-// dispatch a StateEffect from ThemeProvider and rebuild on it.
-function isDark(): boolean {
-	return document.documentElement.classList.contains("dark");
 }
 
 /** A fenced block: its mermaid source, or null for any other fence (or an unclosed one). */
@@ -184,7 +171,7 @@ const mermaidRenderer: TextRenderer<FenceToken> = {
 		}
 		return [
 			Decoration.replace({
-				widget: new MermaidWidget(t.value.code, isDark(), state.facet(translator)),
+				widget: new MermaidWidget(t.value.code, state.facet(translator)),
 				block: true,
 			}).range(t.from, t.to),
 		];

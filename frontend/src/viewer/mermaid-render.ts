@@ -1,10 +1,10 @@
-import { whenLoaded } from "@/lib/when-loaded";
-// One mermaid instance, shared by Reading mode's <MermaidBlock> and the
-// editor's live-preview decoration. Both need the same lazy import, the same
-// per-render theme handling and the same lazy draw (drawMermaid), and two
-// copies of that would be two chances to drift.
-
 import { onceVisible } from "@/lib/once-visible";
+import { whenLoaded } from "@/lib/when-loaded";
+// One diagram renderer, shared by Reading mode's <MermaidBlock> and the
+// editor's live-preview decoration. Both need the same lazy import, the same
+// render options and the same lazy draw (drawMermaid), and two copies of that
+// would be two chances to drift.
+import "./mermaid-theme.css";
 
 // A diagram draws late (lazy chunk, drawn when scrolled near), so its box grew
 // from empty to full height after the note was on screen and shoved every line
@@ -53,95 +53,51 @@ function parseHeights(): Record<string, number> {
 	}
 }
 
-let mermaidPromise: Promise<typeof import("mermaid").default> | null = null;
+let pelePromise: Promise<typeof import("pele/lazy")> | null = null;
 
-// Mermaid 12 defaults `layout` to "elk", which downloads a 1.4 MB layout engine
-// for every diagram. Obsidian draws with dagre, Mermaid's classic layout, so
-// diagrams look the same in both. A diagram can still opt into ELK through its
-// own config; mermaid then loads it on demand.
-const BASE_CONFIG = { startOnLoad: false, securityLevel: "strict", layout: "dagre" } as const;
-
-// Theme is NOT set here. Mermaid bakes the palette into the SVG at render time,
-// so a module-level `theme: "default"` drew dark-on-transparent diagrams that
-// were unreadable in dark mode. `initialize` is idempotent and merges, so
-// renderMermaid re-applies the palette before each render instead.
-function loadMermaid() {
-	if (!mermaidPromise) {
-		mermaidPromise = whenLoaded(import("mermaid"))
-			.then((m) => {
-				m.default.initialize(BASE_CONFIG);
-				return m.default;
-			})
-			.catch((err) => {
-				// Drop the rejected promise so the NEXT diagram retries the import.
-				// Cached, one transient failure — a stale chunk 404 after a deploy
-				// while the tab is open, an offline blip — latched permanently and
-				// every mermaid block in the session, in both panes, rendered the
-				// same error. Nothing distinguished that from "your diagram is
-				// wrong", because both surface through the same message.
-				mermaidPromise = null;
-				throw err;
-			});
-	}
-	return mermaidPromise;
-}
-
-// Renders run one at a time. `initialize` mutates ONE global config, so two
-// concurrent calls could interleave as init(A) → init(B) → render(A), drawing A
-// with B's palette. Reading mode and the editor's live preview each render the
-// same note, and during a theme flip they briefly disagree about `dark` — which
-// is exactly the window that produces a diagram in the wrong palette.
-let queue: Promise<unknown> = Promise.resolve();
-
-// Mermaid measures each diagram in a scratch div it appends to whatever it is
-// given, <body> by default. On <body> that div overflowed the page for the
-// length of a render, so the window scrollbar flashed in and out and narrowed
-// the note. This box keeps it in layout (mermaid needs real text metrics) but
-// clipped to nothing and out of the page's scrollable area.
-let scratch: HTMLElement | null = null;
-
-function scratchSpace(): HTMLElement {
-	if (!scratch?.isConnected) {
-		scratch = document.createElement("div");
-		scratch.setAttribute("aria-hidden", "true");
-		Object.assign(scratch.style, {
-			position: "fixed",
-			top: "0",
-			left: "0",
-			width: "100vw",
-			height: "0px",
-			overflow: "hidden",
-			visibility: "hidden",
-			pointerEvents: "none",
+// Pele (pele.run, by the Obsidian team) replaced mermaid.js: zero deps, a
+// sync and stateless render, and colours from `--pele-*` CSS variables
+// (mermaid-theme.css), so a light/dark flip recolours a drawn diagram with no
+// re-render. Gone with mermaid: the serialized render queue (its global
+// `initialize` raced), the per-render theme, the scratch measuring div and the
+// dagre-vs-ELK config. `pele/lazy` keeps it a lazy chunk and loads each
+// diagram type on first use.
+function loadPele() {
+	if (!pelePromise) {
+		pelePromise = whenLoaded(import("pele/lazy")).catch((err) => {
+			// Drop the rejected promise so the NEXT diagram retries the import.
+			// Cached, one transient failure (a stale chunk 404 after a deploy while
+			// the tab is open, an offline blip) latched permanently and every
+			// diagram in the session rendered the same error.
+			pelePromise = null;
+			throw err;
 		});
-		document.body.append(scratch);
 	}
-	return scratch;
+	return pelePromise;
 }
 
 let idCounter = 0;
 
-/** Mermaid needs a unique DOM id per render; it uses it to key its own scratch node. */
-function nextMermaidId(): string {
-	idCounter += 1;
-	return `mermaid-${idCounter}`;
-}
-
 /**
- * Render `code` to SVG markup. `dark` re-draws rather than restyles, because
- * the palette is baked into the output.
+ * Render `code` to SVG markup.
+ *
+ * Diagrams are note content, so the options are ours alone (Pele's security
+ * page: never let the diagram supply them). Pele emits no scripts, handlers or
+ * HTML labels, always blocks javascript:/data:/vbscript: links and caps source
+ * and output size. On top of that: no remote images (a diagram must not make
+ * the reader's browser fetch a URL), links never pass a referrer, and no
+ * `icons`/`math` hooks, the two inputs Pele inserts unfiltered.
  */
-export function renderMermaid(code: string, dark: boolean): Promise<string> {
-	const result = queue.then(async () => {
-		const mermaid = await loadMermaid();
-		mermaid.initialize({ ...BASE_CONFIG, theme: dark ? "dark" : "default" });
-		const { svg } = await mermaid.render(nextMermaidId(), code, scratchSpace());
-		return svg;
+export async function renderMermaid(code: string, fontFamily?: string): Promise<string> {
+	const { renderAsync } = await loadPele();
+	idCounter += 1;
+	const { svg } = await renderAsync(code, {
+		images: false,
+		linkRel: "noopener noreferrer nofollow",
+		idPrefix: `pele-${idCounter}-`,
+		...(fontFamily ? { fontFamily } : {}),
 	});
-	// The queue must survive a bad diagram: chaining the rejection would fail
-	// every subsequent render with the FIRST diagram's parse error.
-	queue = result.catch(() => undefined);
-	return result;
+	return svg;
 }
 
 export function rememberedMermaidHeight(surface: Surface, code: string): number | undefined {
@@ -177,7 +133,6 @@ export function drawMermaid(
 	el: HTMLElement,
 	surface: Surface,
 	code: string,
-	dark: boolean,
 	on: { drawn: () => void; failed: (err: unknown) => void },
 ): () => void {
 	const reserved = rememberedMermaidHeight(surface, code);
@@ -186,7 +141,8 @@ export function drawMermaid(
 	}
 	let cancelled = false;
 	const stop = onceVisible(el, () => {
-		renderMermaid(code, dark).then(
+		// Pele measures labels to size nodes, so it needs the font they draw in.
+		renderMermaid(code, getComputedStyle(el).fontFamily).then(
 			(svg) => {
 				if (cancelled) {
 					return;
