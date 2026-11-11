@@ -140,10 +140,10 @@ defmodule EngramWeb.ClientAnalyticsEventsTest do
     assert [%Event{event: "upgrade_link_clicked"}] = stored()
   end
 
-  test "stores an upgrade click from the plan badge", %{conn: conn} do
+  test "stores an upgrade click from the sidebar footer", %{conn: conn} do
     conn =
       send_events(conn, [
-        %{"event" => "upgrade_link_clicked", "props" => %{"source" => "plan_badge"}}
+        %{"event" => "upgrade_link_clicked", "props" => %{"source" => "sidebar_footer"}}
       ])
 
     assert response(conn, 204)

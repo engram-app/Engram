@@ -83,24 +83,25 @@ const TOOL_LABELS: Record<string, MsgKey> = {
 	other_mcp: msg("Connect another MCP client"),
 };
 
-function ChecklistWidget() {
+/**
+ * The checklist rows and their dismiss action. Shared so other surfaces can
+ * tell whether the checklist (and its "See paid plans" line) is still up:
+ * the sidebar Upgrade footer stays hidden until it retires, keeping one
+ * upgrade nudge per screen.
+ */
+function useChecklistItems(): {
+	isLoading: boolean;
+	items: Item[];
+	dismiss: (key: string) => void;
+	isFreeTier: boolean;
+} {
 	const { t } = useT();
-	// Same query app-layout and note-menu use, so this flips at exactly the
-	// moment the app switches to MobileLayout.
-	const isDesktop = useMediaQuery("(min-width: 768px)");
-	// Mobile starts collapsed: throwing a bottom sheet over the app on load is
-	// the "in the way" complaint at its worst. Desktop keeps opening expanded.
-	const [collapsed, setCollapsed] = useState(() => !isDesktop);
 	const ob = useOnboardingActions();
 	const status = useOnboardingStatus();
 	const profile = status.data?.profile;
 	const connections = useConnections();
 	const isFreeTier = useIsFreeTier();
 	const qc = useQueryClient();
-
-	if (ob.isLoading) {
-		return null;
-	}
 
 	const actions = status.data?.actions ?? [];
 	const dismissed = new Set(
@@ -196,6 +197,29 @@ function ChecklistWidget() {
 			}),
 		),
 	];
+
+	return { isLoading: ob.isLoading, items, dismiss, isFreeTier };
+}
+
+/** True while the checklist has rows left to act on (and so is on screen). */
+function useChecklistActive(): boolean {
+	const { isLoading, items } = useChecklistItems();
+	return !isLoading && items.some((i) => !(i.done || i.dismissed));
+}
+
+function ChecklistWidget() {
+	const { t } = useT();
+	// Same query app-layout and note-menu use, so this flips at exactly the
+	// moment the app switches to MobileLayout.
+	const isDesktop = useMediaQuery("(min-width: 768px)");
+	// Mobile starts collapsed: throwing a bottom sheet over the app on load is
+	// the "in the way" complaint at its worst. Desktop keeps opening expanded.
+	const [collapsed, setCollapsed] = useState(() => !isDesktop);
+	const { isLoading, items, dismiss, isFreeTier } = useChecklistItems();
+
+	if (isLoading) {
+		return null;
+	}
 
 	// Dismissed rows are removed entirely (the × is "hide this"). Completed rows
 	// stay visible, struck through, so progress is felt, not silently erased.
@@ -406,4 +430,4 @@ function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }
 // Test-only surface for DOC_URLS. ChecklistWidget is exported here too rather
 // than inline: ChecklistBody is declared below it, and biome's useExportsLast
 // wants every export after the last non-export statement.
-export { ChecklistWidget, DOC_URLS };
+export { ChecklistWidget, DOC_URLS, useChecklistActive };

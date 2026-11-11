@@ -99,10 +99,22 @@ describe("UserMenu — plan", () => {
 		vi.mocked(track).mockClear();
 	});
 
-	it("badges a Free user and offers Upgrade, which opens billing as a user_menu click", () => {
+	it("shows no plan badge beside the avatar on any plan", () => {
+		for (const tier of ["free", "starter", "pro"] as const) {
+			billing.data = { tier };
+			const { unmount } = renderUserMenu();
+			// The avatar trigger is the only control: no pill, label or extra button.
+			expect(screen.getAllByRole("button")).toEqual([
+				screen.getByRole("button", { name: "User menu" }),
+			]);
+			expect(screen.queryByText(/^(?:Free|Starter|Pro)$/u)).toBeNull();
+			unmount();
+		}
+	});
+
+	it("names Free under the email and offers Upgrade, which opens billing as a user_menu click", () => {
 		billing.data = { tier: "free" };
 		renderUserMenu();
-		expect(screen.getByTestId("plan-badge")).toHaveTextContent("Free");
 		openMenu();
 		expect(screen.getByText("Free plan")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("menuitem", { name: "Upgrade" }));
@@ -110,38 +122,9 @@ describe("UserMenu — plan", () => {
 		expect(screen.getByTestId("hash")).toHaveTextContent("billing");
 	});
 
-	it("makes the Free badge a button that opens billing as a plan_badge click", () => {
-		billing.data = { tier: "free" };
-		renderUserMenu();
-		const badge = screen.getByRole("button", { name: "Free plan: See paid plans" });
-		expect(badge).toHaveTextContent("Free");
-		fireEvent.click(badge);
-		expect(vi.mocked(track)).toHaveBeenCalledWith("upgrade_link_clicked", { source: "plan_badge" });
-		expect(screen.getByTestId("hash")).toHaveTextContent("billing");
-		// The badge is not the avatar trigger: clicking it opens billing, not the menu.
-		expect(screen.queryByRole("menu")).toBeNull();
-		expect(screen.getByRole("button", { name: "User menu" })).not.toContainElement(badge);
-	});
-
-	it("puts the pill before the avatar when it sits beside it, so focus order matches", () => {
-		billing.data = { tier: "free" };
-		render(
-			<ThemeProvider>
-				<MemoryRouter>
-					<UserMenu planPlacement="beside" />
-				</MemoryRouter>
-			</ThemeProvider>,
-		);
-		const [first, second] = screen.getAllByRole("button");
-		expect(first).toHaveAccessibleName("Free plan: See paid plans");
-		expect(second).toHaveAccessibleName("User menu");
-	});
-
-	it("still offers Upgrade on Starter, which is below Pro, but keeps its label static", () => {
+	it("still offers Upgrade on Starter, which is below Pro", () => {
 		billing.data = { tier: "starter" };
 		renderUserMenu();
-		expect(screen.getByTestId("plan-badge")).toHaveTextContent("Starter");
-		expect(screen.queryByRole("button", { name: /see paid plans/iu })).toBeNull();
 		openMenu();
 		expect(screen.getByText("Starter plan")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("menuitem", { name: "Upgrade" }));
@@ -149,11 +132,9 @@ describe("UserMenu — plan", () => {
 		expect(screen.getByTestId("hash")).toHaveTextContent("billing");
 	});
 
-	it("names a paid plan and does not nudge", () => {
+	it("names Pro and does not nudge", () => {
 		billing.data = { tier: "pro" };
 		renderUserMenu();
-		expect(screen.getByTestId("plan-badge")).toHaveTextContent("Pro");
-		expect(screen.queryByRole("button", { name: /see paid plans/iu })).toBeNull();
 		openMenu();
 		expect(screen.getByText("Pro plan")).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Upgrade" })).toBeNull();
@@ -163,7 +144,6 @@ describe("UserMenu — plan", () => {
 		config.billingEnabled = false;
 		billing.data = { tier: "free" };
 		renderUserMenu();
-		expect(screen.queryByTestId("plan-badge")).toBeNull();
 		openMenu();
 		expect(screen.queryByText("Free plan")).toBeNull();
 		expect(screen.queryByRole("menuitem", { name: "Upgrade" })).toBeNull();
@@ -172,12 +152,15 @@ describe("UserMenu — plan", () => {
 	it("shows no plan, rather than crashing, for a tier this build does not know", () => {
 		billing.data = { tier: "enterprise" } as unknown as { tier: "pro" };
 		renderUserMenu();
-		expect(screen.getByRole("button", { name: "User menu" })).toBeInTheDocument();
-		expect(screen.queryByTestId("plan-badge")).toBeNull();
+		openMenu();
+		expect(screen.queryByText(/ plan$/u)).toBeNull();
+		expect(screen.queryByRole("menuitem", { name: "Upgrade" })).toBeNull();
 	});
 
 	it("shows no plan before billing status loads", () => {
 		renderUserMenu();
-		expect(screen.queryByTestId("plan-badge")).toBeNull();
+		openMenu();
+		expect(screen.queryByText(/ plan$/u)).toBeNull();
+		expect(screen.queryByRole("menuitem", { name: "Upgrade" })).toBeNull();
 	});
 });

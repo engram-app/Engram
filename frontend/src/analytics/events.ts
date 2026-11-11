@@ -49,13 +49,13 @@ export const CHECKOUT_TIERS = ["starter", "pro"] as const;
 export const CHECKOUT_CADENCES = ["monthly", "annual"] as const;
 
 // Where an "Upgrade" link was clicked: the post-wizard checklist, the 402
-// paywall dialog, the avatar menu, the plan badge beside the avatar, or
+// paywall dialog, the avatar menu, the Free sidebar footer, or
 // nowhere ("direct": billing opened unprompted).
 export const UPGRADE_SOURCES = [
 	"checklist",
 	"paywall",
 	"user_menu",
-	"plan_badge",
+	"sidebar_footer",
 	"direct",
 ] as const;
 export type UpgradeSource = (typeof UPGRADE_SOURCES)[number];
