@@ -18,13 +18,15 @@ defmodule Engram.DataMigrations.NameTerms do
   (`run_pass(user_ids: ...)`). Zero operator steps; not re-verified.
 
   Kill switch `enabled?/0` = service override `name_terms_backfill`,
-  default on.
+  default on. Pace (`Engram.Workers.BackfillNameTerms`): at most
+  `name_terms_backfill_max_rows` refs a hop (default #{1_000}) and
+  `name_terms_backfill_writes_per_s` refs a second (default #{150}).
   """
   @behaviour Engram.DataMigration
 
   import Ecto.Query, only: [from: 2]
 
-  alias Engram.Backfill.TenantScan
+  alias Engram.Backfill.{TenantScan, Throttle}
   alias Engram.DataMigrations
   alias Engram.Folders.Folder
   alias Engram.Maintenance.Cursor
@@ -41,6 +43,23 @@ defmodule Engram.DataMigrations.NameTerms do
 
   @impl true
   def enabled?, do: Engram.ServiceConfig.get(:name_terms_backfill, true) == true
+
+  # 150 refs/s: each ref is one non-HOT `notes`/`folders` UPDATE (an entry
+  # in every index) plus up to 32 `name_terms` inserts. At 150 that is at most
+  # about 4,800 posting rows a second, a quarter of the unthrottled ~600 refs/s
+  # that the 2026-11-01 swap shape matched, and ~214k refs (prod: ~170k notes,
+  # ~44k folders) take about 24 min. 1,000 refs a hop: under the ceiling a
+  # hop writes for ~7 s, and a walk is ~214 hops, well inside the chain's 500.
+  @max_rows 1_000
+  @writes_per_s 150
+
+  @doc "Refs a chain hop heals at most: the `name_terms_backfill_max_rows` override."
+  @spec max_rows() :: pos_integer()
+  def max_rows, do: Throttle.positive(:name_terms_backfill_max_rows, @max_rows)
+
+  @doc "Refs a hop heals a second at most: the `name_terms_backfill_writes_per_s` override."
+  @spec writes_per_s() :: pos_integer()
+  def writes_per_s, do: Throttle.positive(:name_terms_backfill_writes_per_s, @writes_per_s)
 
   @doc "True once every live note and folder has current terms."
   def done?, do: DataMigrations.done?(name(), version())

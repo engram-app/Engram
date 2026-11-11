@@ -831,6 +831,69 @@ defmodule Engram.Search.NameTermsTest do
       assert rows(note.id) == []
     end
 
+    test "a hop heals at most name_terms_backfill_max_rows refs (one window past it at most)",
+         ctx do
+      notes = for i <- 1..5, do: write!(ctx.user, ctx.vault, "cap#{i}.md")
+      ServiceConfig.put_override(:name_terms_backfill_max_rows, 2)
+
+      :ok =
+        perform_job(BackfillNameTerms, %{
+          "table" => "notes",
+          "pause_ms" => 0,
+          "batch_size" => 2
+        })
+
+      assert Enum.count(notes, &(rows(&1.id) != [])) == 2
+
+      assert [%{args: %{"table" => "notes", "after" => after_id, "fixed" => 2}}] =
+               all_enqueued(worker: BackfillNameTerms)
+
+      assert is_binary(after_id)
+    end
+
+    test "a hop keeps to name_terms_backfill_writes_per_s", ctx do
+      notes = for i <- 1..3, do: write!(ctx.user, ctx.vault, "rate#{i}.md")
+      ServiceConfig.put_override(:name_terms_backfill_writes_per_s, 2)
+
+      {us, :ok} =
+        :timer.tc(fn ->
+          perform_job(BackfillNameTerms, %{"table" => "notes", "pause_ms" => 0})
+        end)
+
+      assert Enum.all?(notes, &(rows(&1.id) != []))
+      # 3 refs at 2 a second: the window is followed by a 1.5 s wait.
+      assert div(us, 1000) >= 1_500
+    end
+
+    test "database pressure holds a hop: nothing written, the same hop re-inserted later",
+         ctx do
+      note = write!(ctx.user, ctx.vault, "Held.md")
+      Engram.Test.FakePressure.set(%{xact_s: 100_000})
+      on_exit(&Engram.Test.FakePressure.reset/0)
+      args = %{"table" => "notes", "pause_ms" => 0}
+
+      :ok = perform_job(BackfillNameTerms, args)
+
+      assert rows(note.id) == []
+      assert [%{args: ^args, scheduled_at: at}] = all_enqueued(worker: BackfillNameTerms)
+      assert DateTime.diff(at, DateTime.utc_now()) >= 50
+    end
+
+    test "a slow pool queue holds a hop too, and an off chain is never re-inserted", ctx do
+      note = write!(ctx.user, ctx.vault, "Queued.md")
+      Engram.Test.FakePressure.set(%{queue_ms: 10_000})
+      on_exit(&Engram.Test.FakePressure.reset/0)
+
+      :ok = perform_job(BackfillNameTerms, %{"table" => "notes", "pause_ms" => 0})
+      assert rows(note.id) == []
+      assert [_held] = all_enqueued(worker: BackfillNameTerms)
+
+      Repo.delete_all(Oban.Job)
+      ServiceConfig.put_override(:name_terms_backfill, false)
+      :ok = perform_job(BackfillNameTerms, %{"table" => "notes", "pause_ms" => 0})
+      assert all_enqueued(worker: BackfillNameTerms) == []
+    end
+
     test "a restore racing the delete hook: the live note is stale and the drain rewrites it",
          ctx do
       note = write!(ctx.user, ctx.vault, "Back.md")
