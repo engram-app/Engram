@@ -11,7 +11,10 @@ defmodule Engram.Backfill.Throttle do
       Pure, so a test drives it with its own clock.
     * `pressure/0`: one probe on the app pool, timed. The PRIMARY signal is
       its wall time, the pool queue plus a round trip (`backfill_max_queue_ms`,
-      default #{200}): it sees load from every source. The secondary one is
+      default #{200}): it sees load from every source. It is the pool of the
+      node running the hop (a worker node), not the web nodes', though its
+      round trip still reflects database load. A probe that raises or takes
+      over #{5} s holds the hop too (`:probe_failed`). The secondary one is
       the age of the oldest open client transaction (`backfill_max_xact_s`,
       default #{120}), but pg_stat_activity shows `xact_start` only for the
       caller's own role's sessions unless the role holds `pg_monitor` /
@@ -37,6 +40,8 @@ defmodule Engram.Backfill.Throttle do
 
   @max_queue_ms 200
   @max_xact_s 120
+  # A probe slower than this is pressure itself: held as `:probe_failed`.
+  @probe_timeout_ms 5_000
 
   @oldest_xact_sql """
   SELECT COALESCE(EXTRACT(EPOCH FROM now() - min(xact_start)), 0)::int
@@ -62,18 +67,38 @@ defmodule Engram.Backfill.Throttle do
   def now_ms, do: System.monotonic_time(:millisecond)
 
   @doc """
-  nil when the database has room for a hop, else why not: `:pool_queue` or
-  `:long_xact`. The caller reports it in its `log_pass/2` line.
+  nil when the database has room for a hop, else why not: `:pool_queue`,
+  `:long_xact`, or `:probe_failed` when the probe itself raised or timed out
+  (a database too busy to answer is a reason to hold, not to fail the job;
+  the error is logged, its reason only). The caller reports it in its
+  `log_pass/2` line.
   """
-  @spec pressure() :: nil | :pool_queue | :long_xact
+  @spec pressure() :: nil | :pool_queue | :long_xact | :probe_failed
   def pressure do
-    %{queue_ms: queue_ms, xact_s: xact_s} = reader().read(Engram.Repo)
+    case probe() do
+      {:ok, %{queue_ms: queue_ms, xact_s: xact_s}} ->
+        cond do
+          queue_ms > positive(:backfill_max_queue_ms, @max_queue_ms) -> :pool_queue
+          xact_s > positive(:backfill_max_xact_s, @max_xact_s) -> :long_xact
+          true -> nil
+        end
 
-    cond do
-      queue_ms > positive(:backfill_max_queue_ms, @max_queue_ms) -> :pool_queue
-      xact_s > positive(:backfill_max_xact_s, @max_xact_s) -> :long_xact
-      true -> nil
+      {:error, reason} ->
+        Logger.warning(
+          "backfill pressure probe failed, hop held",
+          Metadata.with_category(:warning, :data, reason_label: reason)
+        )
+
+        :probe_failed
     end
+  end
+
+  defp probe do
+    {:ok, reader().read(Engram.Repo)}
+  rescue
+    e -> {:error, Metadata.safe_reason(e)}
+  catch
+    :exit, _ -> {:error, "exit"}
   end
 
   @doc """
@@ -93,7 +118,9 @@ defmodule Engram.Backfill.Throttle do
   @doc "One timed probe: pool queue plus round trip (ms), oldest open transaction (s)."
   @spec read(module()) :: %{queue_ms: non_neg_integer(), xact_s: non_neg_integer()}
   def read(repo) do
-    {us, %{rows: [[age]]}} = :timer.tc(fn -> repo.query!(@oldest_xact_sql) end)
+    {us, %{rows: [[age]]}} =
+      :timer.tc(fn -> repo.query!(@oldest_xact_sql, [], timeout: @probe_timeout_ms) end)
+
     %{queue_ms: div(us, 1000), xact_s: age}
   end
 

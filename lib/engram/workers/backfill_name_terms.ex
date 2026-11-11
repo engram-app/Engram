@@ -86,12 +86,16 @@ defmodule Engram.Workers.BackfillNameTerms do
         at = {ctx.user_id, List.last(ids)}
         now = Throttle.now_ms()
 
-        if now > deadline or n - fixed0 >= max_rows do
-          {:halt, {:stopped, at, n}}
-        else
-          Process.sleep(Throttle.wait_ms(started, n - fixed0, per_s, pause, now))
-          {:cont, {:walked, at, n}}
-        end
+        stop? = now > deadline or n - fixed0 >= max_rows
+
+        # A stopped hop waits off its deficit too: its successor starts at
+        # once, so skipping it let the chain run past the ceiling (~185/s at
+        # a 1,000-row cap against 150).
+        Process.sleep(
+          Throttle.wait_ms(started, n - fixed0, per_s, if(stop?, do: 0, else: pause), now)
+        )
+
+        if stop?, do: {:halt, {:stopped, at, n}}, else: {:cont, {:walked, at, n}}
       else
         {:halt, {:killed, nil, n}}
       end

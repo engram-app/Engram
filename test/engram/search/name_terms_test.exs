@@ -9,6 +9,7 @@ defmodule Engram.Search.NameTermsTest do
   use Oban.Testing, repo: Engram.Repo
 
   import Engram.RlsCase
+  import ExUnit.CaptureLog
 
   alias Engram.Bookkeeping.Drain
   alias Engram.Crypto
@@ -864,6 +865,35 @@ defmodule Engram.Search.NameTermsTest do
       assert Enum.all?(notes, &(rows(&1.id) != []))
       # 3 refs at 2 a second: the window is followed by a 1.5 s wait.
       assert div(us, 1000) >= 1_500
+    end
+
+    test "a hop the row cap stops still keeps to the ceiling before its successor", ctx do
+      for i <- 1..5, do: write!(ctx.user, ctx.vault, "capped#{i}.md")
+      ServiceConfig.put_override(:name_terms_backfill_max_rows, 2)
+      ServiceConfig.put_override(:name_terms_backfill_writes_per_s, 2)
+
+      {us, :ok} =
+        :timer.tc(fn ->
+          perform_job(BackfillNameTerms, %{"table" => "notes", "pause_ms" => 0, "batch_size" => 2})
+        end)
+
+      assert [%{args: %{"fixed" => 2}}] = all_enqueued(worker: BackfillNameTerms)
+      # 2 refs at 2 a second: the stopping window waits ~1 s before the
+      # successor is inserted.
+      assert div(us, 1000) >= 950
+    end
+
+    test "a failing pressure probe holds the hop: nothing written, re-inserted, logged", ctx do
+      note = write!(ctx.user, ctx.vault, "Probe.md")
+      FakePressure.fail()
+      on_exit(&FakePressure.reset/0)
+      args = %{"table" => "notes", "pause_ms" => 0}
+
+      log = capture_log(fn -> assert :ok = perform_job(BackfillNameTerms, args) end)
+
+      assert rows(note.id) == []
+      assert [%{args: ^args}] = all_enqueued(worker: BackfillNameTerms)
+      assert log =~ "backfill pressure probe failed, hop held"
     end
 
     test "database pressure holds a hop: nothing written, the same hop re-inserted later",
