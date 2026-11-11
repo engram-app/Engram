@@ -1,7 +1,7 @@
 defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedTest do
   @moduledoc """
   R8(d): no database object names `notes.content_ciphertext` or
-  `notes.crdt_state_ciphertext` any more (migration 20261107140100), so
+  `notes.crdt_state_ciphertext` any more (migration 20261111000100), so
   release E can drop them without breaking the shape check or the head
   trigger. Before it, a plain drop of the CRDT column failed (the trigger
   depended on it) and a drop of the content column took the whole shape
@@ -118,7 +118,7 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedTest do
   # a prod-sized table, so a behavioural test here would pass either way.
   test "the migration's checkout has no 15 s deadline" do
     {:ok, ast} =
-      "priv/repo/migrations/20261107140100_notes_body_columns_unreferenced_expand.exs"
+      "priv/repo/migrations/20261111000100_notes_body_columns_unreferenced_expand.exs"
       |> File.read!()
       |> Code.string_to_quoted()
 

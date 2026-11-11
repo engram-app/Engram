@@ -13,7 +13,7 @@ defmodule Engram.Notes.NoteBody do
   are virtual, a raw write drops them, `notes_row/1`), R8(c) stopped
   reading them (migration 20261107120000 gives every note its body row
   before boot), and R8(d) (this release) removed the last database objects
-  and code that named them (migration 20261107140100; the null batch is
+  and code that named them (migration 20261111000100; the null batch is
   retired, so an install may keep dead copies there). R8(e) drops the two
   columns. The nonces and `crdt_head` are still written on `notes` (the
   fences below).

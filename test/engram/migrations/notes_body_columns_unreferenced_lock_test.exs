@@ -1,6 +1,6 @@
 defmodule Engram.Migrations.NotesBodyColumnsUnreferencedLockTest do
   @moduledoc """
-  20261107140100 runs at boot. A statement that hits its 5 s `lock_timeout`
+  20261111000100 runs at boot. A statement that hits its 5 s `lock_timeout`
   (55P03) on a busy `notes` table must be retried, not crash every task.
   """
   use Engram.DataCase, async: false
@@ -9,7 +9,7 @@ defmodule Engram.Migrations.NotesBodyColumnsUnreferencedLockTest do
 
   setup_all do
     Code.require_file(
-      "priv/repo/migrations/20261107140100_notes_body_columns_unreferenced_expand.exs"
+      "priv/repo/migrations/20261111000100_notes_body_columns_unreferenced_expand.exs"
     )
 
     :ok
