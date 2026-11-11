@@ -7,7 +7,8 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealRaceTest do
   blocks on that row in its UPDATE, then the writer commits. Under READ
   COMMITTED the UPDATE re-reads the committed row; only the CASE guard in
   `SET` (fill a NULL body, else keep it) stops it writing the stale `notes`
-  copy over the newer body. The user and its rows are deleted in an `after`.
+  copy over the newer body. The user, its rows and the jobs its write
+  enqueued are deleted in an `after`.
   """
   use ExUnit.Case, async: false
 
@@ -30,6 +31,8 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealRaceTest do
     Repo.query!("SELECT content_ct FROM note_bodies WHERE note_id = $1", [id]).rows
   end
 
+  defp job_count, do: hd(hd(Repo.query!("SELECT count(*) FROM oban_jobs").rows))
+
   # Polls until a session waits on a lock inside the heal's UPDATE.
   defp await_blocked_heal(tries \\ 100) do
     %{rows: [[n]]} =
@@ -51,6 +54,8 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealRaceTest do
   end
 
   test "a body written between the heal's read and its UPDATE is kept" do
+    jobs_before = Sandbox.unboxed_run(Repo, &job_count/0)
+
     Sandbox.unboxed_run(Repo, fn ->
       {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
 
@@ -94,9 +99,16 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealRaceTest do
         assert :ok = Task.await(heal)
         assert content_ct(id) == [[newer]]
       after
+        # The write committed for real, and so did the jobs it enqueued:
+        # left behind, they show up in other tests' `all_enqueued`.
+        Repo.query!("DELETE FROM oban_jobs WHERE args->>'user_id' = $1", [user.id])
         Repo.query!("DELETE FROM notes WHERE user_id = $1", [Ecto.UUID.dump!(user.id)])
         Repo.query!("DELETE FROM users WHERE id = $1", [Ecto.UUID.dump!(user.id)])
       end
     end)
+
+    # Nothing committed outlives the test (CI's ContentOutboxTest once saw
+    # this test's NoteCommitted job).
+    assert Sandbox.unboxed_run(Repo, &job_count/0) == jobs_before
   end
 end
