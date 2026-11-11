@@ -115,6 +115,20 @@ curl -X POST https://mcp.engram.page/oauth/register \
 
 Use the returned `client_id` in a normal authorize → token flow. PKCE is mandatory.
 
+### Why was this grant ended (`mcp_oauth_grant_revoked`, written 2026-11-11, unreleased)
+
+Before this, a grant's end left no reason anywhere: prod showed 2,446 `mcp_oauth_token_failed reason=refresh_token_revoked` events from about 10 users (figures from the 2026-11-11 read-only design review, not re-queried for this change) and nothing could say what had ended those grants. Every ending goes through `OAuth.revoke_refresh_tokens/2`, which now requires `cause:` (a `KeyError` without it, an `ArgumentError` outside the closed set `OAuth.revoke_cause()`), and each grant (family) it ends emits one `mcp_oauth_grant_revoked` after commit, through `Engram.Analytics`. Causes, by caller:
+
+- `user_disconnect_client`: Settings, disconnect a whole app (`Connections.revoke_oauth_family/3`, with or without `vault_id`).
+- `user_disconnect_grant`: Settings, disconnect one grant (`Connections.revoke_oauth_grant/2`).
+- `vault_deleted` / `vault_purged`: a grant left reaching no live vault, at soft delete (`Connections.revoke_by_vault/2`) / at purge (`CleanupVault`), both via `drop_vault_from_grants/3`. Narrowed grants did not end and emit nothing.
+- `client_revoke_rfc7009`: the app called `POST /oauth/revoke`.
+- `refresh_reuse`, `revoked_after_use`, `superseded_reuse`, `code_replay`: reuse detection killed the family; the same values as `kill_reason()` and the `reason` label of `engram_prom_ex_oauth_family_revoked_total`, emitted from the same place, so the event and the counter agree one to one. Only these carry `client_agent`.
+
+How to read it: join `mcp_oauth_token_failed.grant_id` (refresh failures now carry it; `refresh_token_unknown` cannot, there is no row) to `mcp_oauth_grant_revoked.grant_id` to see why the grant a client keeps retrying was ended. `families` is how many grants the same call ended (a whole-app disconnect ends several); count grants by events, not by summing `families`. `mcp_client_disconnected` stays: it is one per Settings click (API keys included, sent even when nothing was live), a churn signal, not a count of ended grants. `mcp_oauth_refresh_reuse` stays: it also counts grace re-issues, which end nothing. Refresh-token `mcp_oauth_token_issued` now carries `grant_id` too.
+
+Known gaps: account deletion (rows cascade, no revoke), expiry (90-day TTL, `refresh_token_expired`) and the hourly reaper are not revokes and emit nothing. The rare dead-family stray row (a never-used row found unrevoked in an already-dead family) is swept by a rotation without an event, as the reuse log already treats it. `revoked_after_use` can fire on a family that was already dead but had a stray consumed row left live, exactly when the Prometheus counter already counts it. Prometheus was left as is: its `reason` label already is the cause for the reuse subset, and user-driven ends are not "killed by reuse detection".
+
 ## How to revoke a refresh token
 
 ```bash
