@@ -2,10 +2,11 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
 import { EditorState, type StateField } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { embedRenderer } from "./attachment-embed";
 import { commentDecoration, commentRenderer } from "./comment-decoration";
 import { indentedCodeLines, indentedCodeRenderer } from "./indented-code";
+import { katexDecoration } from "./katex-decoration";
 import { listRails, listRailsRenderer } from "./list-rails";
 import { mermaidDecoration, mermaidRenderer } from "./mermaid-decoration";
 import { defineRenderer } from "./render-core";
@@ -105,5 +106,64 @@ describe("an edit that changes a later block", () => {
 		);
 		s = settle(s.update({ changes: { from: 27, to: 30, insert: "- " } }).state);
 		expect(diffFromFresh(s, iext, indentedCodeLines)).toEqual([]);
+	});
+});
+
+describe("final review cases", () => {
+	const md = markdown({ base: markdownLanguage });
+
+	test("a creation parse cut short still leaves code in the first screen literal", () => {
+		const cext = [md, commentDecoration, embedField];
+		const doc = `${"para line\n\n".repeat(60)}\`\`\`js\ncode %% x\n![[a.png]]\n\`\`\`\nafter\n`;
+		// The first two clock reads advance 25 ms (CodeMirror's 20 ms creation
+		// parse gives up after a few characters); after that time stands still,
+		// so the core's own mount parse finishes. The cut short tree is the one
+		// the text renderers see.
+		let now = 0;
+		let reads = 0;
+		const clock = vi.spyOn(Date, "now").mockImplementation(() => {
+			reads++;
+			if (reads <= 2) {
+				now += 25;
+			}
+			return now;
+		});
+		let s: EditorState;
+		try {
+			s = EditorState.create({ doc, extensions: cext });
+		} finally {
+			clock.mockRestore();
+		}
+		s = settle(s);
+		expect(diffFromFresh(s, cext, commentDecoration)).toEqual([]);
+		expect(diffFromFresh(s, cext, embedField)).toEqual([]);
+	});
+
+	test("moving the caret onto an unpaired $$ keeps the inline math inside it", () => {
+		const kext = [katexDecoration];
+		let s = parsedState("a $$y$ b\n", kext, 6);
+		s = s.update({ selection: { anchor: 2 } }).state;
+		expect(diffFromFresh(s, kext, katexDecoration)).toEqual([]);
+		s = s.update({ selection: { anchor: 8 } }).state;
+		expect(diffFromFresh(s, kext, katexDecoration)).toEqual([]);
+	});
+
+	test("deleting the whole note clears the code-block line style", () => {
+		const iext = [md, indentedCodeLines];
+		let s = parsedState("\tcode\n\tmore\n", iext);
+		expect(placed(s.field(indentedCodeLines)).length).toBeGreaterThan(0);
+		s = s.update({ changes: { from: 0, to: s.doc.length } }).state;
+		expect(placed(s.field(indentedCodeLines))).toEqual([]);
+	});
+
+	test("changing one bullet to 1. in a 5000-line list re-renders that item, not the rest", () => {
+		const s = parsedState("- item\n\t- nested\n".repeat(2500), ext);
+		const at = s.doc.line(2501).from;
+		let after = s;
+		const work = workDuring(listRailsRenderer, () => {
+			after = s.update({ changes: { from: at, to: at + 1, insert: "1." } }).state;
+		});
+		expect(work).toBeLessThan(2000);
+		expect(diffFromFresh(settle(after), ext, railsField)).toEqual([]);
 	});
 });

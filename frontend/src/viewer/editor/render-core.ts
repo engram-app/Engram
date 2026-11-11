@@ -269,7 +269,7 @@ function kept(
 
 function renderTree(state: EditorState, tree: Tree, tree$: [TreeRenderer, Layer][], spans: Span[]) {
 	for (const [from, to] of spans) {
-		if (to <= from) {
+		if (to <= from && state.doc.length > 0) {
 			continue;
 		}
 		const visitors = tree$.map(([r]) => r.visit(state, from, to));
@@ -407,6 +407,31 @@ function unitStarting(tree: Tree, pos: number): SyntaxNode | null {
  * a ``` below now opens a fence to the end of the note; stopping at `hi` left
  * everything under it stale. Costs the units that really changed.
  */
+/**
+ * The innermost unit starting at `pos`, with the names of everything above it.
+ * Two trees agree here when these match even if an outer list does not: a
+ * bullet changed to `1.` splits the list, so the next item now opens a NEW
+ * BulletList, but it and everything after it render exactly as before.
+ */
+function innerUnit(tree: Tree, pos: number): string | null {
+	for (let n: SyntaxNode | null = tree.resolve(pos, 1); n && n.from === pos; n = n.parent) {
+		if (isUnit(n)) {
+			const path: string[] = [];
+			for (let p: SyntaxNode | null = n; p; p = p.parent) {
+				path.push(p.name);
+			}
+			return `${path.join("<")}@${n.to}`;
+		}
+	}
+	return null;
+}
+
+/** `innerUnit` of the old tree, with its end mapped into the new doc. */
+function mapInner(tr: Transaction, key: string): string {
+	const at = key.lastIndexOf("@");
+	return `${key.slice(0, at)}@${tr.changes.mapPos(Number(key.slice(at + 1)), 1)}`;
+}
+
 function resync(tr: Transaction, before: Tree, tree: Tree, hi: number): number {
 	const back = tr.changes.invertedDesc;
 	let at = hi;
@@ -415,6 +440,11 @@ function resync(tr: Transaction, before: Tree, tree: Tree, hi: number): number {
 		const was = unitStarting(before, back.mapPos(at, 1));
 		const wasTo = was ? tr.changes.mapPos(was.to, 1) : -1;
 		if (now && was && now.name === was.name && now.to === wasTo) {
+			return at;
+		}
+		const inner = innerUnit(tree, at);
+		const oldInner = innerUnit(before, back.mapPos(at, 1));
+		if (inner && oldInner && inner === mapInner(tr, oldInner)) {
 			return at;
 		}
 		const end = Math.max(now?.to ?? at, wasTo, at + 1);
@@ -449,9 +479,12 @@ function treeSpans(tr: Transaction, startLen: number, tree: Tree): Span[] {
 		spans.push([blockRegion(tr.state, tree, frontier, frontier)[0], tree.length]);
 	}
 	// Nothing past the frontier yet: keep the old decorations there.
-	return mergeSpans(spans)
-		.map(([a, b]): Span => [a, Math.min(b, tree.length)])
-		.filter(([a, b]) => b > a);
+	return (
+		mergeSpans(spans)
+			.map(([a, b]): Span => [a, Math.min(b, tree.length)])
+			// An empty doc is the one empty span that matters: delete-all must clear it.
+			.filter(([a, b]) => b > a || tree.length === 0)
+	);
 }
 
 /**
@@ -481,7 +514,12 @@ function build(state: EditorState): CoreState {
 		}
 	}
 	renderTree(state, tree, tree$, [[0, tree.length]]);
-	return { layers, treeLen: tree.length };
+	// The watermark is the LEAST any renderer scanned against. ensureSyntaxTree
+	// hands back a longer tree than syntaxTree(state) still reports, and the
+	// text renderers read the latter, so recording the ensured length left the
+	// stretch between the two unscanned for code-ness forever (a `%%` in a fence
+	// greyed the rest of the note).
+	return { layers, treeLen: Math.min(tree.length, syntaxTree(state).length) };
 }
 
 function selectionSpans(sel: EditorSelection): Span[] {
@@ -544,13 +582,25 @@ function update(value: CoreState, tr: Transaction): CoreState {
 
 /** Re-decorate the tokens under the old and new selection, and nothing else. */
 function revealPatch(state: EditorState, r: TextRenderer<unknown>, layer: Layer, spans: Span[]) {
-	const hit = new Map<number, Token<unknown>>();
+	const hit = new Map<string, Token<unknown>>();
+	const add = (from: number, to: number, value: unknown) =>
+		hit.set(`${from}:${to}`, { from, to, value });
 	for (const [from, to] of spans) {
 		layer.tokens.between(from, to, (f, t, v) => {
-			hit.set(f, { from: f, to: t, value: v.value });
+			add(f, t, v.value);
 		});
 	}
-	for (const t of hit.values()) {
+	// Patching a token drops every decoration that starts inside it, so tokens
+	// that start inside a hit one (inline math inside an unpaired `$$`) are
+	// redone too, after it: ascending `from`.
+	for (const t of [...hit.values()]) {
+		layer.tokens.between(t.from, t.to, (f, to, v) => {
+			if (f >= t.from && f < t.to) {
+				add(f, to, v.value);
+			}
+		});
+	}
+	for (const t of [...hit.values()].sort((x, y) => x.from - y.from || y.to - x.to)) {
 		const decos: Range<Decoration>[] = [];
 		decorateTokens(state, r, [t], decos);
 		layer.decos = patch(layer.decos, t.from, t.to, decos);
