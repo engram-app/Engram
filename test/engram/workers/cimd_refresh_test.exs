@@ -78,7 +78,7 @@ defmodule Engram.Workers.CimdRefreshTest do
     test "leaves a fresh row alone" do
       cimd_client(cimd_fetched_at: DateTime.utc_now()) |> used()
 
-      assert {:ok, %{unchanged: 1}} = perform_job(CimdRefresh, %{})
+      assert {:ok, %{fresh: 1}} = perform_job(CimdRefresh, %{})
     end
 
     # THE #1642 CLOSURE. A vendor drops `none` after a key compromise. Before
@@ -115,19 +115,15 @@ defmodule Engram.Workers.CimdRefreshTest do
     end
 
     # Availability still beats freshness. An unreachable vendor keeps its
-    # cached row instead of losing its connector, unchanged from before this
-    # sweep existed.
-    #
-    # It counts as `unchanged`, NOT as an error, and that is the honest answer:
-    # `Cimd.refresh/2` folds the failure into `{:ok, cached}`, so the moved (or
-    # unmoved) timestamp is the only evidence this worker has. The failure
-    # itself is carried by `mcp_cimd_stale_retained`, not by this tally.
+    # cached row instead of losing its connector, and the tally now says so:
+    # `stale_retained`, distinct from a row that was simply still `fresh`.
     test "keeps the cached row when the vendor is unreachable" do
       client = cimd_client(cimd_fetched_at: aged(2)) |> used()
 
       expect(FetcherMock, :fetch, fn @url -> {:error, :fetch_failed} end)
 
-      assert {:ok, %{unchanged: 1}} = perform_job(CimdRefresh, %{})
+      assert {:ok, %{stale_retained: 1} = tally} = perform_job(CimdRefresh, %{})
+      refute Map.has_key?(tally, :fresh)
 
       kept = reload(client)
       assert kept.cimd_fetched_at == client.cimd_fetched_at
@@ -269,7 +265,30 @@ defmodule Engram.Workers.CimdRefreshTest do
       expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
       assert {:ok, _} = Engram.OAuth.Cimd.ensure_client(@url)
 
-      assert {:ok, %{unchanged: 1}} = perform_job(CimdRefresh, %{})
+      assert {:ok, %{fresh: 1}} = perform_job(CimdRefresh, %{})
+    end
+
+    # The authorize path is untouched by the status split: `ensure_client/1`
+    # still answers {:ok, client} whether the row was fresh, refreshed or
+    # retained after a failed refetch.
+    test "ensure_client/1 returns {:ok, client} in all three cases" do
+      alias Engram.OAuth.Cimd
+
+      cimd_client(cimd_fetched_at: DateTime.utc_now())
+      assert {:ok, %Client{}} = Cimd.ensure_client(@url)
+      assert {:fresh, %Client{}} = Cimd.ensure_client_status(@url)
+
+      Repo.update_all(Client, [set: [cimd_fetched_at: aged(2)]], skip_tenant_check: true)
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
+      assert {:ok, %Client{}} = Cimd.ensure_client(@url)
+
+      Repo.update_all(Client, [set: [cimd_fetched_at: aged(2)]], skip_tenant_check: true)
+      expect(FetcherMock, :fetch, fn @url -> {:error, :fetch_failed} end)
+      assert {:ok, %Client{}} = Cimd.ensure_client(@url)
+
+      Repo.update_all(Client, [set: [cimd_fetched_at: aged(2)]], skip_tenant_check: true)
+      expect(FetcherMock, :fetch, fn @url -> {:error, :fetch_failed} end)
+      assert {:stale_retained, %Client{}} = Cimd.ensure_client_status(@url)
     end
 
     test "is a no-op with no CIMD clients at all" do

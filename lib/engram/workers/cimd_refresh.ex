@@ -51,24 +51,25 @@ defmodule Engram.Workers.CimdRefresh do
   five-minute vendor outage must not lock out its users. The difference is that
   we now retry daily instead of never.
 
-  ## Why the tally counts timestamps rather than return values
+  ## What the tally counts
 
-  `Cimd.refresh/2` folds every fetch failure into `{:ok, cached_client}` on
-  purpose, so `ensure_client/1` cannot tell this worker whether anything was
-  actually re-read. Counting its `:ok`s would report a fully successful sweep
-  while every vendor was unreachable. `cimd_fetched_at` moving is the only
-  honest evidence a document was refreshed, so that is what gets counted.
+  `Cimd.refresh/2` folds a failed refetch into a served cached row on purpose
+  (availability beats freshness), which is why `ensure_client/1` alone cannot
+  tell this worker whether anything was re-read. The sweep therefore calls
+  `Cimd.ensure_client_status/1`, the same single fetch path with the outcome
+  kept, and tallies it:
 
-  `unchanged` therefore covers two different facts that this worker cannot
-  separate without duplicating the TTL: a row still inside its TTL (normal, the
-  common case) and a row past it whose refetch failed. Both already have their
-  own signal, which is why no third one is invented here:
+    * `fresh`: inside its TTL, nothing fetched (the common case)
+    * `refreshed`: fetched, validated and stored
+    * `stale_retained`: past its TTL, the refetch failed (unreachable host,
+      invalid document, or refused by our own fetch limiter), cached row kept
+    * any other key: the error reason (`ensure_client_status/1` returned
+      `{:error, reason}`)
 
-    * a failed fetch logs `mcp_cimd_stale_retained` from `Cimd.refresh/2`
-    * a refetch refused by our own fetch limiter logs NOTHING by design
-      (unbounded volume behind a bounded refusal), and is instead visible as
-      `engram_prom_ex_rate_limiter_hit_total{purpose="cimd_fetch",result="deny"}`,
-      which the `engram-prod-cimd-fetch-rate-limited` alert watches
+  A failed fetch also logs `mcp_cimd_stale_retained` from `Cimd.refresh/2`
+  (the limiter refusal logs nothing by design, and is visible as
+  `engram_prom_ex_rate_limiter_hit_total{purpose="cimd_fetch",result="deny"}`,
+  which the `engram-prod-cimd-fetch-rate-limited` alert watches).
 
   ## No staleness ceiling here
 
@@ -161,7 +162,7 @@ defmodule Engram.Workers.CimdRefresh do
         where:
           c.client_id in subquery(live_grant_client_ids()) or is_nil(c.cimd_fetched_at) or
             c.cimd_fetched_at > ^days_ago(dead_after_days()),
-        select: {c.cimd_url, c.cimd_fetched_at}
+        select: c.cimd_url
       ),
       skip_tenant_check: true
     )
@@ -227,27 +228,18 @@ defmodule Engram.Workers.CimdRefresh do
     end
   end
 
-  defp tally_refresh({url, before_at}, acc) do
+  defp tally_refresh(url, acc) do
     outcome =
-      case Cimd.ensure_client(url) do
-        {:ok, %Client{cimd_fetched_at: after_at}} -> refreshed?(before_at, after_at)
+      case Cimd.ensure_client_status(url) do
+        {status, %Client{}} -> status
         {:error, reason} -> reason
       end
 
     Map.update(acc, outcome, 1, &(&1 + 1))
   end
 
-  defp refreshed?(nil, %DateTime{}), do: :refreshed
-  defp refreshed?(%DateTime{}, nil), do: :unchanged
-  defp refreshed?(nil, nil), do: :unchanged
-
-  defp refreshed?(%DateTime{} = before_at, %DateTime{} = after_at) do
-    if DateTime.compare(after_at, before_at) == :gt, do: :refreshed, else: :unchanged
-  end
-
-  # One line per sweep. Stays at `:info`: with failures folded into `unchanged`
-  # this worker has nothing to escalate that its two existing signals do not
-  # already carry, and a routine all-fresh sweep is not news.
+  # One line per sweep. Stays at `:info`: `stale_retained` is already logged
+  # per client by `Cimd.refresh/2`, and a routine all-fresh sweep is not news.
   defp log_sweep(event, total, tally) do
     Logger.info(
       "#{event} total=#{total} #{format_tally(tally)}",
