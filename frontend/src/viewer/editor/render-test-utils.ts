@@ -1,6 +1,8 @@
 import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorState, type Extension, type StateField } from "@codemirror/state";
 import type { Decoration, DecorationSet } from "@codemirror/view";
+import { vi } from "vitest";
+import type { TextRenderer, TreeRenderer } from "./render-core";
 
 // Test helpers for the render core: the incremental result must equal a fresh
 // build of the same document, and an edit must not rebuild what it did not touch.
@@ -60,4 +62,49 @@ export function parsedState(doc: string, extensions: Extension, anchor = 0): Edi
 export function settle(s: EditorState): EditorState {
 	ensureSyntaxTree(s, s.doc.length, 5000);
 	return s.update({}).state;
+}
+
+/**
+ * Characters a renderer was asked to cover while `run` executes: the visited
+ * spans of a tree renderer, the scanned stretch of a text renderer. The proof
+ * that an edit costs the edit, not the note.
+ */
+export function workDuring(r: TreeRenderer | TextRenderer<unknown>, run: () => void): number {
+	let chars = 0;
+	if (r.kind === "tree") {
+		const original = r.visit.bind(r);
+		const spy = vi.spyOn(r, "visit").mockImplementation((state, from, to) => {
+			chars += to - from;
+			return original(state, from, to);
+		});
+		try {
+			run();
+		} finally {
+			spy.mockRestore();
+		}
+		return chars;
+	}
+	const original = r.scan.bind(r);
+	const spy = vi.spyOn(r, "scan").mockImplementation((state, from, emit, neutral) => {
+		let reached = from;
+		original(
+			state,
+			from,
+			(t) => {
+				reached = Math.max(reached, t.to);
+				emit(t);
+			},
+			(x) => {
+				reached = Math.max(reached, x);
+				return neutral(x);
+			},
+		);
+		chars += reached - from;
+	});
+	try {
+		run();
+	} finally {
+		spy.mockRestore();
+	}
+	return chars;
 }

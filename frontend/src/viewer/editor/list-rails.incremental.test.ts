@@ -2,8 +2,8 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import type { StateField } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
 import { describe, expect, test } from "vitest";
-import { listRails } from "./list-rails";
-import { diffFromFresh, parsedState, placed, settle } from "./render-test-utils";
+import { listRails, listRailsRenderer } from "./list-rails";
+import { diffFromFresh, parsedState, placed, settle, workDuring } from "./render-test-utils";
 
 const ext = [markdown({ base: markdownLanguage }), listRails];
 const field = listRails[0] as StateField<DecorationSet>;
@@ -25,6 +25,17 @@ describe("list rails render incrementally", () => {
 		expect(diffFromFresh(settle(after), ext, field)).toEqual([]);
 	});
 
+	test("a keystroke in the middle of a 6000-line list re-renders one item, not the list", () => {
+		const s = parsed(NESTED.repeat(2000));
+		let after = s;
+		const mid = s.doc.line(3001).to;
+		const work = workDuring(listRailsRenderer, () => {
+			after = s.update({ changes: { from: mid, insert: "x" } }).state;
+		});
+		expect(work).toBeLessThan(200);
+		expect(diffFromFresh(settle(after), ext, field)).toEqual([]);
+	});
+
 	test("matches a fresh build after nesting, un-nesting and joining edits", () => {
 		let s = parsed(`${NESTED.repeat(30)}\npara\n\n${NESTED.repeat(30)}`);
 		const edits = [
@@ -32,6 +43,12 @@ describe("list rails render incrementally", () => {
 			{ from: s.doc.line(10).from, insert: "\t\t- new\n" },
 			{ from: s.doc.line(5).from, to: s.doc.line(5).from + 1 },
 			{ from: s.doc.line(90).from, to: s.doc.line(92).to },
+			// Bullet to number: CommonMark splits the list there.
+			{ from: s.doc.line(40).from + 1, to: s.doc.line(40).from + 2, insert: "1." },
+			// Join two items into one line.
+			{ from: s.doc.line(50).to, to: s.doc.line(51).from },
+			// A blank line then an unindented paragraph ends the list.
+			{ from: s.doc.line(60).to, insert: "\n\nbreak" },
 		];
 		for (const changes of edits) {
 			s = settle(s.update({ changes }).state);
