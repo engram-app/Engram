@@ -607,7 +607,10 @@ defmodule Engram.Search.NoteFilterTest do
       # cap 0: the match query AND the complement query run.
       for sql <- statements(ctx, %{folder: "F7"}, cap: 0) do
         plan = index_only_plan(sql)
-        assert plan =~ "Index Only Scan using notes_folder_ref_live", plan
+        # Since S1 two covering indexes serve this at equal cost and the planner
+        # picks either by statistics (seen both ways): `notes_folder_ref_live`
+        # or its superset `notes_folder_ref_live_id` (the old one drops in S6).
+        assert plan =~ ~r/Index Only Scan using notes_folder_ref_live(_id)? on/, plan
       end
     end
 

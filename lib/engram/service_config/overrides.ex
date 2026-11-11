@@ -60,8 +60,23 @@ defmodule Engram.ServiceConfig.Overrides do
     payload_backfill_points_per_min: {:integer, 1..100_000},
     rebuild_max_disk_percent: {:integer, 1..100},
     file_times_backfill: :boolean,
+    # Every paced backfill chain's pressure gate (`Engram.Backfill.Throttle`).
+    backfill_max_queue_ms: {:integer, 1..60_000},
+    backfill_max_xact_s: {:integer, 1..86_400},
     # The plugin's `folder_op` wire (#2523 S4), default off: `Engram.Folders.Wire`.
-    folder_ops: :boolean
+    folder_ops: :boolean,
+    # `name_terms` backfill kill switch and the search leg's (`Engram.Search.NameTerms`).
+    name_terms_backfill: :boolean,
+    name_terms_search: :boolean,
+    # Its pace: refs per hop and refs a second (`BackfillNameTerms`).
+    name_terms_backfill_max_rows: {:integer, 1..100_000},
+    name_terms_backfill_writes_per_s: {:integer, 1..10_000},
+    # The name leg's fusion weights (percent of a Qdrant leg's) and its cap on
+    # folder-only page slots (`Engram.Search.NameTerms.weights/0`), tuned by the
+    # search-quality eval without a deploy.
+    name_terms_title_weight_pct: {:integer, 0..1_000},
+    name_terms_folder_weight_pct: {:integer, 0..1_000},
+    name_terms_folder_slots: {:integer, 0..1_000}
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})

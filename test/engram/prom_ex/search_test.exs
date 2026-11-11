@@ -41,6 +41,21 @@ defmodule Engram.PromEx.SearchTest do
              end)
     end
 
+    test "exports the name-index self-heal outcomes, by reason" do
+      metrics =
+        PromExMetrics.of(SearchPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
+      for {name, event} <- [
+            {:name_terms_skipped, [:engram, :name_terms, :skipped]},
+            {:name_terms_deferred, [:engram, :name_terms, :deferred]}
+          ] do
+        assert [%Telemetry.Metrics.Sum{measurement: :count, tags: [:reason]} = m] =
+                 Enum.filter(metrics, &(&1.event_name == event))
+
+        assert m.name == [:engram, :prom_ex, :search, name, :total]
+      end
+    end
+
     test "no per-tenant tags" do
       metrics =
         PromExMetrics.of(SearchPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)

@@ -33,7 +33,11 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   # existing folder costs the probe alone).
   # 17 -> 18: R8 release N, the create brings its `note_bodies` row in step
   # itself (`NoteBody.sync!/3`; a no-op while the trigger is live).
-  @statements 18
+  # 18 -> 19: S1 name terms (`Engram.Search.NameTerms`): the new folder's
+  # terms, one set-based INSERT in the row transaction (its stamp rides the
+  # folder INSERT). The note's own terms are written by its index pass, not
+  # here, so the create still writes its row once.
+  @statements 19
   @tenant_txns 1
   @subscription_reads 0
 

@@ -14,6 +14,7 @@ defmodule Engram.Search do
   alias Engram.Notes.Helpers
   alias Engram.Search.FieldFilters
   alias Engram.Search.MMR
+  alias Engram.Search.NameTerms
   alias Engram.Search.PhraseCheck
   alias Engram.Search.SearchProfile
   alias Engram.Vector.Qdrant
@@ -646,7 +647,18 @@ defmodule Engram.Search do
           |> Keyword.put(:tenant_idf, mode in [:keyword, :hybrid] and tenant_idf?(user))
           |> embed_once(within, mode, query, profile)
 
-        legs = &run_legs(mode, user, query, &1, profile)
+        # The Postgres name leg (renamed titles and folders, S1) fuses into
+        # whatever the Qdrant legs return, its notes narrowed to the filter
+        # first (`in_scope/3`).
+        legs =
+          NameTerms.leg(
+            &run_legs(mode, user, query, &1, profile),
+            user,
+            vault_scope(vault, opts),
+            mode,
+            query,
+            &in_scope(&1, user, within)
+          )
 
         with {:ok, {candidates, hits}} <-
                ranked_hits(legs, user, search_opts, within, fetch_limit),
@@ -767,15 +779,34 @@ defmodule Engram.Search do
   # `postgres_hits/2` already read. No extra query.
   defp ranked_hits(legs, user, search_opts, {:scope, scope}, keep) do
     with {:ok, {candidates, hits}} <- ranked_hits(legs, user, search_opts, nil, keep) do
-      {kind, ids} = scope
-      ids = MapSet.new(ids)
-      keep? = &(MapSet.member?(ids, hits[&1.qdrant_id].note_id) == (kind == :ids))
-      {:ok, {Enum.filter(candidates, keep?), hits}}
+      keep? = scope_member(scope)
+      {:ok, {Enum.filter(candidates, &keep?.(hits[&1.qdrant_id].note_id)), hits}}
     end
   end
 
   defp ranked_hits(legs, user, search_opts, within, keep),
     do: post_filtered(legs, user, search_opts, within, keep, 1)
+
+  # Whether a note id is inside a resolved `{:ids | :exclude, ids}` scope.
+  defp scope_member({kind, ids}) do
+    ids = MapSet.new(ids)
+    &(MapSet.member?(ids, &1) == (kind == :ids))
+  end
+
+  # The notes of `note_ids` (the name leg's, at most 150) the search's
+  # filter allows, decided BEFORE fusion: an out-of-scope name hit must not
+  # take a page slot from an in-scope Qdrant hit. Same rules as the Qdrant
+  # candidates' (`ranked_hits/5`, `within_filter/4`); one bounded resolve
+  # for a `:too_wide` filter.
+  defp in_scope(note_ids, _user, nil), do: note_ids
+  defp in_scope(note_ids, _user, {:scope, scope}), do: Enum.filter(note_ids, scope_member(scope))
+
+  defp in_scope(note_ids, user, {vaults, filter, _sample}) do
+    case note_filter().resolve(user, vaults, filter, within: note_ids) do
+      {:ok, {:ids, matched}} -> Enum.filter(note_ids, scope_member({:ids, matched}))
+      _ -> []
+    end
+  end
 
   defp post_filtered(legs, user, search_opts, within, keep, round) do
     limit = Keyword.fetch!(search_opts, :limit)

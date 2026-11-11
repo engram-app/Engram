@@ -215,7 +215,7 @@ defmodule Engram.Indexing do
                     set: [index_tier: nil, chunk_count: nil]
                   )
 
-                run_in_commit(note, opts, 0, true, pass_info(%{}))
+                run_in_commit(note, user, opts, 0, true, pass_info(%{}))
               end)
 
               {:ok, 0, 0, true}
@@ -239,7 +239,8 @@ defmodule Engram.Indexing do
         # each attempt re-embedded the whole note (3-4 full paid passes).
         retain(prepared.retain)
 
-        commit = &run_in_commit(note, opts, &1, prepared.dense?, pass_info(prepared))
+        commit =
+          &run_in_commit(note, prepared.user, opts, &1, prepared.dense?, pass_info(prepared))
 
         case commit_index(prepared, commit) do
           {:ok, count} ->
@@ -283,7 +284,10 @@ defmodule Engram.Indexing do
       {:ok, :no_chunks}
     else
       user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
-      prepare_chunks(note, user, chunks, opts, okf_healed?)
+
+      # The resolved user rides along for the commit's name-terms write.
+      with {:ok, %{} = prepared} <- prepare_chunks(note, user, chunks, opts, okf_healed?),
+           do: {:ok, Map.put(prepared, :user, user)}
     end
   end
 
@@ -1046,7 +1050,12 @@ defmodule Engram.Indexing do
   # Re-entrant inside commit_index/2's chunk transaction; on the purge path it
   # opens one of its own.
   # `pass` (`pass_info/1`): what the pass did, for the caller's stamp.
-  defp run_in_commit(note, opts, chunk_count, dense?, pass) do
+  #
+  # The pass's one `name_terms` write (`NameTerms.on_note_written/2`, the
+  # shared note-write hook): a content edit can change the note's title.
+  defp run_in_commit(note, user, opts, chunk_count, dense?, pass) do
+    :ok = Engram.Search.NameTerms.on_note_written(user || note.user_id, note)
+
     case Keyword.get(opts, :in_commit) do
       nil ->
         :ok

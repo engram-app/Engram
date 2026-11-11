@@ -46,12 +46,50 @@ defmodule EngramWeb.SearchControllerTest do
   end
 
   describe "POST /search" do
+    # S1: a note found only through its folder's name, with the lowered
+    # folder weight (0.5 of a Qdrant leg): RRF 0.5 / (2 + 0) = 0.25.
+    test "the name leg's folder recall shows with its lowered weight", %{
+      conn: conn,
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      {:ok, note} =
+        Engram.Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "Zanzibar/plan.md", "content" => "lab results", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      %{"id" => point} = chunk(user, note, 0.0, "lab results")
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, %{"result" => []})))
+      end)
+
+      conn = post(conn, "/api/search", %{query: "zanzibar", diversity: "0"})
+      assert %{"results" => [hit]} = json_response(conn, 200)
+      assert hit["path"] == "Zanzibar/plan.md"
+      assert hit["score"] == 0.5 / 2
+      assert is_binary(point)
+    end
+
     test "returns results for a valid query", %{
       conn: conn,
       bypass: bypass,
       user: user,
       vault: vault
     } do
+      # Qdrant's own score: the S1 name leg would also rank this note (its
+      # filename is the query) and fuse it in (see the name-leg test below).
+      Engram.ServiceConfig.put_override(:name_terms_search, false)
+
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
@@ -122,6 +160,10 @@ defmodule EngramWeb.SearchControllerTest do
       user: user,
       vault: vault
     } do
+      # The S1 name leg reads `notes` (its exact-name probe and liveness
+      # checks); this test is about the hit-id lookup after rehydration.
+      Engram.ServiceConfig.put_override(:name_terms_search, false)
+
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 

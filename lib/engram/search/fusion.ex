@@ -25,11 +25,21 @@ defmodule Engram.Search.Fusion do
   appears in, with `:score` replaced by the fused score.
   """
   @spec rrf([[hit()]], pos_integer()) :: [hit()]
-  def rrf(legs, k) when is_list(legs) and is_integer(k) and k > 0 do
+  def rrf(legs, k) when is_list(legs) and is_integer(k) and k > 0,
+    do: rrf(legs, k, List.duplicate(1, length(legs)))
+
+  @doc """
+  `rrf/2` with a weight per leg: a hit at rank r of a leg weighted w adds
+  `w / (k + rank)`. Ties break as in `rrf/2`.
+  """
+  @spec rrf([[hit()]], pos_integer(), [number()]) :: [hit()]
+  def rrf(legs, k, weights)
+      when is_list(legs) and is_integer(k) and k > 0 and length(weights) == length(legs) do
     legs
-    |> Enum.flat_map(&Enum.with_index/1)
-    |> Enum.reduce(%{}, fn {hit, rank}, acc ->
-      rrf = 1 / (k + rank)
+    |> Enum.zip(weights)
+    |> Enum.flat_map(fn {leg, w} -> leg |> Enum.with_index() |> Enum.map(&{&1, w}) end)
+    |> Enum.reduce(%{}, fn {{hit, rank}, w}, acc ->
+      rrf = w / (k + rank)
 
       Map.update(acc, hit.id, {hit, rrf, rank}, fn {first, fused, best} ->
         {first, fused + rrf, min(best, rank)}

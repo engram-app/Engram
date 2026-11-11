@@ -128,7 +128,8 @@ defmodule Engram.Notes.NoteKeysTest do
       plan.(fn -> Notes.list_notes_in_folder(u, v, "F") end, ~r/"folder_ref_id" = \$/)
 
     assert one.path == "F/one.md"
-    assert p =~ "notes_folder_ref", p
+    # Any reference index, named exactly (S1 added `notes_folder_ref_live_id`).
+    assert p =~ ~r/(using|Scan on) notes_folder_ref(_live|_live_id)? /, p
 
     {_, p} =
       plan.(fn -> Notes.create_folder_marker(u, v, "Marked") end, ~r/"folder_id" (= ANY|=)/)

@@ -24,7 +24,7 @@ defmodule Engram.Billing.SubscriptionsMaintenanceTest do
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.Billing.Reconciliation
   alias Engram.Repo
-  alias Engram.Repo.Maintenance
+  alias Engram.Test.MaintenancePool
 
   setup :verify_on_exit!
 
@@ -56,10 +56,7 @@ defmodule Engram.Billing.SubscriptionsMaintenanceTest do
     owner = Sandbox.start_owner!(Repo, shared: true)
     on_exit(fn -> Sandbox.stop_owner(owner) end)
 
-    config = Keyword.merge(Repo.config(), pool: DBConnection.ConnectionPool, pool_size: 1)
-    start_supervised!({Maintenance, config})
-    Application.put_env(:engram, :maintenance_repo_enabled, true)
-    on_exit(fn -> Application.delete_env(:engram, :maintenance_repo_enabled) end)
+    MaintenancePool.start!(role: :owner)
 
     prev_billing = Application.get_env(:engram, :billing_enabled)
     Application.put_env(:engram, :billing_enabled, true)

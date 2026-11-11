@@ -16,16 +16,13 @@ defmodule Engram.InsightsMaintenanceTest do
   alias Engram.Accounts.User
   alias Engram.Insights
   alias Engram.Repo
-  alias Engram.Repo.Maintenance
+  alias Engram.Test.MaintenancePool
   alias Engram.Vaults.Vault
 
   @email_prefix "insights-maintenance-test-"
 
   setup do
-    config = Keyword.merge(Repo.config(), pool: DBConnection.ConnectionPool, pool_size: 1)
-    start_supervised!({Maintenance, config})
-    Application.put_env(:engram, :maintenance_repo_enabled, true)
-    on_exit(fn -> Application.delete_env(:engram, :maintenance_repo_enabled) end)
+    MaintenancePool.start!(role: :owner)
 
     delete_committed!()
     on_exit(&delete_committed!/0)

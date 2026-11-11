@@ -25,6 +25,8 @@ defmodule Engram.Bookkeeping.DrainTest do
 
   defp write!(user, vault, path) do
     {:ok, n} = Notes.upsert_note(user, vault, %{"path" => path, "content" => "x"}, actor: "api")
+    # The index pass writes a new note's name terms; tests do not run it.
+    :ok = Engram.Search.NameTerms.on_note_written(user, n)
     n
   end
 
@@ -146,6 +148,14 @@ defmodule Engram.Bookkeeping.DrainTest do
       sql!("DELETE FROM folders")
 
       :ok = DataMigrations.mark_done(FolderTable.name(), FolderTable.version())
+      # FolderTable's raw insert writes no name terms: the closed NameTerms
+      # ledger lets the same tick's name-terms drain write the new row's.
+      :ok =
+        DataMigrations.mark_done(
+          Engram.DataMigrations.NameTerms.name(),
+          Engram.DataMigrations.NameTerms.version()
+        )
+
       assert %{folder: 1, folder_blocked: 0} = Drain.run()
 
       %{rows: [[ref]]} =
@@ -255,7 +265,8 @@ defmodule Engram.Bookkeeping.DrainTest do
       link_keys: ~w(notes_link_keys_stale_index attachments_link_keys_stale_index
                     note_links_link_keys_stale_index),
       payload: ~w(note_index_state_unstamped),
-      folder: ~w(notes_unresolved_folder attachments_folder_ref_stale)
+      folder: ~w(notes_unresolved_folder attachments_folder_ref_stale),
+      name_terms: ~w(notes_name_terms_stale folders_name_terms_stale)
     }
 
     # Realistic statistics, set by this test: many clean live notes, no drift.
@@ -373,7 +384,7 @@ defmodule Engram.Bookkeeping.DrainTest do
   test "the folder probe pages exactly the users one tick repairs" do
     assert Drain.page(:folder) == 10
 
-    for kind <- [:folder, :envelope, :link_keys, :payload],
+    for kind <- [:folder, :envelope, :link_keys, :payload, :name_terms],
         {_t, sql} <- Drain.probes(kind),
         do: assert(sql =~ "LIMIT #{Drain.page(kind)}\n")
   end

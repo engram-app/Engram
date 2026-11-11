@@ -29,6 +29,18 @@ defmodule Engram.PromEx.Search do
     * `engram_prom_ex_search_phrase_checked_total` and
       `..._phrase_promoted_total`: `checked` / `promoted` of
       `[:engram, :search, :phrase_check]`.
+    * `engram_prom_ex_search_name_terms_scan_capped_total`: sum of `count`
+      from `[:engram, :search, :name_terms, :scan_capped]`, tag `[:kind]`
+      (0 notes, 1 folders): query terms whose name-terms scan hit its cap
+      before its live budget, i.e. dead rows outran the sweep.
+    * Name-index self-heal outcomes (`@heal_events`), each a sum of `count`
+      with tag `[:reason]`: `engram_prom_ex_search_name_terms_skipped_total`
+      (`[:engram, :name_terms, :skipped]`: refs parked for good, a name that
+      never decrypts or a key that never loads) and
+      `engram_prom_ex_search_name_terms_deferred_total`
+      (`[:engram, :name_terms, :deferred]`: refs left stale on a transient
+      key error, `Engram.Crypto.key_outcome/1` `:later`, retried by the
+      drain). A steady deferred rate is a user whose key keeps failing.
 
   Cardinality contract: only the booleans/atoms above. NEVER add
   user_id, vault_id, or the query string.
@@ -44,6 +56,16 @@ defmodule Engram.PromEx.Search do
   @text_stale_event [:engram, :search, :text_stale]
   @phrase_check_event [:engram, :search, :phrase_check]
   @post_filter_event [:engram, :search, :post_filter]
+  @name_terms_capped_event [:engram, :search, :name_terms, :scan_capped]
+
+  # Self-heal outcomes of the name indexes, one sum per event, tag `reason`:
+  # `{metric, event, description}`. Add a name index's pair here.
+  @heal_events [
+    {:name_terms_skipped, [:engram, :name_terms, :skipped],
+     "Name-terms refs parked for good (never decrypts, key never loads), by reason."},
+    {:name_terms_deferred, [:engram, :name_terms, :deferred],
+     "Name-terms refs left stale on a transient key error, retried by the drain, by reason."}
+  ]
 
   @impl true
   def event_metrics(opts) do
@@ -69,6 +91,17 @@ defmodule Engram.PromEx.Search do
           event_name: @degraded_event,
           description: "Searches that degraded to a single leg (embed failure).",
           tags: [:leg, :reason]
+        ),
+        # The name leg (`Search.NameTerms.hits/3`): a query term whose
+        # bounded scan (2,000 postings) ended before 500 live ones. Zero in
+        # steady state; a rate means dead rows outran the delete hooks and
+        # the drain's orphan sweep, and a live name may be missed.
+        sum(
+          metric_prefix ++ [:name_terms_scan_capped, :total],
+          event_name: @name_terms_capped_event,
+          measurement: :count,
+          description: "Name-leg query terms whose scan hit its cap before its live budget.",
+          tags: [:kind]
         ),
         # A `:too_wide` filter (immutable chunk index): the search ran over
         # the whole tenant and post-filtered in Postgres. `rounds` 2 is the
@@ -133,7 +166,18 @@ defmodule Engram.PromEx.Search do
           measurement: :promoted,
           description: "Search candidates a quoted-phrase match moved up."
         )
-      ]
+      ] ++ heal_metrics(metric_prefix)
     )
+  end
+
+  defp heal_metrics(metric_prefix) do
+    for {name, event, description} <- @heal_events do
+      sum(metric_prefix ++ [name, :total],
+        event_name: event,
+        measurement: :count,
+        description: description,
+        tags: [:reason]
+      )
+    end
   end
 end

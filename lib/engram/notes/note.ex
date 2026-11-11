@@ -152,6 +152,8 @@ defmodule Engram.Notes.Note do
     field :path_ci_hmac, :binary
     field :path_length, :integer
     field :link_keys_stamp, :binary
+    # `Engram.Search.NameTerms`: `<<version>> <> basename_hmac` its terms were written for.
+    field :name_terms_stamp, :binary
 
     # CRDT (Yjs) document state for posture-C file-level sync. The full v1
     # `Yex.encode_state_as_update` snapshot, AES-256-GCM encrypted under the

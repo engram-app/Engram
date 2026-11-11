@@ -21,6 +21,10 @@ config :engram, :oauth_ip_rate_limit_override, 10_000
 # touch the network (Engram.Test.StubResolver).
 config :engram, :cimd_jwks_resolver, {Engram.Test.StubResolver, :resolve}
 
+# Backfill chains' pressure gate (Engram.Backfill.Throttle): a fixed reading,
+# since a real one sees every other test's open sandbox transaction.
+config :engram, :backfill_pressure_reader, Engram.Test.FakePressure
+
 # Same rationale for the pre-auth (vault-pipeline) limiter: it now covers
 # every vault path, so without a high ceiling the shared 127.0.0.1 test IP
 # would accumulate across ConnCase tests and flake on 429. The dedicated
