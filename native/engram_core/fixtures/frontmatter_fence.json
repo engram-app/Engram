@@ -1,0 +1,116 @@
+[
+ {
+  "name": "lf",
+  "input": "---\ntitle: T\n[[In]]\n---\nbody",
+  "block": "title: T\n[[In]]\n",
+  "body": "body"
+ },
+ {
+  "name": "crlf",
+  "input": "---\r\ntitle: T\r\n[[In]]\r\n---\r\nbody",
+  "block": "title: T\r\n[[In]]\r\n",
+  "body": "body"
+ },
+ {
+  "name": "crlf_close_at_eof",
+  "input": "---\r\ntitle: T\r\n---\r",
+  "block": "title: T\r\n",
+  "body": ""
+ },
+ {
+  "name": "bom_is_not_skipped_by_split",
+  "input": "\ufeff---\ntitle: T\n[[In]]\n---\nbody",
+  "block": null,
+  "body": "\ufeff---\ntitle: T\n[[In]]\n---\nbody"
+ },
+ {
+  "name": "close_with_suffix_is_not_a_close",
+  "input": "---\ntitle: T\n[[In]]\n---foo\nbody",
+  "block": null,
+  "body": "---\ntitle: T\n[[In]]\n---foo\nbody"
+ },
+ {
+  "name": "four_dashes_is_not_a_close",
+  "input": "---\ntitle: T\n[[In]]\n----\nbody",
+  "block": null,
+  "body": "---\ntitle: T\n[[In]]\n----\nbody"
+ },
+ {
+  "name": "trailing_blanks_on_close",
+  "input": "---\ntitle: T\n[[In]]\n--- \t\nbody",
+  "block": "title: T\n[[In]]\n",
+  "body": "body"
+ },
+ {
+  "name": "trailing_blank_on_open_is_not_an_open",
+  "input": "--- \ntitle: T\n[[In]]\n---\nbody",
+  "block": null,
+  "body": "--- \ntitle: T\n[[In]]\n---\nbody"
+ },
+ {
+  "name": "u180e_after_close_is_not_a_close",
+  "input": "---\ntitle: T\n[[In]]\n---\u180e\nbody",
+  "block": null,
+  "body": "---\ntitle: T\n[[In]]\n---\u180e\nbody"
+ },
+ {
+  "name": "later_close_wins_after_a_non_close",
+  "input": "---\ntitle: T\n[[In]]\n---foo\n---\nbody",
+  "block": "title: T\n[[In]]\n---foo\n",
+  "body": "body"
+ },
+ {
+  "name": "unclosed",
+  "input": "---\ntitle: T\n[[In]]\nbody",
+  "block": null,
+  "body": "---\ntitle: T\n[[In]]\nbody"
+ },
+ {
+  "name": "empty_doc",
+  "input": "",
+  "block": null,
+  "body": ""
+ },
+ {
+  "name": "fence_only",
+  "input": "---",
+  "block": null,
+  "body": "---"
+ },
+ {
+  "name": "open_fence_only",
+  "input": "---\n",
+  "block": null,
+  "body": "---\n"
+ },
+ {
+  "name": "empty_block",
+  "input": "---\n---\nbody",
+  "block": "",
+  "body": "body"
+ },
+ {
+  "name": "empty_block_crlf",
+  "input": "---\r\n---\r\nbody",
+  "block": "",
+  "body": "body"
+ },
+ {
+  "name": "frontmatter_only_close_at_eof",
+  "input": "---\ntitle: T\n[[In]]\n---",
+  "block": "title: T\n[[In]]\n",
+  "body": ""
+ },
+ {
+  "name": "frontmatter_only_close_then_newline",
+  "input": "---\ntitle: T\n[[In]]\n---\n",
+  "block": "title: T\n[[In]]\n",
+  "body": ""
+ },
+ {
+  "name": "not_at_byte_zero",
+  "input": "\n---\ntitle: T\n[[In]]\n---\nbody",
+  "block": null,
+  "body": "\n---\ntitle: T\n[[In]]\n---\nbody"
+ }
+]

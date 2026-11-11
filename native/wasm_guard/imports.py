@@ -2,7 +2,7 @@
 export EXPORT (without it, the linker could drop the code under test and the
 import check would pass vacuously).
 
-Usage: python3 imports.py module.wasm
+Usage: python3 imports.py module.wasm [export]  (default: guard_roundtrip)
 
 The clients will run engram_core as wasm32 with nothing from their host but
 memory: callers draw nonces, so no entropy import (were ring's RNG to become
@@ -13,7 +13,7 @@ and no WASI. Reads the import section by hand; no wasm toolchain needed.
 import sys
 
 ALLOWED = set()  # (module, name) pairs; none today.
-EXPORT = "guard_roundtrip"
+DEFAULT_EXPORT = "guard_roundtrip"
 
 
 def leb(b, i):
@@ -84,6 +84,7 @@ def imports(b):
 
 
 if __name__ == "__main__":
+    EXPORT = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_EXPORT
     wasm = open(sys.argv[1], "rb").read()
     if EXPORT not in exports(wasm):
         sys.exit(f"::error::{sys.argv[1]} does not export {EXPORT}")

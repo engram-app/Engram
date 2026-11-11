@@ -15,10 +15,13 @@ use unicode_segmentation::UnicodeSegmentation;
 // `\d` are ASCII only.
 const ASCII_WS: &str = r"[\t\n\x0B\x0C\r ]";
 
-/// `~r/\A---\r?\n(.*?)\r?\n---/s`: (frontmatter body, end of the match).
+/// (frontmatter block without its last line break, body start), by the
+/// shared fence rule after a BOM (`engram_core::frontmatter`). The old
+/// `\A---\r?\n(.*?)\r?\n---` also closed on `---foo` and `----`.
 fn frontmatter(s: &str) -> Option<(&str, usize)> {
-    let c = re!(r"(?s)\A---\r?\n(.*?)\r?\n---").captures(s)?;
-    Some((c.get(1)?.as_str(), c.get(0)?.end()))
+    let (start, end, body, _) = crate::frontmatter::split_after_bom(s.as_bytes())?;
+    let block = &s[start..end];
+    Some((block.strip_suffix('\r').unwrap_or(block), body))
 }
 
 /// Frontmatter `title:`, else the first `# heading` outside code. The
