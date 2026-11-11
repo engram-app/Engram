@@ -6,13 +6,17 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
   Oban emits `[:oban, :job, :exception]` for every job that ends in failure,
   cancellation, snooze, or discard. We act on two of them:
 
-    * `state: :discarded` — the terminal state where Oban has burned
-      `max_attempts` and dropped the work. Transient `:failure` retries are
-      expected and noisy, so they are otherwise ignored.
+    * `state: :discard` — the terminal state where Oban has burned
+      `max_attempts` and dropped the work. (Oban sends `:discard` here, not
+      `:discarded`; matching the latter meant this line never fired.)
 
     * any attempt whose reason is an `Oban.TimeoutError` — a wedged job, which
       must be visible on the FIRST attempt rather than hours later when the
       retries run out. See #1496.
+
+    * any other `state: :failure` — a failed attempt Oban will retry. Silent
+      retries hid a node failing every job with "unknown worker" on staging
+      (2026-11-11), so each one logs a warning.
 
   Wires from `Engram.Application.start/2` so the handler is live for the
   lifetime of the VM. The `@handler_id` atom is global; any test attaching
@@ -24,6 +28,8 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
   """
 
   require Logger
+
+  alias Engram.Logger.SafeException
 
   @handler_id :engram_oban_discard
   # Oban contract (>= v2.0): `worker` arrives in metadata as a binary
@@ -47,7 +53,7 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
   end
 
   @doc false
-  def handle_event(@event, _measurements, %{state: :discarded} = metadata, _config) do
+  def handle_event(@event, _measurements, %{state: :discard} = metadata, _config) do
     worker = metadata[:worker]
     queue = metadata[:queue]
     job = metadata[:job] || %{}
@@ -89,7 +95,7 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
   # This clause exists because of the 2026-08-28 prod stall (#1496): the
   # `embed` and `indexing` queues were fully occupied by jobs that would never
   # finish, and nothing anywhere emitted a single line. Timeouts were only
-  # visible once a job burned all `max_attempts` and reached `:discarded` —
+  # visible once a job burned all `max_attempts` and reached `:discard` —
   # five attempts of exponential backoff later, i.e. hours after the queue had
   # already stopped. The whole point of giving workers a finite `timeout/1` is
   # to make a wedged job observable, so the FIRST timeout has to say so.
@@ -97,7 +103,7 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
   # Not noisy by construction: a timeout means a job ran past 5-60 minutes.
   # If these ever become frequent, that is the signal, not the noise.
   #
-  # `:discarded` is matched above, so a timeout on the final attempt logs the
+  # `:discard` is matched above, so a timeout on the final attempt logs the
   # discard line rather than this one — the terminal state is the louder fact.
   def handle_event(@event, measurements, %{reason: %Oban.TimeoutError{}} = metadata, _config) do
     worker = metadata[:worker]
@@ -129,5 +135,42 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
     )
   end
 
+  @doc false
+  # Any other failed attempt Oban will retry.
+  #
+  # ponytail: one line per failed attempt, no sampling. Bounded by queue
+  # concurrency over job duration, and matched one-for-one by the row Oban
+  # already writes to `oban_jobs.errors` for the same attempt. Add sampling if
+  # Loki volume ever says otherwise.
+  def handle_event(@event, _measurements, %{state: :failure} = metadata, _config) do
+    worker = metadata[:worker]
+    queue = metadata[:queue]
+    job = metadata[:job] || %{}
+    error_kind = Engram.Telemetry.error_kind(metadata[:reason])
+    error_message = safe_error_message(metadata[:kind], metadata[:reason])
+
+    Logger.warning(
+      "Oban job attempt failed, will retry: worker=#{worker} queue=#{inspect(queue)} job_id=#{inspect(Map.get(job, :id))} attempt=#{inspect(Map.get(job, :attempt))}/#{inspect(Map.get(job, :max_attempts))} error_kind=#{error_kind} node=#{node()} error=#{error_message}",
+      Engram.Logger.Metadata.with_category(:warning, :oban,
+        worker: worker,
+        queue: queue,
+        job_id: Map.get(job, :id),
+        attempt: Map.get(job, :attempt),
+        max_attempts: Map.get(job, :max_attempts),
+        error_kind: error_kind,
+        error_message: error_message,
+        node: node(),
+        reason_label: :oban_retry
+      )
+    )
+  end
+
   def handle_event(@event, _measurements, _metadata, _config), do: :ok
+
+  # The same sanitizer the Oban errors column uses (Engram.Oban.SafeEngine):
+  # only allowlisted messages survive, everything else is the type name.
+  defp safe_error_message(kind, reason) do
+    {safe, _stack} = SafeException.to_safe_exception(kind, reason, [])
+    Exception.message(safe)
+  end
 end

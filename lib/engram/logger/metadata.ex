@@ -61,6 +61,13 @@ defmodule Engram.Logger.Metadata do
     DBConnection.ConnectionError
   ]
 
+  # The two RuntimeErrors Oban.Worker.from_string/1 raises when a node cannot
+  # resolve a job's worker (deps/oban/lib/oban/worker.ex). The only variable is
+  # the `worker` column, a module name our own code writes. Matched on the
+  # whole message and a module-name charset, so the prefix alone never vouches
+  # for what follows it; every other RuntimeError stays redacted.
+  @oban_worker_resolution ~r/\A(?:unknown worker|module is not a worker): [A-Z]\w*(?:\.[A-Z]\w*)*\z/
+
   @spec safe_reason(Exception.t() | struct() | any()) :: String.t()
   def safe_reason(%mod{} = e) when mod in @safe_message_exceptions, do: Exception.message(e)
 
@@ -147,6 +154,10 @@ defmodule Engram.Logger.Metadata do
   @doc "True for exception types whose `message/1` is known to hold no user data."
   @spec safe_message?(term()) :: boolean()
   def safe_message?(%mod{}) when mod in @safe_message_exceptions, do: true
+
+  def safe_message?(%RuntimeError{message: message}) when is_binary(message),
+    do: Regex.match?(@oban_worker_resolution, message)
+
   def safe_message?(_), do: false
 
   @doc """
