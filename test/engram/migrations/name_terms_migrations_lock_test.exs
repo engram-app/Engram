@@ -27,7 +27,7 @@ defmodule Engram.Migrations.NameTermsMigrationsLockTest do
   ]
 
   setup_all do
-    Enum.each(@files, &Code.require_file/1)
+    Enum.each(@files, &Engram.MigrationFile.load!(Path.basename(&1)))
     :ok
   end
 
