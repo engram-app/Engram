@@ -698,18 +698,46 @@ defmodule Engram.Indexing do
   # built them: `m` points from `n` chunks can only come from a power-of-two
   # `g` whose groups number `m`. nil if none does (not a merged note).
   defp merged_like(chunks, m) do
-    pairs = hashed(chunks)
-    n = length(chunks)
-
-    Stream.iterate(1, &(&1 * 2))
-    |> Stream.take_while(&(&1 <= 2 * n))
-    |> Stream.map(&close_groups(pairs, &1))
-    |> Enum.find(&(length(&1) == m))
-    |> case do
+    case Enum.find(groupings(chunks), &(length(&1) == m)) do
       nil -> nil
       groups -> merge_groups(groups)
     end
   end
+
+  # `chunks` grouped the way `planned` (a plan's chunks, merged or not)
+  # are: the power-of-two `g` whose groups share the most spans with them.
+  # Text hashes, so `g`'s boundaries, are the same in every chunker mode,
+  # so for the legacy parse of the content a plan was built from this is
+  # the plan's own `g` (`cap_chunks/3`), whatever the stored row count: an
+  # edit that adds or removes a group boundary moves only the groups
+  # around it. Each group still closes on the members' own sizes
+  # (`close_groups/2`), as the points stored from that parse were built.
+  defp grouped_like(chunks, planned) do
+    want = MapSet.new(planned, &span/1)
+
+    chunks
+    |> groupings()
+    |> Enum.max_by(fn groups -> Enum.count(groups, &(group_span(&1) in want)) end, fn -> [] end)
+    |> merge_groups()
+  end
+
+  # Every grouping `close_groups/2` can give `chunks`, smallest `g` first.
+  defp groupings(chunks) do
+    pairs = hashed(chunks)
+
+    Stream.iterate(1, &(&1 * 2))
+    |> Stream.take_while(&(&1 <= 2 * length(chunks)))
+    |> Stream.map(&close_groups(pairs, &1))
+  end
+
+  # `span/1` of the chunk `merge_group/1` makes of `members`.
+  defp group_span([one]), do: span(one)
+
+  defp group_span([first | _] = members), do: {first.char_start, group_end(members), true}
+
+  # Where a group of `members` ends (a frontmatter chunk ends at 0, so not
+  # simply the last one's): one rule for every chunk built from a group.
+  defp group_end(members), do: members |> Enum.map(& &1.char_end) |> Enum.max()
 
   # Bytes of the members' `embed_text`s bound the merged one's from above
   # (each carries its own prefix plus "\n\n"), so a group that fits by this
@@ -780,7 +808,7 @@ defmodule Engram.Indexing do
       text: text,
       context_text: [prefix(first.context_text, first.text), text],
       embed_text: [prefix(first.embed_text, first.text), embed],
-      char_end: members |> Enum.map(& &1.char_end) |> Enum.max(),
+      char_end: group_end(members),
       token_count: members |> Enum.map(&UsageMeters.estimate_tokens(&1.text)) |> Enum.sum(),
       merged: true,
       members: Enum.map(members, &Map.delete(&1, :crumbed))
@@ -1015,7 +1043,7 @@ defmodule Engram.Indexing do
          %{
            position: position,
            char_start: members |> Enum.map(& &1.char_start) |> Enum.min(),
-           char_end: members |> Enum.map(& &1.char_end) |> Enum.max(),
+           char_end: group_end(members),
            heading_path: nil,
            text: "",
            embed_text: "",
@@ -2741,7 +2769,7 @@ defmodule Engram.Indexing do
       end)
 
     {entries, legacy} =
-      legacy_reuse(entries, alts, left, {note, length(existing)}, content_key, dense?)
+      legacy_reuse(entries, alts, left, note, content_key, dense?)
 
     reused = for {:reuse, _chunk, point_id, _tokens} <- entries, do: point_id
 
@@ -2768,7 +2796,7 @@ defmodule Engram.Indexing do
   # inputs (the folder, the file-name title, aliases in every prefix), so
   # every chunk of an unrenamed note misses above, and R3c alone would
   # re-embed the fleet on its next edits. Each chunk still unmatched tries
-  # its `legacy_twins/3` fingerprints (under each model, as above) against
+  # its `legacy_twins/2` fingerprints (under each model, as above) against
   # the rows still unmatched; a hit keeps the point, 0 Voyage and 0 Qdrant,
   # and writes the chunk's NEW fingerprint, so the note is rename-free from
   # this pass on. The twin is built at the note's CURRENT path: a note
@@ -2784,14 +2812,14 @@ defmodule Engram.Indexing do
   # contract, which deletes this and `Markdown.parse/3`'s `:legacy` once
   # `outcome="legacy"` of `[:engram, :indexing, :chunks]` reads 0 for 30
   # days.
-  defp legacy_reuse(entries, alts, left, {note, stored}, content_key, dense?) do
+  defp legacy_reuse(entries, alts, left, note, content_key, dense?) do
     missed = for {{:embed, _chunk}, i} <- Enum.with_index(entries), do: i
 
     if missed == [] or Enum.all?(left, &(elem(&1, 1) == [])) do
       {entries, 0}
     else
       twins =
-        entries |> Enum.map(&entry_chunk/1) |> legacy_twins(note, stored) |> List.to_tuple()
+        entries |> Enum.map(&entry_chunk/1) |> legacy_twins(note) |> List.to_tuple()
 
       alts = List.to_tuple(alts)
       chunks = List.to_tuple(entries)
@@ -2840,21 +2868,23 @@ defmodule Engram.Indexing do
   # note with an H1 and no aliases: its fingerprint is the same already).
   #
   # A merged note (the largest ones, over the per-note cap) is regrouped the
-  # way its `stored` points were built (`merged_like/2`, from the row count,
-  # as `resparse_note/2` does), so a merged group pairs with the legacy
-  # group over the same sections. When the grouping moved since (another
-  # cap, another size) that group misses, as it would today.
+  # way `chunks` were (`grouped_like/2`): the same `g`, so a group the edit
+  # left alone pairs with the legacy group its point was built from. Not by
+  # the stored row count: an edit that adds or removes one group boundary
+  # moves that count, no `g` gives it, and every chunk of the note missed.
+  # When the grouping moved since (another cap, another size) a group
+  # misses, as it would today.
   #
   # Paired in document order by span: a merged group by its offsets and
   # member count (its crumbs may differ by prefix room), a plain chunk by
   # offsets and text. The twin is the new chunk with the legacy inputs (a
   # merged one: the legacy group, keeping the new chunk's `sparse_only`).
-  defp legacy_twins(chunks, note, stored) do
+  defp legacy_twins(chunks, note) do
     old = Markdown.parse(note.content || "", note.path, legacy: true)
 
     old =
       if Enum.any?(chunks, &Map.get(&1, :merged, false)),
-        do: merged_like(old, stored) || [],
+        do: grouped_like(old, chunks),
         else: old
 
     {twins, _left} =
@@ -3468,14 +3498,14 @@ defmodule Engram.Indexing do
 
     # Then, only when a chunk is left unmatched while a row is left over
     # (as `legacy_reuse/6` decides it), the same over the chunks' pre-R3c
-    # inputs (`legacy_twins/3`; a chunk without a twin repeats its own), for
+    # inputs (`legacy_twins/2`; a chunk without a twin repeats its own), for
     # points indexed before R3c.
     matched = Enum.count(by_fingerprint, &(elem(&1, 1) != nil))
 
     by_fingerprint =
       if matched < length(chunks) and
            matched < Enum.sum(Enum.map(by_hmac, fn {_h, ids} -> length(ids) end)) do
-        twins = Enum.zip_with(chunks, legacy_twins(chunks, note, length(rows)), &(&2 || &1))
+        twins = Enum.zip_with(chunks, legacy_twins(chunks, note), &(&2 || &1))
 
         legacy =
           Enum.map(fingerprint_models(), &fingerprints(content_key, twins, true, &1)) ++
@@ -3884,10 +3914,10 @@ defmodule Engram.Indexing do
         %{}
 
       chunks ->
-        # And the chunks' pre-R3c twins (`legacy_twins/3`): a row not yet
+        # And the chunks' pre-R3c twins (`legacy_twins/2`): a row not yet
         # moved to its R3c fingerprint keeps its old-input one, rekeyed, or
         # the next index could no longer match it and would re-embed.
-        twins = chunks |> legacy_twins(note, 0) |> Enum.reject(&is_nil/1)
+        twins = chunks |> legacy_twins(note) |> Enum.reject(&is_nil/1)
 
         for set <- [chunks, twins],
             set != [],
