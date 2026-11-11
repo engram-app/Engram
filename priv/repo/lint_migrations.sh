@@ -95,20 +95,8 @@ fi
 base_excluded=$(sed -n 's/^excluded_rules *= *\[\(.*\)\]/\1/p' ".squawk.toml" |
   tr -d '" ' | tr -d "'")
 
-# Ecto's --log-migrations-sql output to plain SQL. The clean SQL lines have no
-# timestamp prefix; each statement is terminated by a params marker (` []`
-# inline, or a lone `[]` line). The greps are `|| true`: a migration that
-# renders nothing (data-only, no-op) makes grep exit 1, which pipefail would
-# turn into a silent script exit before the "rendered no SQL" branch.
-render_sql() {
-  { grep -vE '^[0-9]{2}:[0-9]{2}:[0-9]{2}' || true; } \
-    | { grep -vE '^\s*$' || true; } \
-    | awk '{ t=$0; sub(/[ \t]+$/,"",t);
-             if (t=="[]") { if(buf!=""){print buf ";"; buf=""} }
-             else if (t ~ / \[\]$/) { sub(/ \[\]$/,"",t); buf=(buf==""?t:buf"\n"t); print buf ";"; buf="" }
-             else { buf=(buf==""?t:buf"\n"t) } }
-         END { if (buf!="") print buf ";" }'
-}
+# Ecto's --log-migrations-sql output to plain SQL: priv/repo/render_migration_sql.sh.
+render_sql() { bash priv/repo/render_migration_sql.sh; }
 
 echo "squawk: linting new migrations: ${new_versions[*]}"
 
