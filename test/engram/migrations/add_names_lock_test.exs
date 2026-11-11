@@ -12,7 +12,7 @@ defmodule Engram.Migrations.AddNamesLockTest do
   alias Engram.LockTimeoutRepo
 
   setup_all do
-    Code.require_file("priv/repo/migrations/20261111030000_add_names_expand.exs")
+    Engram.MigrationFile.load!("20261111030000_add_names_expand.exs")
     :ok
   end
 
