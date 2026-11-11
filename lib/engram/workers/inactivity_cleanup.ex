@@ -111,9 +111,19 @@ defmodule Engram.Workers.InactivityCleanup do
     end)
   end
 
+  # A failed send is not stamped: the stamp is the proof the notice went out,
+  # and the soft delete trusts it (#2566). Returned to `per_user/3`, which
+  # counts it, and the next run retries. A suppressed address (bounced or
+  # complained) can never be mailed, so it is stamped as sent; otherwise it
+  # could never be deleted.
   defp warn(user, days, warned_field, mailer_fun) do
-    _ = mailer_fun.(user)
+    case mailer_fun.(user) do
+      {:error, reason} = error when reason != :suppressed -> error
+      _sent -> stamp_warned(user, days, warned_field)
+    end
+  end
 
+  defp stamp_warned(user, days, warned_field) do
     user
     |> Ecto.Changeset.change(%{warned_field => DateTime.utc_now()})
     |> Repo.update!(skip_tenant_check: true)

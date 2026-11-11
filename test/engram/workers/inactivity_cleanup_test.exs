@@ -246,6 +246,32 @@ defmodule Engram.Workers.InactivityCleanupTest do
       assert_warned_not_deleted(user)
     end
 
+    test "a final notice that failed to send is not stamped, so no delete" do
+      user = insert(:user)
+      set_last_active(user.id, 120)
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, _s, _h, _o ->
+        {:error, {:http_error, 503}}
+      end)
+
+      ExUnit.CaptureLog.capture_log(fn -> InactivityCleanup.__sweep_soft__() end)
+
+      reloaded = Repo.reload!(user)
+      assert is_nil(reloaded.inactivity_warning_80_at)
+      assert is_nil(reloaded.deleted_at)
+    end
+
+    test "a suppressed address is still stamped, so it cannot block the delete forever" do
+      user = insert(:user)
+      set_last_active(user.id, 120)
+      expect(Engram.Email.ProviderMock, :send, 0, fn _to, _s, _h, _o -> :ok end)
+      {:ok, _} = Engram.Email.Suppression.suppress(user.email, :bounced)
+
+      ExUnit.CaptureLog.capture_log(fn -> InactivityCleanup.__sweep_soft__() end)
+
+      assert %DateTime{} = Repo.reload!(user).inactivity_warning_80_at
+    end
+
     test "a final notice from an earlier idle period does not count" do
       user = final_noticed_user(200)
       set_last_active(user.id, 120)
