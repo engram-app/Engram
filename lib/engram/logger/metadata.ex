@@ -66,6 +66,10 @@ defmodule Engram.Logger.Metadata do
   # the `worker` column, a module name our own code writes. Matched on the
   # whole message and a module-name charset, so the prefix alone never vouches
   # for what follows it; every other RuntimeError stays redacted.
+  #
+  # The charset is not the last guard: "unknown worker: Medical" (one
+  # capitalised word) passes from ANY raiser, and safe_message?/1 feeds every
+  # sink. Never raise a RuntimeError with this text around a user value.
   @oban_worker_resolution ~r/\A(?:unknown worker|module is not a worker): [A-Z]\w*(?:\.[A-Z]\w*)*\z/
 
   @spec safe_reason(Exception.t() | struct() | any()) :: String.t()

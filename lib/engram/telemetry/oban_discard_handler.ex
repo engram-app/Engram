@@ -139,10 +139,15 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
   @doc false
   # Any other failed attempt Oban will retry.
   #
-  # ponytail: one line per failed attempt, no sampling. Bounded by queue
-  # concurrency over job duration, and matched one-for-one by the row Oban
-  # already writes to `oban_jobs.errors` for the same attempt. Add sampling if
-  # Loki volume ever says otherwise.
+  # Logged under `:oban_retry`, not `:oban`: the prod Loki `oban-discard` rule
+  # fires on any `oban` warning and says "discarded". A retry is not a discard.
+  #
+  # ponytail: one line per failed attempt, no sampling. The ceiling is jobs x
+  # (max_attempts - 1), NOT a rate: a fast-failing job is not held back by queue
+  # concurrency. Worked example: a 10k-note import while Voyage returns 5xx is
+  # 10_000 EmbedNote jobs x (5 - 1) = 40k lines over the backoff window (429s
+  # snooze and do not count). Each line matches one `oban_jobs.errors` row Oban
+  # already writes. Add sampling if Loki volume ever says otherwise.
   def handle_event(@event, _measurements, %{state: :failure} = metadata, _config) do
     worker = metadata[:worker]
     queue = metadata[:queue]
@@ -152,7 +157,7 @@ defmodule Engram.Telemetry.ObanDiscardHandler do
 
     Logger.warning(
       "Oban job attempt failed, will retry: worker=#{worker} queue=#{inspect(queue)} job_id=#{inspect(Map.get(job, :id))} attempt=#{inspect(Map.get(job, :attempt))}/#{inspect(Map.get(job, :max_attempts))} error_kind=#{error_kind} node=#{node()} error=#{error_message}",
-      Metadata.with_category(:warning, :oban,
+      Metadata.with_category(:warning, :oban_retry,
         worker: worker,
         queue: queue,
         job_id: Map.get(job, :id),

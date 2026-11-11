@@ -18,6 +18,7 @@ defmodule Engram.Logger.Category do
           | :crypto
           | :lifecycle
           | :oban
+          | :oban_retry
           | :boot
           | :data
           | :websocket
@@ -32,6 +33,12 @@ defmodule Engram.Logger.Category do
     :crypto,
     :lifecycle,
     :oban,
+    # A failed Oban attempt that will be retried. Its own category, not :oban:
+    # the prod Loki rule `oban-discard` (engram-infra grafana_alerts.tf) fires
+    # on ANY `metadata_category="oban"` warning and reads as "a job was
+    # discarded". Retries are not discards. Warning-only, so it ships to Loki
+    # by level and stays off `@info_to_loki`.
+    :oban_retry,
     :boot,
     :data,
     :websocket,
