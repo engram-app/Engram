@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.82.0](https://github.com/engram-app/Engram/compare/0.81.0...0.82.0) (2026-11-11)
+
+
+### Features
+
+* **index:** path-free chunk inputs, rename is free (R3c) ([#2529](https://github.com/engram-app/Engram/issues/2529)) ([6debda4](https://github.com/engram-app/Engram/commit/6debda4496b345a06b75a546b3d74d9ebd86cb1a))
+* **notes:** store note names and folder refs alongside paths (S2 expand) ([#2535](https://github.com/engram-app/Engram/issues/2535)) ([689cd0c](https://github.com/engram-app/Engram/commit/689cd0c5a8d1e364a2506a247651df5e5a34ab44))
+* **qdrant:** immutable chunk payload, note filters via n (R3a) ([#2521](https://github.com/engram-app/Engram/issues/2521)) ([0ba37d4](https://github.com/engram-app/Engram/commit/0ba37d4c1c460be727b54497bcbfc59f20bcccdc))
+* **release:** one rollback floor, checked at deploy ([#2526](https://github.com/engram-app/Engram/issues/2526)) ([c6fa524](https://github.com/engram-app/Engram/commit/c6fa524514522db4d0843bef930b6b36e225313a))
+* **search:** name_terms recall leg for renamed titles and folders (S1) ([#2528](https://github.com/engram-app/Engram/issues/2528)) ([72d89e5](https://github.com/engram-app/Engram/commit/72d89e51532ccb920510cf86412f5786a4cdb1fe))
+
+
+### Bug Fixes
+
+* **index:** no O(note) work in the planning txn; batch get_many ([#2534](https://github.com/engram-app/Engram/issues/2534)) ([856a34f](https://github.com/engram-app/Engram/commit/856a34fa371722d145fe2174ea94c99b7558e1ff))
+* **native:** one regex per thread, own cache pool ([#2559](https://github.com/engram-app/Engram/issues/2559)) ([c09bb07](https://github.com/engram-app/Engram/commit/c09bb070acc8e084ba38a63fd709fcbc032bf88e))
+* sweep CIMD documents for active clients only ([#2562](https://github.com/engram-app/Engram/issues/2562)) ([a127333](https://github.com/engram-app/Engram/commit/a12733340547afcd13cfef7fe6763d6a86dbd0a4))
+
 ## [0.81.0](https://github.com/engram-app/Engram/compare/0.80.0...0.81.0) (2026-11-11)
 
 
