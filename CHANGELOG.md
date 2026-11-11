@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.80.0](https://github.com/engram-app/Engram/compare/0.79.1...0.80.0) (2026-11-11)
+
+
+### Features
+
+* **billing:** plan in the user menu and a Free upgrade footer ([#2547](https://github.com/engram-app/Engram/issues/2547)) ([37ebb07](https://github.com/engram-app/Engram/commit/37ebb0712289783078e740a75ca06cd42cd796d5))
+
+
+### Bug Fixes
+
+* **auth:** stop throttling shared IPs at sign-in ([#2542](https://github.com/engram-app/Engram/issues/2542)) ([06b6112](https://github.com/engram-app/Engram/commit/06b6112720b606aa8bab1a40170184414738c363))
+
 ## [0.79.1](https://github.com/engram-app/Engram/compare/0.79.0...0.79.1) (2026-11-11)
 
 
