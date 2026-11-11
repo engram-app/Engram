@@ -7,8 +7,10 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealRaceTest do
   blocks on that row in its UPDATE, then the writer commits. Under READ
   COMMITTED the UPDATE re-reads the committed row; only the CASE guard in
   `SET` (fill a NULL body, else keep it) stops it writing the stale `notes`
-  copy over the newer body. The user, its rows and the jobs its write
-  enqueued are deleted in an `after`.
+  copy over the newer body. The `after` stops the writer (rolling it back
+  if it never committed, so its row lock cannot block the cleanup) and the
+  heal, then deletes the user, its notes and the jobs the test enqueued,
+  each delete on its own.
   """
   use ExUnit.Case, async: false
 
@@ -16,6 +18,8 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealRaceTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.{Notes, Repo}
+
+  require Logger
 
   @mod "Elixir.Engram.Repo.Migrations.NoteBodiesPreNonceHealMigrate"
 
@@ -53,18 +57,74 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealRaceTest do
     await_blocked_heal(tries - 1)
   end
 
+  # Tasks and rows this test makes, so `after` can stop and delete them
+  # even when the test fails half way.
+  defp track(key, value), do: Process.put({__MODULE__, key}, value)
+  defp tracked(key), do: Process.get({__MODULE__, key})
+
+  # The writer rolls back if it has not committed (its row lock would block
+  # every delete below); the heal is given time to finish, then killed.
+  defp stop_tasks do
+    if writer = tracked(:writer) do
+      send(writer.pid, :rollback)
+      Task.yield(writer, 5_000) || Task.shutdown(writer, :brutal_kill)
+    end
+
+    if heal = tracked(:heal), do: Task.yield(heal, 15_000) || Task.shutdown(heal, :brutal_kill)
+  end
+
+  # Each delete on its own, so one failure does not skip the rest; failures
+  # are logged and returned. Jobs go by note id and by the test's window
+  # (vault registration enqueues some with no note id).
+  defp cleanup(started) do
+    user = tracked(:user)
+    note = tracked(:note)
+
+    [
+      {"DELETE FROM oban_jobs WHERE inserted_at >= $1 OR args->>'note_id' = $2",
+       [started, note && note.id]},
+      {"DELETE FROM notes WHERE user_id = $1", [user && Ecto.UUID.dump!(user.id)]},
+      {"DELETE FROM users WHERE id = $1", [user && Ecto.UUID.dump!(user.id)]}
+    ]
+    |> Enum.flat_map(fn {sql, params} ->
+      try do
+        Repo.query!(sql, params)
+        []
+      rescue
+        e ->
+          Logger.error("race test cleanup failed: #{sql}: #{Exception.message(e)}")
+          [sql]
+      end
+    end)
+  end
+
+  defp leftovers(user_id) do
+    Repo.query!(
+      """
+      SELECT (SELECT count(*) FROM users WHERE id = $1),
+        (SELECT count(*) FROM notes WHERE user_id = $1),
+        (SELECT count(*) FROM oban_jobs)
+      """,
+      [user_id]
+    ).rows
+  end
+
   test "a body written between the heal's read and its UPDATE is kept" do
-    jobs_before = Sandbox.unboxed_run(Repo, &job_count/0)
+    {jobs_before, started} =
+      Sandbox.unboxed_run(Repo, fn ->
+        {job_count(), hd(hd(Repo.query!("SELECT timezone('UTC', now())").rows))}
+      end)
 
     Sandbox.unboxed_run(Repo, fn ->
-      {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
-
       try do
+        {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
+        track(:user, user)
         {:ok, vault, _} = Engram.Vaults.register_vault(user, "Race", Ecto.UUID.generate())
 
         {:ok, note} =
           Notes.upsert_note(user, vault, %{"path" => "race.md", "content" => "old"}, actor: "api")
 
+        track(:note, note)
         Engram.Fixtures.pre_nonce_null_body!(note.id)
         id = Ecto.UUID.dump!(note.id)
         newer = <<1>> <> :crypto.strong_rand_bytes(60)
@@ -80,11 +140,16 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealRaceTest do
                 ])
 
                 send(parent, :locked)
-                receive do: (:commit -> :ok)
+
+                receive do
+                  :commit -> :ok
+                  :rollback -> Repo.rollback(:test_failed)
+                end
               end)
             end)
           end)
 
+        track(:writer, writer)
         assert_receive :locked, 5_000
 
         heal =
@@ -92,6 +157,7 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealRaceTest do
             Sandbox.unboxed_run(Repo, fn -> String.to_existing_atom(@mod).heal(Repo) end)
           end)
 
+        track(:heal, heal)
         await_blocked_heal()
         send(writer.pid, :commit)
 
@@ -99,16 +165,14 @@ defmodule Engram.Migrations.NoteBodiesPreNonceHealRaceTest do
         assert :ok = Task.await(heal)
         assert content_ct(id) == [[newer]]
       after
-        # The write committed for real, and so did the jobs it enqueued:
-        # left behind, they show up in other tests' `all_enqueued`.
-        Repo.query!("DELETE FROM oban_jobs WHERE args->>'user_id' = $1", [user.id])
-        Repo.query!("DELETE FROM notes WHERE user_id = $1", [Ecto.UUID.dump!(user.id)])
-        Repo.query!("DELETE FROM users WHERE id = $1", [Ecto.UUID.dump!(user.id)])
+        stop_tasks()
+        assert cleanup(started) == []
       end
     end)
 
     # Nothing committed outlives the test (CI's ContentOutboxTest once saw
     # this test's NoteCommitted job).
-    assert Sandbox.unboxed_run(Repo, &job_count/0) == jobs_before
+    user_id = Ecto.UUID.dump!(tracked(:user).id)
+    assert Sandbox.unboxed_run(Repo, fn -> leftovers(user_id) end) == [[0, 0, jobs_before]]
   end
 end
