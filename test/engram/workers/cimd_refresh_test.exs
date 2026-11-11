@@ -178,23 +178,22 @@ defmodule Engram.Workers.CimdRefreshTest do
       assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{})
     end
 
-    # The boundary: a document exactly `dead_after_days/0` old is dead by the
-    # time the sweep runs (the cutoff is taken after the row was aged).
-    test "boundary: exactly dead_after_days old is skipped, a minute younger is swept" do
-      cimd_client(
-        cimd_url: "https://edge.example/c",
-        cimd_fetched_at: aged(CimdRefresh.dead_after_days())
-      )
+    # The boundary, pinned: `now` is fixed and rows are offset from it to the
+    # second, so `>` vs `>=` on `cimd_fetched_at` flips the middle row. A
+    # document exactly `dead_after_days/0` old is dead; one second younger is
+    # swept; one second older is dead.
+    test "boundary: dead_after_days exactly and +1s are skipped, -1s is swept" do
+      now = DateTime.utc_now(:second)
+      dead = CimdRefresh.dead_after_days() * 86_400
 
-      client =
+      for {name, age} <- [exact: dead, younger: dead - 1, older: dead + 1] do
         cimd_client(
-          cimd_fetched_at: DateTime.add(aged(CimdRefresh.dead_after_days()), 60, :second)
+          cimd_url: "https://#{name}.example/c",
+          cimd_fetched_at: DateTime.add(now, -age, :second)
         )
+      end
 
-      expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
-
-      assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{})
-      assert DateTime.compare(reload(client).cimd_fetched_at, client.cimd_fetched_at) == :gt
+      assert CimdRefresh.sweep_urls(now) == ["https://younger.example/c"]
     end
 
     test "fetches a client with a live token used within 30 days" do

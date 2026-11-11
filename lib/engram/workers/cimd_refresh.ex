@@ -4,7 +4,7 @@ defmodule Engram.Workers.CimdRefresh do
   5 min) of the JWKS of every RECENTLY USED client. See `perform/1`.
 
   Live grant = at least one refresh token that is unrevoked and unexpired,
-  whenever it was last used (`live_grant_client_ids/1`, the one subquery both sweeps use). A dormant
+  whenever it was last used (`live_grant_client_ids/2`, the one subquery both sweeps use). A dormant
   grant must keep its document fresh: the refresh-token exchange never calls
   `ensure_client/1` and trusts the stored row (#1642). The JWKS sweep layers a
   30-day `last_used_at` rule on top, because a dormant client's JWKS is
@@ -145,7 +145,7 @@ defmodule Engram.Workers.CimdRefresh do
   end
 
   def perform(%Oban.Job{}) do
-    rows = cimd_rows()
+    rows = sweep_urls(DateTime.utc_now())
     tally = Enum.reduce(rows, %{}, &tally_refresh/2)
 
     log_sweep("mcp_cimd_refresh_sweep", length(rows), tally)
@@ -156,12 +156,16 @@ defmodule Engram.Workers.CimdRefresh do
   # `skip_tenant_check: true` for the same reason every other read in
   # `Engram.OAuth.Cimd` carries it: an OAuth client is not tenant-scoped, and
   # this sweep runs with no user in context at all.
-  defp cimd_rows do
+  @doc false
+  # The document sweep's client URLs as of `now`; public only so a test can pin
+  # `now` and probe the dead-client boundary to the second.
+  @spec sweep_urls(DateTime.t()) :: [String.t()]
+  def sweep_urls(now) do
     Repo.all(
       from(c in cimd_clients(),
         where:
-          c.client_id in subquery(live_grant_client_ids()) or is_nil(c.cimd_fetched_at) or
-            c.cimd_fetched_at > ^days_ago(dead_after_days()),
+          c.client_id in subquery(live_grant_client_ids(now)) or is_nil(c.cimd_fetched_at) or
+            c.cimd_fetched_at > ^days_ago(now, dead_after_days()),
         select: c.cimd_url
       ),
       skip_tenant_check: true
@@ -177,17 +181,17 @@ defmodule Engram.Workers.CimdRefresh do
   # not-dead rule. A small, once-a-day semi-join over `oauth_refresh_tokens`
   # (~7k rows); the JWKS sweep reaches it every 5 min over the same rows.
 
-  defp live_grant_client_ids(last_used_after \\ nil) do
+  defp live_grant_client_ids(now, last_used_after \\ nil) do
     live =
       from(rt in RefreshToken,
-        where: is_nil(rt.revoked_at) and rt.expires_at > ^DateTime.utc_now(),
+        where: is_nil(rt.revoked_at) and rt.expires_at > ^now,
         select: rt.client_id
       )
 
     if last_used_after, do: where(live, [rt], rt.last_used_at > ^last_used_after), else: live
   end
 
-  defp days_ago(days), do: DateTime.add(DateTime.utc_now(), -days * 86_400, :second)
+  defp days_ago(now, days), do: DateTime.add(now, -days * 86_400, :second)
 
   # Recently used clients only (live grant used in the last `active_days/0`),
   # most recently used first, so a burst of registrations that never connect,
@@ -195,9 +199,11 @@ defmodule Engram.Workers.CimdRefresh do
   # path. Clients sharing a jwks_uri collapse to one URI, ordered by its most
   # recent use.
   defp jwks_uris do
+    now = DateTime.utc_now()
+
     from(c in cimd_clients(),
       where:
-        c.client_id in subquery(live_grant_client_ids(days_ago(active_days()))) and
+        c.client_id in subquery(live_grant_client_ids(now, days_ago(now, active_days()))) and
           not is_nil(c.jwks_uri),
       select: {
         c.jwks_uri,
