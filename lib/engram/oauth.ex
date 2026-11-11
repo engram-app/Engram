@@ -730,7 +730,9 @@ defmodule Engram.OAuth do
   Rotates a refresh token: marks the presented one consumed, mints + issues
   a successor in the same family. If the presented token is already
   consumed (replay) or revoked, this revokes the entire family per
-  RFC 6749 §10.4. A refusal is `{:error, {:invalid_grant, grant_reason()}}`.
+  RFC 6749 §10.4. A refusal is `{:error, {:invalid_grant, grant_reason()}}`;
+  a rotation that rolled back (nothing changed, the token is still good) is
+  `{:error, :temporarily_unavailable}`.
   """
   def rotate_refresh_token(raw_token, client_id, opts \\ []) do
     case refresh_token_by_raw(raw_token) do
@@ -780,24 +782,45 @@ defmodule Engram.OAuth do
        do: grant_error(:client_mismatch)
 
   defp rotate_existing(%RefreshToken{} = rt, _client_id, opts) do
-    {:ok, outcome} =
-      Repo.transaction_after_commit(fn ->
-        lock_grants!(rt.user_id)
+    Repo.transaction_after_commit(fn ->
+      lock_grants!(rt.user_id)
 
-        outcome =
-          case lock_row(rt) do
-            nil -> {:error, :refresh_token_unknown}
-            locked -> decide(locked, opts[:ip])
-          end
+      outcome =
+        case lock_row(rt) do
+          nil -> {:error, :refresh_token_unknown}
+          locked -> decide(locked, opts[:ip])
+        end
 
-        # Logged and counted after commit through the queue's rescue: a
-        # failing log or analytics call can never turn the answer into a 500.
-        Repo.after_commit(fn -> report(outcome, rt, opts[:user_agent]) end)
-        outcome
-      end)
-
-    answer(outcome)
+      # Logged and counted after commit through the queue's rescue: a
+      # failing log or analytics call can never turn the answer into a 500.
+      Repo.after_commit(fn -> report(outcome, rt, opts[:user_agent]) end)
+      outcome
+    end)
+    |> case do
+      {:ok, outcome} -> answer(outcome)
+      {:error, reason} -> rolled_back(rt, reason)
+    end
   end
+
+  # The transaction rolled back (`decide/2`'s `Repo.rollback/1`): nothing was
+  # consumed, minted or revoked, so the presented token is still good. Not
+  # `invalid_grant`, which makes a client drop the connection (#2299, #2333):
+  # retryable, answered like the token endpoint's other transient failure.
+  defp rolled_back(rt, reason) do
+    Logger.warning(
+      "oauth_refresh_rotation_rolled_back",
+      Metadata.with_category(:warning, :auth,
+        reason: Metadata.safe_reason(grant_reason_of(reason)),
+        client_id: rt.client_id,
+        family_id: rt.family_id
+      )
+    )
+
+    {:error, :temporarily_unavailable}
+  end
+
+  defp grant_reason_of({:invalid_grant, reason}), do: reason
+  defp grant_reason_of(reason), do: reason
 
   @doc """
   Serializes, for one user, rotation (`rotate_refresh_token/3`) with every

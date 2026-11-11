@@ -122,6 +122,10 @@ defmodule EngramWeb.OAuthTokenController do
   defp grant_result({:error, {:invalid_grant, reason}}, conn, grant_type, client_id),
     do: reject(conn, grant_type, client_id, "invalid_grant", reason)
 
+  # A refresh rotation that rolled back: retryable, the token is untouched.
+  defp grant_result({:error, :temporarily_unavailable}, conn, grant_type, client_id),
+    do: temporarily_unavailable(conn, grant_type, client_id, :rotation_rolled_back)
+
   defp grant_result({:error, _changeset}, conn, grant_type, client_id),
     do: reject(conn, grant_type, client_id, "invalid_grant", :token_persist_failed)
 
@@ -293,11 +297,13 @@ defmodule EngramWeb.OAuthTokenController do
   # and the user sees a permanently dead integration. Our own fetch throttle and
   # an unreachable vendor JWKS endpoint both clear on their own, so they must be
   # retryable. Same split `Engram.OAuth.cimd_error/1` already makes on the
-  # authorize path, and the same string it uses.
-  defp temporarily_unavailable(conn, grant_type) do
-    props = client_props(conn, request_client_id(conn))
-    emit(grant_type, :rejected, "temporarily_unavailable", :client_auth_unavailable, props)
-    track_failed(conn, grant_type, props, "temporarily_unavailable", :client_auth_unavailable)
+  # authorize path, and the same string it uses. A refresh rotation that rolled
+  # back (`:rotation_rolled_back`) is answered the same way: `invalid_grant`
+  # would make the client drop a token that is still good.
+  defp temporarily_unavailable(conn, grant_type, client_id, reason) do
+    props = client_props(conn, client_id)
+    emit(grant_type, :rejected, "temporarily_unavailable", reason, props)
+    track_failed(conn, grant_type, props, "temporarily_unavailable", reason)
 
     # A hint to retry soon (#1974): ChatGPT did not retry the 2026-10-13 503 at
     # all, and the condition behind it clears within seconds.
@@ -317,5 +323,6 @@ defmodule EngramWeb.OAuthTokenController do
   defp auth_error(conn, grant_type, :invalid_client), do: invalid_client(conn, grant_type)
 
   defp auth_error(conn, grant_type, :temporarily_unavailable),
-    do: temporarily_unavailable(conn, grant_type)
+    do:
+      temporarily_unavailable(conn, grant_type, request_client_id(conn), :client_auth_unavailable)
 end
