@@ -1,5 +1,4 @@
-import { useBillingStatus } from "../api/queries";
-import { useConfig } from "../config-context";
+import { usePlan } from "./use-plan";
 
 /**
  * True only when paid tiers exist AND the user is on the free tier.
@@ -9,12 +8,9 @@ import { useConfig } from "../config-context";
  * subscription-less user. A raw `tier === 'free'` check therefore wrongly
  * renders free-tier caps / upgrade framing on self-host. Gate every
  * free-tier UI affordance on this hook instead of comparing tier directly.
+ *
+ * The billing gate itself lives in usePlan, so the two can never disagree.
  */
 export function useIsFreeTier(): boolean {
-	const { billingEnabled } = useConfig();
-	const { data } = useBillingStatus();
-	if (!billingEnabled) {
-		return false;
-	}
-	return data?.tier === "free";
+	return usePlan()?.tier === "free";
 }
