@@ -2778,12 +2778,9 @@ defmodule Engram.Notes do
   end
 
   # Enough of a hash to tell two apart. A client's base_hash is untrusted and
-  # can be anything, even note text, so only a hex prefix ever reaches a log.
+  # can be anything, even note text or a secret, so only a whole hash is sliced.
   defp hash_prefix(hash) when is_binary(hash) do
-    case Regex.run(~r/\A[0-9a-f]{16}/, hash) do
-      [prefix] -> prefix
-      nil -> "not_hex"
-    end
+    if hash =~ ~r/\A[0-9a-f]{64}\z/, do: binary_part(hash, 0, 16), else: "not_a_hash"
   end
 
   defp hash_prefix(nil), do: nil

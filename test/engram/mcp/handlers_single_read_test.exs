@@ -699,7 +699,8 @@ defmodule Engram.MCP.HandlersSingleReadTest do
         |> json_response(409)
       end)
 
-    assert log =~ "base_hash=abcdef0123456789"
+    assert log =~ "base_hash=not_a_hash"
+    refute log =~ "abcdef0123456789"
     refute log =~ "secret note text"
 
     log =
@@ -709,7 +710,7 @@ defmodule Engram.MCP.HandlersSingleReadTest do
         |> json_response(409)
       end)
 
-    assert log =~ "base_hash=not_hex"
+    assert log =~ "base_hash=not_a_hash"
     refute log =~ "my secret"
   end
 
