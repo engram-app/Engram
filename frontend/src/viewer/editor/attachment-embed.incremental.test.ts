@@ -10,8 +10,9 @@ const opts = {
 	resolve: (t: string) => (known.has(t) ? `img/${t}` : null),
 	load: () => Promise.resolve("blob:x"),
 };
-const ext = [markdown({ base: markdownLanguage }), attachmentEmbeds(opts)];
-const field = ext[1]?.[0] as StateField<DecorationSet>;
+const embeds = attachmentEmbeds(opts);
+const ext = [markdown({ base: markdownLanguage }), embeds];
+const field = embeds[0] as StateField<DecorationSet>;
 const PARA = "see ![[pic.png]] and ![[later.png]]\n\n";
 
 describe("attachment embeds render incrementally", () => {
