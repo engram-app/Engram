@@ -2754,7 +2754,10 @@ defmodule Engram.Notes do
 
   # base_hash == stored_hash with a different served_hash and read_source
   # crdt_tail means a CRDT edit landed after the writer read: a correct refusal
-  # (#2541). A base matching neither is a client that held an older read.
+  # (#2541). A base matching neither is a read older than the row. A read torn
+  # by a checkpoint would look the same, but `confirm_stale/5` re-checks those
+  # before they get here; one that loses its retry logs
+  # `note_write_snapshot_fence_lost` instead.
   defp log_stale_base(user, vault, existing, view, base_hash) do
     served = view || existing
 
@@ -2840,8 +2843,11 @@ defmodule Engram.Notes do
       # (`base_check/5`).
       is_binary(base_hash) and CrdtBridge.markdown_path?(sanitized_path) ->
         case served_base(user, existing, base_hash, base_attrs) do
-          {:stale, view} ->
-            {:stale_base, existing, view}
+          {:stale, current, view} ->
+            {:stale_base, current, view}
+
+          :stale_snapshot ->
+            :stale_snapshot
 
           :noop ->
             idempotent_repush(existing, base_attrs)
@@ -2883,18 +2889,44 @@ defmodule Engram.Notes do
   # the tail edit the writer already holds. When the row was served instead,
   # the default merge runs, as it did before #2480.
   #
-  # The tail is read in its own statement, not with the row. A checkpoint
-  # landing in between rewrites the row's snapshot, so the write loses its
-  # snapshot fence and `lookup_and_write/2` retries from the lookup, which
-  # re-runs this check: the worst case is a spurious 409, never a bad write.
+  # The tail is read in its own statement, not with the row, so a checkpoint
+  # landing in between pairs the OLD row with an EMPTY tail. On a match the
+  # write loses its snapshot fence and `lookup_and_write/2` retries. A mismatch
+  # never writes, so no fence sees it: `confirm_stale/5` re-checks it instead.
   defp served_base(user, %Note{} = row, base_hash, incoming) do
     tail = CrdtPersistence.tail_rows(row.id, row.vault_id)
+    note = decrypt_or_raise!(row, user)
 
-    case base_check(user, decrypt_or_raise!(row, user), tail, base_hash) do
+    case base_check(user, note, tail, base_hash) do
       {:match, _view, merge} -> {:ok, merge}
+      {:stale, view} -> confirm_stale(user, note, view, base_hash, incoming)
+    end
+  end
+
+  # The refusal path only, and once per attempt: re-reads row and tail in one
+  # statement before a 409 goes out. A base that names the current view was
+  # refused by a torn read, so the write retries from the lookup (its snapshot
+  # moved, and the retry is bounded there).
+  defp confirm_stale(user, note, view, base_hash, incoming) do
+    {current, current_view} = untorn_view(user, note, view)
+
+    cond do
+      current_view.content_hash == base_hash -> :stale_snapshot
       # The writer's own retry: the note already holds what it sends.
-      {:stale, view} when view.content == incoming.content -> :noop
-      {:stale, view} -> {:stale, view}
+      current_view.content == incoming.content -> :noop
+      true -> {:stale, current, current_view}
+    end
+  end
+
+  # A row that did not move cannot have been torn (a checkpoint rewrites the row
+  # and prunes the tail in one transaction), so the first view stands and
+  # nothing is rebuilt. A note gone since then keeps the first view too.
+  defp untorn_view(user, note, view) do
+    with {:ok, fresh, tail} <- get_note_with_tail(user, %{id: note.vault_id}, note.path),
+         false <- same_row_state?(fresh, note) do
+      {fresh, current_note(user, fresh, tail)}
+    else
+      _ -> {note, view}
     end
   end
 
@@ -3506,7 +3538,8 @@ defmodule Engram.Notes do
   #
   # #2480: for a markdown note this is the ONE canonical view: GET,
   # get_notes, the base_hash check and a 409 body all go through it, so a
-  # hash a reader is given is always a base a write accepts.
+  # hash a reader is given is a base a write accepts until the note's text
+  # moves (`confirm_stale/5` keeps a checkpoint of that text from refusing it).
   defp current_note(_user, note, []), do: note
 
   # A structural doc (`.canvas`) never projects to `content`.

@@ -623,8 +623,8 @@ defmodule Engram.MCP.HandlersSingleReadTest do
   # GET and its POST. The GET's hash no longer names what a reader is served,
   # so the 409 is the right answer; replacing the note would erase that write.
   # Same shape as the CI failure: the row did not move (version, mtime), the
-  # 409 serves the plugin's text from the tail. The re-read's hash then writes,
-  # so a GET hash is never refused on a note that held still.
+  # 409 serves the plugin's text from the tail. The re-read's hash then writes.
+  # A checkpoint landing mid-check is pinned in RestWriteInterleaveTest.
   test "REST POST 409s when a plugin write lands between its GET and POST", ctx do
     %{conn: conn, user: user, vault: vault} = ctx
     read = conn |> get("/api/notes/a.md") |> json_response(200)
