@@ -129,7 +129,8 @@ defmodule Engram.Crypto.AadRebindTest do
     # A legacy row is not NoteMeta's work until it is bound, so the rebind
     # hands it over: it clears the row's meta stamp and reopens a closed
     # ledger, and the next pass re-derives its title, tags and links.
-    test "hands the rebound note to NoteMeta: clears its stamp, reopens the ledger", %{user: user} do
+    test "hands the rebound note to NoteMeta: clears its stamp, reopens the ledger, restarts the walk",
+         %{user: user} do
       {:ok, vault, _} = Engram.Vaults.register_vault(user, "Meta Vault", Ecto.UUID.generate())
       {:ok, dek} = Crypto.get_dek(user)
       {content_ct, content_n} = Envelope.encrypt("# Body", dek)
@@ -173,10 +174,16 @@ defmodule Engram.Crypto.AadRebindTest do
       assert note.meta_version == Engram.Notes.Helpers.meta_version()
       assert Engram.DataMigrations.done?(meta.name(), meta.version())
 
+      # A walk already past the note's id would end clean without it.
+      cursors = Engram.Backfill.IdWindows.Cursors
+      walk = %{from: {nil, "ffffffff-ffff-ffff-ffff-ffffffffffff"}, dirty: false, passes: 1}
+      Agent.update(cursors, &Map.put(&1, meta.name(), walk))
+
       assert :ok = AadRebind.rebind_user(user.id)
 
       assert is_nil(Engram.Fixtures.raw_note!(note).meta_version)
       refute Engram.DataMigrations.done?(meta.name(), meta.version())
+      refute Map.has_key?(Agent.get(cursors, & &1), meta.name()), "the walk must start over"
     end
 
     test "upgrades the user's wrapped DEK from v1 to v2 (AAD-bound)", %{user: user} do

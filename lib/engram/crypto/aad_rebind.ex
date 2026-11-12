@@ -290,7 +290,9 @@ defmodule Engram.Crypto.AadRebind do
 
       if count == 1 do
         _ = NoteBody.put!({id, content_ciphertext: content_ct, content_nonce: content_n})
-        hand_to_note_meta()
+        # After commit: this runs inside the rebind's tenant transaction, and a
+        # pre-commit reopen lets a peer re-cache `done?` from the old row.
+        :ok = Repo.after_commit(&hand_to_note_meta/0)
         :ok
       else
         :stale
@@ -298,14 +300,15 @@ defmodule Engram.Crypto.AadRebind do
     end
   end
 
-  # NoteMeta skips legacy rows, so a ledger closed before this rebind never
-  # saw the note: reopen it (cluster-wide) and the next hourly pass re-derives
-  # the note's title, tags and links. A cached read while it is still open,
-  # so a run of rebinds reopens once.
+  # NoteMeta skips legacy rows, so its walk never saw this note: a ledger that
+  # closed, or a walk already past the note's id, would miss it. Reopening
+  # (open or done) restarts the NoteMeta walk on every node
+  # (`DataMigrations.forget/2`), and the next pass re-derives the note's
+  # title, tags and links from its NULL stamp. Rebinds are rare (the T3.6
+  # cutover residue), so one ledger write each is cheap.
   defp hand_to_note_meta do
     meta = Engram.DataMigrations.NoteMeta
-    if meta.done?(), do: :ok = Engram.DataMigrations.reopen(meta.name(), meta.version())
-    :ok
+    Engram.DataMigrations.reopen(meta.name(), meta.version())
   end
 
   # T3-audit H5 — attachment rebind is intentional no-op (see comment on
