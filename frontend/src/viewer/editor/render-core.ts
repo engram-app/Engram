@@ -531,11 +531,10 @@ function build(state: EditorState): CoreState {
 		}
 	}
 	renderTree(state, tree, tree$, [[0, tree.length]]);
-	// The watermark is the shorter of the two trees. ensureSyntaxTree hands back a
-	// longer tree than syntaxTree(state) still reports, and later updates render
-	// against the latter, so recording the ensured length could leave a stretch
-	// rendered against neither (a `%%` in a fence greyed the rest of the note).
-	// The cost is one rescan of that stretch when the state's tree catches up.
+	// Every renderer above read the ensured tree, so the ensured length would be
+	// a correct watermark. Recording the shorter state tree instead is a cautious
+	// choice, not a correctness need: when the state's tree catches up, the core
+	// rescans that stretch once more (at most MOUNT_PARSE_CHARS, once per mount).
 	return { layers, treeLen: Math.min(tree.length, syntaxTree(state).length) };
 }
 
