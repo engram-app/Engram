@@ -46,9 +46,8 @@ defmodule Engram.Notes.Location do
   import Ecto.Query
 
   alias Engram.Crypto
-  alias Engram.Crypto.{Envelope, PathCrypto}
+  alias Engram.Crypto.{Envelope, NameKeys, PathCrypto}
   alias Engram.DataMigrations.{Entry, NoteName}
-  alias Engram.Crypto.NameKeys
   alias Engram.Folders.{Rows, WalkSql}
   alias Engram.Notes.{Helpers, Keys, Name, Note}
   alias Engram.Repo
