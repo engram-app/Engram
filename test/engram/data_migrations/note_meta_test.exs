@@ -278,6 +278,31 @@ defmodule Engram.DataMigrations.NoteMetaTest do
     assert decrypted(x, ctx.user).title == elem(derived(@content), 0)
   end
 
+  # A row lock held past the app pool's lock_timeout (55P03) on one note must
+  # leave that note for a later pass, not abort the pass and lose its cursor.
+  test "a lock timeout on one note leaves it and the pass goes on", ctx do
+    held = stale_note(ctx, "held.md")
+    other = stale_note(ctx, "other.md")
+
+    Repo.query!("""
+    CREATE FUNCTION nm_lock_timeout() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.id = '#{held.id}' THEN
+        RAISE EXCEPTION 'canceling statement due to lock timeout' USING ERRCODE = '55P03';
+      END IF;
+      RETURN NEW;
+    END $$
+    """)
+
+    Repo.query!(
+      "CREATE TRIGGER nm_lock_timeout BEFORE UPDATE OF meta_version ON notes FOR EACH ROW EXECUTE FUNCTION nm_lock_timeout()"
+    )
+
+    assert {:more, _} = NoteMeta.run_pass(batch: 50)
+    assert is_nil(decrypted(held, ctx.user).meta_version)
+    assert decrypted(other, ctx.user).meta_version == Helpers.meta_version()
+  end
+
   describe "tenant scoping" do
     test "control: in another tenant's context the heal reads and writes nothing", ctx do
       note = stale_note(ctx)

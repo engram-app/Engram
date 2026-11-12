@@ -112,14 +112,18 @@ defmodule Engram.DataMigrations.NoteMeta do
   """
   @spec heal_window([Ecto.UUID.t()], IdWindows.ctx()) :: {non_neg_integer(), boolean()}
   def heal_window(ids, ctx) do
-    ids
-    |> read_stale(ctx)
-    |> Enum.group_by(fn {_id, user_id} -> user_id end, fn {id, _} -> id end)
-    |> Enum.reduce({0, false}, fn {user_id, note_ids}, {fixed, left} ->
-      {f, l} = heal_user(user_id, note_ids)
+    by_user = ids |> read_stale(ctx) |> Enum.group_by(&elem(&1, 1), &elem(&1, 0))
+    # One users read per window: a fleet window spans about one user per note.
+    users = Map.new(owners(Map.keys(by_user)), &{&1.id, &1})
+
+    Enum.reduce(by_user, {0, false}, fn {user_id, note_ids}, {fixed, left} ->
+      {f, l} = heal_user(Map.get(users, user_id), note_ids)
       {fixed + f, left or l}
     end)
   end
+
+  defp owners([]), do: []
+  defp owners(user_ids), do: Repo.all(from(u in User, where: u.id in ^user_ids))
 
   # The fleet walk reads on the maintenance pool; a per-user walk (no pool)
   # inside that user's tenant, since FORCE RLS would read zero rows outside it.
@@ -129,8 +133,8 @@ defmodule Engram.DataMigrations.NoteMeta do
   defp read_stale(ids, %{user_id: user_id}),
     do: Repo.with_tenant!(user_id, fn -> Repo.all(select(stale(ids), [n], {n.id, n.user_id})) end)
 
-  defp heal_user(user_id, note_ids) do
-    with %User{} = user <- Repo.get(User, user_id),
+  defp heal_user(user, note_ids) do
+    with %User{} = user <- user,
          :ok <- RotationGate.check_user(user) do
       Enum.reduce(note_ids, {0, false}, fn id, {fixed, left} ->
         case heal_note(user, id) do
@@ -152,6 +156,14 @@ defmodule Engram.DataMigrations.NoteMeta do
       # Deleted since the window read.
       {:discard, _reason} -> :stamped
     end
+  rescue
+    # A row lock held past the app pool's lock_timeout: a writer has the
+    # note. Its transaction rolled back; leave the note for a later pass
+    # rather than abort this one (and lose its cursor).
+    e in Postgrex.Error ->
+      if match?(%{postgres: %{code: :lock_not_available}}, e),
+        do: :left,
+        else: reraise(e, __STACKTRACE__)
   end
 
   defp derive(user, note, tail) do
