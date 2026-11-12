@@ -47,9 +47,11 @@ parent_id, name}]` plus a `folder_id` per note. The `crdt_create` reply and
 carry, on each LIVE note row, `folder_id` (nil at the root or when the folder
 is unresolved) and `name` while the S3 name reads are on (#2523:
 `Engram.Notes.Location.on?/0`, the `note_name` ledger done and the
-`name_reads` override not false). The row's `path` is then where its folder
-row and name put it. Tombstones keep the path they were deleted at and carry
-neither field. A client that ignores the two fields sees no change.
+`name_reads` override not false). The row's `path` stays its stored path,
+except under a folder renamed without a cascade (`folders.notes_cascaded =
+false`, written from S5 on), where it is the path that folder gives it.
+Tombstones keep the path they were deleted at and carry neither field. A
+client that ignores the two fields sees no change.
 
 ## Server → Client Broadcasts
 
