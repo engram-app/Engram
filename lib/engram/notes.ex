@@ -6096,49 +6096,72 @@ defmodule Engram.Notes do
     notes = Enum.map(rows, &elem(&1, 0))
     asked = asked_paths(filter_key, paths, hmacs, on?)
     key = path_key_of(user, filter_key, notes, asked)
-    by_hmac = for {n, _} = row <- rows, k <- key.(n), into: %{}, do: {k, batch_row(row)}
+    read = keyed(rows, &key.(elem(&1, 0)), &batch_row/1)
 
-    {by_hmac, over} =
+    {{held, named}, over} =
       if total > length(notes) do
-        ctx = %{ids?: ids?, at: at, key: &path_key_of(user, filter_key, &1, asked)}
-        past_the_cut(user, vault, Enum.zip(paths, hmacs), by_hmac, spent, max_bytes, ctx)
+        ctx = %{
+          ids?: ids?,
+          at: at,
+          key: &path_key_of(user, filter_key, &1, asked),
+          read: Enum.map(notes, & &1.id)
+        }
+
+        past_the_cut(user, vault, Enum.zip(paths, hmacs), read, spent, max_bytes, ctx)
       else
-        {by_hmac, MapSet.new()}
+        {read, MapSet.new()}
       end
 
+    # The note that holds a path answers it, then a budget miss, and only
+    # then a note whose folder and name put it there.
     Enum.zip_with(paths, hmacs, fn path, hmac ->
-      case by_hmac do
-        %{^hmac => {note, tail}} ->
-          {path, fn -> note |> decrypt_or_raise!(user) |> then(&current_note(user, &1, tail)) end}
-
-        _ ->
-          if MapSet.member?(over, hmac),
-            do: {path, fn -> :over_budget end},
-            else: {path, fn -> nil end}
+      cond do
+        is_map_key(held, hmac) -> {path, serve(user, held[hmac])}
+        MapSet.member?(over, hmac) -> {path, fn -> :over_budget end}
+        is_map_key(named, hmac) -> {path, serve(user, named[hmac])}
+        true -> {path, fn -> nil end}
       end
     end)
   end
 
-  # The unread paths, in request order: each note that still fits the budget
-  # (stored sizes, `spent` so far) is read; the rest are over budget. Returns
-  # the read notes merged into `by_hmac`, and the over-budget HMACs.
-  defp past_the_cut(user, vault, pairs, by_hmac, spent, max_bytes, ctx) do
-    %{ids?: ids?, at: at, key: key} = ctx
+  defp serve(user, {note, tail}),
+    do: fn -> note |> decrypt_or_raise!(user) |> then(&current_note(user, &1, tail)) end
+
+  # `{held, named}`: each row by the path it holds (its stored path, the
+  # first `key` answer) and by the paths its folder and name put it at (the
+  # rest), so one never displaces the other.
+  defp keyed(rows, key, value \\ & &1) do
+    Enum.reduce(rows, {%{}, %{}}, fn row, {held, named} ->
+      [stored | derived] = key.(row)
+      v = value.(row)
+      {Map.put(held, stored, v), Enum.reduce(derived, named, &Map.put(&2, &1, v))}
+    end)
+  end
+
+  # The paths no read note holds, in request order: each note there not
+  # read yet that still fits the budget (stored sizes, `spent` so far) is
+  # read; the rest are over budget. Returns `{held, named}` with the read
+  # notes merged in, and the over-budget HMACs.
+  defp past_the_cut(user, vault, pairs, {held, named}, spent, max_bytes, ctx) do
+    %{ids?: ids?, at: at, key: key, read: read_ids} = ctx
 
     unread_pairs =
-      for {_path, hmac} = p <- pairs, not is_map_key(by_hmac, hmac), uniq: true, do: p
+      for {_path, hmac} = p <- pairs, not is_map_key(held, hmac), uniq: true, do: p
 
     unread = Enum.map(unread_pairs, &elem(&1, 1))
 
     sizes =
-      from(n in live_notes(user, vault, ids?), where: ^at.(Enum.map(unread_pairs, &elem(&1, 0))))
+      from(n in live_notes(user, vault, ids?),
+        where: ^at.(Enum.map(unread_pairs, &elem(&1, 0))),
+        where: n.id not in ^read_ids
+      )
       |> NoteBody.join()
       |> select([n], map(n, ^@located_fields))
       |> select_merge(^%{size: NoteBody.byte_length(:content)})
 
     {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(sizes) end)
-    key_of = key.(rows)
-    by_unread = for row <- rows, k <- key_of.(row), into: %{}, do: {k, row}
+    {by_path, by_name} = keyed(rows, key.(rows))
+    by_unread = Map.merge(by_name, by_path)
 
     {pick, over, _spent} =
       Enum.reduce(unread, {[], MapSet.new(), spent}, fn hmac, {pick, over, spent} ->
@@ -6170,9 +6193,9 @@ defmodule Engram.Notes do
 
     pairs = Enum.map(read, &NoteBody.to_note(&1, @tail_keys ++ @tail_state_keys))
     key_of = key.(Enum.map(pairs, &elem(&1, 0)))
-    fresh = for {n, _} = pair <- pairs, k <- key_of.(n), into: %{}, do: {k, batch_row(pair)}
+    {fresh_held, fresh_named} = keyed(pairs, &key_of.(elem(&1, 0)), &batch_row/1)
 
-    {Map.merge(by_hmac, fresh), over}
+    {{Map.merge(held, fresh_held), Map.merge(fresh_named, named)}, over}
   end
 
   # What `get_notes_within/4` keys a row by: the path hashes it answers,
