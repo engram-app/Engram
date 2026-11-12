@@ -1231,16 +1231,16 @@ defmodule Engram.Accounts do
         if would_orphan_admins?(user) do
           Repo.rollback(:last_admin)
         else
+          # Same transaction as the mark. Grants first: the mark is the last
+          # write, so a mark that fails takes the revoke and its queued
+          # grant events down with it.
+          :ok = Engram.OAuth.revoke_account_grants(user.id)
+
           case user
                |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
                |> Repo.update(skip_tenant_check: true) do
-            {:ok, u} ->
-              # Same transaction as the mark, as `Lifecycle` does.
-              :ok = Engram.OAuth.revoke_account_grants(u.id)
-              u
-
-            {:error, cs} ->
-              Repo.rollback(cs)
+            {:ok, u} -> u
+            {:error, cs} -> Repo.rollback(cs)
           end
         end
       end)
