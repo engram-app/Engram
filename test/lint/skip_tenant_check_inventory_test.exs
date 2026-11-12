@@ -62,7 +62,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
   @inventory %{
     "engram/abuse/origin_stats.ex" => 3,
     "engram/accounts.ex" => 35,
-    "engram/accounts/lifecycle.ex" => 4,
+    "engram/accounts/lifecycle.ex" => 3,
     "engram/accounts/password_reset.ex" => 5,
     "engram/auth/clerk/webhook.ex" => 2,
     "engram/auth/device_flow.ex" => 14,

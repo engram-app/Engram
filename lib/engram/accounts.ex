@@ -1222,6 +1222,36 @@ defmodule Engram.Accounts do
     |> tap(&evict_user_on_ok(&1, user.id))
   end
 
+  @doc """
+  THE write that marks an account deleted, for every delete path (admin
+  `soft_delete_user/1`, and `Lifecycle` for own, Clerk and inactivity
+  deletes): ends the account's OAuth grants (`OAuth.revoke_account_grants/1`),
+  then stamps `deleted_at`, and returns the updated user.
+
+  Lock order, defined here once: the user's grant advisory lock and refresh
+  token rows first (rotation's own order), then the `users` row. Two delete
+  paths on one account at once (an admin delete racing a self delete, the
+  Clerk webhook or the inactivity sweep) then wait on each other instead of
+  deadlocking. Grants first also means a failing mark, the last write, rolls
+  the revoke back with it.
+
+  Must run inside the caller's transaction, opened with
+  `Repo.transaction_after_commit/1`, so both writes commit or neither does
+  and the `mcp_oauth_grant_revoked` events wait for that commit. Rolls the
+  transaction back on a changeset error.
+  """
+  @spec mark_deleted_in_transaction!(User.t()) :: User.t()
+  def mark_deleted_in_transaction!(%User{} = user) do
+    :ok = Engram.OAuth.revoke_account_grants(user.id)
+
+    case user
+         |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
+         |> Repo.update(skip_tenant_check: true) do
+      {:ok, u} -> u
+      {:error, cs} -> Repo.rollback(cs)
+    end
+  end
+
   @doc "Soft-deletes a user. Refuses the last active admin."
   def soft_delete_user(%User{} = user) do
     result =
@@ -1231,17 +1261,7 @@ defmodule Engram.Accounts do
         if would_orphan_admins?(user) do
           Repo.rollback(:last_admin)
         else
-          # Same transaction as the mark. Grants first: the mark is the last
-          # write, so a mark that fails takes the revoke and its queued
-          # grant events down with it.
-          :ok = Engram.OAuth.revoke_account_grants(user.id)
-
-          case user
-               |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
-               |> Repo.update(skip_tenant_check: true) do
-            {:ok, u} -> u
-            {:error, cs} -> Repo.rollback(cs)
-          end
+          mark_deleted_in_transaction!(user)
         end
       end)
 

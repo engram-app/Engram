@@ -667,6 +667,50 @@ defmodule EngramWeb.OAuthGrantRevokedTest do
       assert is_nil(Repo.reload!(user, skip_tenant_check: true).deleted_at)
     end
 
+    # Runs `body` (plpgsql) when `user`'s row is marked deleted: a trigger that
+    # lives only in this test's sandbox transaction.
+    defp on_mark(user, body) do
+      Repo.query!("""
+      CREATE FUNCTION engram_test_on_mark() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN #{body} RETURN NEW; END $$
+      """)
+
+      Repo.query!("""
+      CREATE TRIGGER engram_test_on_mark BEFORE UPDATE ON users FOR EACH ROW
+      WHEN (OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL
+            AND NEW.id = '#{user.id}'::uuid)
+      EXECUTE FUNCTION engram_test_on_mark()
+      """)
+    end
+
+    # Lock order (review of #2574): every delete path ends the grants BEFORE it
+    # writes `deleted_at` (`Accounts.mark_deleted_in_transaction!/1`), so two
+    # paths on one account take the grant lock and token rows, then the user
+    # row, in one order and cannot deadlock. The trigger refuses a mark that
+    # finds the user's grants still live.
+    @grants_ended_first """
+    IF EXISTS (SELECT 1 FROM oauth_refresh_tokens
+               WHERE user_id = NEW.id AND revoked_at IS NULL) THEN
+      RAISE EXCEPTION 'marked before the grants ended';
+    END IF;
+    """
+
+    test "the lifecycle path ends the grants before the mark", %{user: user, rts: rts} do
+      on_mark(user, @grants_ended_first)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = Engram.Accounts.Lifecycle.soft_delete(user, :inactivity)
+      end)
+
+      for rt <- rts, do: assert(row(rt).revoked_at)
+    end
+
+    test "the admin path ends the grants before the mark", %{user: user, rts: rts} do
+      on_mark(user, @grants_ended_first)
+      assert {:ok, _} = Engram.Accounts.soft_delete_user(user)
+      for rt <- rts, do: assert(row(rt).revoked_at)
+    end
+
     # The admin path's own transaction is the queue owner (`with_admin_lock`),
     # so only a failure INSIDE it, after the revoke, proves its events wait for
     # its commit: the user-row mark, the delete's last write, is refused by a
@@ -675,17 +719,7 @@ defmodule EngramWeb.OAuthGrantRevokedTest do
       user: user,
       rts: rts
     } do
-      Repo.query!("""
-      CREATE FUNCTION engram_test_refuse_mark() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN RAISE EXCEPTION 'mark refused'; END $$
-      """)
-
-      Repo.query!("""
-      CREATE TRIGGER engram_test_refuse_mark BEFORE UPDATE ON users FOR EACH ROW
-      WHEN (OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL
-            AND NEW.id = '#{user.id}'::uuid)
-      EXECUTE FUNCTION engram_test_refuse_mark()
-      """)
+      on_mark(user, "RAISE EXCEPTION 'mark refused';")
 
       assert_raise Postgrex.Error, ~r/mark refused/, fn ->
         Engram.Accounts.soft_delete_user(user)

@@ -88,15 +88,11 @@ defmodule Engram.Accounts.Lifecycle do
   defp mark_deleted(%User{} = user, reason, revoke?) do
     # The mark and the end of the account's OAuth grants commit together, on
     # every path (own delete included: its retry of `DELETE /api/me` rides a
-    # session token, never an OAuth one). Grant events run after the commit.
-    {:ok, :ok} =
-      Repo.transaction_after_commit(fn ->
-        user
-        |> Ecto.Changeset.change(%{deleted_at: DateTime.utc_now()})
-        |> Repo.update!(skip_tenant_check: true)
-
-        OAuth.revoke_account_grants(user.id)
-      end)
+    # session token, never an OAuth one), in the lock order
+    # `Accounts.mark_deleted_in_transaction!/1` defines for every delete path.
+    # Grant events run after the commit.
+    {:ok, %User{}} =
+      Repo.transaction_after_commit(fn -> Accounts.mark_deleted_in_transaction!(user) end)
 
     Accounts.evict_user(user.id)
     if revoke?, do: Accounts.revoke_all_user_tokens(user)
