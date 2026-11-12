@@ -49,8 +49,14 @@ def read_server_doc(vault_id: str, note_id: str) -> ServerDoc:
     nid, vid = _elixir_str(note_id), _elixir_str(vault_id)
     out = backend_rpc(
         vault_user_expr(vault_id)
-        + "{:ok, d} = Engram.Repo.with_tenant(u.id, fn -> "
-        f"n = Engram.Repo.get!(Engram.Notes.Note, {nid}); "
+        # `crdt_state_ciphertext` is a VIRTUAL field (it lives in note_bodies),
+        # so `Repo.get` leaves it nil and the doc reads empty. Select it the way
+        # `LineageAudit` does.
+        + "import Ecto.Query; "
+        "{:ok, d} = Engram.Repo.with_tenant(u.id, fn -> "
+        f"n = from(x in Engram.Notes.Note, where: x.id == ^{nid}) "
+        "|> Engram.Notes.NoteBody.select_note([:id, :dek_version, :crdt_state_ciphertext, :crdt_state_nonce]) "
+        "|> Engram.Repo.one!(); "
         "{:ok, st} = Engram.Crypto.decrypt_crdt_state(n, u); "
         f"{{:ok, d}} = {_FM}.doc_from_state(st); "
         f"Engram.Notes.CrdtPersistence.replay_tail(d, u, {nid}, {vid}); d end); "
