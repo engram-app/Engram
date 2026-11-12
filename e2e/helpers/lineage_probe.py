@@ -56,8 +56,11 @@ _PROBE = (
     "{{:ok, nr}} = Ecto.Adapters.SQL.query(Engram.Repo, "
     '"select id::text from notes where vault_id=$1 and deleted_at is null", [vb]); '
     "ids = List.flatten(nr.rows); "
+    # `crdt_state_ciphertext` is VIRTUAL (it lives in note_bodies since R8):
+    # `Repo.get` leaves it nil, which read every note as zero clients.
     "{{:ok, notes}} = Engram.Repo.with_tenant(u.id, fn -> "
-    "Enum.map(ids, &Engram.Repo.get(Engram.Notes.Note, &1)) end); "
+    "import Ecto.Query; from(x in Engram.Notes.Note, where: x.id in ^ids) "
+    "|> Engram.Notes.NoteBody.select_note() |> Engram.Repo.all() end); "
     "pairs = Enum.map(notes, fn n -> "
     "{{:ok, st}} = Engram.Crypto.decrypt_crdt_state(n, u); "
     "c = if st do {{:ok, d}} = Engram.Notes.CrdtBridge.doc_from_state(st); "
