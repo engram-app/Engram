@@ -366,6 +366,10 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     Engram.DataMigrations.EffectiveDates
   ]
 
+  # Rule (2026-11-11): these ship OFF and are switched on by their override
+  # after the deploy is validated on staging. Every other one ships on.
+  @ships_off [Engram.DataMigrations.NoteMeta]
+
   test "every data migration newer than the kill-switch rule has a working kill switch" do
     alias Engram.ServiceConfig.Overrides
 
@@ -388,16 +392,19 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
       # A key missing here silently falls back to env: no runtime switch.
       assert key in Overrides.keys(), "#{inspect(mod)}: add #{key} to ServiceConfig.Overrides"
 
-      # Either default (a migration may ship off until staging validates it,
-      # e.g. NoteMeta), but the override must switch it both ways, and
-      # deleting the override must restore the default.
-      default = mod.enabled?()
+      # Default on, except a migration named in @ships_off (off until staging
+      # validates it); the override must switch it both ways either way.
+      ships_off? = mod in @ships_off
+
+      assert mod.enabled?() == not ships_off?,
+             "#{inspect(mod)}: default #{if ships_off?, do: "off", else: "on"}"
+
       assert :ok = Overrides.put(key, false, by: "test")
       refute mod.enabled?(), "#{inspect(mod)}: the override must switch it off"
       assert :ok = Overrides.put(key, true, by: "test")
       assert mod.enabled?(), "#{inspect(mod)}: the override must switch it on"
       assert :ok = Overrides.delete(key, by: "test")
-      assert mod.enabled?() == default
+      assert mod.enabled?() == not ships_off?
     end
   end
 

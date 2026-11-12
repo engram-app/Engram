@@ -358,8 +358,9 @@ defmodule Engram.Notes.Frontmatter do
   The key order with each key once, at its FIRST position. Concurrent lifts of
   one fence each append to the `frontmatter_order` Y.Array and the CRDT keeps
   both inserts, so every reader of the order goes through this (the web app's
-  `uniqueKeys` and the plugin do the same), and every replica shows and writes
-  the key once, in the same place.
+  `uniqueKeys` does the same) and the backend and web show and write the key
+  once, in the same place. The Obsidian plugin dedupes only once
+  Engram-obsidian#697 ships; until then it writes a duplicated key twice.
   """
   @spec unique_order([String.t()]) :: [String.t()]
   def unique_order(order) when is_list(order), do: Enum.uniq(order)

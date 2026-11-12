@@ -115,7 +115,8 @@ export function parseFrontmatter(
  * The key order with each key once, at its FIRST position. Concurrent lifts of
  * one fence each append to `frontmatter_order` and the CRDT keeps both, so every
  * reader of the order goes through this (the backend's
- * `Frontmatter.unique_order/1` and the plugin do the same).
+ * `Frontmatter.unique_order/1` does the same; the Obsidian plugin only once
+ * Engram-obsidian#697 ships).
  */
 export function uniqueKeys(order: readonly string[]): string[] {
 	return [...new Set(order)];
