@@ -168,6 +168,34 @@ defmodule Engram.Notes.LocationTest do
     end
   end
 
+  describe "cost" do
+    test "get_notes_within at current stored paths reads no folder chains", %{user: u, vault: v} do
+      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "D/y.md", "content" => "y"}, actor: "api")
+      names_on!()
+
+      {got, queries} =
+        Engram.QueryRecorder.record(fn ->
+          for {_path, fetch} <- Notes.get_notes_within(u, v, ["A/B/x.md", "D/y.md"], 1_000_000),
+              do: fetch.().path
+        end)
+
+      assert got == ["A/B/x.md", "D/y.md"]
+      assert Engram.QueryPlan.reading(queries, "folders") == []
+    end
+
+    test "a feed page reads its folder chains in its own transaction", %{user: u, vault: v} do
+      names_on!()
+      {_, queries} = Engram.QueryRecorder.record(fn -> Notes.list_changes_by_seq(u, v, 0) end)
+
+      assert [_] = Engram.QueryPlan.reading(queries, "folders")
+
+      assert Enum.any?(Engram.QueryRecorder.transactions(queries), fn sqls ->
+               Enum.any?(sqls, &(&1 =~ ~s(FROM "notes"))) and
+                 Enum.any?(sqls, &(&1 =~ ~s(FROM "folders")))
+             end)
+    end
+  end
+
   describe "derived output paths" do
     test "the change feed serves the path derived from the folder tree, plus folder_id and name",
          %{user: u, vault: v, note: note} do

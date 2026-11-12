@@ -23,6 +23,15 @@ defmodule Engram.Notes.LocationPlanTest do
 
     for _ <- 1..300, do: insert(:note, user: user, vault: vault)
 
+    # Siblings at every level, so a probe by parent alone reads many rows
+    # and the planner weighs the name.
+    {:ok, _} =
+      Engram.Folders.create_markers(
+        user,
+        vault,
+        for(i <- 1..60, do: "R#{i}") ++ for(i <- 1..60, do: "A/S#{i}")
+      )
+
     :ok = DataMigrations.mark_done("note_name", 1)
     Engram.Cache.clear_local(:note_name)
     on_exit(fn -> Engram.Cache.clear_local(:note_name) end)
@@ -40,6 +49,9 @@ defmodule Engram.Notes.LocationPlanTest do
     for index <- ~w(folders_live_name notes_folder_name_live notes_user_vault_path_v2),
         do: assert(plan =~ index, "expected #{index} in:\n#{sql}\n\nplan:\n#{plan}")
 
+    # No level reads a whole vault's (or a parent's) folders.
     refute plan =~ "Seq Scan", plan
+    refute plan =~ "Hash Join", plan
+    refute plan =~ "folders_parent", plan
   end
 end

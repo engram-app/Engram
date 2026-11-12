@@ -150,6 +150,9 @@ defmodule Engram.Cache.Registry do
     # Whether every notes row carries wave 3's 16-byte ids (Engram.Notes.Keys);
     # the NoteSplit ledger, read at most once a minute per node.
     %{name: :note_split, ttl: 60_000, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # Whether the S2 `note_name` ledger is done (Engram.Notes.Location.on?/0),
+    # read at most once a minute per node.
+    %{name: :note_name, ttl: 60_000, cache_nil: false, evict_match: :key, pg_channel: nil},
     # Legal floor / current version / hash per document; evicted on publish.
     %{
       name: :legal_version,
