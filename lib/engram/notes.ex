@@ -4529,8 +4529,6 @@ defmodule Engram.Notes do
   # paths only (one folder walk each). Rows are keyed back to the asked paths
   # as `get_notes_within/4` keys them; the moved-vault flag rides the same
   # statement, so with no moved folder nothing more is read.
-  defp located_ids_at(_user, _vault, []), do: %{}
-
   defp located_ids_at(user, vault, paths) do
     case Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
