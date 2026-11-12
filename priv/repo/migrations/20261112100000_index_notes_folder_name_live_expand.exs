@@ -53,13 +53,22 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderNameLiveExpand do
   most 110 s (`checkout/2` `timeout:`; DBConnection's default, 15 s, would
   otherwise cut the build short and leave it INVALID), and before each
   statement `statement_timeout` is set to what is left of that budget less
-  a 5 s margin (at least 1 s). The server therefore cancels every statement,
+  a 5 s margin; under 10 s left, the boot fails loudly instead of starting
+  a build it cannot finish. The server therefore cancels every statement,
   the second build included, before the client's deadline: no orphaned
   build outlives the checkout, so the next boot's drop of an INVALID index
   never waits on one. A build past its share (a long-open snapshot the
   CONCURRENTLY build must wait out) fails the boot cleanly; the next boot
   drops the INVALID index and builds again. No `lock_timeout`: see
   20261105150100's `up/0`.
+
+  One builder at a time: two tasks booting together (no migration lock)
+  would otherwise both drop and build. The body runs under a session
+  advisory lock on the pinned connection, polled with
+  `pg_try_advisory_lock` (a blocking wait would hold a snapshot the other
+  task's CONCURRENTLY build must wait out: a deadlock) until the same
+  deadline. The second task then finds each index valid and skips it, or
+  INVALID (the first failed) and rebuilds it.
   """
 
   @indexes [
@@ -72,12 +81,15 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderNameLiveExpand do
 
   @checkout_timeout_ms 110_000
   @margin_ms 5_000
+  @min_statement_ms 10_000
+  @lock_key 20_261_112_100_000
+  @lock_poll_ms 1_000
 
   def up do
     started = MigrationLog.now()
     deadline = started + @checkout_timeout_ms
 
-    with_checkout(fn ->
+    with_checkout(deadline, fn ->
       for {name, spec} <- @indexes do
         if invalid?(name),
           do: bounded!(deadline, "DROP INDEX CONCURRENTLY IF EXISTS #{name}")
@@ -118,13 +130,16 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderNameLiveExpand do
   # miss the build and leak into later migrations. Inlined, not shared: the
   # N-1 gate runs this file on the previous release's code, so a migration
   # calls no app module.
-  defp with_checkout(fun) do
+  defp with_checkout(deadline, fun) do
     repo().checkout(
       fn ->
+        lock!(deadline)
+
         try do
           fun.()
         after
           repo().query!("RESET statement_timeout")
+          repo().query!("SELECT pg_advisory_unlock($1)", [@lock_key], log: false)
         end
       end,
       timeout: @checkout_timeout_ms
@@ -135,8 +150,38 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderNameLiveExpand do
   # checkout's), less the margin: the server cancels it before the client
   # disconnects.
   defp bounded!(deadline, sql) do
-    left = max(deadline - MigrationLog.now() - @margin_ms, 1_000)
-    repo().query!("SET statement_timeout = #{left}")
+    repo().query!("SET statement_timeout = #{left!(deadline)}")
     repo().query!(sql, [], timeout: :infinity)
+  end
+
+  # Takes the build lock, polling, before `deadline` leaves too little for a
+  # build. Each poll is one short statement, so a waiting task holds no
+  # snapshot the other task's build waits on.
+  defp lock!(deadline) do
+    _ = left!(deadline)
+
+    case repo().query!("SELECT pg_try_advisory_lock($1)", [@lock_key], log: false) do
+      %{rows: [[true]]} ->
+        :ok
+
+      _ ->
+        Process.sleep(@lock_poll_ms)
+        lock!(deadline)
+    end
+  end
+
+  # What is left before `deadline`, less the margin; raises when that is
+  # under the floor, rather than run a build bound to time out.
+  defp left!(deadline) do
+    left = deadline - MigrationLog.now() - @margin_ms
+
+    if left < @min_statement_ms,
+      do:
+        raise(
+          "index_notes_folder_name_live: #{left} ms left of the #{@checkout_timeout_ms} ms " <>
+            "budget, under the #{@min_statement_ms} ms floor; the next boot retries"
+        )
+
+    left
   end
 end
