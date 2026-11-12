@@ -32,6 +32,24 @@ from helpers.cdp import PLUGIN_PATH
 
 PROBE = f"JSON.stringify({PLUGIN_PATH}.syncQuiescence())"
 OWED = ("pushing", "pendingPushes", "queued", "flushing", "creating", "crdtOps")
+QUEUE_DUMP_CAP = 20
+# Metadata only, never note content: names which entry held `queued`/`crdtOps`.
+QUEUE_DUMP = f"""JSON.stringify((() => {{
+  const p = {PLUGIN_PATH};
+  const q = p.syncEngine.queue.all();
+  const ops = p.crdtOpQueue?.all() ?? [];
+  return {{
+    queue: q.slice(0, {QUEUE_DUMP_CAP}).map((e) => ({{
+      path: e.path, action: e.action, kind: e.kind, noteId: e.noteId, crdt: e.crdt,
+      vaultId: e.vaultId, attempts: e.attempts, queuedAt: e.timestamp, nextAttemptAt: e.nextAttemptAt,
+    }})),
+    queueTotal: q.length,
+    crdtOps: ops.slice(0, {QUEUE_DUMP_CAP}).map((o) => ({{
+      kind: o.kind, docId: o.docId, attempts: o.attempts, enqueuedAt: o.enqueuedAt,
+    }})),
+    crdtOpsTotal: ops.length,
+  }};
+}})())"""
 
 
 def _settled(server: dict, client: dict, caught_up: bool) -> bool:
@@ -67,8 +85,13 @@ async def await_quiescent(
         if in_a_row >= 2:
             return
         await asyncio.sleep(0.5)
+    try:
+        entries = json.loads(await cdp.evaluate(QUEUE_DUMP))
+    except Exception as e:  # noqa: BLE001 - a diagnostic must never mask the settle failure
+        entries = f"<queue dump failed: {e!r}>"
     raise AssertionError(
-        f"sync did not settle within {deadline_s}s: server={server} client={client}"
+        f"sync did not settle within {deadline_s}s: server={server} client={client} "
+        f"queue_entries={entries}"
     )
 
 
