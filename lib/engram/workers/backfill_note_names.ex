@@ -72,6 +72,8 @@ defmodule Engram.Workers.BackfillNoteNames do
   alias Engram.DataMigrations.NoteName
   alias Engram.Folders.{Folder, Rows}
   alias Engram.Logger.Metadata
+
+  require NameKeys
   alias Engram.Notes.{Name, Note}
   alias Engram.Repo
 
@@ -308,13 +310,8 @@ defmodule Engram.Workers.BackfillNoteNames do
     from(r in schema(table),
       where:
         not is_nil(field(r, ^ct)) and
-          fragment("? IS DISTINCT FROM (? || ?::bytea)", r.name_stamp, field(r, ^nonce), ^v) and
-          fragment(
-            "? IS DISTINCT FROM ('\\x00'::bytea || ? || ?::bytea)",
-            r.name_stamp,
-            field(r, ^nonce),
-            ^v
-          ),
+          fragment(NameKeys.not_current_sql(), r.name_stamp, field(r, ^nonce), ^v) and
+          fragment(NameKeys.not_parked_sql(), r.name_stamp, field(r, ^nonce), ^v),
       select: %{
         id: r.id,
         user_id: r.user_id,
