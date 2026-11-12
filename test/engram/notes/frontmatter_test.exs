@@ -183,6 +183,15 @@ defmodule Engram.Notes.FrontmatterTest do
       assert {:ok, ^order, ^values, []} = Frontmatter.parse(block)
     end
 
+    # Concurrent lifts of one fence each append the key to the shared
+    # `frontmatter_order` Y.Array, and a CRDT keeps both inserts. Every
+    # replica (the plugin too) keeps a key at its FIRST position, once.
+    test "a key listed twice in the order is emitted once, at its first position" do
+      values = %{"a" => "1", "b" => "2"}
+      assert Frontmatter.emit(["a", "b", "a"], values) == "a: 1\nb: 2\n"
+      assert Frontmatter.emit(["b", "a", "b", "a"], values) == "b: 2\na: 1\n"
+    end
+
     test "empty inputs emit an empty string" do
       assert Frontmatter.emit([], %{}) == ""
     end

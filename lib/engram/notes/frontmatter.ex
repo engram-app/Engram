@@ -375,7 +375,11 @@ defmodule Engram.Notes.Frontmatter do
 
   def emit(order, values, raws)
       when is_list(order) and is_map(values) and is_map(raws) do
+    # Concurrent lifts of one fence each append to `frontmatter_order` and the
+    # CRDT keeps both inserts: a key emits once, at its FIRST position, as the
+    # plugin renders it, so every replica writes the same block.
     order
+    |> Enum.uniq()
     |> Enum.filter(fn k -> Map.has_key?(raws, k) or Map.has_key?(values, k) end)
     |> Enum.map_join("", fn key ->
       case Map.fetch(raws, key) do

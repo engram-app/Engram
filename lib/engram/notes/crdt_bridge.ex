@@ -346,7 +346,7 @@ defmodule Engram.Notes.CrdtBridge do
               end
             end)
 
-            to_append = Enum.reject(new_keys, fn k -> k in existing_order end)
+            to_append = new_keys |> Enum.uniq() |> Enum.reject(&(&1 in existing_order))
 
             if to_append != [] do
               Yex.Array.insert_list(arr, length(existing_order), to_append)
