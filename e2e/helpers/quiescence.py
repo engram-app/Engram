@@ -5,7 +5,8 @@ Settled means, read twice in a row:
     updates a room could not checkpoint inline: a room-shutdown overflow past
     CheckpointGate's limit, or a link rewrite on a roomless note; the fold bumps
     change_seq), and
-  - client: the catch-up cursor has reached the server's change_seq, and the
+  - client: the catch-up cursor has reached the head of the server's op-log
+    feed (`feed_seq`; folder rows bump the vault seq but are never served), and the
     device owes nothing outbound (debounced or running pushes, offline queue,
     CRDT op queue, in-flight flushes and creates).
 
@@ -41,7 +42,10 @@ def _settled(server: dict, client: dict, caught_up: bool) -> bool:
     return (
         server["pending_checkpoints"] == 0
         and not server.get("checkpoints_capped")
-        and (not caught_up or client["catchupSeq"] >= server["change_seq"])
+        # `feed_seq`, not `change_seq`: the vault seq also counts folder rows,
+        # which the op-log feed never serves, so a cursor cannot reach
+        # change_seq after a folder write until some later note bump.
+        and (not caught_up or client["catchupSeq"] >= server.get("feed_seq", server["change_seq"]))
         and not client["pulling"]
         and all(client[k] == 0 for k in OWED)
     )
