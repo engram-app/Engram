@@ -45,7 +45,7 @@ defmodule Engram.Notes.LocationPlanTest do
 
     plan = QueryPlan.generic_plan(sql, analyze: ["notes", "folders"])
 
-    for index <- ["folders_live_name", "notes_folder_name_live", path_index],
+    for index <- ["folders_moved_live", "folders_live_name", "notes_folder_name_live", path_index],
         do: assert(plan =~ index, "expected #{index} in:\n#{sql}\n\nplan:\n#{plan}")
 
     # No level reads a whole vault's (or a parent's) folders.

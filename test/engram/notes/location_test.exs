@@ -103,6 +103,12 @@ defmodule Engram.Notes.LocationTest do
     ])
   end
 
+  defp got_ids(user, vault, paths) do
+    for {p, fetch} <- Notes.get_notes_within(user, vault, paths, 10_000_000), into: %{} do
+      {p, with(%{id: id} <- fetch.(), do: id)}
+    end
+  end
+
   defp folder_id(user, vault, path),
     do: Repo.with_tenant!(user.id, fn -> Rows.ids_by_path(user, vault.id, [path]) end)[path]
 
@@ -317,6 +323,31 @@ defmodule Engram.Notes.LocationTest do
 
       assert {:error, :conflict} = Notes.rename_note(u, v, "D/o.md", "Z/x.md")
       refute_received {:claim_route, :orphan}
+    end
+
+    # Third review B3: get_notes keyed a drift row by its folder-ref path too.
+    test "get_notes over same-name paths serves the holder of the folder-ref path",
+         %{user: u, vault: v, note: note} do
+      holder = note!(u, v, "Z/x.md")
+      got = got_ids(u, v, ["Z/x.md", "A/B/x.md"])
+      assert got["A/B/x.md"] == note.id
+      assert got["Z/x.md"] == holder.id
+    end
+
+    test "get_notes over same-name paths serves nothing at an unheld folder-ref path",
+         %{user: u, vault: v, note: note} do
+      got = got_ids(u, v, ["A/B/x.md", "Z/x.md"])
+      assert got["A/B/x.md"] == note.id
+      assert got["Z/x.md"] == nil
+    end
+
+    test "in a moved vault get_notes still serves the holder of a same-name path",
+         %{user: u, vault: v, note: note} do
+      holder = note!(u, v, "Z/x.md")
+      mark_moved!(u, v)
+      got = got_ids(u, v, ["Z/x.md", "A/B/x.md"])
+      assert got["A/B/x.md"] == note.id
+      assert got["Z/x.md"] == holder.id
     end
 
     test "outputs keep the stored path under a cascaded folder", %{user: u, vault: v, note: note} do
