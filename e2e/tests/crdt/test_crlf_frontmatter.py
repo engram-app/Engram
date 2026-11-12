@@ -22,6 +22,7 @@ it does not heal it.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 import uuid
 from pathlib import Path
@@ -49,9 +50,14 @@ CRLF_NOTE = FENCE + BODY
 # heal that diffs to the body (instead of deleting exactly the fence) trims
 # that shared `-` and, merged with another device's lift, eats the list marker.
 LIST_BODY = "- item one\r\n- item two\r\n"
-# What a device that never opened the note holds: the projection's LF fence
-# around the doc's own CRLF body. Mixed endings, pinned so a change is visible.
-B_NOTE = FENCE.replace("\r\n", "\n") + BODY
+
+
+def _lf(text: str) -> str:
+    """The plugin's and server's `toLf`: every CRLF pair and lone CR as LF.
+    Markdown docs hold LF only, and every file sync writes is LF."""
+    return re.sub(r"\r\n?", "\n", text)
+
+
 # Long enough for a server lift, its fan-out and any disk rewrite it causes to
 # land; well inside the crdt job's per-test budget.
 SETTLE_S = 15
@@ -111,26 +117,25 @@ def _properties_are_properties(doc, values: dict[str, str]) -> bool:
 
 
 async def _hold_bytes(
-    vault: Path, rel: str, expected: str, why: str, *, open_in_editor: bool = False
+    vault: Path, rel: str, expected: str, why: str, *, exact: bool = True
 ) -> None:
-    """Assert the file keeps `expected` for the whole settle window.
+    """Assert the file holds `expected` for the whole settle window.
 
-    Byte-exact for a note that is NOT open. For a note open in the editor,
-    line endings are Obsidian's call, not sync's: CodeMirror holds LF, and
-    TextFileView.save (app.js 1.12.7) writes the LF buffer whenever it differs
-    from the CRLF text it loaded, which `onUnloadFile` triggers on every leaf
-    close or file switch. So an open note is compared with line endings
-    folded; every other byte, the key count and the body still have to match.
-    The plugin's own share (no repaint, no save nudge for an unchanged
-    buffer) is pinned byte-exact by the plugin's tests/crdt-live-binding-crlf
-    and crdt-live-views unit tests."""
-    fold = (lambda t: t.replace("\r\n", "\n")) if open_in_editor else (lambda t: t)
+    `exact` for a file sync wrote. Otherwise (the user's own CRLF file, or a
+    note open in the editor, which Obsidian itself saves as LF: CodeMirror
+    holds LF and TextFileView.save in app.js 1.12.7 writes it whenever it
+    differs from the CRLF text it loaded) it may be the original CRLF bytes or
+    their LF form, but never a MIX: the same text, one line ending."""
     deadline = time.monotonic() + SETTLE_S
     while time.monotonic() < deadline:
         now = _disk(vault, rel)
-        assert fold(now) == fold(expected), (
-            f"{why}\n--- expected ---\n{expected!r}\n--- on disk ---\n{now!r}"
-        )
+        detail = f"{why}\n--- expected ---\n{expected!r}\n--- on disk ---\n{now!r}"
+        if exact:
+            assert now == expected, detail
+        else:
+            assert _lf(now) == _lf(expected), detail
+            uniform = "\r" not in now or now.count("\n") == now.count("\r\n")
+            assert uniform, f"mixed line endings: {detail}"
         await asyncio.sleep(0.5)
 
 
@@ -157,8 +162,9 @@ async def _damaged_note_on_both(
     test: the server doc holds the fence in its body and an empty map, and both
     devices pull it as their FIRST sight of the note.
 
-    Created over REST (the server's ingest lifts CRLF frontmatter since #1645),
-    then damaged inside a pinned room so no rebind's `normalize_doc` heals it.
+    Created over REST (the server's ingest lifts the frontmatter and converts
+    to LF), then rewritten inside a pinned room to the legacy text, CRLF and
+    fence in the body, so no rebind's `normalize_doc` heals it.
     Both gates stay shut until the damage is in place, so neither device sees
     the healthy version first."""
     path = f"{folder}/Damaged.md"
@@ -169,7 +175,7 @@ async def _damaged_note_on_both(
     try:
         api_sync.create_note(path, note)
         note_id = api_sync.wait_for_note_id(path)
-        damage_server_doc(sync_vault_id, note_id, FENCE)
+        damage_server_doc(sync_vault_id, note_id, note)
         await _wait_server_doc(
             sync_vault_id,
             note_id,
@@ -209,10 +215,10 @@ async def test_crlf_note_syncs_with_properties_as_properties(
         lambda d: _properties_are_properties(d, {"title": "Crlf note", "status": "draft"}),
         "the CRLF block lifted into the frontmatter map, no fence in the body",
     )
-    assert read_server_doc(sync_vault_id, note_id).body == BODY
+    assert read_server_doc(sync_vault_id, note_id).body == _lf(BODY)
 
-    await _hold_bytes(vault_a, path, CRLF_NOTE, "sync rewrote the user's CRLF file on A")
-    await _hold_bytes(vault_b, path, B_NOTE, "B's file is not the projection of A's note")
+    await _hold_bytes(vault_a, path, CRLF_NOTE, "sync damaged A's own file", exact=False)
+    await _hold_bytes(vault_b, path, _lf(CRLF_NOTE), "B's file is not the LF projection")
     await _assert_no_copies(folder, cdp_a, cdp_b)
     _assert_one_note(folder, path, api_sync, vault_a, vault_b)
 
@@ -242,15 +248,10 @@ async def test_crlf_property_edit_reaches_b(
         lambda d: _properties_are_properties(d, {"status": "published"}),
         "the edited property in the frontmatter map, no fence in the body",
     )
-    assert doc.body == BODY, f"server body changed by a property edit: {doc.body!r}"
+    assert doc.body == _lf(BODY), f"server body changed by a property edit: {doc.body!r}"
 
-    await _hold_bytes(vault_a, path, edited, "sync rewrote the user's CRLF file on A")
-    await _hold_bytes(
-        vault_b,
-        path,
-        B_NOTE.replace("status: draft", "status: published"),
-        "B's file is not the projection of the edited note",
-    )
+    await _hold_bytes(vault_a, path, edited, "sync damaged A's own file", exact=False)
+    await _hold_bytes(vault_b, path, _lf(edited), "B's file is not the LF projection")
     await _assert_no_copies(folder, cdp_a, cdp_b)
     _assert_one_note(folder, path, api_sync, vault_a, vault_b)
 
@@ -278,10 +279,10 @@ async def test_damaged_crlf_note_heals_on_open(
             "the damaged fence lifted into the map by the plugin",
         )
         print(f"healed: order={doc.order}")
-        assert doc.body == BODY, f"heal changed the body: {doc.body!r}"
+        assert doc.body == _lf(BODY), f"heal left CRs or changed the body: {doc.body!r}"
 
-        await _hold_bytes(vault_a, path, CRLF_NOTE, "healing rewrote A's CRLF file", open_in_editor=True)
-        await _hold_bytes(vault_b, path, CRLF_NOTE, "healing rewrote B's CRLF file")
+        await _hold_bytes(vault_a, path, CRLF_NOTE, "healing damaged A's file", exact=False)
+        await _hold_bytes(vault_b, path, _lf(CRLF_NOTE), "B's file is not the LF projection")
         _assert_probe_sees_writers(sync_vault_id, folder)
         _assert_keys_once(vault_a, path)
         _assert_keys_once(vault_b, path)
@@ -323,10 +324,10 @@ async def test_concurrent_heal_of_damaged_crlf_note(
         doc = read_server_doc(sync_vault_id, note_id)
         print(f"\nafter concurrent heal: raw order={doc.order}")
         assert doc.unique_order == KEYS, f"server doc: {doc}"
-        assert doc.body == LIST_BODY, f"the concurrent heal ate body characters: {doc.body!r}"
+        assert doc.body == _lf(LIST_BODY), f"the concurrent heal ate body characters: {doc.body!r}"
 
-        await _hold_bytes(vault_a, path, note, "the heal rewrote A's file", open_in_editor=True)
-        await _hold_bytes(vault_b, path, note, "the heal rewrote B's file", open_in_editor=True)
+        await _hold_bytes(vault_a, path, note, "the heal damaged A's file", exact=False)
+        await _hold_bytes(vault_b, path, note, "the heal damaged B's file", exact=False)
         _assert_probe_sees_writers(sync_vault_id, folder)
         _assert_keys_once(vault_a, path)
         _assert_keys_once(vault_b, path)
@@ -379,3 +380,43 @@ async def test_duplicate_order_key_projects_once_and_mints_nothing(
     )
     _assert_keys_once(vault_a, path)
     assert _disk(vault_b, path) == DUP_NOTE, f"B's file changed: {_disk(vault_b, path)!r}"
+
+
+@pytest.mark.asyncio
+async def test_close_after_remote_edit_keeps_the_doc_lf(
+    vault_a, vault_b, cdp_a, cdp_b, api_sync, sync_vault_id
+):
+    """[6] A has a CRLF note open; B edits it; the edit is painted into A's
+    editor; A closes the note, and Obsidian's unload save writes A's LF buffer
+    back over the file. That save must read as an echo: the doc keeps the
+    remote line exactly once and holds no CR, and B's file is the LF
+    projection."""
+    folder = _folder()
+    path = f"{folder}/CloseAfterRemote.md"
+    await _arm(cdp_a, cdp_b)
+    write_binary(vault_a, path, CRLF_NOTE.encode())
+    note_id = api_sync.wait_for_note_id(path)
+    await cdp_b.trigger_full_sync()
+    wait_for_content(vault_b, path, "body line two", timeout=DELIVERY_TIMEOUT)
+    await cdp_a.open_in_editor(path)
+
+    edited = _lf(CRLF_NOTE).replace("body line two\n", "body line two\nremote line\n")
+    write_binary(vault_b, path, edited.encode())
+    deadline = time.monotonic() + DELIVERY_TIMEOUT
+    while "remote line" not in (await cdp_a.editor_text() or ""):
+        assert time.monotonic() < deadline, "B's edit never reached A's open editor"
+        await asyncio.sleep(0.5)
+    await cdp_a.close_all_editors()
+    await asyncio.sleep(SETTLE_S)
+    await await_quiescent(cdp_a, api_sync)
+
+    want = _lf(BODY).replace("body line two\n", "body line two\nremote line\n")
+    doc = await _wait_server_doc(
+        sync_vault_id, note_id, lambda d: d.body == want, "the remote edit, once, in LF"
+    )
+    assert doc.unique_order == KEYS, f"server doc: {doc}"
+    await _hold_bytes(vault_a, path, edited, "A's file after close", exact=False)
+    await _hold_bytes(vault_b, path, edited, "B's file is not the LF projection")
+    _assert_keys_once(vault_a, path)
+    await _assert_no_copies(folder, cdp_a, cdp_b)
+    _assert_one_note(folder, path, api_sync, vault_a, vault_b)

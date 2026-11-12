@@ -50,24 +50,6 @@ SETTLE_SECONDS = 15
 
 
 
-async def _close_all_in_obsidian(cdp) -> None:
-    """Detach every markdown leaf — the user's "close the file".
-
-    This is the transition that releases the live binding. `detach()` is what
-    Obsidian's own close button calls, so it fires the same teardown (and the
-    same final save) the reported repro goes through."""
-    left = await cdp.evaluate(
-        """
-        (async () => {
-          app.workspace.getLeavesOfType("markdown").forEach((l) => l.detach());
-          return app.workspace.getLeavesOfType("markdown").length;
-        })()
-        """,
-        await_promise=True,
-    )
-    assert left == 0, f"markdown leaves still open after detach: {left!r}"
-
-
 async def _type_into_open_editor(cdp, path: str, text: str) -> None:
     """Set the OPEN editor's buffer, which is what typing produces.
 
@@ -270,7 +252,7 @@ async def test_typed_frontmatter_survives_close_and_reopen(
         "published", timeout=MS
     )
 
-    await _close_all_in_obsidian(cdp_a)
+    await cdp_a.close_all_editors()
 
     # Assert while CLOSED. This is the reported state, and it is the strict one:
     # reopening first runs attach() -> enroll -> room rejoin, and any update

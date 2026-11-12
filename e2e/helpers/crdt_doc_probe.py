@@ -87,10 +87,11 @@ def _in_room(vault_id: str, note_id: str, fun: str, pin: bool) -> None:
     assert "staged" in out, f"room staging did not run: {out!r}"
 
 
-def damage_server_doc(vault_id: str, note_id: str, fence: str) -> None:
-    """Rewrite the doc into the old-plugin damaged shape in ONE transaction:
-    every frontmatter key and the order removed, `fence` (the block's raw text,
-    fences included) prepended to the body. Pins the room so it stays damaged."""
+def damage_server_doc(vault_id: str, note_id: str, raw: str) -> None:
+    """Rewrite the doc into the legacy damaged shape in ONE transaction: every
+    frontmatter key and the order removed, and the body replaced by `raw`, the
+    note's text as an old plugin seeded it (fence and CRLF in the Y.Text).
+    Pins the room so no rebind heals it."""
     fun = (
         "fn d -> m = Yex.Doc.get_map(d, \"frontmatter\"); "
         'a = Yex.Doc.get_array(d, "frontmatter_order"); '
@@ -99,7 +100,9 @@ def damage_server_doc(vault_id: str, note_id: str, fence: str) -> None:
         "Enum.each(Map.keys(Yex.Map.to_map(m)), &Yex.Map.delete(m, &1)); "
         "n = length(Yex.Array.to_list(a)); "
         "if n > 0, do: Yex.Array.delete_range(a, 0, n); "
-        f"Yex.Text.insert(t, 0, {_elixir_str(fence)}) end) end"
+        "l = Yex.Text.length(t); "
+        "if l > 0, do: Yex.Text.delete(t, 0, l); "
+        f"Yex.Text.insert(t, 0, {_elixir_str(raw)}) end) end"
     )
     _in_room(vault_id, note_id, fun, pin=True)
 

@@ -676,6 +676,25 @@ class CdpClient:
         )
         assert opened == path, f"failed to live-bind {path} in Obsidian: {opened!r}"
 
+    async def close_all_editors(self) -> None:
+        """Detach every markdown leaf, the user's "close the file". `detach()`
+        is what Obsidian's own close button calls, so it fires the same
+        teardown (the live binding's release and the final unload save)."""
+        left = await self.evaluate(
+            """
+            (async () => {
+              app.workspace.getLeavesOfType("markdown").forEach((l) => l.detach());
+              return app.workspace.getLeavesOfType("markdown").length;
+            })()
+            """,
+            await_promise=True,
+        )
+        assert left == 0, f"markdown leaves still open after detach: {left!r}"
+
+    async def editor_text(self) -> str | None:
+        """The active editor's text, or None when no editor is open."""
+        return await self.evaluate("app.workspace.activeEditor?.editor?.getValue() ?? null")
+
     async def arm_create_spy(self) -> None:
         """Record every path Obsidian CREATES from now on, until disarmed.
 
