@@ -44,7 +44,8 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.EffectiveDates,
     Engram.DataMigrations.FileTimes,
     Engram.DataMigrations.NameTerms,
-    Engram.DataMigrations.NoteName
+    Engram.DataMigrations.NoteName,
+    Engram.DataMigrations.NoteMeta
   ]
 
   @impl Oban.Worker

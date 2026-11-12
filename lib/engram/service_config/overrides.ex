@@ -88,7 +88,9 @@ defmodule Engram.ServiceConfig.Overrides do
     # `Engram.Workers.InactivityCleanup` (#2566): the soft-delete kill switch
     # (default on) and the days between the final notice and the delete.
     inactivity_soft_delete: :boolean,
-    inactivity_delete_grace_days: {:integer, 0..365}
+    inactivity_delete_grace_days: {:integer, 0..365},
+    # The `NoteMeta` migration's kill switch (title/tags/links rule heal).
+    note_meta_backfill: :boolean
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})
