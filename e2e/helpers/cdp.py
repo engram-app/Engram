@@ -1557,8 +1557,11 @@ class CdpClient:
         result = await self.evaluate(f"{PLUGIN_PATH}.crdtOpQueue?.size() ?? -1")
         return result if isinstance(result, int) else -1
 
-    async def get_crdt_queue_ops(self) -> list:
-        """Flat snapshot of pending CRDT ops: `[{kind, docId, path}, ...]`.
+    async def get_crdt_queue_ops(self, timeout: float = 120) -> list:
+        """Flat snapshot of pending CRDT ops:
+        `[{id, kind, docId, vaultId, attempts, enqueuedAt, path}, ...]`.
+
+        Plain fields only: the op `payload` body is never copied, just its path.
 
         `path` is included deliberately. Without it no assertion can pin an op
         to the note that produced it, which forces tests into weak shapes like
@@ -1569,9 +1572,10 @@ class CdpClient:
         """
         js = (
             f"({PLUGIN_PATH}.crdtOpQueue?.all() ?? [])"
-            ".map(o => ({kind: o.kind, docId: o.docId, path: o.payload?.path ?? null}))"
+            ".map(o => ({id: o.id, kind: o.kind, docId: o.docId, vaultId: o.vaultId ?? null,"
+            " attempts: o.attempts, enqueuedAt: o.enqueuedAt, path: o.payload?.path ?? null}))"
         )
-        result = await self.evaluate(js)
+        result = await self.evaluate(js, timeout=timeout)
         return result if isinstance(result, list) else []
 
     async def wait_for_crdt_queue_drain(self, timeout: float = 30, poll: float = 0.5) -> None:
@@ -1607,16 +1611,21 @@ class CdpClient:
             f"Queue not drained after {timeout}s, size={await self.get_queue_size()}"
         )
 
-    async def get_queue_entries(self) -> list[dict]:
-        """Dump queue entries for diagnostics (path, action, timestamp)."""
+    async def get_queue_entries(self, timeout: float = 120) -> list[dict]:
+        """Offline-queue entries for diagnostics, plain metadata only.
+
+        Never copies `content`/`contentBase64`. `evidenced` and `priority` are
+        kept so a held delete (which the plugin's `queued` count skips) can be
+        told apart from a live entry.
+        """
         result = await self.evaluate(
-            f"JSON.stringify({ENGINE_PATH}.queue.all().map("
-            f"e => ({{path: e.path, action: e.action, kind: e.kind, ts: e.timestamp}})))"
+            f"JSON.stringify({ENGINE_PATH}.queue.all().map(e => ({{"
+            "path: e.path, action: e.action, kind: e.kind, noteId: e.noteId, crdt: e.crdt,"
+            " vaultId: e.vaultId, evidenced: e.evidenced, priority: e.priority,"
+            " attempts: e.attempts, timestamp: e.timestamp, nextAttemptAt: e.nextAttemptAt})))",
+            timeout=timeout,
         )
-        if isinstance(result, str):
-            import json as _json
-            return _json.loads(result)
-        return []
+        return json.loads(result) if isinstance(result, str) else []
 
     async def clear_queue(self) -> None:
         """Clear the offline queue (for test isolation)."""
