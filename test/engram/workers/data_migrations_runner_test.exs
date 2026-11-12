@@ -284,6 +284,8 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     Engram.Cache.clear_local(:rebuild)
     Repo.query!("DELETE FROM rebuild_ledger")
     Engram.Rebuild.set_budget(1_000_000)
+    # NoteMeta ships off until staging validates it.
+    Engram.ServiceConfig.put_override(:note_meta_backfill, true)
     # PersonOriginBackfill is disabled (no ledger row) without PostHog reads.
     posthog = [:posthog_key, :posthog_erasure_api_key, :posthog_project_id]
     prior = Map.new(posthog, &{&1, Application.fetch_env(:engram, &1)})
@@ -386,11 +388,16 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
       # A key missing here silently falls back to env: no runtime switch.
       assert key in Overrides.keys(), "#{inspect(mod)}: add #{key} to ServiceConfig.Overrides"
 
-      assert mod.enabled?(), "#{inspect(mod)}: default on"
+      # Either default (a migration may ship off until staging validates it,
+      # e.g. NoteMeta), but the override must switch it both ways, and
+      # deleting the override must restore the default.
+      default = mod.enabled?()
       assert :ok = Overrides.put(key, false, by: "test")
       refute mod.enabled?(), "#{inspect(mod)}: the override must switch it off"
+      assert :ok = Overrides.put(key, true, by: "test")
+      assert mod.enabled?(), "#{inspect(mod)}: the override must switch it on"
       assert :ok = Overrides.delete(key, by: "test")
-      assert mod.enabled?()
+      assert mod.enabled?() == default
     end
   end
 

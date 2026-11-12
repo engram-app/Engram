@@ -144,9 +144,8 @@ defmodule Engram.DataMigrations.NoteMetaTest do
     refute_enqueued(worker: RebuildStaleNote)
   end
 
-  test "kill switch off: the runner does no work", ctx do
+  test "kill switch off (the default): the runner does no work", ctx do
     note = stale_note(ctx)
-    Engram.ServiceConfig.put_override(:note_meta_backfill, false)
     refute NoteMeta.enabled?()
 
     assert :ok = perform_job(DataMigrationsRunner, %{})
@@ -157,8 +156,10 @@ defmodule Engram.DataMigrations.NoteMetaTest do
     assert links(note) == []
   end
 
-  test "registered with the runner, on by default" do
+  test "registered with the runner, off until the override turns it on" do
     assert NoteMeta in DataMigrationsRunner.migrations()
+    refute NoteMeta.enabled?()
+    Engram.ServiceConfig.put_override(:note_meta_backfill, true)
     assert NoteMeta.enabled?()
   end
 

@@ -236,6 +236,8 @@ defmodule Engram.DataMigrations.MaintenancePoolRegistryTest do
   test "every registered migration's pass and left/0 run on the maintenance pool" do
     assert {:fleet, _} = TenantScan.pool()
     stub_qdrant!()
+    # Ships off until staging validates it; its fleet path is covered here.
+    Engram.ServiceConfig.put_override(:note_meta_backfill, true)
     rows = exercise(DataMigrationsRunner.migrations())
     report(rows)
     assert failures(rows) == []

@@ -89,7 +89,7 @@ defmodule Engram.ServiceConfig.Overrides do
     # (default on) and the days between the final notice and the delete.
     inactivity_soft_delete: :boolean,
     inactivity_delete_grace_days: {:integer, 0..365},
-    # The `NoteMeta` migration's kill switch (title/tags/links rule heal).
+    # The `NoteMeta` migration's kill switch (title/tags/links rule heal), default off.
     note_meta_backfill: :boolean
   }
 

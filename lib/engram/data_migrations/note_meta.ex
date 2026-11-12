@@ -34,7 +34,10 @@ defmodule Engram.DataMigrations.NoteMeta do
   stamped note under the old rules; that note heals on its next edit, as
   every note did before this migration.
 
-  Kill switch: the `note_meta_backfill` service override (default on).
+  Kill switch: the `note_meta_backfill` service override, default OFF: it is
+  turned on after the deploy has been validated on staging. A legacy row is
+  handed over by `Engram.Crypto.AadRebind.rebind_note/2`, which clears its
+  stamp and reopens this ledger.
   """
   @behaviour Engram.DataMigration
 
@@ -66,7 +69,11 @@ defmodule Engram.DataMigrations.NoteMeta do
   def version, do: 1
 
   @impl true
-  def enabled?, do: Engram.ServiceConfig.get(:note_meta_backfill, true) == true
+  def enabled?, do: Engram.ServiceConfig.get(:note_meta_backfill, false) == true
+
+  @doc "True once every note was checked under the current rules."
+  @spec done?() :: boolean()
+  def done?, do: Engram.DataMigrations.done?(name(), version())
 
   @impl true
   def run_pass, do: run_pass([])
