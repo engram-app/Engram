@@ -303,8 +303,86 @@ defmodule Engram.Notes.CrdtBridgeTest do
       :ok = Yex.apply_update(plugin, from_server)
       :ok = Yex.apply_update(server, from_plugin)
 
-      assert CrdtBridge.body_of(server) == body
-      assert CrdtBridge.body_of(plugin) == body
+      # The server heal also strips the body's CRs (LF-only docs).
+      assert CrdtBridge.body_of(server) == "- item one\n- item two\n"
+      assert CrdtBridge.body_of(plugin) == "- item one\n- item two\n"
+    end
+
+    test "strips CRs from the body: CRLF and a lone CR both become LF" do
+      doc = CrdtBridge.new_doc() |> seed_body("a\r\nb\rc\n\r\n")
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert CrdtBridge.body_of(doc) == "a\nb\nc\n\n"
+    end
+
+    test "lifts a CRLF fence and leaves an LF body" do
+      doc = CrdtBridge.new_doc() |> seed_body("---\r\ntitle: T\r\n---\r\nbody\r\n")
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert CrdtBridge.frontmatter_of(doc) == {["title"], %{"title" => "\"T\""}}
+      assert CrdtBridge.body_of(doc) == "body\n"
+    end
+
+    # Per-CR deletes, not one diff from the first CR to the last: a diff span
+    # re-inserts everything between, resurrecting a word a concurrent client
+    # deleted inside that span.
+    test "the CR heal touches only CRs, so a concurrent mid-body delete survives" do
+      base = CrdtBridge.new_doc() |> seed_body("a\r\none two\r\nb\r\n")
+      {:ok, state} = Yex.encode_state_as_update(base)
+      {:ok, server} = CrdtBridge.doc_from_state(state)
+      {:ok, plugin} = CrdtBridge.doc_from_state(state)
+
+      assert :ok = CrdtBridge.normalize_doc(server)
+      # The plugin deletes " two" (UTF-16 offset 6, 4 units) concurrently.
+      Yex.Text.delete(Yex.Doc.get_text(plugin, CrdtBridge.text_name()), 6, 4)
+
+      {:ok, from_server} = Yex.encode_state_as_update(server)
+      {:ok, from_plugin} = Yex.encode_state_as_update(plugin)
+      :ok = Yex.apply_update(plugin, from_server)
+      :ok = Yex.apply_update(server, from_plugin)
+
+      assert CrdtBridge.body_of(server) == "a\none\nb\n"
+      assert CrdtBridge.body_of(plugin) == "a\none\nb\n"
+    end
+
+    test "two concurrent CR heals converge without eating text" do
+      base = CrdtBridge.new_doc() |> seed_body("x\r\ny\r\nz")
+      {:ok, state} = Yex.encode_state_as_update(base)
+      {:ok, a} = CrdtBridge.doc_from_state(state)
+      {:ok, b} = CrdtBridge.doc_from_state(state)
+
+      assert :ok = CrdtBridge.normalize_doc(a)
+      assert :ok = CrdtBridge.normalize_doc(b)
+
+      {:ok, from_a} = Yex.encode_state_as_update(a)
+      {:ok, from_b} = Yex.encode_state_as_update(b)
+      :ok = Yex.apply_update(a, from_b)
+      :ok = Yex.apply_update(b, from_a)
+
+      assert CrdtBridge.body_of(a) == "x\ny\nz"
+      assert CrdtBridge.body_of(b) == "x\ny\nz"
+    end
+
+    test "the CR heal is idempotent: a second pass mints no ops" do
+      doc = CrdtBridge.new_doc() |> seed_body("a\r\nb\r\n")
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      sv = Yex.encode_state_vector!(doc)
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert Yex.encode_state_vector!(doc) == sv
+      assert CrdtBridge.body_of(doc) == "a\nb\n"
+    end
+
+    # An old plugin still writes CRLF and body fences as raw Yjs ops through
+    # the room, after the doc was healed once. The next room open must catch
+    # them again: the heal is a cheap unconditional scan, never skipped.
+    test "a doc healed once is healed again after a later CRLF and fence write" do
+      doc = CrdtBridge.new_doc() |> seed_body("x\r\n")
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert CrdtBridge.body_of(doc) == "x\n"
+
+      text = Yex.Doc.get_text(doc, CrdtBridge.text_name())
+      Yex.Text.insert(text, 0, "---\r\ntitle: T\r\n---\r\na\r\nb")
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert CrdtBridge.frontmatter_of(doc) == {["title"], %{"title" => "\"T\""}}
+      assert CrdtBridge.body_of(doc) == "a\nbx\n"
     end
 
     test "no-op when the body has no leading fence" do
@@ -361,6 +439,35 @@ defmodule Engram.Notes.CrdtBridgeTest do
       assert :ok = CrdtBridge.normalize_doc(doc)
       assert CrdtBridge.frontmatter_of(doc) == {[], %{}}
       assert CrdtBridge.body_of(doc) == "body\n"
+    end
+  end
+
+  describe "ingest_plaintext/2 on a doc that still holds CRs" do
+    # A legacy (never opened) note's doc is CRLF; the write path hands ingest
+    # LF text. Healing the CRs one by one first keeps the body diff to the
+    # real edit, so a concurrent tail edit between two CRs is not undone.
+    test "the three-way merge keeps a tail delete that sits between CRs" do
+      {:ok, %{state: snap}} = CrdtBridge.merge_plaintext(nil, "a\r\none two\r\nb\r\n")
+      {:ok, snapshot_doc} = CrdtBridge.doc_from_state(snap)
+      {:ok, tail_doc} = CrdtBridge.doc_from_state(snap)
+      Yex.Text.delete(Yex.Doc.get_text(tail_doc, CrdtBridge.text_name()), 6, 4)
+
+      assert {:ok, %{text: text}} =
+               CrdtBridge.merge_plaintext_relative_to_snapshot(
+                 snapshot_doc,
+                 tail_doc,
+                 "a\none two\nb\n"
+               )
+
+      assert text == "a\none\nb\n"
+    end
+
+    test "ingesting the same text twice mints no ops the second time" do
+      {:ok, doc} = CrdtBridge.doc_from_state(nil)
+      :ok = CrdtBridge.ingest_plaintext(doc, "---\ntitle: T\n---\na\nb\n")
+      sv = Yex.encode_state_vector!(doc)
+      :ok = CrdtBridge.ingest_plaintext(doc, "---\ntitle: T\n---\na\nb\n")
+      assert Yex.encode_state_vector!(doc) == sv
     end
   end
 

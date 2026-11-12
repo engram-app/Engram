@@ -440,8 +440,8 @@ defmodule Engram.MCP.HandlersEditNoteTest do
   end
 
   # Review round 2, finding 3: replace_section must not mix line endings when
-  # rewriting a CRLF note.
-  test "replace_section keeps the note's CRLF line endings uniform", %{user: u, vault: v} do
+  # rewriting a CRLF note. Docs hold LF only, so the whole note lands as LF.
+  test "replace_section on a CRLF note leaves uniform LF endings", %{user: u, vault: v} do
     content = "## A\r\nold\r\n## B\r\nkeep\r\n"
 
     {:ok, _} =
@@ -459,7 +459,7 @@ defmodule Engram.MCP.HandlersEditNoteTest do
 
     {:ok, note} = Notes.get_note(u, v, "Crlf.md")
     {:ok, out} = Notes.authoritative_content(u, note)
-    assert out == "## A\r\nn1\r\nn2\r\n## B\r\nkeep\r\n"
+    assert out == "## A\nn1\nn2\n## B\nkeep\n"
   end
 
   # Review round 2, finding 4: a setext heading occupies two lines; replacing
@@ -512,7 +512,7 @@ defmodule Engram.MCP.HandlersEditNoteTest do
   end
 
   # Fix round 2, Minor 3: replace_section to end of file on a CRLF note with
-  # no trailing newline must not leave a bare LF or a stray trailing CR.
+  # no trailing newline must not leave a stray trailing CR or a newline.
   test "replace_section to end of file on a CRLF note with no trailing newline stays uniform", %{
     user: u,
     vault: v
@@ -534,7 +534,7 @@ defmodule Engram.MCP.HandlersEditNoteTest do
 
     {:ok, note} = Notes.get_note(u, v, "CrlfEof.md")
     {:ok, out} = Notes.authoritative_content(u, note)
-    assert out == "## A\r\nn1\r\nn2"
+    assert out == "## A\nn1\nn2"
   end
 
   # Fix round 4 (final), data-loss repro: a "%%" inside an inline code span
@@ -617,7 +617,7 @@ defmodule Engram.MCP.HandlersEditNoteTest do
 
   # M1: replacing the LAST section of a note that ends with a newline must
   # keep that final newline (CRLF: no stray "\r" left behind either).
-  test "replace_section on the last section of a CRLF note keeps the final CRLF", %{
+  test "replace_section on the last section of a CRLF note keeps a final newline", %{
     user: u,
     vault: v
   } do
@@ -642,7 +642,7 @@ defmodule Engram.MCP.HandlersEditNoteTest do
              })
 
     {:ok, note} = Notes.get_note(u, v, "Last.md")
-    assert {:ok, "## A\r\nNEW\r\n"} = Notes.authoritative_content(u, note)
+    assert {:ok, "## A\nNEW\n"} = Notes.authoritative_content(u, note)
   end
 
   test "replace_section on the last section of an LF note keeps the final newline", %{
