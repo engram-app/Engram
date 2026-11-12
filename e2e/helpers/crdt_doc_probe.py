@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from helpers.backend_rpc import backend_rpc, vault_user_expr
+from helpers.backend_rpc import LOAD_DOC_EXPR, backend_rpc, vault_user_expr
 
 _FM = "Engram.Notes.CrdtBridge"
 
@@ -46,20 +46,17 @@ def _elixir_str(s: str) -> str:
 
 
 def read_server_doc(vault_id: str, note_id: str) -> ServerDoc:
-    nid, vid = _elixir_str(note_id), _elixir_str(vault_id)
+    nid = _elixir_str(note_id)
     out = backend_rpc(
         vault_user_expr(vault_id)
         # `crdt_state_ciphertext` is a VIRTUAL field (it lives in note_bodies),
-        # so `Repo.get` leaves it nil and the doc reads empty. Select it the way
-        # `LineageAudit` does.
+        # so `Repo.get` leaves it nil and the doc reads empty: select_note.
+        + LOAD_DOC_EXPR
         + "import Ecto.Query; "
         "{:ok, d} = Engram.Repo.with_tenant(u.id, fn -> "
-        f"n = from(x in Engram.Notes.Note, where: x.id == ^{nid}) "
-        "|> Engram.Notes.NoteBody.select_note([:id, :dek_version, :crdt_state_ciphertext, :crdt_state_nonce]) "
-        "|> Engram.Repo.one!(); "
-        "{:ok, st} = Engram.Crypto.decrypt_crdt_state(n, u); "
-        f"{{:ok, d}} = {_FM}.doc_from_state(st); "
-        f"Engram.Notes.CrdtPersistence.replay_tail(d, u, {nid}, {vid}); d end); "
+        f"from(x in Engram.Notes.Note, where: x.id == ^{nid}) "
+        "|> Engram.Notes.NoteBody.select_note() |> Engram.Repo.one!() "
+        "|> load_doc.(u) end); "
         f"{{o, v}} = {_FM}.frontmatter_of(d); "
         'IO.puts("DOC\\t" <> Jason.encode!(%{order: o, values: v, '
         f"body: {_FM}.body_of(d), "
