@@ -273,7 +273,10 @@ defmodule Engram.Crypto.AadRebind do
               folder_nonce: folder_n,
               tags_ciphertext: tags_ct,
               tags_nonce: tags_n,
-              dek_version: @target_version
+              dek_version: @target_version,
+              # Bound now, so it is NoteMeta's work: re-derive its title,
+              # tags and links (see `hand_to_note_meta/0`).
+              meta_version: nil
             ] ++
               Engram.Notes.Name.keys(
                 :notes,
@@ -287,11 +290,22 @@ defmodule Engram.Crypto.AadRebind do
 
       if count == 1 do
         _ = NoteBody.put!({id, content_ciphertext: content_ct, content_nonce: content_n})
+        hand_to_note_meta()
         :ok
       else
         :stale
       end
     end
+  end
+
+  # NoteMeta skips legacy rows, so a ledger closed before this rebind never
+  # saw the note: reopen it (cluster-wide) and the next hourly pass re-derives
+  # the note's title, tags and links. A cached read while it is still open,
+  # so a run of rebinds reopens once.
+  defp hand_to_note_meta do
+    meta = Engram.DataMigrations.NoteMeta
+    if meta.done?(), do: :ok = Engram.DataMigrations.reopen(meta.name(), meta.version())
+    :ok
   end
 
   # T3-audit H5 — attachment rebind is intentional no-op (see comment on

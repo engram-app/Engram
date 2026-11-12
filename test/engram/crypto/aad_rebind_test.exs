@@ -126,6 +126,59 @@ defmodule Engram.Crypto.AadRebindTest do
       assert decrypted.tags == ["t1"]
     end
 
+    # A legacy row is not NoteMeta's work until it is bound, so the rebind
+    # hands it over: it clears the row's meta stamp and reopens a closed
+    # ledger, and the next pass re-derives its title, tags and links.
+    test "hands the rebound note to NoteMeta: clears its stamp, reopens the ledger", %{user: user} do
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Meta Vault", Ecto.UUID.generate())
+      {:ok, dek} = Crypto.get_dek(user)
+      {content_ct, content_n} = Envelope.encrypt("# Body", dek)
+      {title_ct, title_n} = Envelope.encrypt("old", dek)
+      {path_ct, path_n} = Envelope.encrypt("m.md", dek)
+      {folder_ct, folder_n} = Envelope.encrypt("", dek)
+      {tags_ct, tags_n} = Envelope.encrypt(:erlang.term_to_binary([]), dek)
+      {:ok, filter_key} = Crypto.dek_filter_key(user)
+
+      fields = %{
+        content_hash: "h",
+        seq: 1,
+        mtime: 0.0,
+        user_id: user.id,
+        vault_id: vault.id,
+        content_ciphertext: content_ct,
+        content_nonce: content_n,
+        title_ciphertext: title_ct,
+        title_nonce: title_n,
+        path_ciphertext: path_ct,
+        path_nonce: path_n,
+        path_hmac: Crypto.hmac_field(filter_key, "m.md"),
+        folder_ciphertext: folder_ct,
+        folder_nonce: folder_n,
+        folder_hmac: Crypto.hmac_field(filter_key, ""),
+        tags_ciphertext: tags_ct,
+        tags_nonce: tags_n,
+        tags_hmac: [],
+        dek_version: 1,
+        meta_version: Engram.Notes.Helpers.meta_version()
+      }
+
+      note =
+        %Note{}
+        |> Ecto.Changeset.cast(fields, Map.keys(fields))
+        |> Engram.Fixtures.insert_note_row!()
+
+      meta = Engram.DataMigrations.NoteMeta
+      :ok = Engram.DataMigrations.mark_done(meta.name(), meta.version())
+      # Preconditions: stamped and closed, or the asserts below prove nothing.
+      assert note.meta_version == Engram.Notes.Helpers.meta_version()
+      assert Engram.DataMigrations.done?(meta.name(), meta.version())
+
+      assert :ok = AadRebind.rebind_user(user.id)
+
+      assert is_nil(Engram.Fixtures.raw_note!(note).meta_version)
+      refute Engram.DataMigrations.done?(meta.name(), meta.version())
+    end
+
     test "upgrades the user's wrapped DEK from v1 to v2 (AAD-bound)", %{user: user} do
       # ensure_user_dek already wrote a v2 wrap. Force a legacy v1 wrap to
       # exercise the rewrap path.
