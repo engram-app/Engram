@@ -132,6 +132,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 **Testing & CI**
 - Full test strategy, ExUnit tooling, CI pipeline, local gate loop before pushing, "a test must be able to fail" rules, quality lints (credo/sobelow/dialyzer) → `docs/context/testing-strategy.md`
 - CI pipeline & gating — what runs vs what gates, post testing-architecture migration → `docs/context/ci-pipeline-gating.md`
+- `ci` went green while an e2e suite was still running, or a test is red on a PR but main merged green (main fingerprint-skips every test job after a merge; only the 06:00 nightly re-runs all) → `docs/context/ci-pipeline-gating.md`
 - Running the ExUnit suite locally against Docker Postgres → `docs/context/local-backend-testing.md`
 - `Vault not registered after 15s` E2E diagnostic ladder — don't just bump the timeout → `docs/context/e2e-vault-registration-diagnostics.md`
 - `Application.put_env` in `async: true` tests is a flake source (fix the mutator, or route the read through `Engram.ServiceConfig` per-process overrides) → `docs/context/exunit-application-env-races.md`
