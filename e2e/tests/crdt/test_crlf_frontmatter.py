@@ -260,10 +260,11 @@ async def test_crlf_property_edit_reaches_b(
 async def test_damaged_crlf_note_heals_on_open(
     vault_a, vault_b, cdp_a, cdp_b, api_sync, sync_vault_id
 ):
-    """[3] A note the old plugin damaged (fence in the body, empty map) heals
-    when A opens it, while the server room stays bound (so `normalize_doc`
-    cannot be the one healing it), and B converges. Neither file is rewritten,
-    no key is duplicated, no conflict copy."""
+    """[3] A note the old plugin damaged (fence in the body, empty map) gets
+    its fence lifted when A opens it, while the server room stays bound (so
+    `normalize_doc` cannot be the one lifting it), and B converges. The
+    body's CRs stay until the next room open, whose heal removes them: only
+    the room removes CRs already in a doc. No key is duplicated, no copy."""
     folder = _folder()
     await _arm(cdp_a, cdp_b)
     path, note_id = await _damaged_note_on_both(
@@ -279,13 +280,23 @@ async def test_damaged_crlf_note_heals_on_open(
             "the damaged fence lifted into the map by the plugin",
         )
         print(f"healed: order={doc.order}")
-        assert doc.body == _lf(BODY), f"heal left CRs or changed the body: {doc.body!r}"
+        # One healer: the plugin lifts the fence but leaves the body's CRs to
+        # the server room. This room is pinned, so they are still there.
+        assert doc.body == BODY, f"the plugin touched CRs the room owns: {doc.body!r}"
 
         await _hold_bytes(vault_a, path, CRLF_NOTE, "healing damaged A's file", exact=False)
         await _hold_bytes(vault_b, path, _lf(CRLF_NOTE), "B's file is not the LF projection")
         _assert_probe_sees_writers(sync_vault_id, folder)
         _assert_keys_once(vault_a, path)
         _assert_keys_once(vault_b, path)
+
+        # The next room open runs the room's heal, which removes them.
+        release_room(note_id)
+        await asyncio.to_thread(bind_room, sync_vault_id, note_id)
+        await _wait_server_doc(
+            sync_vault_id, note_id, lambda d: d.body == _lf(BODY), "the room heal of the body's CRs"
+        )
+        await _hold_bytes(vault_b, path, _lf(CRLF_NOTE), "B's file after the room heal")
         await _assert_no_copies(folder, cdp_a, cdp_b)
         _assert_one_note(folder, path, api_sync, vault_a, vault_b)
     finally:
