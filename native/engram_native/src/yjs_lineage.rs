@@ -203,7 +203,7 @@ fn covered<'a>(ranges: impl Iterator<Item = &'a Range<u32>>, span: &Range<u32>) 
 
 #[cfg(test)]
 mod tests {
-    use super::{root_inserts, RootLineage};
+    use super::{inserts_cr, root_inserts, RootLineage};
     use yrs::updates::decoder::Decode;
     use yrs::{Doc, GetString, Map, ReadTxn, StateVector, Text, Transact, Update};
 
