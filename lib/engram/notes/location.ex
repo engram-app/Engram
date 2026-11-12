@@ -11,7 +11,9 @@ defmodule Engram.Notes.Location do
 
     * **by-path lookup** (`at/5`, `at_any/5`): ONE statement. A live note
       whose stored path key is the asked path is that path's note, always.
-      Only when no row holds the path does the name answer: the folder part
+      Only in a vault holding a folder moved without a cascade (from S5 on,
+      so never in S3 alone) and only when no row holds the path does the
+      name answer: the folder part
       of the path is walked on `folders_live_name` (`Engram.Folders.WalkSql`,
       one unique-index probe per segment), then the note is probed on
       `notes_folder_name_live` by `(vault_id, name_ci_hmac || folder_ref_id)`
@@ -153,7 +155,11 @@ defmodule Engram.Notes.Location do
 
   # The row's name key, folder and current stamp match: the folder walked
   # down from the root (`WalkSql.key_eq/0`, on `notes_folder_name_live`),
-  # the exact name, a name whose stamp is current.
+  # the exact name, a name whose stamp is current. Only in a vault holding a
+  # folder moved without a cascade (`WalkSql.moved/0`, one probe of the
+  # empty-until-S5 `folders_moved_live`): until S5 writes one, a name match
+  # can only be drift, a row the user sees somewhere else, so every lookup,
+  # push, delete and CRDT create reads stored paths exactly as 0.83.0 did.
   defp by_name(vault_id, segs, ci, exact) do
     dynamic(
       [n],
@@ -168,7 +174,8 @@ defmodule Engram.Notes.Location do
         type(^segs, {:array, :binary}),
         ^length(segs)
       ) and n.name_hmac == ^exact and
-        fragment(NameKeys.current_sql(), n.name_stamp, n.path_nonce, ^Name.version())
+        fragment(NameKeys.current_sql(), n.name_stamp, n.path_nonce, ^Name.version()) and
+        fragment(WalkSql.moved(), type(^vault_id, Ecto.UUID))
     )
   end
 
