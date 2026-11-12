@@ -39,38 +39,63 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderNameLiveExpand do
   on create, rename, move and delete); a content save leaves every key
   column as it was, so no save that was heap-only stops being so.
 
-  Additive: the previous release ignores it. Rerun-safe with no operator
+  `folders_moved_live`: the live folders of a vault renamed without a
+  cascade (`notes_cascaded = false`, written from S5 on). A reader probes it
+  to learn whether any note of the vault must be shown where its folder row
+  puts it rather than at its stored path (`Engram.Folders.WalkSql.moved/0`).
+  Empty until S5 writes, so the probe reads one index page.
+
+  Additive: the previous release ignores both. Rerun-safe with no operator
   step: an index a failed or timed-out CONCURRENTLY build left INVALID is
-  dropped, then it is built IF NOT EXISTS. A 10 min `statement_timeout`
-  bounds the build, on one pinned connection (20261106100000's pattern; no
-  `lock_timeout`: see 20261105150100's `up/0`).
+  dropped, then it is built IF NOT EXISTS.
+
+  Time bound: 100 s per statement (`statement_timeout`, server side), on
+  ONE pinned connection checked out for at most 110 s (`checkout/2`
+  `timeout:`; DBConnection's default, 15 s, would otherwise cut the build
+  short and leave it INVALID). The server cancels a slow build before the
+  client gives up, so no orphaned build outlives the boot, and both fit the
+  boot's health-check window. A build past 100 s (a long-open snapshot the
+  CONCURRENTLY build must wait out) fails the boot cleanly; the next boot
+  drops the INVALID index and builds again. No `lock_timeout`: see
+  20261105150100's `up/0`.
   """
 
-  @index "notes_folder_name_live"
+  @indexes [
+    {"notes_folder_name_live",
+     "ON notes (vault_id, (name_ci_hmac || uuid_send(folder_ref_id))) " <>
+       "WHERE deleted_at IS NULL AND kind = 'note'"},
+    {"folders_moved_live",
+     "ON folders (vault_id) WHERE NOT notes_cascaded AND deleted_at IS NULL"}
+  ]
+
+  @statement_timeout_ms 100_000
+  @checkout_timeout_ms 110_000
 
   def up do
     started = MigrationLog.now()
 
     with_statement_timeout(fn ->
-      if invalid?(@index),
-        do: repo().query!("DROP INDEX CONCURRENTLY IF EXISTS #{@index}", [], timeout: :infinity)
+      for {name, spec} <- @indexes do
+        if invalid?(name),
+          do: repo().query!("DROP INDEX CONCURRENTLY IF EXISTS #{name}", [], timeout: :infinity)
 
-      repo().query!(
-        """
-        CREATE INDEX CONCURRENTLY IF NOT EXISTS #{@index}
-        ON notes (vault_id, (name_ci_hmac || uuid_send(folder_ref_id)))
-        WHERE deleted_at IS NULL AND kind = 'note'
-        """,
-        [],
-        timeout: :infinity
-      )
+        repo().query!("CREATE INDEX CONCURRENTLY IF NOT EXISTS #{name} #{spec}", [],
+          timeout: :infinity
+        )
+      end
     end)
 
-    MigrationLog.indexes(repo(), "index_notes_folder_name_live", [@index], started)
+    MigrationLog.indexes(
+      repo(),
+      "index_notes_folder_name_live",
+      Enum.map(@indexes, &elem(&1, 0)),
+      started
+    )
   end
 
   def down do
-    execute "DROP INDEX CONCURRENTLY IF EXISTS #{@index}"
+    execute "DROP INDEX CONCURRENTLY IF EXISTS folders_moved_live"
+    execute "DROP INDEX CONCURRENTLY IF EXISTS notes_folder_name_live"
   end
 
   # A CONCURRENTLY build that fails or times out leaves an INVALID index; a
@@ -93,14 +118,17 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderNameLiveExpand do
   # N-1 gate runs this file on the previous release's code, so a migration
   # calls no app module.
   defp with_statement_timeout(fun) do
-    repo().checkout(fn ->
-      repo().query!("SET statement_timeout = '10min'")
+    repo().checkout(
+      fn ->
+        repo().query!("SET statement_timeout = #{@statement_timeout_ms}")
 
-      try do
-        fun.()
-      after
-        repo().query!("RESET statement_timeout")
-      end
-    end)
+        try do
+          fun.()
+        after
+          repo().query!("RESET statement_timeout")
+        end
+      end,
+      timeout: @checkout_timeout_ms
+    )
   end
 end
