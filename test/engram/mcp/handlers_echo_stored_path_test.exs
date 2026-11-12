@@ -123,4 +123,31 @@ defmodule Engram.MCP.HandlersEchoStoredPathTest do
     assert note.content =~ "more"
     assert {:error, :not_found} = Notes.get_note(user, vault, "My  Folder/x.md")
   end
+
+  # The write that moves a legacy row to its sanitized path also moves its
+  # folder ref: a ref left on the old folder row is drift, and the S3 name
+  # reads would still find the note at its old path.
+  test "the move to the sanitized path moves the folder ref too", %{user: user, vault: vault} do
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "f/x.md", "content" => "legacy"}, actor: "api")
+
+    {:ok, _} = Notes.rename_folder(user, vault, "f", "My  Folder")
+
+    {:ok, _text, %{"path" => "My Folder/x.md"}} =
+      Handlers.handle("append_to_note", user, vault, %{"path" => "My  Folder/x.md", "text" => "m"})
+
+    ref =
+      Engram.Repo.with_tenant!(user.id, fn ->
+        Engram.Folders.Rows.ids_by_path(user, vault.id, ["My Folder"])["My Folder"]
+      end)
+
+    assert is_binary(ref)
+
+    %{rows: [[stored]]} =
+      Engram.Repo.query!("SELECT folder_ref_id FROM notes WHERE id = $1", [
+        Ecto.UUID.dump!(note.id)
+      ])
+
+    assert Ecto.UUID.load!(stored) == ref
+  end
 end
