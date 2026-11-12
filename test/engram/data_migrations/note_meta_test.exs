@@ -173,6 +173,72 @@ defmodule Engram.DataMigrations.NoteMetaTest do
     assert stamped.() == 2
   end
 
+  describe "a change between the read and the write" do
+    # The read the pass makes, and the write it would make from it.
+    defp read_and_derive(ctx, note) do
+      {:ok, row, tail} = Engram.Notes.fetch_note_with_tail_for_worker(note.id, ctx.user.id)
+      {:ok, dec} = Crypto.maybe_decrypt_note_fields(row, ctx.user)
+      {dec, tail, derived(@content), Engram.Links.Parser.extract(@content)}
+    end
+
+    test "a note trashed in between is left: not stamped, not rewritten", ctx do
+      note = stale_note(ctx)
+      {dec, tail, meta, parsed} = read_and_derive(ctx, note)
+
+      Repo.update_all(
+        from(n in Note, where: n.id == ^note.id),
+        [set: [deleted_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      assert :left = NoteMeta.write(ctx.user, dec, tail, meta, parsed)
+      row = decrypted(note, ctx.user)
+      assert row.title == "old title"
+      assert is_nil(row.meta_version)
+      assert links(note) == []
+      refute_enqueued(worker: RebuildStaleNote)
+    end
+
+    test "a tail write in between (an unsaved CRDT edit) leaves the note", ctx do
+      note = stale_note(ctx)
+      {dec, tail, meta, parsed} = read_and_derive(ctx, note)
+
+      Repo.insert!(
+        %Engram.Notes.CrdtUpdateLog{
+          note_id: note.id,
+          user_id: ctx.user.id,
+          vault_id: ctx.vault.id,
+          update_ciphertext: <<1, 2, 3>>,
+          update_nonce: <<0::96>>
+        },
+        skip_tenant_check: true
+      )
+
+      assert :left = NoteMeta.write(ctx.user, dec, tail, meta, parsed)
+      assert links(note) == []
+      assert is_nil(decrypted(note, ctx.user).meta_version)
+    end
+
+    test "a moved title's re-index is queued in the same transaction as the stamp", ctx do
+      note = stale_note(ctx)
+      {dec, tail, meta, parsed} = read_and_derive(ctx, note)
+
+      # The insert fails: the stamp and title must roll back with it, or the
+      # stamped note would never be revisited and never re-indexed.
+      Repo.query!(
+        "ALTER TABLE oban_jobs ADD CONSTRAINT nm_refuse CHECK (worker <> 'Engram.Workers.RebuildStaleNote')"
+      )
+
+      assert_raise Ecto.ConstraintError, fn ->
+        NoteMeta.write(ctx.user, dec, tail, meta, parsed)
+      end
+
+      row = decrypted(note, ctx.user)
+      assert row.title == "old title"
+      assert is_nil(row.meta_version)
+    end
+  end
+
   describe "tenant scoping" do
     test "control: in another tenant's context the heal reads and writes nothing", ctx do
       note = stale_note(ctx)

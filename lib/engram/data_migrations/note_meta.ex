@@ -52,7 +52,7 @@ defmodule Engram.DataMigrations.NoteMeta do
   alias Engram.Links.Parser
   alias Engram.Logger.DecryptFailure
   alias Engram.Notes
-  alias Engram.Notes.{Helpers, NameIndex, Note}
+  alias Engram.Notes.{CrdtUpdateLog, Helpers, NameIndex, Note}
   alias Engram.Repo
   alias Engram.Workers.RebuildStaleNote
 
@@ -159,7 +159,7 @@ defmodule Engram.DataMigrations.NoteMeta do
          {:ok, text} <- Notes.authoritative_content(user, dec, tail) do
       {title, tags} = Helpers.extract_title_and_tags(text, dec.path)
       meta? = (title || "") != (dec.title || "") or tags != (dec.tags || [])
-      write(user, dec, meta? && {title, tags}, Parser.extract(text))
+      write(user, dec, tail, meta? && {title, tags}, Parser.extract(text))
     else
       {:error, reason} ->
         DecryptFailure.log("note_meta_decrypt_failed", reason, user_id: user.id, note_id: note.id)
@@ -168,25 +168,47 @@ defmodule Engram.DataMigrations.NoteMeta do
   end
 
   # One tenant transaction: the stamp (plus title and tags when they moved)
-  # under a compare-and-set, then the links, so a concurrent write either
-  # lands first (and we lose the CAS) or waits for us on the row lock.
-  defp write(user, note, meta, parsed) do
+  # under a compare-and-set, then the links and a moved title's re-index job,
+  # so a concurrent write either lands first (and we leave the note) or waits
+  # for us on the row lock, and a stamped title always has its re-index.
+  @doc false
+  # Public for the race tests: they change the note between the read and here.
+  def write(user, note, tail, meta, parsed) do
     result =
       Repo.with_tenant!(user.id, fn ->
-        case Repo.update_all(cas(note),
-               set: [meta_version: Helpers.meta_version()] ++ meta_cols(user, note, meta)
-             ) do
-          {1, _} ->
-            {links?, _} = Links.sync_links(user, %{id: note.vault_id}, note.id, parsed)
-            if meta || links?, do: :rewritten, else: :stamped
+        with false <- tail_grew?(note, tail),
+             {1, _} <-
+               Repo.update_all(cas(note),
+                 set: [meta_version: Helpers.meta_version()] ++ meta_cols(user, note, meta)
+               ) do
+          {links?, _} = Links.sync_links(user, %{id: note.vault_id}, note.id, parsed)
 
-          {0, _} ->
-            :left
+          if title_moved?(note, meta),
+            do: :ok = RebuildStaleNote.enqueue_reread(note.id, note.user_id)
+
+          if meta || links?, do: :rewritten, else: :stamped
+        else
+          _ -> :left
         end
       end)
 
-    if result == :rewritten and meta, do: title_moved(note, meta)
+    if result == :rewritten and title_moved?(note, meta),
+      do: NameIndex.announce(note.vault_id, note.id, note.path, elem(meta, 0))
+
     result
+  end
+
+  # A CRDT write that has not checkpointed (a live edit, a link rewrite's
+  # roomless persist) appends to the tail and moves neither `version` nor
+  # `content_hash`, so the compare-and-set cannot see it: a tail row we did not
+  # read means our text is stale, and writing its links would undo the
+  # rewrite's. The note is left for the next pass.
+  defp tail_grew?(note, tail) do
+    read = Enum.map(tail, & &1.id)
+
+    Repo.exists?(
+      from(l in CrdtUpdateLog, where: l.note_id == ^note.id and l.id not in ^read, select: 1)
+    )
   end
 
   defp meta_cols(_user, _note, false), do: []
@@ -201,29 +223,22 @@ defmodule Engram.DataMigrations.NoteMeta do
   end
 
   # The stored title is what search's name leg and the editor's link index
-  # read: re-index (vectors reused, only a changed chunk context re-embeds)
-  # and tell the name index. Tags live only in Postgres.
-  defp title_moved(note, {title, _tags}) do
-    if (title || "") != (note.title || "") do
-      :ok = RebuildStaleNote.enqueue_reread(note.id, note.user_id)
-      NameIndex.announce(note.vault_id, note.id, note.path, title)
-    end
+  # read: a moved one re-indexes (vectors reused, only a changed chunk context
+  # re-embeds) and is told to the name index. Tags live only in Postgres.
+  defp title_moved?(_note, false), do: false
+  defp title_moved?(note, {title, _tags}), do: (title || "") != (note.title || "")
 
-    :ok
-  end
-
-  # A write in between wins: it derived under the current rules itself.
+  # A write in between wins: it derived under the current rules itself. A
+  # note trashed in between is left alone (a trash moves neither `version`
+  # nor `content_hash`).
   defp cas(%Note{content_hash: nil} = note),
-    do:
-      from(n in Note,
-        where: n.id == ^note.id and n.version == ^note.version and is_nil(n.content_hash)
-      )
+    do: where(unchanged(note), [n], is_nil(n.content_hash))
 
-  defp cas(note),
+  defp cas(note), do: where(unchanged(note), [n], n.content_hash == ^note.content_hash)
+
+  defp unchanged(note),
     do:
       from(n in Note,
-        where:
-          n.id == ^note.id and n.version == ^note.version and
-            n.content_hash == ^note.content_hash
+        where: n.id == ^note.id and n.version == ^note.version and is_nil(n.deleted_at)
       )
 end
