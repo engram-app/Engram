@@ -16,7 +16,11 @@ Redaction internals and the filter failure modes: `docs/context/log-redaction-bo
 | `warning` | Off but not broken. |
 | `error` | Broken, needs attention. |
 
-**Categories** — nine, the source of truth is `Engram.Logger.Category`: `http`, `sync`, `search`, `auth`, `billing`, `crypto`, `lifecycle`, `oban`, `boot`. Only `billing`, `crypto`, `lifecycle`, `oban`, `boot` ship `info` to Loki; the rest ship only `warning`/`error` (by level).
+**Categories:** the source of truth is the `@categories` list in `Engram.Logger.Category` (read it, don't count from here). As of 2026-11-11 it is: `http`, `sync`, `search`, `auth`, `billing`, `crypto`, `lifecycle`, `oban`, `oban_retry`, `boot`, `data`, `websocket`, `client`.
+
+- `info` ships to Loki only for the categories in `@info_to_loki`: `billing`, `crypto`, `lifecycle`, `oban`, `boot`, `websocket`. Every other category ships only `warning`/`error` (by level).
+- Caveat: `websocket` is in `@info_to_loki` but absent from the Fluent Bit `rewrite_tag` regex that actually routes to Loki (engram-infra `main/envs/prod/fluent-bit/firelens.conf`, `^(billing|crypto|lifecycle|oban|boot)$`), so `info` + `websocket` does not reach Loki today (see the NOTE in `category.ex`).
+- `oban_retry` is a failed Oban attempt that will be retried. It is its own category so the Loki `oban-discard` rule (exact match on category `oban`) never reads a retry as a discard (PR #2578). Warning-only, so it ships by level.
 
 **How to log (the rule):** always build metadata via `Engram.Logger.Metadata.with_category(level, category, kw)` — it stamps `:category` and the computed `:loki_ship`.
 
