@@ -1,6 +1,6 @@
 # Context Doc: Note line-ending policy (LF-only in the CRDT doc)
 
-_Last verified: 2026-11-12_
+_Last verified: 2026-11-12 (against the #697 and #2585 implementation)_
 
 ## Status
 Decided 2026-11-12 (Todd). Implementation in plugin PR Engram-obsidian#697 and backend PR Engram#2585.
@@ -11,8 +11,10 @@ Markdown note text is LF-only inside the CRDT doc, the Relay model. One shared f
 - plugin `seedContentInto`
 - the merge3 inputs
 - disk text before the `keepDiskFrontmatter` comparison
-- server `CrdtBridge.ingest_plaintext`, gated on `markdown_path?`
-- the `normalize_doc` heal on room open
+- server `Engram.Notes.LineEndings.to_lf/1` (`for_path/2` skips non-`.md`), called from `maybe_merge_crdt` (every REST/MCP/web write) and the live-room deliver
+- the `normalize_doc` heal on room open: fence lift (deletes exactly the fence range) plus one small delete per body CR, in one transaction. It runs on EVERY open, with no "already normalized" stamp: an old plugin can write CRs or a body fence back through the room at any time.
+- plugin `liftBodyFence` on editor open (the live binding's `healOnOpen`): the same fence lift plus a delete of each CRLF pair's CR. A lone CR is left to the server, which replaces it with LF; two devices both inserting that LF would merge to two.
+- a write into a doc that still holds CRs first gets the same per-CR strip, then the diff, so a concurrent edit between two CRs is not undone.
 
 Markdown only. Canvas, `.base` and attachments stay byte-exact.
 
