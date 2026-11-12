@@ -775,6 +775,8 @@ defmodule Engram.OAuth do
   #
   # A refusal that revokes (reuse) must commit, so the transaction returns the
   # result instead of rolling back. Logging and analytics run after it.
+  # Nothing in it rolls back: every refusal, `user_not_found` included, is
+  # decided before the first write (`with_user/2`).
   defp rotate_existing(%RefreshToken{client_id: actual}, requested, _opts)
        when actual != requested,
        do: grant_error(:client_mismatch)
@@ -863,13 +865,15 @@ defmodule Engram.OAuth do
   # Consumed, in a live family: a replay. Inside the grace window it may be a
   # lost rotation response (`grace_reissue/2`); otherwise it is reuse.
   defp decide({%RefreshToken{consumed_at: %DateTime{} = at} = rt, true = _family_live}, ip) do
-    with true <- DateTime.diff(DateTime.utc_now(), at) <= @refresh_reuse_grace_seconds,
-         {:ok, response, ip_matched} <- grace_reissue(rt, ip) do
-      {:ok, response, {:grace, ip_matched}}
+    if DateTime.diff(DateTime.utc_now(), at) <= @refresh_reuse_grace_seconds do
+      with_user(rt, fn user ->
+        case grace_reissue(rt, user, ip) do
+          {:ok, response, ip_matched} -> {:ok, response, {:grace, ip_matched}}
+          :not_eligible -> refuse_reuse(rt)
+        end
+      end)
     else
-      _not_eligible ->
-        _ = revoke_family(rt.family_id, :refresh_reuse)
-        {:error, :refresh_token_reuse}
+      refuse_reuse(rt)
     end
   end
 
@@ -877,19 +881,36 @@ defmodule Engram.OAuth do
     if DateTime.compare(DateTime.utc_now(), exp) == :gt do
       {:error, :refresh_token_expired}
     else
-      # The successor copies the row as the consume LEFT it (RETURNING), not
-      # as it was locked: the latest point anything could have rewritten it.
-      {1, [consumed]} =
-        Repo.update_all(
-          from(r in RefreshToken, where: r.id == ^rt.id, select: r),
-          [set: [consumed_at: DateTime.utc_now(:second)]],
-          skip_tenant_check: true
-        )
+      with_user(rt, fn user ->
+        # The successor copies the row as the consume LEFT it (RETURNING), not
+        # as it was locked: the latest point anything could have rewritten it.
+        {1, [consumed]} =
+          Repo.update_all(
+            from(r in RefreshToken, where: r.id == ^rt.id, select: r),
+            [set: [consumed_at: DateTime.utc_now(:second)]],
+            skip_tenant_check: true
+          )
 
-      case mint_rotation_successor(consumed, ip) do
-        {:ok, response} -> {:ok, response}
-        {:error, reason} -> Repo.rollback(reason)
-      end
+        {:ok, mint_rotation_successor(consumed, user, ip)}
+      end)
+    end
+  end
+
+  defp refuse_reuse(rt) do
+    _ = revoke_family(rt.family_id, :refresh_reuse)
+    {:error, :refresh_token_reuse}
+  end
+
+  # The token's user, loaded before anything is written, for both minting
+  # paths. A miss is permanent (the user is gone, or a loader rule refuses
+  # it), so it is a terminal `user_not_found` that consumes nothing and kills
+  # nothing. It used to be checked after the consume: a fresh rotation rolled
+  # back into a 500, and a grace replay killed the family as reuse (review of
+  # #2574). The same one user read as before, moved earlier.
+  defp with_user(rt, fun) do
+    case fetch_user(rt.user_id) do
+      {:ok, user} -> fun.(user)
+      {:error, {:invalid_grant, reason}} -> {:error, reason}
     end
   end
 
@@ -925,9 +946,8 @@ defmodule Engram.OAuth do
     )
   end
 
-  # Inside rotate_existing/3's transaction, which undoes the insert when the
-  # user lookup fails (it should not: the user_id FK guarantees the row).
-  defp mint_rotation_successor(rt, ip) do
+  # Inside rotate_existing/3's transaction, with the user `with_user/2` loaded.
+  defp mint_rotation_successor(rt, user, ip) do
     {:ok, refresh_raw, refresh_row} =
       rt
       |> grant_attrs(rt.family_id, ip)
@@ -937,18 +957,31 @@ defmodule Engram.OAuth do
       |> Map.put(:parent_id, rt.id)
       |> insert_refresh_token()
 
-    with {:ok, user} <- fetch_user(rt.user_id) do
-      {:ok, build_token_response(user, rt, refresh_raw, refresh_row)}
-    end
+    build_token_response(user, rt, refresh_raw, refresh_row)
   end
 
-  defp revoke_family(family_id, cause) do
-    {_n, changed} =
-      revoke_refresh_tokens(from(rt in RefreshToken, where: rt.family_id == ^family_id),
-        cause: cause,
-        skip_tenant_check: true
-      )
+  defp revoke_family(family_id, cause),
+    do: revoke_announced(from(rt in RefreshToken, where: rt.family_id == ^family_id), cause)
 
+  @doc """
+  Ends every live OAuth grant of `user_id` because the account was deleted
+  (cause `:account_deleted`): every soft-delete path calls it in the same
+  transaction as its `deleted_at` write, so both commit or neither does, and
+  the `mcp_oauth_grant_revoked` events run only after that commit. A delete
+  used to leave the grants live (`Accounts.revoke_all_user_tokens/1` covers
+  session and device tokens only), so a deleted account's MCP client kept
+  refreshing until the hard delete (review of #2574).
+  """
+  @spec revoke_account_grants(Ecto.UUID.t()) :: :ok
+  def revoke_account_grants(user_id) do
+    _ =
+      revoke_announced(from(rt in RefreshToken, where: rt.user_id == ^user_id), :account_deleted)
+
+    :ok
+  end
+
+  defp revoke_announced(query, cause) do
+    {_n, changed} = revoke_refresh_tokens(query, cause: cause, skip_tenant_check: true)
     :ok = grants_changed(changed)
     changed
   end
@@ -971,6 +1004,7 @@ defmodule Engram.OAuth do
           | :vault_deleted
           | :vault_purged
           | :client_revoke_rfc7009
+          | :account_deleted
           | kill_reason()
 
   @revoke_causes [
@@ -978,7 +1012,8 @@ defmodule Engram.OAuth do
                    :user_disconnect_grant,
                    :vault_deleted,
                    :vault_purged,
-                   :client_revoke_rfc7009
+                   :client_revoke_rfc7009,
+                   :account_deleted
                  ] ++ @kill_reasons
 
   @doc """
@@ -1107,7 +1142,7 @@ defmodule Engram.OAuth do
   # and client authentication (the token controller, before this runs) still
   # apply, every re-issue logs whether the caller's IP matched the original
   # rotation's, and a revoked successor turning up later revokes the family.
-  defp grace_reissue(rt, ip) do
+  defp grace_reissue(rt, user, ip) do
     successors =
       Repo.all(
         from(r in RefreshToken,
@@ -1133,10 +1168,9 @@ defmodule Engram.OAuth do
          true <- live != [],
          # The first successor is the original rotation; the rest re-issues.
          true <- length(successors) - 1 < @max_grace_reissues,
-         {n, _} when n == length(live) <- revoke_ids(live_ids),
-         {:ok, response} <- mint_rotation_successor(rt, ip) do
+         {n, _} when n == length(live) <- revoke_ids(live_ids) do
       original = Enum.min_by(successors, & &1.inserted_at, DateTime)
-      {:ok, response, original.last_used_ip == ip}
+      {:ok, mint_rotation_successor(rt, user, ip), original.last_used_ip == ip}
     else
       _ -> :not_eligible
     end
@@ -1234,6 +1268,7 @@ defmodule Engram.OAuth do
           | :pkce_verifier_missing
           | :pkce_mismatch
           | :user_not_found
+          | :user_deleted
           | :refresh_token_unknown
           | :refresh_token_revoked
           | :refresh_token_reuse
@@ -1421,9 +1456,15 @@ defmodule Engram.OAuth do
     end
   end
 
+  # The one user read of the token endpoint: code exchange and both rotation
+  # paths (`with_user/2`). A soft-deleted account is refused like a missing
+  # one, under its own reason: deletion ends its grants
+  # (`revoke_account_grants/1`), so this only meets a token that outlived
+  # that, and `user_not_found` stays the anomaly worth alerting on.
   defp fetch_user(user_id) do
     case Accounts.get_user(user_id) do
-      %Accounts.User{} = user -> {:ok, user}
+      %Accounts.User{deleted_at: nil} = user -> {:ok, user}
+      %Accounts.User{} -> grant_error(:user_deleted)
       _ -> grant_error(:user_not_found)
     end
   end

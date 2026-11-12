@@ -611,6 +611,155 @@ defmodule EngramWeb.OAuthGrantRevokedTest do
     end
   end
 
+  describe "account deletion ends every grant (cause account_deleted)" do
+    setup %{client: client, user: user} do
+      {rt1, f1} = grant(client, user)
+      {rt2, f2} = grant(client, user)
+      other = insert(:user)
+      {other_rt, _} = grant(client, other)
+      %{rts: [rt1, rt2], families: Enum.sort([f1, f2]), other_rt: other_rt}
+    end
+
+    defp assert_account_deleted(user, families, rts, other_rt) do
+      evs = events(@event)
+      assert Enum.all?(evs, &(&1.user_id == user.id))
+      assert Enum.map(evs, & &1.props["cause"]) == ["account_deleted", "account_deleted"]
+
+      assert evs |> Enum.map(& &1.props["grant_id"]) |> Enum.sort() ==
+               families |> Enum.map(&OAuth.grant_id/1) |> Enum.sort()
+
+      for rt <- rts, do: assert(row(rt).revoked_at)
+      assert is_nil(row(other_rt).revoked_at)
+    end
+
+    test "inactivity / user / Clerk soft delete (Lifecycle.soft_delete/2)", %{
+      user: user,
+      families: families,
+      rts: rts,
+      other_rt: other_rt
+    } do
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = Engram.Accounts.Lifecycle.soft_delete(user, :inactivity)
+      end)
+
+      assert_account_deleted(user, families, rts, other_rt)
+    end
+
+    test "admin soft delete (Accounts.soft_delete_user/1)", %{
+      user: user,
+      families: families,
+      rts: rts,
+      other_rt: other_rt
+    } do
+      assert {:ok, _} = Engram.Accounts.soft_delete_user(user)
+      assert_account_deleted(user, families, rts, other_rt)
+    end
+
+    test "a delete that rolls back ends nothing and emits nothing", %{user: user, rts: rts} do
+      {:error, :undo} =
+        Repo.transaction_after_commit(fn ->
+          {:ok, _} = Engram.Accounts.soft_delete_user(user)
+          Repo.rollback(:undo)
+        end)
+
+      assert events(@event) == []
+      for rt <- rts, do: assert(is_nil(row(rt).revoked_at))
+      assert is_nil(Repo.reload!(user, skip_tenant_check: true).deleted_at)
+    end
+
+    # Runs `body` (plpgsql) when `user`'s row is marked deleted: a trigger that
+    # lives only in this test's sandbox transaction.
+    defp on_mark(user, body) do
+      Repo.query!("""
+      CREATE FUNCTION engram_test_on_mark() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN #{body} RETURN NEW; END $$
+      """)
+
+      Repo.query!("""
+      CREATE TRIGGER engram_test_on_mark BEFORE UPDATE ON users FOR EACH ROW
+      WHEN (OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL
+            AND NEW.id = '#{user.id}'::uuid)
+      EXECUTE FUNCTION engram_test_on_mark()
+      """)
+    end
+
+    # Lock order (review of #2574): every delete path ends the grants BEFORE it
+    # writes `deleted_at` (`Accounts.mark_deleted_in_transaction!/1`), so two
+    # paths on one account take the grant lock and token rows, then the user
+    # row, in one order and cannot deadlock. The trigger refuses a mark that
+    # finds the user's grants still live.
+    @grants_ended_first """
+    IF EXISTS (SELECT 1 FROM oauth_refresh_tokens
+               WHERE user_id = NEW.id AND revoked_at IS NULL) THEN
+      RAISE EXCEPTION 'marked before the grants ended';
+    END IF;
+    """
+
+    test "the lifecycle path ends the grants before the mark", %{user: user, rts: rts} do
+      on_mark(user, @grants_ended_first)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = Engram.Accounts.Lifecycle.soft_delete(user, :inactivity)
+      end)
+
+      for rt <- rts, do: assert(row(rt).revoked_at)
+    end
+
+    test "the admin path ends the grants before the mark", %{user: user, rts: rts} do
+      on_mark(user, @grants_ended_first)
+      assert {:ok, _} = Engram.Accounts.soft_delete_user(user)
+      for rt <- rts, do: assert(row(rt).revoked_at)
+    end
+
+    # The admin path's own transaction is the queue owner (`with_admin_lock`),
+    # so only a failure INSIDE it, after the revoke, proves its events wait for
+    # its commit: the user-row mark, the delete's last write, is refused by a
+    # trigger scoped to this user and to this test's sandbox transaction.
+    test "an admin soft delete whose mark fails ends nothing and emits nothing", %{
+      user: user,
+      rts: rts
+    } do
+      on_mark(user, "RAISE EXCEPTION 'mark refused';")
+
+      assert_raise Postgrex.Error, ~r/mark refused/, fn ->
+        Engram.Accounts.soft_delete_user(user)
+      end
+
+      assert events(@event) == []
+      for rt <- rts, do: assert(is_nil(row(rt).revoked_at))
+      assert is_nil(Repo.reload!(user, skip_tenant_check: true).deleted_at)
+    end
+
+    # Poisons the `:user` cache so `Engram.Analytics` raises on its re-read.
+    # Safe here only because this module is `async: false`: no other test runs
+    # while it does, so nothing can clear the entry (an async file doing the
+    # same flaked in this PR). The drop line proves the raise really happened,
+    # so a cleared entry fails the test instead of passing it vacuously.
+    test "analytics that raises cannot stop the delete", %{user: user, rts: rts} do
+      on_exit(fn -> Engram.Cache.evict(:user, user.id) end)
+      Engram.Cache.put(:user, user.id, :not_a_user)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, _} = Engram.Accounts.soft_delete_user(user)
+        end)
+
+      # One drop per ended grant: both events raised and were rescued.
+      assert length(String.split(log, "analytics event dropped")) - 1 == 2
+      for rt <- rts, do: assert(row(rt).revoked_at)
+      assert Repo.reload!(user, skip_tenant_check: true).deleted_at
+    end
+
+    test "a refresh after the delete is refused, as any revoked grant", %{
+      client: client,
+      user: user,
+      rts: [rt | _]
+    } do
+      assert {:ok, _} = Engram.Accounts.soft_delete_user(user)
+      assert_invalid_grant(refresh(client, rt))
+    end
+  end
+
   # The grant id rides the request process, which a keep-alive connection
   # (and this test) reuses: one request's grant must not label the next.
   test "a grant_id does not carry over to the next request", %{client: client, user: user} do

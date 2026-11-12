@@ -22,6 +22,7 @@ defmodule Engram.Accounts.Lifecycle do
   alias Engram.Indexing
   alias Engram.Logger.Metadata
   alias Engram.Mailer
+  alias Engram.OAuth
   alias Engram.Repo
   alias Engram.Storage
   alias Engram.Vector.Qdrant
@@ -80,13 +81,18 @@ defmodule Engram.Accounts.Lifecycle do
     # again — `revoke_all_user_tokens` is idempotent. Skip email and
     # telemetry; those already fired on the first call.
     Accounts.revoke_all_user_tokens(user)
+    :ok = OAuth.revoke_account_grants(user.id)
     :ok
   end
 
   defp mark_deleted(%User{} = user, reason, revoke?) do
-    user
-    |> Ecto.Changeset.change(%{deleted_at: DateTime.utc_now()})
-    |> Repo.update!(skip_tenant_check: true)
+    # The mark and the end of the account's OAuth grants commit together, on
+    # every path (own delete included: its retry of `DELETE /api/me` rides a
+    # session token, never an OAuth one), in the lock order
+    # `Accounts.mark_deleted_in_transaction!/1` defines for every delete path.
+    # Grant events run after the commit.
+    {:ok, %User{}} =
+      Repo.transaction_after_commit(fn -> Accounts.mark_deleted_in_transaction!(user) end)
 
     Accounts.evict_user(user.id)
     if revoke?, do: Accounts.revoke_all_user_tokens(user)
