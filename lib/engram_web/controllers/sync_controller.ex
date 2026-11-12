@@ -43,9 +43,11 @@ defmodule EngramWeb.SyncController do
     summary: "Check whether the server still owes this vault sync work",
     tags: ["Sync"],
     description:
-      "The vault's `change_seq` plus how many CRDT updates still await their " <>
-        "checkpoint. A client whose catch-up cursor has reached `change_seq` while " <>
-        "both counts are 0 has seen every change the server will make on its own. " <>
+      "The vault's `change_seq`, the op-log feed's head `feed_seq`, and how many " <>
+        "CRDT updates still await their checkpoint. A client whose catch-up cursor " <>
+        "has reached `feed_seq` while both counts are 0 has seen every change the " <>
+        "server will make on its own (`change_seq` also counts folder rows, which " <>
+        "the feed never serves). " <>
         "`deferred_checkpoints` (held by a live room) is reported but is not " <>
         "owed work. `checkpoints_capped` is true when more pending checkpoints exist " <>
         "than the server reads per call; `pending_checkpoints` is then at least 1, " <>
@@ -57,18 +59,19 @@ defmodule EngramWeb.SyncController do
     user = conn.assigns.current_user
     vault = conn.assigns.current_vault
 
-    {current, pending_updates} =
+    {current, feed, pending_updates} =
       Repo.with_tenant!(user.id, fn ->
         pending =
           Repo.one(from(l in CrdtUpdateLog, where: l.vault_id == ^vault.id, select: count()))
 
-        {Engram.Vaults.raw_current_seq(vault.id), pending}
+        {Engram.Vaults.raw_current_seq(vault.id), Engram.Sync.feed_head(vault.id), pending}
       end)
 
     {owed, deferred, capped?} = checkpoint_counts(vault.id)
 
     json(conn, %{
       change_seq: current,
+      feed_seq: feed,
       pending_crdt_updates: pending_updates,
       # Past the cap the unread jobs may be owed, so never report quiet.
       pending_checkpoints: if(capped?, do: max(owed, 1), else: owed),

@@ -3,7 +3,43 @@ defmodule Engram.Sync do
   Ordered change-log sync: builds one seq-ordered page merging the notes and
   attachments change feeds for a vault (the socket op-log catch-up feed).
   """
+  import Ecto.Query
+
   alias Engram.{Attachments, Notes}
+  alias Engram.Attachments.Attachment
+  alias Engram.Notes.Note
+
+  @doc """
+  The highest seq this feed can serve for `vault_id`: the newest note (not a
+  folder row, which the feed skips) or attachment row. Lower than the vault's
+  `change_seq` whenever the vault's last bump was a folder write, so a client
+  cursor that reached it has seen every row the feed holds. Run inside
+  `Repo.with_tenant/2`. Two index seeks on `(vault_id, seq, id)`.
+  """
+  @spec feed_head(Ecto.UUID.t()) :: non_neg_integer()
+  def feed_head(vault_id) do
+    note =
+      Engram.Repo.one(
+        from(n in Note,
+          where: n.vault_id == ^vault_id and not is_nil(n.seq) and n.kind != "folder",
+          order_by: [desc: n.seq],
+          limit: 1,
+          select: n.seq
+        )
+      )
+
+    att =
+      Engram.Repo.one(
+        from(a in Attachment,
+          where: a.vault_id == ^vault_id and not is_nil(a.seq),
+          order_by: [desc: a.seq],
+          limit: 1,
+          select: a.seq
+        )
+      )
+
+    max(note || 0, att || 0)
+  end
 
   @doc """
   One seq-ordered page merging the notes + attachments change feeds for a vault.
