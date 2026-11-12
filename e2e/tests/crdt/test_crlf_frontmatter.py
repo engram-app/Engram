@@ -101,12 +101,27 @@ def _properties_are_properties(doc, values: dict[str, str]) -> bool:
     )
 
 
-async def _hold_bytes(vault: Path, rel: str, expected: str, why: str) -> None:
-    """Assert the file keeps exactly `expected` for the whole settle window."""
+async def _hold_bytes(
+    vault: Path, rel: str, expected: str, why: str, *, open_in_editor: bool = False
+) -> None:
+    """Assert the file keeps `expected` for the whole settle window.
+
+    Byte-exact for a note that is NOT open. For a note open in the editor,
+    line endings are Obsidian's call, not sync's: CodeMirror holds LF, and
+    TextFileView.save (app.js 1.12.7) writes the LF buffer whenever it differs
+    from the CRLF text it loaded, which `onUnloadFile` triggers on every leaf
+    close or file switch. So an open note is compared with line endings
+    folded; every other byte, the key count and the body still have to match.
+    The plugin's own share (no repaint, no save nudge for an unchanged
+    buffer) is pinned byte-exact by the plugin's tests/crdt-live-binding-crlf
+    and crdt-live-views unit tests."""
+    fold = (lambda t: t.replace("\r\n", "\n")) if open_in_editor else (lambda t: t)
     deadline = time.monotonic() + SETTLE_S
     while time.monotonic() < deadline:
         now = _disk(vault, rel)
-        assert now == expected, f"{why}\n--- expected ---\n{expected!r}\n--- on disk ---\n{now!r}"
+        assert fold(now) == fold(expected), (
+            f"{why}\n--- expected ---\n{expected!r}\n--- on disk ---\n{now!r}"
+        )
         await asyncio.sleep(0.5)
 
 
@@ -240,7 +255,7 @@ async def test_damaged_crlf_note_heals_on_open(
         print(f"healed: order={doc.order}")
         assert doc.body == BODY, f"heal changed the body: {doc.body!r}"
 
-        await _hold_bytes(vault_a, path, CRLF_NOTE, "healing rewrote A's CRLF file")
+        await _hold_bytes(vault_a, path, CRLF_NOTE, "healing rewrote A's CRLF file", open_in_editor=True)
         await _hold_bytes(vault_b, path, CRLF_NOTE, "healing rewrote B's CRLF file")
         _assert_keys_once(vault_a, path)
         _assert_keys_once(vault_b, path)
@@ -282,8 +297,8 @@ async def test_concurrent_heal_of_damaged_crlf_note(
         print(f"\nafter concurrent heal: raw order={doc.order}")
         assert doc.unique_order == KEYS and doc.body == BODY, f"server doc: {doc}"
 
-        await _hold_bytes(vault_a, path, CRLF_NOTE, "the heal rewrote A's CRLF file")
-        await _hold_bytes(vault_b, path, CRLF_NOTE, "the heal rewrote B's CRLF file")
+        await _hold_bytes(vault_a, path, CRLF_NOTE, "the heal rewrote A's CRLF file", open_in_editor=True)
+        await _hold_bytes(vault_b, path, CRLF_NOTE, "the heal rewrote B's CRLF file", open_in_editor=True)
         _assert_keys_once(vault_a, path)
         _assert_keys_once(vault_b, path)
         await _assert_no_copies(folder, cdp_a, cdp_b)
