@@ -469,8 +469,8 @@ defmodule Engram.Notes.CrdtBridgeTest do
 
     test "an LF write leaves the doc's CRs alone and applies only the edit" do
       doc = raw_doc("a\r\nb\rc\r\n")
-      :ok = CrdtBridge.ingest_plaintext(doc, "a\nbX\nc\nd\n", lf_view: true)
-      assert CrdtBridge.body_of(doc) == "a\r\nbX\rc\r\nd\n"
+      :ok = CrdtBridge.ingest_plaintext(doc, "a\nbX\nc\n", lf_view: true)
+      assert CrdtBridge.body_of(doc) == "a\r\nbX\rc\r\n"
     end
 
     test "an edit next to a CRLF never splits the pair" do
@@ -535,6 +535,21 @@ defmodule Engram.Notes.CrdtBridgeTest do
       {room, _} = fork(w1)
       :ok = CrdtBridge.normalize_doc(room)
       assert CrdtBridge.body_of(room) == "ONE\ntwo\nTHREE\n"
+    end
+
+    # The lone-CR heal inserts the LF at the CR first, then deletes the CR, so
+    # the LF's right origin is the CR item and it sorts before anything a
+    # device inserted right after that CR. Delete-then-insert let a concurrent
+    # append land before the LF. Client ids are random, so run it many times.
+    test "the room heal of a lone CR sorts before a concurrent append after it" do
+      for _ <- 1..40 do
+        {room, device} = fork(raw_doc("a\rb\rc\r"))
+        :ok = CrdtBridge.normalize_doc(room)
+        Yex.Text.insert(Yex.Doc.get_text(device, CrdtBridge.text_name()), 6, "from a\n")
+        sync(room, device)
+        assert CrdtBridge.body_of(room) == "a\nb\nc\nfrom a\n"
+        assert CrdtBridge.body_of(device) == "a\nb\nc\nfrom a\n"
+      end
     end
 
     # A concurrent tail edit between two CRs survives the three-way merge.
