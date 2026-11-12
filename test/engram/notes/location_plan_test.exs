@@ -32,26 +32,40 @@ defmodule Engram.Notes.LocationPlanTest do
         for(i <- 1..60, do: "R#{i}") ++ for(i <- 1..60, do: "A/S#{i}")
       )
 
-    :ok = DataMigrations.mark_done("note_name", 1)
-    Engram.Cache.clear_local(:note_name)
-    on_exit(fn -> Engram.Cache.clear_local(:note_name) end)
+    on_exit(fn -> Engram.Cache.clear_local(:note_split) end)
     %{user: user, vault: vault}
   end
 
-  test "a by-path lookup reads the folder and name indexes", %{user: u, vault: v} do
-    {_, queries} = QueryRecorder.record(fn -> assert Notes.note_exists?(u, v, "A/B/n7.md") end)
+  defp assert_plan(user, vault, path_index) do
+    {_, queries} =
+      QueryRecorder.record(fn -> assert Notes.note_exists?(user, vault, "A/B/n7.md") end)
 
     [sql] =
       for sql <- QueryPlan.reading(queries, "notes"), sql =~ "WITH RECURSIVE", do: sql
 
     plan = QueryPlan.generic_plan(sql, analyze: ["notes", "folders"])
 
-    for index <- ~w(folders_live_name notes_folder_name_live notes_user_vault_path_v2),
+    for index <- ["folders_live_name", "notes_folder_name_live", path_index],
         do: assert(plan =~ index, "expected #{index} in:\n#{sql}\n\nplan:\n#{plan}")
 
     # No level reads a whole vault's (or a parent's) folders.
     refute plan =~ "Seq Scan", plan
     refute plan =~ "Hash Join", plan
     refute plan =~ "folders_parent", plan
+  end
+
+  # Prod: the `note_split` ledger is done, so the path key is `path_id` on
+  # `notes_path_live`.
+  test "a by-path lookup reads the folder, name and live path-id indexes", ctx do
+    :ok = DataMigrations.mark_done("note_split", 1)
+    Engram.Cache.clear_local(:note_split)
+    assert Engram.Notes.Keys.ids?()
+    assert_plan(ctx.user, ctx.vault, "notes_path_live")
+  end
+
+  test "before the note_split ledger: the path_hmac index", ctx do
+    Engram.Cache.clear_local(:note_split)
+    refute Engram.Notes.Keys.ids?()
+    assert_plan(ctx.user, ctx.vault, "notes_user_vault_path_v2")
   end
 end

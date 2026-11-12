@@ -11,8 +11,8 @@ defmodule Engram.Notes.LocationRlsTest do
 
   import Engram.RlsCase
 
-  alias Engram.{Crypto, DataMigrations, Notes, Repo}
-  alias Engram.Folders.Folder
+  alias Engram.{Crypto, Notes, Repo}
+  alias Engram.Folders.{Folder, Rows}
 
   setup do
     {:ok, owner} = Crypto.ensure_user_dek(insert(:user))
@@ -30,10 +30,6 @@ defmodule Engram.Notes.LocationRlsTest do
       Ecto.UUID.dump!(note.id),
       :crypto.strong_rand_bytes(32)
     ])
-
-    :ok = DataMigrations.mark_done("note_name", 1)
-    Engram.Cache.clear_local(:note_name)
-    on_exit(fn -> Engram.Cache.clear_local(:note_name) end)
 
     %{owner: owner, other: other, vault: vault, theirs: theirs, note: note}
   end
@@ -55,9 +51,22 @@ defmodule Engram.Notes.LocationRlsTest do
     assert id == note.id
   end
 
-  test "another user's lookup in the owner's vault finds nothing",
-       %{other: other, vault: vault} do
-    assert {:returned, {:error, :not_found}} =
-             as_prod_role(fn -> Notes.get_note(other, vault, "A/B/x.md") end)
+  # The walk names the other user's vault and folder keys exactly, so only
+  # the `folders` policy can hide the row: as the suite's superuser the same
+  # statement finds it (the control below), as `engram_app` under this
+  # user's tenant it must not.
+  test "the folder walk cannot see another tenant's folder rows",
+       %{owner: owner, other: other, theirs: theirs} do
+    theirs_id = Repo.with_tenant!(other.id, fn -> Rows.id_by_walk(other, theirs.id, "A/B") end)
+    assert is_binary(theirs_id), "precondition: the walk finds the folder as its owner"
+
+    assert Repo.with_tenant!(owner.id, fn -> Rows.id_by_walk(other, theirs.id, "A/B") end) ==
+             theirs_id,
+           "control: without RLS (superuser) the cross-tenant walk sees the row"
+
+    assert {:returned, nil} =
+             as_prod_role(fn ->
+               Repo.with_tenant!(owner.id, fn -> Rows.id_by_walk(other, theirs.id, "A/B") end)
+             end)
   end
 end

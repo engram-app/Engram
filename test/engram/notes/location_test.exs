@@ -1,17 +1,18 @@
 defmodule Engram.Notes.LocationTest do
-  # O(1) folder rename plan, S3 read switch (Engram#2523): with the S2
-  # `note_name` ledger done, a note is found by its folder chain plus its
-  # name, and a live note's path is derived from the folder tree plus its
-  # name. Writers still cascade, so the stored path agrees; these tests break
-  # that agreement on purpose (a folder row renamed with no cascade, the S5
-  # write shape; a corrupted path key; a stale name stamp) to prove which
-  # source each reader trusts.
+  # O(1) folder rename plan, S3 read switch (Engram#2523). The suite runs in
+  # prod's state: the S2 `note_name` ledger done and `name_reads` on
+  # (`config/test.exs`); `names_off!/0` is the fallback.
+  #
+  # While writers still cascade, the stored path is the truth: a note held
+  # at the asked path is that path's note. The folder chain plus the name
+  # answers only when no row holds the path. A live note is shown where its
+  # folder row puts it only when a folder on its chain was renamed without a
+  # cascade (`folders.notes_cascaded = false`, the S5 write shape).
   #
   # async: false: the ledger answer is a node-wide cache entry.
   use Engram.DataCase, async: false
 
   alias Engram.Crypto
-  alias Engram.DataMigrations
   alias Engram.Folders.Rows
   alias Engram.Notes
   alias Engram.Notes.{Location, Name}
@@ -27,19 +28,28 @@ defmodule Engram.Notes.LocationTest do
         actor: "api"
       )
 
+    Engram.Cache.clear_local(:note_name)
     on_exit(fn -> Engram.Cache.clear_local(:note_name) end)
     %{user: user, vault: vault, note: note}
   end
 
-  defp names_on! do
-    :ok = DataMigrations.mark_done("note_name", 1)
+  # The ledger as the test DB holds it (not done): names off.
+  defp names_off! do
+    ServiceConfig.put_override(:name_reads_ledger, :read)
     Engram.Cache.clear_local(:note_name)
-    assert Location.on?()
+    refute Location.on?()
   end
 
   defp sql!(sql, params), do: Repo.query!(sql, params)
 
   defp dump(id), do: Ecto.UUID.dump!(id)
+
+  defp note!(user, vault, path) do
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => path}, actor: "api")
+
+    note
+  end
 
   # The path key of the row no longer names its path: a reader that still
   # matches `path_hmac` (or the trigger-derived `path_id`) cannot find it.
@@ -50,17 +60,23 @@ defmodule Engram.Notes.LocationTest do
     ])
   end
 
+  # Drift: the row's folder ref names another folder than its stored path.
+  defp point_ref!(note_id, folder_id),
+    do:
+      sql!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [dump(note_id), dump(folder_id)])
+
   # A folder rename that writes ONE folder row and nothing else (the S5
-  # write shape): the notes under it keep their old stored path.
-  defp rename_folder_row!(user, folder_id, new_name) do
+  # write shape, `notes_cascaded = false`): the notes under it keep their
+  # old stored path.
+  defp move_folder_row!(user, folder_id, new_name) do
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, fk} = Crypto.dek_filter_key(user)
     {ct, nonce} = Rows.encrypt_name(dek, folder_id, new_name)
 
     %{rows: [[vault_id]]} =
       sql!(
-        "UPDATE folders SET name_ciphertext = $2, name_nonce = $3, name_hmac = $4 " <>
-          "WHERE id = $1 RETURNING vault_id",
+        "UPDATE folders SET name_ciphertext = $2, name_nonce = $3, name_hmac = $4, " <>
+          "notes_cascaded = false WHERE id = $1 RETURNING vault_id",
         [dump(folder_id), ct, nonce, Rows.name_hmac(fk, new_name)]
       )
 
@@ -76,7 +92,8 @@ defmodule Engram.Notes.LocationTest do
     ])
   end
 
-  defp folder_id(user, path), do: Engram.FolderRows.tree(user)[path].id
+  defp folder_id(user, vault, path),
+    do: Repo.with_tenant!(user.id, fn -> Rows.ids_by_path(user, vault.id, [path]) end)[path]
 
   defp found(user, vault, path) do
     case Notes.get_note(user, vault, path) do
@@ -85,87 +102,84 @@ defmodule Engram.Notes.LocationTest do
     end
   end
 
+  test "the suite runs with names on, as prod does" do
+    assert Location.on?()
+  end
+
   describe "by-path lookup" do
-    test "with the ledger done it reads the folder chain and the name, not the path key",
+    test "no row holds the path: the folder chain and the name find the note",
          %{user: u, vault: v, note: note} do
       corrupt_path_key!(note.id)
-      assert found(u, v, "A/B/x.md") == nil, "precondition: the path read misses the row"
-
-      names_on!()
       assert found(u, v, "A/B/x.md") == note.id
       assert Notes.note_exists?(u, v, "A/B/x.md")
+
+      names_off!()
+      assert found(u, v, "A/B/x.md") == nil
     end
 
-    test "a folder renamed with no cascade: found at the new path, not at the old one",
+    test "a folder moved with no cascade: found at the new path, and at the stored one",
          %{user: u, vault: v, note: note} do
-      rename_folder_row!(u, folder_id(u, "A/B"), "C")
-      assert found(u, v, "A/B/x.md") == note.id, "precondition: the path read uses the old path"
-      assert found(u, v, "A/C/x.md") == nil
+      move_folder_row!(u, folder_id(u, v, "A/B"), "C")
 
-      names_on!()
       assert found(u, v, "A/C/x.md") == note.id
-      assert found(u, v, "A/B/x.md") == nil
-      # The note reads back at the path it was found at, not its stored one.
+      # Writers still cascade, so the stored path stays authoritative.
+      assert found(u, v, "A/B/x.md") == note.id
+      # The note reads back at the path it was found at.
       assert {:ok, %{path: "A/C/x.md", folder: "A/C"}} = Notes.get_note(u, v, "A/C/x.md")
+
+      names_off!()
+      assert found(u, v, "A/C/x.md") == nil
     end
 
     test "the name is exact: another case of the same name is a different path",
          %{user: u, vault: v, note: note} do
-      names_on!()
+      corrupt_path_key!(note.id)
       assert found(u, v, "A/B/x.md") == note.id
       assert found(u, v, "A/B/X.md") == nil
       assert found(u, v, "a/B/x.md") == nil
     end
 
-    test "a stale name stamp (a previous-release rename) falls back to the path",
+    test "a stale name stamp (a previous-release rename) is never matched by name",
          %{user: u, vault: v, note: note} do
       {:ok, fk} = Crypto.dek_filter_key(u)
 
-      # The previous release renamed x.md to y.md: new path, old name keys.
+      # The previous release renamed y.md to x.md: new path, old name keys.
       sql!(
         "UPDATE notes SET name_hmac = $2, name_ci_hmac = $3, name_stamp = $4 WHERE id = $1",
         [dump(note.id), Name.hmac(fk, "y.md"), Name.ci_hmac(fk, "y.md"), <<9, 9, 9>>]
       )
 
-      names_on!()
       assert found(u, v, "A/B/x.md") == note.id
       assert found(u, v, "A/B/y.md") == nil
     end
 
     test "a row with no folder ref is read by its path", %{user: u, vault: v, note: note} do
-      {:ok, root} =
-        Notes.upsert_note(u, v, %{"path" => "r.md", "content" => "r"}, actor: "api")
-
+      root = note!(u, v, "r.md")
       sql!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [dump(note.id)])
 
-      names_on!()
       assert found(u, v, "r.md") == root.id
       assert found(u, v, "A/B/x.md") == note.id
     end
 
     test "unfinished ledger: names are not read", %{user: u, vault: v, note: note} do
-      rename_folder_row!(u, folder_id(u, "A/B"), "C")
-      refute Location.on?()
+      move_folder_row!(u, folder_id(u, v, "A/B"), "C")
+      names_off!()
       assert found(u, v, "A/B/x.md") == note.id
       assert found(u, v, "A/C/x.md") == nil
     end
 
-    test "the name_reads override turns names off with the ledger done",
-         %{user: u, vault: v, note: note} do
-      rename_folder_row!(u, folder_id(u, "A/B"), "C")
-      names_on!()
+    test "the name_reads override turns names off", %{user: u, vault: v, note: note} do
+      move_folder_row!(u, folder_id(u, v, "A/B"), "C")
       ServiceConfig.put_override(:name_reads, false)
       refute Location.on?()
+      assert found(u, v, "A/C/x.md") == nil
       assert found(u, v, "A/B/x.md") == note.id
     end
 
-    test "get_notes_within (MCP get_notes) resolves each path by its folder and name",
+    test "get_notes_within (MCP get_notes) resolves each path, the stored path first",
          %{user: u, vault: v, note: note} do
-      {:ok, other} =
-        Notes.upsert_note(u, v, %{"path" => "D/x.md", "content" => "d"}, actor: "api")
-
-      rename_folder_row!(u, folder_id(u, "A/B"), "C")
-      names_on!()
+      other = note!(u, v, "D/x.md")
+      move_folder_row!(u, folder_id(u, v, "A/B"), "C")
 
       got =
         u
@@ -175,16 +189,60 @@ defmodule Engram.Notes.LocationTest do
       assert got == [
                {"D/x.md", other.id},
                {"A/C/x.md", note.id},
-               {"A/B/x.md", nil},
+               {"A/B/x.md", note.id},
                {"nope.md", nil}
              ]
     end
   end
 
+  describe "drift (a folder ref that disagrees with the stored path)" do
+    setup %{user: u, vault: v, note: note} do
+      z = note!(u, v, "Z/z.md")
+      point_ref!(note.id, folder_id(u, v, "Z"))
+      %{z: z}
+    end
+
+    test "the note is found at its stored path", %{user: u, vault: v, note: note} do
+      assert found(u, v, "A/B/x.md") == note.id
+      # Its folder ref's path holds no row, so the name answers there too.
+      assert found(u, v, "Z/x.md") == note.id
+    end
+
+    test "a push to the stored path updates the note; a rename onto it conflicts",
+         %{user: u, vault: v, note: note} do
+      assert {:ok, %{id: id}} =
+               Notes.upsert_note(u, v, %{"path" => "A/B/x.md", "content" => "new"}, actor: "api")
+
+      assert id == note.id
+      _ = note!(u, v, "D/o.md")
+      assert {:error, :conflict} = Notes.rename_note(u, v, "D/o.md", "A/B/x.md")
+    end
+
+    test "the row holding the path wins over a name match: one row, never two",
+         %{user: u, vault: v, note: note} do
+      holder = note!(u, v, "Z/x.md")
+      assert found(u, v, "Z/x.md") == holder.id
+      assert :deleted = Notes.delete_note_reporting(u, v, "Z/x.md")
+      assert found(u, v, "A/B/x.md") == note.id
+    end
+
+    test "two name matches and no holder: the lowest id, never an error",
+         %{user: u, vault: v, note: note} do
+      other = note!(u, v, "Z/x.md")
+      corrupt_path_key!(other.id)
+      assert found(u, v, "Z/x.md") == Enum.min([note.id, other.id])
+    end
+
+    test "outputs keep the stored path under a cascaded folder", %{user: u, vault: v, note: note} do
+      {:ok, %{changes: changes}} = Notes.list_changes_by_seq(u, v, 0)
+      assert %{path: "A/B/x.md"} = Enum.find(changes, &(&1.id == note.id))
+      assert {:ok, %{path: "A/B/x.md"}} = Notes.get_note_by_id(u, v, note.id)
+    end
+  end
+
   describe "cost" do
     test "get_notes_within at current stored paths reads no folder chains", %{user: u, vault: v} do
-      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "D/y.md", "content" => "y"}, actor: "api")
-      names_on!()
+      _ = note!(u, v, "D/y.md")
 
       {got, queries} =
         Engram.QueryRecorder.record(fn ->
@@ -196,8 +254,14 @@ defmodule Engram.Notes.LocationTest do
       assert Engram.QueryPlan.reading(queries, "folders") == []
     end
 
-    test "a feed page reads its folder chains in its own transaction", %{user: u, vault: v} do
-      names_on!()
+    test "a feed page with no moved folder reads no folder rows", %{user: u, vault: v} do
+      {_, queries} = Engram.QueryRecorder.record(fn -> Notes.list_changes_by_seq(u, v, 0) end)
+      assert Engram.QueryPlan.reading(queries, "folders") == []
+    end
+
+    test "a feed page under a moved folder reads its chains in its own transaction",
+         %{user: u, vault: v} do
+      move_folder_row!(u, folder_id(u, v, "A/B"), "C")
       {_, queries} = Engram.QueryRecorder.record(fn -> Notes.list_changes_by_seq(u, v, 0) end)
 
       assert [_] = Engram.QueryPlan.reading(queries, "folders")
@@ -210,16 +274,11 @@ defmodule Engram.Notes.LocationTest do
   end
 
   describe "derived output paths" do
-    test "the change feed serves the path derived from the folder tree, plus folder_id and name",
+    test "the change feed serves the path its moved folder gives it, plus folder_id and name",
          %{user: u, vault: v, note: note} do
-      b = folder_id(u, "A/B")
-      rename_folder_row!(u, b, "C")
+      b = folder_id(u, v, "A/B")
+      move_folder_row!(u, b, "C")
 
-      {:ok, %{changes: [before]}} = Notes.list_changes_by_seq(u, v, 0)
-      assert before.path == "A/B/x.md"
-      refute Map.has_key?(before, :folder_id)
-
-      names_on!()
       {:ok, %{changes: [change]}} = Notes.list_changes_by_seq(u, v, 0)
       assert change.id == note.id
       assert change.path == "A/C/x.md"
@@ -229,21 +288,23 @@ defmodule Engram.Notes.LocationTest do
 
       {:ok, %{changes: [meta]}} = Notes.list_changes_by_seq(u, v, 0, fields: :meta)
       assert meta.path == "A/C/x.md"
+
+      names_off!()
+      {:ok, %{changes: [before]}} = Notes.list_changes_by_seq(u, v, 0)
+      assert before.path == "A/B/x.md"
+      refute Map.has_key?(before, :folder_id)
     end
 
     test "get_note_by_id shows the derived path; the stored-row read keeps the stored one",
          %{user: u, vault: v, note: note} do
-      rename_folder_row!(u, folder_id(u, "A/B"), "C")
-      names_on!()
+      move_folder_row!(u, folder_id(u, v, "A/B"), "C")
 
       assert {:ok, %{path: "A/C/x.md", folder: "A/C"}} = Notes.get_note_by_id(u, v, note.id)
       assert {:ok, %{path: "A/B/x.md"}} = Notes.get_note_row_by_id(u, v, note.id)
     end
 
-    test "a folder listing (MCP list_folder) shows the derived paths",
-         %{user: u, vault: v} do
-      rename_folder_row!(u, folder_id(u, "A/B"), "C")
-      names_on!()
+    test "a folder listing (MCP list_folder) shows the derived paths", %{user: u, vault: v} do
+      move_folder_row!(u, folder_id(u, v, "A/B"), "C")
 
       assert {:ok, %{notes: [%{path: "A/C/x.md"}]}} =
                Notes.list_notes_in_folder_page(u, v, "A/C")
@@ -251,23 +312,18 @@ defmodule Engram.Notes.LocationTest do
 
     test "a tombstone keeps the path it was deleted at", %{user: u, vault: v} do
       :ok = Notes.delete_note(u, v, "A/B/x.md")
-      rename_folder_row!(u, folder_id(u, "A/B"), "C")
-      names_on!()
+      move_folder_row!(u, folder_id(u, v, "A/B"), "C")
 
       {:ok, %{changes: changes}} = Notes.list_changes_by_seq(u, v, 0)
       assert [%{deleted: true, path: "A/B/x.md"} = tomb] = Enum.filter(changes, & &1.deleted)
       refute Map.has_key?(tomb, :folder_id)
     end
 
-    test "put_paths/2 derives live rows across vaults and leaves the rest alone",
+    test "put_paths/3 derives moved rows across vaults and leaves the rest alone",
          %{user: u, vault: v, note: note} do
       v2 = insert(:vault, user: u)
-
-      {:ok, n2} =
-        Notes.upsert_note(u, v2, %{"path" => "A/B/x.md", "content" => "two"}, actor: "api")
-
-      rename_folder_row!(u, folder_id_in(u, v, "A/B"), "C")
-      names_on!()
+      n2 = note!(u, v2, "A/B/x.md")
+      move_folder_row!(u, folder_id(u, v, "A/B"), "C")
 
       # Stored rows as a reader decrypts them: the stored path, still A/B.
       notes = for {vv, n} <- [{v, note}, {v2, n2}], do: stored!(u, vv, n.id)
@@ -281,9 +337,5 @@ defmodule Engram.Notes.LocationTest do
   defp stored!(user, vault, id) do
     {:ok, note} = Notes.get_note_row_by_id(user, vault, id)
     note
-  end
-
-  defp folder_id_in(user, vault, path) do
-    Repo.with_tenant!(user.id, fn -> Rows.ids_by_path(user, vault.id, [path]) end)[path]
   end
 end

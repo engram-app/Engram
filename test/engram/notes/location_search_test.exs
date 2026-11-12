@@ -1,14 +1,14 @@
 defmodule Engram.Notes.LocationSearchTest do
   # S3 read switch (Engram#2523): a search hit shows its note where the
   # folder row and the name put it (`Notes.search_hits_by_qdrant_points/2`
-  # through `Engram.Notes.Location.put_paths/3`), with the folder chain read
-  # in the hits' own tenant transaction.
+  # through `Engram.Notes.Location.put_paths/3`) once a folder on its chain
+  # was moved with no cascade, the chain read in the hits' own transaction.
   use Engram.DataCase, async: false
 
   import Ecto.Query
   import Mox
 
-  alias Engram.{Crypto, DataMigrations, Indexing, Notes, ServiceConfig}
+  alias Engram.{Crypto, Indexing, Notes, ServiceConfig}
   alias Engram.Folders.Rows
   alias Engram.Notes.Chunk
 
@@ -63,14 +63,16 @@ defmodule Engram.Notes.LocationSearchTest do
     {ct, nonce} = Rows.encrypt_name(dek, id, "Body")
 
     Repo.query!(
-      "UPDATE folders SET name_ciphertext = $2, name_nonce = $3, name_hmac = $4 WHERE id = $1",
+      "UPDATE folders SET name_ciphertext = $2, name_nonce = $3, name_hmac = $4, " <>
+        "notes_cascaded = false WHERE id = $1",
       [Ecto.UUID.dump!(id), ct, nonce, Rows.name_hmac(fk, "Body")]
     )
 
-    assert hit_paths(u, note) == ["Health/Iron.md"]
-
-    :ok = DataMigrations.mark_done("note_name", 1)
-    Engram.Cache.clear_local(:note_name)
     assert hit_paths(u, note) == ["Body/Iron.md"]
+
+    # Names off (the ledger as the test DB holds it): the stored path.
+    ServiceConfig.put_override(:name_reads_ledger, :read)
+    Engram.Cache.clear_local(:note_name)
+    assert hit_paths(u, note) == ["Health/Iron.md"]
   end
 end
