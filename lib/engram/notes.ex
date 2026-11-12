@@ -5804,6 +5804,21 @@ defmodule Engram.Notes do
   # instead of crashing on a Postgrex unique_violation.
   @changes_page_max_limit 500
 
+  # The rows the op-log feed serves: every note row with a seq except folder
+  # rows. One definition for the page and for its head (`feed_head_seq/2`).
+  defp feed_rows(user, vault),
+    do: from(n in scoped(user, vault), where: not is_nil(n.seq) and n.kind != "folder")
+
+  @doc """
+  The highest seq `list_changes_by_seq/4` can serve, or 0. Lower than the
+  vault's `change_seq` whenever its last bump was a folder row. One index seek.
+  """
+  @spec feed_head_seq(map(), map()) :: non_neg_integer()
+  def feed_head_seq(user, vault) do
+    Repo.one(from(n in feed_rows(user, vault), order_by: [desc: n.seq], limit: 1, select: n.seq)) ||
+      0
+  end
+
   @doc """
   Seq-cursor change feed: rows with `(seq, id) > (after_seq, after_id)`,
   ordered by `(seq, id)`, paginated.
@@ -5844,8 +5859,7 @@ defmodule Engram.Notes do
     max_bytes = Keyword.get(opts, :max_bytes) || page_max_bytes()
 
     base =
-      from(n in scoped(user, vault),
-        where: not is_nil(n.seq) and n.kind != "folder",
+      from(n in feed_rows(user, vault),
         order_by: [asc: n.seq, asc: n.id],
         limit: ^(limit + 1)
       )

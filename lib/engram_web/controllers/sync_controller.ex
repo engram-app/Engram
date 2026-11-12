@@ -64,7 +64,7 @@ defmodule EngramWeb.SyncController do
         pending =
           Repo.one(from(l in CrdtUpdateLog, where: l.vault_id == ^vault.id, select: count()))
 
-        {Engram.Vaults.raw_current_seq(vault.id), Engram.Sync.feed_head(vault.id), pending}
+        {Engram.Vaults.raw_current_seq(vault.id), Engram.Sync.feed_head(user, vault), pending}
       end)
 
     {owed, deferred, capped?} = checkpoint_counts(vault.id)
