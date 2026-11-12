@@ -239,6 +239,45 @@ defmodule Engram.DataMigrations.NoteMetaTest do
     end
   end
 
+  # A rebind hands a note over (NULL stamp + reopen) while a pass is mid-walk
+  # and already past that note's id. The pass must not save its cursor or
+  # close the ledger clean over the reopen, or the note is never re-derived.
+  test "a reopen during a pass is not lost: the note still heals", ctx do
+    [first, second] = for p <- ["a1.md", "a2.md"], do: stale_note(ctx, p)
+    [x, _] = Enum.sort_by([first, second], & &1.id)
+    # Both already checked: the walk would end clean.
+    Repo.update_all(
+      from(n in Note, where: n.id in ^[first.id, second.id]),
+      [set: [meta_version: Helpers.meta_version()]],
+      skip_tenant_check: true
+    )
+
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    step = fn ids, wctx ->
+      result = NoteMeta.heal_window(ids, wctx)
+
+      # After the first window (x, already passed): x is handed back.
+      if Agent.get_and_update(calls, &{&1, &1 + 1}) == 0 do
+        Repo.update_all(from(n in Note, where: n.id == ^x.id), [set: [meta_version: nil]],
+          skip_tenant_check: true
+        )
+
+        :ok = Engram.DataMigrations.reopen(NoteMeta.name(), NoteMeta.version())
+      end
+
+      result
+    end
+
+    refute Engram.Backfill.IdWindows.heal_pass(NoteMeta.name(), Note, step,
+             batch_size: 1,
+             fun_in_tenant: false
+           ) == :done
+
+    assert :done = run_until_done()
+    assert decrypted(x, ctx.user).title == elem(derived(@content), 0)
+  end
+
   describe "tenant scoping" do
     test "control: in another tenant's context the heal reads and writes nothing", ctx do
       note = stale_note(ctx)
