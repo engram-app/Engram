@@ -346,6 +346,7 @@ defmodule Engram.Fixtures do
   Returns the inserted struct with `dek_version: 1`.
   """
   def insert_attachment!(user, vault, attrs \\ %{}) do
+    user = with_dek(user)
     {row, path} = attachment_row(user, vault, attrs)
 
     # DB-enforced NOT NULL on seq (NULL rows vanish from the sync feed).
@@ -370,6 +371,7 @@ defmodule Engram.Fixtures do
   def insert_attachments!(_user, _vault, []), do: []
 
   def insert_attachments!(user, vault, entries) do
+    user = with_dek(user)
     now = DateTime.utc_now(:second)
     fields = Engram.Attachments.Attachment.__schema__(:fields)
 
@@ -400,9 +402,9 @@ defmodule Engram.Fixtures do
   end
 
   # The `attachments` row `insert_attachment!/3` writes, all but `seq`, and
-  # its path (virtual on the schema). Writes the blob to storage.
+  # its path (virtual on the schema). Writes the blob to storage. `user`
+  # already holds its DEK (`with_dek/1`, once per call, not per row).
   defp attachment_row(user, vault, attrs) do
-    user = with_dek(user)
     attrs = Enum.into(attrs, %{}, fn {k, v} -> {to_string(k), v} end)
 
     path =
