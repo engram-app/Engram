@@ -117,7 +117,7 @@ defmodule Engram.Notes.NoteKeysTest do
         path_hmac: :crypto.strong_rand_bytes(32),
         folder_hmac: :crypto.strong_rand_bytes(32),
         basename_hmac: :crypto.strong_rand_bytes(32),
-        deleted_at: DateTime.truncate(DateTime.utc_now(), :second)
+        deleted_at: DateTime.utc_now(:second)
       )
     end
 
