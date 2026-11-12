@@ -3,11 +3,12 @@ defmodule Engram.Notes.LocationTest do
   # prod's state: the S2 `note_name` ledger done and `name_reads` on
   # (`config/test.exs`); `names_off!/0` is the fallback.
   #
-  # While writers still cascade, the stored path is the truth: a note held
-  # at the asked path is that path's note. The folder chain plus the name
-  # answers only when no row holds the path. A live note is shown where its
-  # folder row puts it only when a folder on its chain was renamed without a
-  # cascade (`folders.notes_cascaded = false`, the S5 write shape).
+  # While writers still cascade, the stored path is the truth. The folder
+  # chain plus the name is read only in a vault holding a folder renamed
+  # without a cascade (`folders.notes_cascaded = false`, the S5 write shape;
+  # `mark_moved!/2`), and there only when no row holds the asked path. Every
+  # other vault reads exactly as 0.83.0 did. A live note is shown where its
+  # folder row puts it only when a folder on its own chain moved that way.
   #
   # async: false: the ledger answer is a node-wide cache entry.
   use Engram.DataCase, async: false
@@ -92,6 +93,16 @@ defmodule Engram.Notes.LocationTest do
     ])
   end
 
+  # The vault holds a folder moved without a cascade (an empty marker
+  # folder, so no note's chain changes).
+  defp mark_moved!(user, vault) do
+    {:ok, _} = Engram.Folders.create_markers(user, vault, ["Moved"])
+
+    sql!("UPDATE folders SET notes_cascaded = false WHERE id = $1", [
+      dump(folder_id(user, vault, "Moved"))
+    ])
+  end
+
   defp folder_id(user, vault, path),
     do: Repo.with_tenant!(user.id, fn -> Rows.ids_by_path(user, vault.id, [path]) end)[path]
 
@@ -106,9 +117,31 @@ defmodule Engram.Notes.LocationTest do
     assert Location.on?()
   end
 
+  # The ledger row, not the test config, turns names on in prod.
+  test "a completed note_name ledger row turns names on; a reopen turns them off" do
+    ServiceConfig.put_override(:name_reads_ledger, :read)
+    Engram.Cache.clear_local(:note_name)
+    refute Location.on?()
+
+    :ok = Engram.DataMigrations.mark_done("note_name", 1)
+    Engram.Cache.clear_local(:note_name)
+    assert Location.on?()
+
+    Engram.DataMigrations.reopen("note_name", 1)
+    Engram.Cache.clear_local(:note_name)
+    refute Location.on?()
+  end
+
   describe "by-path lookup" do
-    test "no row holds the path: the folder chain and the name find the note",
+    test "a vault with no moved folder reads stored paths only, as 0.83.0",
          %{user: u, vault: v, note: note} do
+      corrupt_path_key!(note.id)
+      assert found(u, v, "A/B/x.md") == nil
+    end
+
+    test "no row holds the path in a moved vault: the folder chain and the name find the note",
+         %{user: u, vault: v, note: note} do
+      mark_moved!(u, v)
       corrupt_path_key!(note.id)
       assert found(u, v, "A/B/x.md") == note.id
       assert Notes.note_exists?(u, v, "A/B/x.md")
@@ -133,6 +166,7 @@ defmodule Engram.Notes.LocationTest do
 
     test "the name is exact: another case of the same name is a different path",
          %{user: u, vault: v, note: note} do
+      mark_moved!(u, v)
       corrupt_path_key!(note.id)
       assert found(u, v, "A/B/x.md") == note.id
       assert found(u, v, "A/B/X.md") == nil
@@ -202,10 +236,9 @@ defmodule Engram.Notes.LocationTest do
       %{z: z}
     end
 
-    test "the note is found at its stored path", %{user: u, vault: v, note: note} do
+    test "the note is found at its stored path only", %{user: u, vault: v, note: note} do
       assert found(u, v, "A/B/x.md") == note.id
-      # Its folder ref's path holds no row, so the name answers there too.
-      assert found(u, v, "Z/x.md") == note.id
+      assert found(u, v, "Z/x.md") == nil
     end
 
     test "a push to the stored path updates the note; a rename onto it conflicts",
@@ -218,35 +251,72 @@ defmodule Engram.Notes.LocationTest do
       assert {:error, :conflict} = Notes.rename_note(u, v, "D/o.md", "A/B/x.md")
     end
 
-    test "the row holding the path wins over a name match: one row, never two",
+    # Review B2, scenario 1: a new note at the drift row's folder-ref path.
+    test "a new note at the folder ref's path is a new row; the drift note is untouched",
          %{user: u, vault: v, note: note} do
-      # Made by path: with names on, a push to Z/x.md would land on the
-      # drift note, which its folder and name put there.
-      names_off!()
+      assert {:ok, %{id: id}} =
+               Notes.upsert_note(u, v, %{"path" => "Z/x.md", "content" => "zzz"}, actor: "api")
+
+      refute id == note.id
+      assert {:ok, %{id: ^id, content: "zzz"}} = Notes.get_note(u, v, "Z/x.md")
+      assert {:ok, %{content: "# X\n\nbody"}} = Notes.get_note(u, v, "A/B/x.md")
+    end
+
+    # Review B2, scenario 2: a replayed delete.
+    test "a replayed delete of the folder ref's path deletes nothing more",
+         %{user: u, vault: v, note: note} do
+      _ = note!(u, v, "Z/x.md")
+      assert :deleted = Notes.delete_note_reporting(u, v, "Z/x.md")
+      assert :absent = Notes.delete_note_reporting(u, v, "Z/x.md")
+      assert found(u, v, "A/B/x.md") == note.id
+    end
+
+    # Review B2, scenario 3: a CRDT create mints the file's own id.
+    test "a CRDT create at the folder ref's path does not adopt the drift note",
+         %{user: u, vault: v, note: note} do
+      fresh = Notes.mint_id()
+      assert {:ok, %{id: ^fresh}} = Notes.genesis_crdt_note(u, v, fresh, "Z/x.md")
+      assert found(u, v, "A/B/x.md") == note.id
+    end
+
+    test "in a moved vault the row holding the path wins over a name match",
+         %{user: u, vault: v, note: note} do
       holder = note!(u, v, "Z/x.md")
-      ServiceConfig.put_override(:name_reads_ledger, :done)
-      assert Location.on?()
+      mark_moved!(u, v)
 
       assert found(u, v, "Z/x.md") == holder.id
       assert :deleted = Notes.delete_note_reporting(u, v, "Z/x.md")
       assert found(u, v, "A/B/x.md") == note.id
     end
 
-    test "a push to a path no row holds lands on the row its folder and name put there",
+    test "in a moved vault two name matches and no holder give the lowest id",
          %{user: u, vault: v, note: note} do
-      assert {:ok, %{id: id}} =
-               Notes.upsert_note(u, v, %{"path" => "Z/x.md", "content" => "z"}, actor: "api")
-
-      assert id == note.id
+      other = note!(u, v, "Z/x.md")
+      corrupt_path_key!(other.id)
+      mark_moved!(u, v)
+      assert found(u, v, "Z/x.md") == Enum.min([note.id, other.id])
     end
 
-    test "two name matches and no holder: the lowest id, never an error",
-         %{user: u, vault: v, note: note} do
-      names_off!()
-      other = note!(u, v, "Z/x.md")
-      ServiceConfig.put_override(:name_reads_ledger, :done)
-      corrupt_path_key!(other.id)
-      assert found(u, v, "Z/x.md") == Enum.min([note.id, other.id])
+    # Review M5: the rename's claim check and its row check read the same
+    # lookup, so a target the row check calls taken is never claimed first.
+    test "in a moved vault a rename onto a name-matched path conflicts before any claim",
+         %{user: u, vault: v} do
+      _ = note!(u, v, "D/o.md")
+      mark_moved!(u, v)
+      me = self()
+      id = "orphan-claim-#{System.unique_integer()}"
+
+      :telemetry.attach(
+        id,
+        [:engram, :crdt, :index_claim],
+        fn _, _, %{route: route}, _ -> send(me, {:claim_route, route}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+
+      assert {:error, :conflict} = Notes.rename_note(u, v, "D/o.md", "Z/x.md")
+      refute_received {:claim_route, :orphan}
     end
 
     test "outputs keep the stored path under a cascaded folder", %{user: u, vault: v, note: note} do

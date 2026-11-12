@@ -26,6 +26,15 @@ defmodule Engram.Notes.LocationRlsTest do
     {:ok, _} =
       Notes.upsert_note(other, theirs, %{"path" => "A/B/x.md", "content" => "y"}, actor: "api")
 
+    # A moved folder: only then does the name read run.
+    {:ok, _} = Engram.Folders.create_markers(owner, vault, ["Moved"])
+
+    moved = Repo.with_tenant!(owner.id, fn -> Rows.ids_by_path(owner, vault.id, ["Moved"]) end)
+
+    Repo.query!("UPDATE folders SET notes_cascaded = false WHERE id = $1", [
+      Ecto.UUID.dump!(moved["Moved"])
+    ])
+
     Repo.query!("UPDATE notes SET path_hmac = $2 WHERE id = $1", [
       Ecto.UUID.dump!(note.id),
       :crypto.strong_rand_bytes(32)
