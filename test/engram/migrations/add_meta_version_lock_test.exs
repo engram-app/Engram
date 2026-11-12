@@ -38,9 +38,20 @@ defmodule Engram.Migrations.AddMetaVersionLockTest do
     assert :ok = migration().run_up(Engram.Repo)
   end
 
-  test "it gives up after its retries" do
-    LockTimeoutRepo.refuse(3)
-    assert_raise Postgrex.Error, fn -> migration().run_up(LockTimeoutRepo) end
+  # A transaction on `notes` longer than one round of retries (3 x 5 s) must
+  # not fail boot: the migration backs off and tries again, inside the ~60 s
+  # boot budget (boot-migration-and-shared-ip-limits.md). Backoff 0 in tests.
+  test "it backs off and retries past one round of lock timeouts" do
+    migration().run_down(Engram.Repo)
+    LockTimeoutRepo.refuse(5)
+    assert :ok = migration().run_up(LockTimeoutRepo, [0, 0])
+    assert LockTimeoutRepo.left() == 0
+    assert column?()
+  end
+
+  test "it gives up after its last backoff" do
+    LockTimeoutRepo.refuse(9)
+    assert_raise Postgrex.Error, fn -> migration().run_up(LockTimeoutRepo, [0, 0]) end
   end
 
   test "one summary line, counts only: the column present" do
