@@ -162,9 +162,10 @@ async def _damaged_note_on_both(
     test: the server doc holds the fence in its body and an empty map, and both
     devices pull it as their FIRST sight of the note.
 
-    Created over REST (the server's ingest lifts the frontmatter and converts
-    to LF), then rewritten inside a pinned room to the legacy text, CRLF and
-    fence in the body, so no rebind's `normalize_doc` heals it.
+    Created over REST, then rewritten inside a pinned room to the legacy text
+    (fence and CRLF in the body), as an old plugin's live update would. The
+    room heals the CRs at once (it is the only CR healer) and leaves the fence,
+    which only a bind or a device lifts; the pin keeps a rebind away.
     Both gates stay shut until the damage is in place, so neither device sees
     the healthy version first."""
     path = f"{folder}/Damaged.md"
@@ -179,8 +180,10 @@ async def _damaged_note_on_both(
         await _wait_server_doc(
             sync_vault_id,
             note_id,
-            lambda d: d.order == [] and d.values == {} and d.body == note,
-            "the damaged fixture shape (fence in body, empty map)",
+            # The room heals the CRs of a live update the moment it applies it
+            # (single healer); the fence in the body is left for a bind.
+            lambda d: d.order == [] and d.values == {} and d.body == _lf(note),
+            "the damaged fixture shape (fence in body, empty map, CRs healed)",
         )
     finally:
         await cdp_a.set_sync_blocked(False)
@@ -188,9 +191,9 @@ async def _damaged_note_on_both(
     for cdp, vault in ((cdp_a, vault_a), (cdp_b, vault_b)):
         await cdp.trigger_full_sync()
         wait_for_content(vault, path, last_line, timeout=DELIVERY_TIMEOUT)
-    # A device projects the damaged doc to the CRLF bytes verbatim.
+    # A device projects the damaged doc (empty map) to its body verbatim.
     for vault in (vault_a, vault_b):
-        assert _disk(vault, path) == note, f"{vault} did not pull the damaged note"
+        assert _disk(vault, path) == _lf(note), f"{vault} did not pull the damaged note"
     return path, note_id
 
 
@@ -262,9 +265,8 @@ async def test_damaged_crlf_note_heals_on_open(
 ):
     """[3] A note the old plugin damaged (fence in the body, empty map) gets
     its fence lifted when A opens it, while the server room stays bound (so
-    `normalize_doc` cannot be the one lifting it), and B converges. The
-    body's CRs stay until the next room open, whose heal removes them: only
-    the room removes CRs already in a doc. No key is duplicated, no copy."""
+    `normalize_doc` cannot be the one lifting it), and B converges to the LF
+    projection. No key is duplicated, no conflict copy."""
     folder = _folder()
     await _arm(cdp_a, cdp_b)
     path, note_id = await _damaged_note_on_both(
@@ -280,9 +282,7 @@ async def test_damaged_crlf_note_heals_on_open(
             "the damaged fence lifted into the map by the plugin",
         )
         print(f"healed: order={doc.order}")
-        # One healer: the plugin lifts the fence but leaves the body's CRs to
-        # the server room. This room is pinned, so they are still there.
-        assert doc.body == BODY, f"the plugin touched CRs the room owns: {doc.body!r}"
+        assert doc.body == _lf(BODY), f"heal changed the body: {doc.body!r}"
 
         await _hold_bytes(vault_a, path, CRLF_NOTE, "healing damaged A's file", exact=False)
         await _hold_bytes(vault_b, path, _lf(CRLF_NOTE), "B's file is not the LF projection")
@@ -290,13 +290,6 @@ async def test_damaged_crlf_note_heals_on_open(
         _assert_keys_once(vault_a, path)
         _assert_keys_once(vault_b, path)
 
-        # The next room open runs the room's heal, which removes them.
-        release_room(note_id)
-        await asyncio.to_thread(bind_room, sync_vault_id, note_id)
-        await _wait_server_doc(
-            sync_vault_id, note_id, lambda d: d.body == _lf(BODY), "the room heal of the body's CRs"
-        )
-        await _hold_bytes(vault_b, path, _lf(CRLF_NOTE), "B's file after the room heal")
         await _assert_no_copies(folder, cdp_a, cdp_b)
         _assert_one_note(folder, path, api_sync, vault_a, vault_b)
     finally:
