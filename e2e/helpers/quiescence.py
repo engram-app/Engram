@@ -32,6 +32,9 @@ from helpers.cdp import PLUGIN_PATH
 
 PROBE = f"JSON.stringify({PLUGIN_PATH}.syncQuiescence())"
 OWED = ("pushing", "pendingPushes", "queued", "flushing", "creating", "crdtOps")
+QUEUE_DUMP_CAP = 20
+# Bounded so a wedged renderer cannot push the dump past the pytest timeout.
+QUEUE_DUMP_TIMEOUT_S = 5
 
 
 def _settled(server: dict, client: dict, caught_up: bool) -> bool:
@@ -68,7 +71,25 @@ async def await_quiescent(
             return
         await asyncio.sleep(0.5)
     raise AssertionError(
-        f"sync did not settle within {deadline_s}s: server={server} client={client}"
+        f"sync did not settle within {deadline_s}s: server={server} client={client} "
+        f"queue_entries={await _queue_dump(cdp)}"
+    )
+
+
+async def _queue_dump(cdp) -> str:
+    """Name which entries held `queued`/`crdtOps`. Metadata only, never content."""
+    try:
+        queue = await cdp.get_queue_entries(timeout=QUEUE_DUMP_TIMEOUT_S)
+        ops = await cdp.get_crdt_queue_ops(timeout=QUEUE_DUMP_TIMEOUT_S)
+    except Exception as e:  # noqa: BLE001 - a diagnostic must never mask the settle failure
+        return f"<queue dump failed: {e!r}>"
+    return json.dumps(
+        {
+            "queue": queue[:QUEUE_DUMP_CAP],
+            "queueTotal": len(queue),
+            "crdtOps": ops[:QUEUE_DUMP_CAP],
+            "crdtOpsTotal": len(ops),
+        }
     )
 
 
