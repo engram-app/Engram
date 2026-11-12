@@ -34,20 +34,26 @@ defmodule Engram.Folders.WalkSql do
    ) SELECT w.id FROM w WHERE w.i = ?)
   """
 
+  @moved "EXISTS (SELECT 1 FROM folders m WHERE m.vault_id = ? AND NOT m.notes_cascaded " <>
+           "AND m.deleted_at IS NULL)"
+
   @doc "`? = <walk>`: a folder id column against the walk (params: column, then the walk's)."
   defmacro id_eq, do: "? = " <> @walk
 
   @doc """
-  `(? || uuid_send(?)) = (? || uuid_send(<walk>))`: a note's
-  `(name_ci_hmac, folder_ref_id)` key, as `notes_folder_name_live` indexes
-  it, against a casefolded name hash plus the walk (params: the two
-  columns, the name hash, then the walk's).
+  `(? || uuid_send(?)) = (? || uuid_send(CASE WHEN <moved> THEN <walk> END))`:
+  a note's `(name_ci_hmac, folder_ref_id)` key, as `notes_folder_name_live`
+  indexes it, against a casefolded name hash plus the walk, which runs only
+  when the vault holds a folder moved without a cascade; otherwise the key
+  is NULL and matches nothing, so an unmoved vault pays the one `moved/0`
+  probe (params: the two columns, the name hash, the vault id, then the
+  walk's).
   """
-  defmacro key_eq, do: "(? || uuid_send(?)) = (? || uuid_send(" <> @walk <> "))"
+  defmacro key_eq,
+    do:
+      "(? || uuid_send(?)) = (? || uuid_send(CASE WHEN " <>
+        @moved <> " THEN " <> @walk <> " END))"
 
   @doc "`EXISTS` a live folder of the vault renamed without a cascade (param: vault id)."
-  defmacro moved,
-    do:
-      "EXISTS (SELECT 1 FROM folders m WHERE m.vault_id = ? AND NOT m.notes_cascaded " <>
-        "AND m.deleted_at IS NULL)"
+  defmacro moved, do: @moved
 end

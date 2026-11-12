@@ -156,7 +156,7 @@ defmodule Engram.Notes.Location do
   # The row's name key, folder and current stamp match: the folder walked
   # down from the root (`WalkSql.key_eq/0`, on `notes_folder_name_live`),
   # the exact name, a name whose stamp is current. Only in a vault holding a
-  # folder moved without a cascade (`WalkSql.moved/0`, one probe of the
+  # folder moved without a cascade (`key_eq/0` checks it first, one probe of the
   # empty-until-S5 `folders_moved_live`): until S5 writes one, a name match
   # can only be drift, a row the user sees somewhere else, so every lookup,
   # push, delete and CRDT create reads stored paths exactly as 0.83.0 did.
@@ -169,13 +169,13 @@ defmodule Engram.Notes.Location do
         n.folder_ref_id,
         type(^ci, :binary),
         type(^vault_id, Ecto.UUID),
+        type(^vault_id, Ecto.UUID),
         type(^segs, {:array, :binary}),
         type(^vault_id, Ecto.UUID),
         type(^segs, {:array, :binary}),
         ^length(segs)
       ) and n.name_hmac == ^exact and
-        fragment(NameKeys.current_sql(), n.name_stamp, n.path_nonce, ^Name.version()) and
-        fragment(WalkSql.moved(), type(^vault_id, Ecto.UUID))
+        fragment(NameKeys.current_sql(), n.name_stamp, n.path_nonce, ^Name.version())
     )
   end
 
