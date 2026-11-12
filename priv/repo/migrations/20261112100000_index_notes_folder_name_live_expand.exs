@@ -49,12 +49,14 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderNameLiveExpand do
   step: an index a failed or timed-out CONCURRENTLY build left INVALID is
   dropped, then it is built IF NOT EXISTS.
 
-  Time bound: 100 s per statement (`statement_timeout`, server side), on
-  ONE pinned connection checked out for at most 110 s (`checkout/2`
-  `timeout:`; DBConnection's default, 15 s, would otherwise cut the build
-  short and leave it INVALID). The server cancels a slow build before the
-  client gives up, so no orphaned build outlives the boot, and both fit the
-  boot's health-check window. A build past 100 s (a long-open snapshot the
+  Time bound: ONE deadline. The pinned connection is checked out for at
+  most 110 s (`checkout/2` `timeout:`; DBConnection's default, 15 s, would
+  otherwise cut the build short and leave it INVALID), and before each
+  statement `statement_timeout` is set to what is left of that budget less
+  a 5 s margin (at least 1 s). The server therefore cancels every statement,
+  the second build included, before the client's deadline: no orphaned
+  build outlives the checkout, so the next boot's drop of an INVALID index
+  never waits on one. A build past its share (a long-open snapshot the
   CONCURRENTLY build must wait out) fails the boot cleanly; the next boot
   drops the INVALID index and builds again. No `lock_timeout`: see
   20261105150100's `up/0`.
@@ -68,20 +70,19 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderNameLiveExpand do
      "ON folders (vault_id) WHERE NOT notes_cascaded AND deleted_at IS NULL"}
   ]
 
-  @statement_timeout_ms 100_000
   @checkout_timeout_ms 110_000
+  @margin_ms 5_000
 
   def up do
     started = MigrationLog.now()
+    deadline = started + @checkout_timeout_ms
 
-    with_statement_timeout(fn ->
+    with_checkout(fn ->
       for {name, spec} <- @indexes do
         if invalid?(name),
-          do: repo().query!("DROP INDEX CONCURRENTLY IF EXISTS #{name}", [], timeout: :infinity)
+          do: bounded!(deadline, "DROP INDEX CONCURRENTLY IF EXISTS #{name}")
 
-        repo().query!("CREATE INDEX CONCURRENTLY IF NOT EXISTS #{name} #{spec}", [],
-          timeout: :infinity
-        )
+        bounded!(deadline, "CREATE INDEX CONCURRENTLY IF NOT EXISTS #{name} #{spec}")
       end
     end)
 
@@ -117,11 +118,9 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderNameLiveExpand do
   # miss the build and leak into later migrations. Inlined, not shared: the
   # N-1 gate runs this file on the previous release's code, so a migration
   # calls no app module.
-  defp with_statement_timeout(fun) do
+  defp with_checkout(fun) do
     repo().checkout(
       fn ->
-        repo().query!("SET statement_timeout = #{@statement_timeout_ms}")
-
         try do
           fun.()
         after
@@ -130,5 +129,14 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderNameLiveExpand do
       end,
       timeout: @checkout_timeout_ms
     )
+  end
+
+  # `sql` with a server-side timeout of what is left before `deadline` (the
+  # checkout's), less the margin: the server cancels it before the client
+  # disconnects.
+  defp bounded!(deadline, sql) do
+    left = max(deadline - MigrationLog.now() - @margin_ms, 1_000)
+    repo().query!("SET statement_timeout = #{left}")
+    repo().query!(sql, [], timeout: :infinity)
   end
 end
