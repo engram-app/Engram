@@ -220,15 +220,31 @@ defmodule Engram.Notes.LocationTest do
 
     test "the row holding the path wins over a name match: one row, never two",
          %{user: u, vault: v, note: note} do
+      # Made by path: with names on, a push to Z/x.md would land on the
+      # drift note, which its folder and name put there.
+      names_off!()
       holder = note!(u, v, "Z/x.md")
+      ServiceConfig.put_override(:name_reads_ledger, :done)
+      assert Location.on?()
+
       assert found(u, v, "Z/x.md") == holder.id
       assert :deleted = Notes.delete_note_reporting(u, v, "Z/x.md")
       assert found(u, v, "A/B/x.md") == note.id
     end
 
+    test "a push to a path no row holds lands on the row its folder and name put there",
+         %{user: u, vault: v, note: note} do
+      assert {:ok, %{id: id}} =
+               Notes.upsert_note(u, v, %{"path" => "Z/x.md", "content" => "z"}, actor: "api")
+
+      assert id == note.id
+    end
+
     test "two name matches and no holder: the lowest id, never an error",
          %{user: u, vault: v, note: note} do
+      names_off!()
       other = note!(u, v, "Z/x.md")
+      ServiceConfig.put_override(:name_reads_ledger, :done)
       corrupt_path_key!(other.id)
       assert found(u, v, "Z/x.md") == Enum.min([note.id, other.id])
     end

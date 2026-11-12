@@ -5723,14 +5723,20 @@ defmodule Engram.Notes do
     # :meta carries no content, so it has no byte hazard and no budget.
     #
     # `chains`: the folder rows the page's live notes are placed by
-    # (`Location.chains/1`), read in the page's own tenant transaction: one
-    # more statement, no more round trips for a transaction.
+    # (`Location.chains/1`), in the page's own tenant transaction. The
+    # budgeted page statement itself says whether the vault holds a folder
+    # moved without a cascade (`Location.moved_column/1`), so the chains are
+    # read only then.
+    moved = Location.moved_column(vault_id(vault))
+
     {notes, budget_more, chains} =
       case {fields, max_bytes} do
         {:all, b} when is_integer(b) and b > 0 ->
-          budgeted_page(base, user, limit, b)
+          budgeted_page(base, user, limit, b, moved)
 
         _ ->
+          # Unbudgeted (`:meta`, or no byte budget): the chains statement
+          # itself probes for a moved folder.
           {:ok, {notes, chains}} =
             Repo.with_tenant(user.id, fn ->
               notes = Repo.all(query)
@@ -5900,7 +5906,7 @@ defmodule Engram.Notes do
   # The next page (up to `limit + 1` rows of `base`), cut at the byte budget
   # (`budget_cut/5`), and whether the budget (not the row limit) is what
   # stopped it.
-  defp budgeted_page(base, user, limit, max_bytes) do
+  defp budgeted_page(base, user, limit, max_bytes, moved) do
     {rows, total, _spent, chains} =
       budget_cut_rows(
         base,
@@ -5908,8 +5914,8 @@ defmodule Engram.Notes do
         @note_fields_without_crdt,
         user,
         max_bytes,
-        %{},
-        &Location.chains/1
+        moved,
+        &if(Location.moved?(&1), do: Location.chains(&1))
       )
 
     notes = Enum.map(rows, &elem(&1, 0))
@@ -6033,7 +6039,7 @@ defmodule Engram.Notes do
     notes = Enum.map(rows, &elem(&1, 0))
     asked = asked_paths(filter_key, paths, hmacs, on?)
     key = path_key_of(user, filter_key, notes, asked)
-    by_hmac = Map.new(rows, &{key.(elem(&1, 0)), batch_row(&1)})
+    by_hmac = for {n, _} = row <- rows, k <- key.(n), into: %{}, do: {k, batch_row(row)}
 
     {by_hmac, over} =
       if total > length(notes) do
@@ -6075,7 +6081,7 @@ defmodule Engram.Notes do
 
     {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(sizes) end)
     key_of = key.(rows)
-    by_unread = Map.new(rows, &{key_of.(&1), &1})
+    by_unread = for row <- rows, k <- key_of.(row), into: %{}, do: {k, row}
 
     {pick, over, _spent} =
       Enum.reduce(unread, {[], MapSet.new(), spent}, fn hmac, {pick, over, spent} ->
@@ -6107,13 +6113,13 @@ defmodule Engram.Notes do
 
     pairs = Enum.map(read, &NoteBody.to_note(&1, @tail_keys ++ @tail_state_keys))
     key_of = key.(Enum.map(pairs, &elem(&1, 0)))
-    fresh = Map.new(pairs, fn {n, _} = pair -> {key_of.(n), batch_row(pair)} end)
+    fresh = for {n, _} = pair <- pairs, k <- key_of.(n), into: %{}, do: {k, batch_row(pair)}
 
     {Map.merge(by_hmac, fresh), over}
   end
 
-  # What `get_notes_within/4` keys a row by: the path hash of where the row
-  # IS, so it lands on the path it was asked for.
+  # What `get_notes_within/4` keys a row by: the path hashes it answers,
+  # so it lands on every path it was asked for.
   #
   # With names off (`asked` nil), its stored `path_hmac`: the only match.
   # With them on, a row read by its path (`Location.derivable?/1` false) is
@@ -6131,7 +6137,7 @@ defmodule Engram.Notes do
       names: Enum.frequencies_by(paths, &Name.hmac(filter_key, Name.of_path(&1)))
     }
 
-  defp path_key_of(_user, _filter_key, _rows, nil), do: & &1.path_hmac
+  defp path_key_of(_user, _filter_key, _rows, nil), do: &[&1.path_hmac]
 
   defp path_key_of(user, filter_key, rows, %{hmacs: hmacs, names: names}) do
     paths =
@@ -6145,10 +6151,15 @@ defmodule Engram.Notes do
         moved -> Location.paths(user, moved)
       end
 
+    # A row can answer two asked paths: its stored one (it holds it) and the
+    # one its folder and name put it at (no row holds that one).
     fn row ->
       case paths[row.id] do
-        path when is_binary(path) -> Crypto.hmac_field(filter_key, path)
-        _ -> row.path_hmac
+        path when is_binary(path) ->
+          Enum.uniq([row.path_hmac, Crypto.hmac_field(filter_key, path)])
+
+        _ ->
+          [row.path_hmac]
       end
     end
   end

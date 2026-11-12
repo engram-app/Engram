@@ -53,15 +53,16 @@ defmodule Engram.Notes.LocationRlsTest do
 
   # The walk names the other user's vault and folder keys exactly, so only
   # the `folders` policy can hide the row: as the suite's superuser the same
-  # statement finds it (the control below), as `engram_app` under this
-  # user's tenant it must not.
+  # statement finds it (the control), as `engram_app` under this user's
+  # tenant it must not.
   test "the folder walk cannot see another tenant's folder rows",
        %{owner: owner, other: other, theirs: theirs} do
     theirs_id = Repo.with_tenant!(other.id, fn -> Rows.id_by_walk(other, theirs.id, "A/B") end)
     assert is_binary(theirs_id), "precondition: the walk finds the folder as its owner"
 
-    assert Repo.with_tenant!(owner.id, fn -> Rows.id_by_walk(other, theirs.id, "A/B") end) ==
-             theirs_id,
+    # `with_tenant` itself drops to `engram_app`, so the superuser control
+    # runs with no tenant block at all.
+    assert Repo.cross_tenant(fn -> Rows.id_by_walk(other, theirs.id, "A/B") end) == theirs_id,
            "control: without RLS (superuser) the cross-tenant walk sees the row"
 
     assert {:returned, nil} =

@@ -28,12 +28,13 @@ defmodule Engram.Folders.Rows do
 
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
-  alias Engram.Folders.Folder
+  alias Engram.Folders.{Folder, WalkSql}
   alias Engram.Logger.Metadata
   alias Engram.Repo
   alias Engram.Search.NameTerms
 
   require Logger
+  require WalkSql
 
   # ---- keys and names (pure) ----------------------------------------------
 
@@ -576,17 +577,54 @@ defmodule Engram.Folders.Rows do
   def paths_by_ids(dek, vault_id, ids), do: chain_paths(dek, chain_rows(vault_id, ids), ids)
 
   @doc """
-  The live folder rows on the parent chains of `ids` in `vault_id`, names
-  still encrypted (what `chain_paths/3` takes): ONE recursive read. The CTE
-  is a UNION, so a shared ancestor is read once: at most the distinct
-  ancestors of `ids`, never more than min(the vault's folders, `length(ids)`
-  x depth), each step a primary-key probe. A dead or missing row stops its
-  chain. Runs inside the caller's tenant transaction; decrypt outside it.
+  The id of the live folder at `path` in `vault_id`, by walking its
+  segments down from the root (`Engram.Folders.WalkSql`, the walk the S3
+  note lookup embeds), or nil. One statement, one index probe per segment.
+  Runs inside the caller's tenant transaction.
   """
-  @spec chain_rows(Ecto.UUID.t(), [Ecto.UUID.t()]) :: [map()]
-  def chain_rows(_vault_id, []), do: []
+  @spec id_by_walk(map(), Ecto.UUID.t(), String.t()) :: Ecto.UUID.t() | nil
+  def id_by_walk(user, vault_id, path) do
+    with {:ok, fk} <- Crypto.dek_filter_key(user),
+         [_ | _] = segs <- String.split(path, "/", trim: true) do
+      hmacs = Enum.map(segs, &name_hmac(fk, &1))
 
-  def chain_rows(vault_id, ids) do
+      Repo.one(
+        from(f in Folder,
+          where:
+            fragment(
+              WalkSql.id_eq(),
+              f.id,
+              type(^vault_id, Ecto.UUID),
+              type(^hmacs, {:array, :binary}),
+              type(^vault_id, Ecto.UUID),
+              type(^hmacs, {:array, :binary}),
+              ^length(hmacs)
+            ),
+          select: f.id
+        )
+      )
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  The live folder rows on the parent chains of `ids` in `vault_id`, names
+  still encrypted (what `chain_paths/3` and `moved_paths/3` take): ONE
+  recursive read. The CTE is a UNION, so a shared ancestor is read once: at
+  most the distinct ancestors of `ids`, never more than min(the vault's
+  folders, `length(ids)` x depth), each step a primary-key probe. A dead or
+  missing row stops its chain. Runs inside the caller's tenant transaction;
+  decrypt outside it.
+
+  `moved_only: true` reads nothing (one probe of `folders_moved_live`) unless
+  the vault holds a folder renamed without a cascade (`WalkSql.moved/0`).
+  """
+  @spec chain_rows(Ecto.UUID.t(), [Ecto.UUID.t()], keyword()) :: [map()]
+  def chain_rows(vault_id, ids, opts \\ [])
+  def chain_rows(_vault_id, [], _opts), do: []
+
+  def chain_rows(vault_id, ids, opts) do
     live = fn query -> where(query, [f], f.vault_id == ^vault_id and is_nil(f.deleted_at)) end
 
     leaf =
@@ -595,6 +633,11 @@ defmodule Engram.Folders.Rows do
         select: %{id: f.id, parent_id: f.parent_id}
       )
       |> live.()
+
+    leaf =
+      if opts[:moved_only],
+        do: where(leaf, fragment(WalkSql.moved(), type(^vault_id, Ecto.UUID))),
+        else: leaf
 
     up =
       from(f in Folder,
@@ -612,7 +655,8 @@ defmodule Engram.Folders.Rows do
         parent_id: f.parent_id,
         dek_version: f.dek_version,
         ct: f.name_ciphertext,
-        nonce: f.name_nonce
+        nonce: f.name_nonce,
+        cascaded: f.notes_cascaded
       }
     )
     |> recursive_ctes(true)
@@ -621,32 +665,52 @@ defmodule Engram.Folders.Rows do
   end
 
   @doc """
-  `%{id => full path}` for `ids` from `chain_rows/2`'s `rows`: one batch
+  `%{id => full path}` for `ids` from `chain_rows/3`'s `rows`: one batch
   decrypt of their names, then each chain joined up to the root. An id whose
   chain is broken (a dead or missing ancestor), cyclic, or will not open is
   absent. CPU only.
   """
   @spec chain_paths(binary(), [map()], [Ecto.UUID.t()]) :: %{Ecto.UUID.t() => String.t()}
-  def chain_paths(_dek, [], _ids), do: %{}
+  def chain_paths(dek, rows, ids), do: paths_of(dek, rows, ids, fn _moved? -> true end)
 
-  def chain_paths(dek, rows, ids) do
+  @doc """
+  `chain_paths/3` for only the ids whose chain holds a folder renamed
+  without a cascade (`notes_cascaded = false`): the notes under such a
+  folder still carry their old stored path.
+  """
+  @spec moved_paths(binary(), [map()], [Ecto.UUID.t()]) :: %{Ecto.UUID.t() => String.t()}
+  def moved_paths(dek, rows, ids), do: paths_of(dek, rows, ids, & &1)
+
+  defp paths_of(_dek, [], _ids, _keep?), do: %{}
+
+  defp paths_of(dek, rows, ids, keep?) do
     named =
       for {r, {:ok, name}} <- Enum.zip(rows, decrypt_names(dek, rows)),
           into: %{},
-          do: {r.id, {r.parent_id, name}}
+          do: {r.id, {r.parent_id, name, Map.get(r, :cascaded, true) == false}}
 
-    for id <- ids, path = chain_path(named, id, [], 0), into: %{}, do: {id, path}
+    for id <- ids,
+        {path, moved?} <- [chain_path(named, id, [], false, 0)],
+        keep?.(moved?),
+        into: %{},
+        do: {id, path}
   end
 
-  # Joins `id`'s chain up to the root; nil when a link is missing or the
-  # chain outruns `@max_depth` (a cycle never reaches the root).
-  defp chain_path(_named, _id, _acc, depth) when depth > @max_depth, do: nil
+  # Joins `id`'s chain up to the root, and whether a folder on it was moved
+  # without a cascade; nil when a link is missing or the chain outruns
+  # `@max_depth` (a cycle never reaches the root).
+  defp chain_path(_named, _id, _acc, _moved?, depth) when depth > @max_depth, do: nil
 
-  defp chain_path(named, id, acc, depth) do
+  defp chain_path(named, id, acc, moved?, depth) do
     case named do
-      %{^id => {nil, name}} -> Enum.join([name | acc], "/")
-      %{^id => {parent, name}} -> chain_path(named, parent, [name | acc], depth + 1)
-      _ -> nil
+      %{^id => {nil, name, m}} ->
+        {Enum.join([name | acc], "/"), moved? or m}
+
+      %{^id => {parent, name, m}} ->
+        chain_path(named, parent, [name | acc], moved? or m, depth + 1)
+
+      _ ->
+        nil
     end
   end
 
