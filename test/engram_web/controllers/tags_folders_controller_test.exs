@@ -168,11 +168,15 @@ defmodule EngramWeb.TagsFoldersControllerTest do
       over = Engram.Batch.rest_page_default() + 1
 
       # Direct rows: this pins paging, not the write path. 501 full
-      # `upsert_note/4` saves took 25-45 s alone and hit the 60 s timeout
-      # on loaded CI runners.
-      for i <- 1..over do
-        Engram.Fixtures.insert_note!(user, vault, %{"path" => "Huge/n#{i}.md", "content" => "x"})
-      end
+      # `upsert_note/4` saves took 25-45 s alone, and 501 `insert_note!/3`
+      # calls (a seq bump and three more round trips each) still hit the
+      # 60 s timeout on loaded CI runners. One bulk insert: the same rows,
+      # seqs ascending in the same order.
+      Engram.Fixtures.insert_notes!(
+        user,
+        vault,
+        for(i <- 1..over, do: %{"path" => "Huge/n#{i}.md", "content" => "x"})
+      )
 
       page = conn |> get("/api/folders/list", %{folder: "Huge"}) |> json_response(200)
       assert length(page["notes"]) == Engram.Batch.rest_page_default()
