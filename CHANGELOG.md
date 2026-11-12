@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.83.0](https://github.com/engram-app/Engram/compare/0.82.0...0.83.0) (2026-11-12)
+
+
+### Features
+
+* **oauth:** record why a grant ended ([#2565](https://github.com/engram-app/Engram/issues/2565)) ([c79fc37](https://github.com/engram-app/Engram/commit/c79fc37e429f8be6093d2b08f99b6c4da659a91d))
+
+
+### Bug Fixes
+
+* **editor:** read the mount-parsed tree in text renderers ([#2580](https://github.com/engram-app/Engram/issues/2580)) ([1c49626](https://github.com/engram-app/Engram/commit/1c496267ab2bd1036b5160bd4ca30b9a7522e59c))
+* inactivity delete waits for a final notice ([#2567](https://github.com/engram-app/Engram/issues/2567)) ([92cfaa6](https://github.com/engram-app/Engram/commit/92cfaa6be58a9e589a05bd3ba9621b1155ded5be))
+* **index:** reuse legacy vectors across merged regroup ([#2573](https://github.com/engram-app/Engram/issues/2573)) ([5d4881b](https://github.com/engram-app/Engram/commit/5d4881b63c23d1bf0081b4a9ca537401102722fe))
+* **oauth:** refuse userless refresh, end grants on delete ([#2574](https://github.com/engram-app/Engram/issues/2574)) ([9440015](https://github.com/engram-app/Engram/commit/94400152536dbfd3ef145103deec77e0506c55d1))
+* **oban:** log retried attempts, fix discard state ([#2578](https://github.com/engram-app/Engram/issues/2578)) ([288d0d3](https://github.com/engram-app/Engram/commit/288d0d330bdaa86cdfca80cd9dcf7feacef56cc1))
+
+
+### Performance Improvements
+
+* **editor:** one incremental render core; mermaid on Pele ([#2564](https://github.com/engram-app/Engram/issues/2564)) ([f5da042](https://github.com/engram-app/Engram/commit/f5da042627b68aa93fc59067cb42be133e91a6ad))
+
 ## [0.82.0](https://github.com/engram-app/Engram/compare/0.81.0...0.82.0) (2026-11-11)
 
 
