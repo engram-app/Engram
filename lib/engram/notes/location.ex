@@ -62,7 +62,7 @@ defmodule Engram.Notes.Location do
   require Logger
 
   @doc "The columns `paths/2` reads from a row, beside `id`, `vault_id`, `deleted_at` and the path."
-  @spec fields() :: [atom()]
+  @spec fields() :: [:folder_ref_id | :name_ciphertext | :name_nonce | :name_stamp, ...]
   def fields, do: [:folder_ref_id, :name_ciphertext, :name_nonce, :name_stamp]
 
   @doc "Whether readers use names (the `note_name` ledger is done, `name_reads` not off)."
