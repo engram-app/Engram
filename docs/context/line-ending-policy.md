@@ -19,7 +19,7 @@ EXACTLY ONE actor removes CRs that are already in a doc: the server room process
 
 - **On room open** (`CrdtPersistence.bind/3` -> `CrdtBridge.normalize_doc/1`), unconditionally, every open: the CR heal plus the fence lift, in one transaction. An old plugin can write CRs or a body fence back through the room at any time, and both checks are a scan of a body bind already reads, so there is no "already normalized" stamp.
 - **On every live update** (`CrdtPersistence.update_v1/4`): `Native.yjs_inserts_cr/1` reads what the update inserted (O(update), never the body). If it inserted a `\r`, `CrdtBridge.heal_line_endings/1` runs as its own transaction, which is then appended and broadcast like any update.
-- The heal: a `\r\n` loses its `\r` (a pure delete). A lone `\r` gets an `\n` inserted AT the CR first, then the CR deleted. Insert-first makes the LF's right origin the CR item, so it sorts before anything a device inserted right after that CR; delete-first let a concurrent append land before the LF. It also rewrites raw frontmatter spans that hold a CR (O(frontmatter), no ops when clean).
+- The heal: a `\r\n` loses its `\r` (a pure delete). A lone `\r` gets an `\n` inserted AT the CR first, then the CR deleted. Insert-first makes the LF's right origin the CR item, so a concurrent insert right AFTER that CR sorts after the LF; delete-first let it land before the LF. It does not cover an edit right BEFORE the CR (see Costs accepted). It also rewrites raw frontmatter spans that hold a CR (O(frontmatter), no ops when clean).
 
 **Every other writer converts only its INCOMING text** and never emits an op on a CR already in the doc:
 
@@ -48,6 +48,8 @@ Keep CRLF in the doc and convert between the editor and the doc (the first versi
 - A REST/MCP/web write into a doc that still holds CRs keeps them (only its own edit is LF) until the room next heals that doc, on open or on a live update.
 - A note holding a lone CR re-chunks once: the chunker now converts lone CRs too.
 - Unopened notes stay CRLF until a future backfill. The read-side CRLF tolerance (Rust fence rule, chunker, outline) must stay until that backfill ships as a DataMigration with its kill switch OFF.
+- A lone-CR heal racing an edit right beside that CR has no safe order. An insert just before the CR can land on the next line (it depends on client ids), and deleting that line break during the heal brings back an LF. Only classic-Mac files with lone CRs, and only during the heal window.
+- The global room registry can briefly run two rooms for one note (a cluster split, or two nodes racing to start the room). Both heal the same lone CR, so it doubles into a blank line. A CRLF pair is safe because its heal is a pure delete. Lone CRs only.
 
 ## Gotchas
 - `ingest_plaintext` is path-agnostic: `lf_view` is opt-in, and conversion happens in the caller (`for_path`), so a `.canvas`/`.base` doc diffs raw and lands byte-exact.
