@@ -346,16 +346,65 @@ defmodule Engram.Fixtures do
   Returns the inserted struct with `dek_version: 1`.
   """
   def insert_attachment!(user, vault, attrs \\ %{}) do
-    user =
-      case user.encrypted_dek do
-        nil ->
-          {:ok, u} = Engram.Crypto.ensure_user_dek(user)
-          u
+    user = with_dek(user)
+    {row, path} = attachment_row(user, vault, attrs)
 
-        _ ->
-          user
+    # DB-enforced NOT NULL on seq (NULL rows vanish from the sync feed).
+    {:ok, seq} = Repo.with_tenant(user.id, fn -> Engram.Vaults.next_seq!(vault.id) end)
+
+    inserted =
+      Repo.insert!(
+        struct(Engram.Attachments.Attachment, Map.put(row, :seq, seq)),
+        skip_tenant_check: true
+      )
+
+    # Splice virtual path so callers can read att.path
+    %{inserted | path: path}
+  end
+
+  @doc """
+  `insert_attachment!/3` for many attachments of one vault in two
+  statements (one seq block, one INSERT) instead of two per attachment.
+  Each entry is the attrs `insert_attachment!/3` takes; the rows and blobs
+  are the ones it writes. Returns the ids, in order.
+  """
+  def insert_attachments!(_user, _vault, []), do: []
+
+  def insert_attachments!(user, vault, entries) do
+    user = with_dek(user)
+    now = DateTime.utc_now(:second)
+    fields = Engram.Attachments.Attachment.__schema__(:fields)
+
+    rows =
+      for entry <- entries do
+        {row, _path} = attachment_row(user, vault, entry)
+
+        # The struct's defaults, as `Repo.insert!/2` writes them; nil
+        # columns left to their column default, as it leaves them.
+        Engram.Attachments.Attachment
+        |> struct(row)
+        |> Map.take(fields)
+        |> Map.merge(%{created_at: now, updated_at: now})
+        |> Map.reject(fn {_, v} -> is_nil(v) end)
       end
 
+    Repo.with_tenant!(user.id, fn ->
+      last = Engram.Vaults.next_seq_block!(vault.id, length(rows))
+      rows = Enum.with_index(rows, last - length(rows) + 1)
+
+      Repo.insert_all(
+        Engram.Attachments.Attachment,
+        Enum.map(rows, &Map.put(elem(&1, 0), :seq, elem(&1, 1)))
+      )
+
+      Enum.map(rows, &elem(&1, 0).id)
+    end)
+  end
+
+  # The `attachments` row `insert_attachment!/3` writes, all but `seq`, and
+  # its path (virtual on the schema). Writes the blob to storage. `user`
+  # already holds its DEK (`with_dek/1`, once per call, not per row).
+  defp attachment_row(user, vault, attrs) do
     attrs = Enum.into(attrs, %{}, fn {k, v} -> {to_string(k), v} end)
 
     path =
@@ -372,9 +421,6 @@ defmodule Engram.Fixtures do
     att_id = Ecto.UUID.generate()
     storage_key = Engram.Storage.object_key(user.id, vault.id, att_id)
 
-    # DB-enforced NOT NULL on seq (NULL rows vanish from the sync feed).
-    {:ok, seq} = Repo.with_tenant(user.id, fn -> Engram.Vaults.next_seq!(vault.id) end)
-
     # Legacy v1 encrypt: empty AAD
     {content_ct, content_nonce} = Envelope.encrypt(content, dek, <<>>)
     {path_ct, path_nonce} = Envelope.encrypt(path, dek, <<>>)
@@ -382,7 +428,7 @@ defmodule Engram.Fixtures do
     # Write ciphertext blob to storage
     :ok = Engram.Storage.adapter().put(storage_key, content_ct, content_type: mime_type)
 
-    attrs = %{
+    row = %{
       id: att_id,
       user_id: user.id,
       vault_id: vault.id,
@@ -396,21 +442,11 @@ defmodule Engram.Fixtures do
       mime_type: mime_type,
       size_bytes: byte_size(content),
       mtime: mtime,
-      seq: seq,
       encryption_version: 1,
       dek_version: 1
     }
 
-    attrs = Map.merge(attrs, Map.new(Engram.Links.path_keys(filter_key, path, path_nonce)))
-
-    inserted =
-      Repo.insert!(
-        struct(Engram.Attachments.Attachment, attrs),
-        skip_tenant_check: true
-      )
-
-    # Splice virtual path so callers can read att.path
-    %{inserted | path: path}
+    {Map.merge(row, Map.new(Engram.Links.path_keys(filter_key, path, path_nonce))), path}
   end
 
   @doc """

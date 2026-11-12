@@ -44,14 +44,18 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
   # shared across the property.
   defp damage_keys(_user, _vault, :fresh), do: :ok
 
+  # One UPDATE per table and state, as the uniform states below: the rows
+  # are split by id in Elixir, not damaged one statement each.
   defp damage_keys(user, vault, :mixed) do
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        for schema <- [Engram.Notes.Note, Engram.Attachments.Attachment, Engram.Links.NoteLink],
-            id <- Repo.all(from(r in in_vault(schema, vault), select: r.id)) do
-          case Enum.at([:fresh, :missing, :stale], :erlang.phash2(id, 3)) do
-            :fresh -> :ok
-            state -> damage(schema, from(r in schema, where: r.id == ^id), state)
+        for schema <- [Engram.Notes.Note, Engram.Attachments.Attachment, Engram.Links.NoteLink] do
+          by_state =
+            Repo.all(from(r in in_vault(schema, vault), select: r.id))
+            |> Enum.group_by(&Enum.at([:fresh, :missing, :stale], :erlang.phash2(&1, 3)))
+
+          for state <- [:missing, :stale], ids = by_state[state] do
+            damage(schema, from(r in schema, where: r.id in ^ids), state)
           end
         end
       end)
@@ -67,6 +71,9 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
 
   defp in_vault(schema, vault), do: from(r in schema, where: r.vault_id == ^vault.id)
 
+  # One `junk` per statement, shared by its rows, as a uniform `:stale`
+  # always did: a reader must ignore a stale key whatever its value, so
+  # equal junk across rows can only make a reader that trusts it fail.
   defp damage(schema, query, state) do
     junk = :crypto.strong_rand_bytes(32)
 
@@ -94,7 +101,9 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
             keys <- member_of([:fresh, :missing, :stale, :mixed]),
             max_runs: 80
           ) do
-      vault = insert(:vault, user: user)
+      # `user_id`, not the loaded `user`: an association makes the insert a
+      # transaction of its own (two more round trips a run).
+      vault = insert(:vault, user: nil, user_id: user.id)
       enters = count_tenant_enters()
 
       # One tenant transaction per run. Every fixture insert and Links read
@@ -119,7 +128,7 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
     paths = notes ++ ["zz/Source.md"]
     ids = Fixtures.insert_notes!(user, vault, Enum.map(paths, &%{path: &1}))
     {rows, [src]} = ids |> Enum.zip_with(paths, &%{id: &1, path: &2}) |> Enum.split(-1)
-    Enum.each(atts, &Fixtures.insert_attachment!(user, vault, %{path: &1}))
+    Fixtures.insert_attachments!(user, vault, Enum.map(atts, &%{path: &1}))
 
     :ok =
       Links.replace_links(
@@ -148,9 +157,14 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
 
     assert Enum.map(links, &{&1.target_note_id, &1.target_attachment_id}) == expected
 
+    # `backlinks_for_note/3` is `backlinks_for_notes/3` of one id, so one
+    # call for every row answers each as its own call would: one pass of
+    # a few queries instead of a few a row (1,984 -> 596 over 80 runs).
+    backlinks = Links.backlinks_for_notes(user, Enum.map([src | rows], & &1.id))
+
     for row <- [src | rows] do
       want = for {{id, _}, i} <- Enum.with_index(expected), id == row.id, do: i
-      got = user |> Links.backlinks_for_note(row.id) |> length()
+      got = backlinks |> Map.fetch!(row.id) |> length()
       assert got == length(want), "backlinks of #{row.path}: #{got} != #{length(want)}"
     end
   end
