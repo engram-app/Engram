@@ -733,6 +733,8 @@ export default function FolderTree() {
 		<>
 			<ScrollArea
 				viewportRef={scrollRef}
+				// The rows are the tab stops; the viewport scrolls to the focused one.
+				viewportFocusable={false}
 				onContextMenu={(e) => {
 					// Empty space only — rows stopPropagation, but a right-click can
 					// also land on the padding or below the last row.

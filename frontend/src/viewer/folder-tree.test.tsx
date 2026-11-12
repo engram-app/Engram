@@ -924,3 +924,12 @@ it("renders the rows it scrolls to inside the ScrollArea viewport", async () => 
 	}
 	expect(await screen.findByRole("treeitem", { name: "n290" })).toBeInTheDocument();
 });
+
+// The rows are the tab stops (headless-tree roves focus among them), so the
+// scroll viewport around them must not add an unnamed one before the tree.
+it("adds no tab stop of its own around the tree", async () => {
+	renderTree();
+	await screen.findByRole("treeitem", { name: "a" });
+	const viewport = document.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]');
+	expect(viewport?.tabIndex).toBe(-1);
+});

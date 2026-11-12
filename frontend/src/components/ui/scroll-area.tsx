@@ -8,6 +8,7 @@ function ScrollArea({
 	viewportClassName,
 	viewportLabel,
 	viewportRef,
+	viewportFocusable = true,
 	children,
 	...props
 }: React.ComponentProps<typeof ScrollAreaPrimitive.Root> & {
@@ -18,6 +19,9 @@ function ScrollArea({
 	viewportLabel?: string;
 	/** The element that scrolls (Radix's viewport), e.g. for a virtualizer's scroll element. */
 	viewportRef?: React.Ref<HTMLDivElement>;
+	/** False when the content brings its own tab stops (a tree, a list of
+	 *  links): the viewport then scrolls with them and adds no unnamed one. */
+	viewportFocusable?: boolean;
 }) {
 	return (
 		<ScrollAreaPrimitive.Root
@@ -33,7 +37,7 @@ function ScrollArea({
 			<ScrollAreaPrimitive.Viewport
 				ref={viewportRef}
 				data-slot="scroll-area-viewport"
-				tabIndex={0}
+				tabIndex={viewportFocusable ? 0 : -1}
 				role={viewportLabel ? "region" : undefined}
 				aria-label={viewportLabel}
 				className={cn(
