@@ -394,3 +394,54 @@ describe("OKF_FIELD_HELP filterable keys", () => {
 		expect(isOkfMatch(key, type, value)).toBe(false);
 	});
 });
+
+// Concurrent lifts of one fence each append a key to `frontmatter_order`, and
+// the CRDT keeps both inserts. Every reader shows the key once, at its FIRST
+// position (backend and plugin agree), and delete/rename remove every copy:
+// leaving one behind would bring the key back on its next edit.
+describe("frontmatter_order holding a key twice", () => {
+	function dup(doc: Y.Doc) {
+		seed(doc);
+		doc.getArray<string>(ORDER_KEY).push(["title"]);
+	}
+
+	test("readRows lists the key once, at its first position", () => {
+		const doc = new Y.Doc();
+		dup(doc);
+		expect(readRows(doc).map((r) => r.key)).toEqual(["title", "tags"]);
+	});
+
+	test("the emitted block holds the key once", () => {
+		const doc = new Y.Doc();
+		dup(doc);
+		expect(emitFrontmatterText(doc)).toBe("title: Hi\ntags:\n  - a\n  - b\n");
+	});
+
+	test("removeKey removes every copy", () => {
+		const doc = new Y.Doc();
+		dup(doc);
+		removeKey(doc, "title");
+		expect(doc.getArray<string>(ORDER_KEY).toArray()).toEqual(["tags"]);
+	});
+
+	test("renameKey renames at the first position and drops the other copies", () => {
+		const doc = new Y.Doc();
+		dup(doc);
+		expect(renameKey(doc, "title", "name")).toBe(true);
+		expect(doc.getArray<string>(ORDER_KEY).toArray()).toEqual(["name", "tags"]);
+	});
+
+	test("a save of the same block writes nothing", () => {
+		const doc = new Y.Doc();
+		dup(doc);
+		let updates = 0;
+		doc.on("update", () => {
+			updates++;
+		});
+		applyParsedFrontmatter(doc, {
+			order: ["title", "tags"],
+			values: { title: JSON.stringify("Hi"), tags: JSON.stringify(["a", "b"]) },
+		});
+		expect(updates).toBe(0);
+	});
+});

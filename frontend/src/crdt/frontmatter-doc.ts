@@ -5,7 +5,7 @@ import type { MsgKey } from "@/i18n/ui-text";
 import { isMember } from "@/lib/is-member";
 import { msg } from "../i18n/msg";
 import { coerceValue, type PropertyType } from "../viewer/property-types";
-import { emitFrontmatter } from "./frontmatter-codec";
+import { emitFrontmatter, uniqueKeys } from "./frontmatter-codec";
 
 const EMPTY_DEFAULT: Record<PropertyType, unknown> = {
 	text: "",
@@ -26,6 +26,14 @@ const EMPTY_DEFAULT: Record<PropertyType, unknown> = {
  * other property's value stops being emitted at all. That corruption then
  * materialises and syncs out to the vault.
  */
+/** Every index `key` holds in the order, highest first, ready to delete. */
+function positionsOf(order: Y.Array<string>, key: string): number[] {
+	return order
+		.toArray()
+		.flatMap((k, i) => (k === key ? [i] : []))
+		.reverse();
+}
+
 function isTaken(doc: Y.Doc, key: string): boolean {
 	return frontmatterMaps(doc).values.has(key) || rawMap(doc).has(key);
 }
@@ -231,6 +239,11 @@ export function frontmatterMaps(doc: Y.Doc): FrontmatterMaps {
 	};
 }
 
+/** The doc's key order, each key once at its first position (`uniqueKeys`). */
+export function keyOrder(doc: Y.Doc): string[] {
+	return uniqueKeys(frontmatterMaps(doc).order.toArray());
+}
+
 export interface PropertyRow {
 	key: string;
 	value: unknown;
@@ -238,8 +251,8 @@ export interface PropertyRow {
 }
 
 export function readRows(doc: Y.Doc): PropertyRow[] {
-	const { values, order, types } = frontmatterMaps(doc);
-	return order.toArray().map((key) => {
+	const { values, types } = frontmatterMaps(doc);
+	return keyOrder(doc).map((key) => {
 		const raw = values.get(key);
 		let value: unknown = raw;
 		if (typeof raw === "string") {
@@ -284,9 +297,8 @@ export function removeKey(doc: Y.Doc, key: string): void {
 	doc.transact(() => {
 		values.delete(key);
 		types.delete(key);
-		const idx = order.toArray().indexOf(key);
-		if (idx >= 0) {
-			order.delete(idx, 1);
+		for (const i of positionsOf(order, key)) {
+			order.delete(i, 1);
 		}
 	});
 }
@@ -316,12 +328,16 @@ export function renameKey(doc: Y.Doc, from: string, to: string): boolean {
 		}
 		values.delete(from);
 		types.delete(from);
-		const idx = order.toArray().indexOf(from);
-		if (idx >= 0) {
-			order.delete(idx, 1);
-			order.insert(idx, [trimmed]);
-		} else {
+		// Every copy goes; the new name takes the first one's place.
+		const at = positionsOf(order, from);
+		for (const i of at) {
+			order.delete(i, 1);
+		}
+		const first = at.at(-1);
+		if (first === undefined) {
 			order.push([trimmed]);
+		} else {
+			order.insert(first, [trimmed]);
 		}
 	});
 	return true;
@@ -355,12 +371,12 @@ export function readRaws(doc: Y.Doc): Record<string, string> {
 
 /** Emit the frontmatter block (inner YAML, no fences) from the live maps. */
 export function emitFrontmatterText(doc: Y.Doc): string {
-	const { values, order } = frontmatterMaps(doc);
+	const { values } = frontmatterMaps(doc);
 	const valuesRec: Record<string, string> = {};
 	values.forEach((v, k) => {
 		valuesRec[k] = v;
 	});
-	return emitFrontmatter(order.toArray(), valuesRec, readRaws(doc));
+	return emitFrontmatter(keyOrder(doc), valuesRec, readRaws(doc));
 }
 
 /**
@@ -388,7 +404,8 @@ export function applyParsedFrontmatter(
 				values.delete(key);
 			}
 		}
-		const current = order.toArray();
+		// Compared as readers see it: a duplicate alone is not a change to write.
+		const current = keyOrder(doc);
 		const changed =
 			current.length !== parsed.order.length || current.some((k, i) => k !== parsed.order[i]);
 		if (changed) {
