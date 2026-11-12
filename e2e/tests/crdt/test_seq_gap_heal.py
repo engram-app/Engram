@@ -34,13 +34,6 @@ from helpers.latency import DELIVERY_TIMEOUT
 CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert
 
 
-def _note_id(api_sync, path: str) -> str:
-    note = api_sync.wait_for_note(path, timeout=CRDT_TIMEOUT)
-    inner = note.get("note", note) if isinstance(note, dict) else {}
-    nid = inner.get("id") or inner.get("note_id") or inner.get("uuid")
-    assert nid, f"no note id in GET /notes/{path}: {note}"
-    return str(nid)
-
 
 @pytest.mark.asyncio
 async def test_dropped_fanout_heals_via_seq_replay(vault_b, cdp_b, api_sync):
@@ -54,8 +47,8 @@ async def test_dropped_fanout_heals_via_seq_replay(vault_b, cdp_b, api_sync):
     wait_for_content(vault_b, path_x, "base line", timeout=CRDT_TIMEOUT)
     wait_for_content(vault_b, path_y, "base line", timeout=CRDT_TIMEOUT)
 
-    note_id_x = _note_id(api_sync, path_x)
-    _note_id(api_sync, path_y)  # existence check only; the heal log is id-agnostic now
+    note_id_x = api_sync.wait_for_note_id(path_x)
+    api_sync.wait_for_note_id(path_y)  # existence check only; the heal log is id-agnostic now
 
     # Arm the lost broadcast: X's next fan-out is swallowed server-side.
     backend_rpc(f'Engram.Notes.FanoutPacer.test_drop_next("{note_id_x}", 1)')

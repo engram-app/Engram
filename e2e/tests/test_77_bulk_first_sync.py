@@ -122,7 +122,6 @@ PEAK_RESIDENT_ROOM_BOUND = 32
 logger = logging.getLogger(__name__)
 
 ENGINE = "app.plugins.plugins['engram-vault-sync'].syncEngine"
-SET_BLOCKED = ENGINE + ".setSyncBlocked({})"
 
 # Fire-and-forget fullSync: the promise settles into window.__e2e77 instead of
 # being awaited over CDP. Awaiting it made the CDP evaluate ceiling (120s) the
@@ -234,7 +233,7 @@ async def _cleanup_bulk_residue(vault_a, cdp_a, api_sync) -> None:
     test body already failed, pytest reports that error as the context.
     """
     try:
-        await cdp_a.evaluate(SET_BLOCKED.format("true"))
+        await cdp_a.set_sync_blocked(True)
         await _wait_for_kicked_sync_settled(cdp_a, api_sync)
         shutil.rmtree(vault_a / "Bulk", ignore_errors=True)
 
@@ -285,7 +284,7 @@ async def _cleanup_bulk_residue(vault_a, cdp_a, api_sync) -> None:
     finally:
         # Re-open the gate so subsequent tests sync normally, even on failure.
         try:
-            await cdp_a.evaluate(SET_BLOCKED.format("false"))
+            await cdp_a.set_sync_blocked(False)
         except Exception:
             logger.exception("test_77 cleanup: could not re-open the sync gate")
             raise
@@ -309,7 +308,7 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
         # auto-pushes — a request storm that exhausts the rate budget and
         # starves the batch sync this test measures. handleModify short-circuits
         # while the gate is closed.
-        await cdp_a.evaluate(SET_BLOCKED.format("true"))
+        await cdp_a.set_sync_blocked(True)
 
         # Seed 1,000 files on disk, then wait for Obsidian's indexer to see them
         # (raw filesystem writes only reach app.vault.getFiles() once the
@@ -354,7 +353,7 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
             raw = await cdp_a.evaluate(SYNC_STATE)
             last_state = json.loads(raw) if isinstance(raw, str) else None
             if last_state is None or last_state.get("done"):
-                await cdp_a.evaluate(SET_BLOCKED.format("false"))
+                await cdp_a.set_sync_blocked(False)
                 await cdp_a.evaluate(KICK_SYNC)
                 kicks += 1
             count = _server_bulk_count(api_sync)

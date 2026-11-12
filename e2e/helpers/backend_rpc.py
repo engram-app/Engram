@@ -30,3 +30,14 @@ def backend_rpc(expr: str, timeout: int = 20) -> str:
     if result.returncode != 0:
         raise RuntimeError(f"backend_rpc({expr!r}) failed: {result.stderr.strip()}")
     return result.stdout.strip()
+
+
+def vault_user_expr(vault_id: str) -> str:
+    """Elixir statements binding `u` to the owner of `vault_id` (one logical
+    line, ends in `; `). Shared by the probes that decrypt a vault's notes."""
+    return (
+        f'{{:ok, vb}} = Ecto.UUID.dump("{vault_id}"); '
+        "{:ok, vr} = Ecto.Adapters.SQL.query(Engram.Repo, "
+        '"select user_id::text from vaults where id=$1", [vb]); '
+        "u = Engram.Accounts.get_user!(hd(hd(vr.rows))); "
+    )

@@ -46,16 +46,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from helpers.backend_rpc import backend_rpc
+from helpers.backend_rpc import backend_rpc, vault_user_expr
 
 # ONE logical Elixir line: `bin/engram rpc` takes the expression as a single
 # argv, so a one-liner cannot be reshaped by newline handling in the release
 # wrapper (same constraint room_probe.py documents).
 _PROBE = (
-    '{{:ok, vb}} = Ecto.UUID.dump("{vault_id}"); '
-    "{{:ok, vr}} = Ecto.Adapters.SQL.query(Engram.Repo, "
-    '"select user_id::text from vaults where id=$1", [vb]); '
-    "u = Engram.Accounts.get_user!(hd(hd(vr.rows))); "
+    "{vault_user}"
     "{{:ok, nr}} = Ecto.Adapters.SQL.query(Engram.Repo, "
     '"select id::text from notes where vault_id=$1 and deleted_at is null", [vb]); '
     "ids = List.flatten(nr.rows); "
@@ -102,7 +99,9 @@ def read_lineages(vault_id: str, path_prefix: str = "") -> Lineages:
 
     Raises if the probe misfires.
     """
-    out = backend_rpc(_PROBE.format(vault_id=vault_id, path_prefix=path_prefix))
+    out = backend_rpc(
+        _PROBE.format(vault_user=vault_user_expr(vault_id), path_prefix=path_prefix)
+    )
     lines = out.strip().splitlines()
     # Print WHICH notes are multi-client, so a failure names the offending
     # paths instead of only a count — the count alone cost a debugging cycle.

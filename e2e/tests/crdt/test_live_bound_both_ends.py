@@ -37,13 +37,6 @@ from helpers.vault import read_note, wait_for_content
 CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert
 
 
-def _note_id(api_sync, path: str) -> str:
-    note = api_sync.wait_for_note(path, timeout=CRDT_TIMEOUT)
-    inner = note.get("note", note) if isinstance(note, dict) else {}
-    nid = inner.get("id") or inner.get("note_id") or inner.get("uuid")
-    assert nid, f"no note id in GET /notes/{path}: {note}"
-    return str(nid)
-
 
 @pytest.mark.asyncio
 async def test_remote_edit_converges_while_note_is_live_bound_in_obsidian(
@@ -59,22 +52,10 @@ async def test_remote_edit_converges_while_note_is_live_bound_in_obsidian(
 
     # THE trigger: open the note in Obsidian's editor so its Y.Doc is LIVE-BOUND
     # when the remote edit arrives (the condition the other tests never set up).
-    opened = await cdp_b.evaluate(
-        """
-        (async () => {
-          const f = app.vault.getAbstractFileByPath(%r);
-          if (!f) return "no-file";
-          await app.workspace.getLeaf(false).openFile(f);
-          return app.workspace.activeEditor?.file?.path ?? "no-active";
-        })()
-        """
-        % path,
-        await_promise=True,
-    )
-    assert opened == path, f"failed to live-bind note in Obsidian editor: {opened!r}"
+    await cdp_b.open_in_editor(path)
 
     # Edit from the web SPA over the CRDT channel.
-    note_id = _note_id(api_sync, path)
+    note_id = api_sync.wait_for_note_id(path)
     await web.open_note(note_id, sync_vault_id)
     await web.append("\nEDIT-WHILE-B-LIVE-BOUND\n")
 
@@ -150,21 +131,9 @@ async def test_deaf_live_bound_note_converges_via_socket_replay(vault_b, cdp_b, 
     wait_for_content(vault_b, path_y, "base line", timeout=CRDT_TIMEOUT)
 
     # Live-bind X in B's editor BEFORE the wedge, so B's Y.Doc owns it.
-    opened = await cdp_b.evaluate(
-        """
-        (async () => {
-          const f = app.vault.getAbstractFileByPath(%r);
-          if (!f) return "no-file";
-          await app.workspace.getLeaf(false).openFile(f);
-          return app.workspace.activeEditor?.file?.path ?? "no-active";
-        })()
-        """
-        % path_x,
-        await_promise=True,
-    )
-    assert opened == path_x, f"failed to live-bind note in Obsidian editor: {opened!r}"
+    await cdp_b.open_in_editor(path_x)
 
-    note_id_x = _note_id(api_sync, path_x)
+    note_id_x = api_sync.wait_for_note_id(path_x)
     # Stage the deafness: room dead (B silently unobserved) + next fan-out lost.
     backend_rpc(f'Engram.Notes.CrdtRegistry.terminate_room("{note_id_x}")')
     # generous: swallow EVERY fan-out for X in the window — emit-count drift must
@@ -257,21 +226,9 @@ async def test_deaf_note_survives_handshake_rate_limit_and_heals_on_restore(
     wait_for_content(vault_b, path_y, "base line", timeout=CRDT_TIMEOUT)
 
     # Live-bind X in B's editor BEFORE the wedge, so B's Y.Doc owns it.
-    opened = await cdp_b.evaluate(
-        """
-        (async () => {
-          const f = app.vault.getAbstractFileByPath(%r);
-          if (!f) return "no-file";
-          await app.workspace.getLeaf(false).openFile(f);
-          return app.workspace.activeEditor?.file?.path ?? "no-active";
-        })()
-        """
-        % path_x,
-        await_promise=True,
-    )
-    assert opened == path_x, f"failed to live-bind note in Obsidian editor: {opened!r}"
+    await cdp_b.open_in_editor(path_x)
 
-    note_id_x = _note_id(api_sync, path_x)
+    note_id_x = api_sync.wait_for_note_id(path_x)
     # Stage the deafness: room dead (B silently unobserved) + next fan-out lost.
     backend_rpc(f'Engram.Notes.CrdtRegistry.terminate_room("{note_id_x}")')
     # generous: swallow EVERY fan-out for X in the window — emit-count drift must

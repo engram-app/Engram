@@ -34,7 +34,6 @@ from helpers.vault import wait_for_content
 
 NOTE_COUNT = 5
 
-SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 GET_CURSOR = "app.plugins.plugins['engram-vault-sync'].syncEngine.getCatchupSeq()"
 
 
@@ -53,7 +52,7 @@ async def test_closed_gate_holds_the_feed_until_it_opens(vault_b, cdp_b, api_syn
     await cdp_b.trigger_full_sync()
     cursor_before = await cdp_b.evaluate(GET_CURSOR)
 
-    await cdp_b.evaluate(SET_BLOCKED.format("true"))
+    await cdp_b.set_sync_blocked(True)
     try:
         for i, path in enumerate(paths):
             api_sync.create_note(path, f"# Held {i}\nheld-marker-{i}\n")
@@ -74,7 +73,7 @@ async def test_closed_gate_holds_the_feed_until_it_opens(vault_b, cdp_b, api_syn
             f"served again — this is the 2026-08-13 data-loss shape."
         )
     finally:
-        await cdp_b.evaluate(SET_BLOCKED.format("false"))
+        await cdp_b.set_sync_blocked(False)
 
     # Gate open: every held row must still be there to serve.
     try:

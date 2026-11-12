@@ -653,6 +653,52 @@ class CdpClient:
         )
         return raw if isinstance(raw, dict) else {}
 
+    async def set_sync_blocked(self, blocked: bool) -> None:
+        """Close (True) or open (False) the engine's sync gate. Closed holds the
+        catch-up feed and every pull/push until it reopens (test_89)."""
+        await self.evaluate(
+            f"{ENGINE_PATH}.setSyncBlocked({'true' if blocked else 'false'})"
+        )
+
+    async def open_in_editor(self, path: str) -> None:
+        """Open `path` in Obsidian's editor, which LIVE-BINDS its Y.Doc: edits
+        then route through the CM binding instead of the disk-save path."""
+        opened = await self.evaluate(
+            f"""
+            (async () => {{
+              const f = app.vault.getAbstractFileByPath({json.dumps(path)});
+              if (!f) return "no-file";
+              await app.workspace.getLeaf(false).openFile(f);
+              return app.workspace.activeEditor?.file?.path ?? "no-active";
+            }})()
+            """,
+            await_promise=True,
+        )
+        assert opened == path, f"failed to live-bind {path} in Obsidian: {opened!r}"
+
+    async def arm_create_spy(self) -> None:
+        """Record every path Obsidian CREATES from now on, until disarmed.
+
+        A conflict copy cannot be found by scanning disk afterwards: the copy is
+        stamped as synced but never pushed, so the next manifest reconcile reads
+        it as server-deleted and trashes it within a second (Engram#1931). Only
+        a live `vault.on('create')` listener sees it. The expression ends in
+        `true` because CDP cannot serialize the returned EventRef.
+        """
+        await self.evaluate(
+            "window.__e2eCreates = [];"
+            "window.__e2eCreatesRef && app.vault.offref(window.__e2eCreatesRef);"
+            "window.__e2eCreatesRef = app.vault.on('create', f => window.__e2eCreates.push(f.path)); true"
+        )
+
+    async def disarm_create_spy(self) -> list[str]:
+        """Stop recording and return every path created since `arm_create_spy`."""
+        raw = await self.evaluate(
+            "app.vault.offref(window.__e2eCreatesRef); window.__e2eCreatesRef = null;"
+            "JSON.stringify(window.__e2eCreates || [])"
+        )
+        return json.loads(raw or "[]")
+
     async def is_sync_blocked(self) -> bool:
         """Read the engine's syncBlocked flag. False when plugin lacks gate."""
         if not await self.has_sync_gate():

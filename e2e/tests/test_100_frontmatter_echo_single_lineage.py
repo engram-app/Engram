@@ -58,7 +58,6 @@ from helpers.vault import write_note
 # and reports a generic timeout instead of "converged only N/M".
 CONVERGE_BOUND_S = 90
 
-SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
 # Each shape is a separate way YAML can fail to survive a parse/serialise round
 # trip. Named so a failure says WHICH shape moved rather than just "bytes
@@ -95,7 +94,7 @@ async def test_frontmatter_echo_forks_no_lineage(
     arm_room_starts()
     rooms_before = read_room_starts()
 
-    await cdp_a.evaluate(SET_BLOCKED.format("true"))
+    await cdp_a.set_sync_blocked(True)
 
     written: dict[str, str] = {}
     shapes = {**FRONTMATTER_SHAPES, IDENTICAL_ECHO: "---\ntags:\n  - stable\n---\n"}
@@ -123,7 +122,7 @@ async def test_frontmatter_echo_forks_no_lineage(
     started = time.monotonic()
     landed = 0
     while time.monotonic() < started + CONVERGE_BOUND_S:
-        await cdp_a.evaluate(SET_BLOCKED.format("false"))
+        await cdp_a.set_sync_blocked(False)
         await cdp_a.trigger_full_sync()
         manifest = api_sync.get_manifest()
         landed = sum(1 for n in manifest["notes"] if n["path"].startswith(prefix))
