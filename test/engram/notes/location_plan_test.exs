@@ -9,6 +9,7 @@ defmodule Engram.Notes.LocationPlanTest do
   alias Engram.{Crypto, DataMigrations, Notes}
   alias Engram.QueryPlan
   alias Engram.QueryRecorder
+  alias Engram.Repo
 
   setup do
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
@@ -67,5 +68,36 @@ defmodule Engram.Notes.LocationPlanTest do
     Engram.Cache.clear_local(:note_split)
     refute Engram.Notes.Keys.ids?()
     assert_plan(ctx.user, ctx.vault, "notes_user_vault_path_v2")
+  end
+
+  # The walk sits behind the moved-folder probe (`WalkSql.key_eq/0`): an
+  # unmoved vault never runs it, whatever plan is cached. Run for real on
+  # the statement the app sends, not inferred from the plan's shape.
+  defp walk_line(user, vault) do
+    {_, queries} =
+      QueryRecorder.record(fn -> assert Notes.note_exists?(user, vault, "A/B/n7.md") end)
+
+    [%{sql: sql, params: params}] =
+      for %{sql: sql} = q <- queries, sql =~ "WITH RECURSIVE", sql =~ "FROM \"notes\"", do: q
+
+    {:ok, plan} =
+      Repo.transaction(fn ->
+        Repo.query!("EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF) " <> sql, params).rows
+        |> List.flatten()
+      end)
+
+    Enum.find(plan, &(&1 =~ "Recursive Union")) || flunk(Enum.join(plan, "\n"))
+  end
+
+  test "an unmoved vault never runs the folder walk; a moved one does", ctx do
+    assert walk_line(ctx.user, ctx.vault) =~ "never executed"
+
+    {:ok, _} = Engram.Folders.create_markers(ctx.user, ctx.vault, ["Moved"])
+
+    Repo.query!("UPDATE folders SET notes_cascaded = false WHERE vault_id = $1", [
+      Ecto.UUID.dump!(ctx.vault.id)
+    ])
+
+    refute walk_line(ctx.user, ctx.vault) =~ "never executed"
   end
 end
