@@ -72,12 +72,11 @@ defmodule Engram.Workers.BackfillNoteNames do
   alias Engram.DataMigrations.NoteName
   alias Engram.Folders.{Folder, Rows}
   alias Engram.Logger.Metadata
-
-  require NameKeys
   alias Engram.Notes.{Name, Note}
   alias Engram.Repo
 
   require Logger
+  require NameKeys
 
   @tables [:notes, :attachments, :folders]
   @batch_size 100
