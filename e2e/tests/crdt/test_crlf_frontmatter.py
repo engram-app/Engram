@@ -37,6 +37,7 @@ from helpers.crdt_doc_probe import (
 )
 from helpers.frontmatter_first_sync import fm_keys
 from helpers.latency import DELIVERY_TIMEOUT
+from helpers.lineage_probe import read_lineages
 from helpers.quiescence import await_quiescent
 from helpers.vault import list_notes, wait_for_content, write_binary
 
@@ -44,9 +45,17 @@ KEYS = ["title", "status", "area"]
 FENCE = "---\r\ntitle: Crlf note\r\nstatus: draft\r\narea: sync\r\n---\r\n"
 BODY = "\r\n# Heading\r\n\r\nbody line one\r\nbody line two\r\n"
 CRLF_NOTE = FENCE + BODY
+# A body that starts with `-`, the character the fence also starts with: a
+# heal that diffs to the body (instead of deleting exactly the fence) trims
+# that shared `-` and, merged with another device's lift, eats the list marker.
+LIST_BODY = "- item one\r\n- item two\r\n"
+# What a device that never opened the note holds: the projection's LF fence
+# around the doc's own CRLF body. Mixed endings, pinned so a change is visible.
+B_NOTE = FENCE.replace("\r\n", "\n") + BODY
 # Long enough for a server lift, its fan-out and any disk rewrite it causes to
 # land; well inside the crdt job's per-test budget.
 SETTLE_S = 15
+DUP_NOTE = "---\ntitle: Dup\nstatus: draft\narea: sync\n---\n\nbody\n"
 
 
 def _folder() -> str:
@@ -80,12 +89,12 @@ def _assert_one_note(folder: str, path: str, api_sync, *vaults: Path) -> None:
     assert on_server == [path], f"server holds {on_server} under {folder}, expected one note"
 
 
-def _wait_server_doc(vault_id: str, note_id: str, done, what: str):
+async def _wait_server_doc(vault_id: str, note_id: str, done, what: str):
     """Poll the server doc until `done(doc)`; fail with the last doc seen."""
     deadline = time.monotonic() + DELIVERY_TIMEOUT
     doc = read_server_doc(vault_id, note_id)
     while not done(doc) and time.monotonic() < deadline:
-        time.sleep(1)
+        await asyncio.sleep(1)
         doc = read_server_doc(vault_id, note_id)
     assert done(doc), f"server doc never reached: {what}\nlast doc: {doc}"
     return doc
@@ -125,13 +134,25 @@ async def _hold_bytes(
         await asyncio.sleep(0.5)
 
 
+def _assert_probe_sees_writers(vault_id: str, folder: str) -> None:
+    """Self-check of `read_lineages`: the damaged fixture is written by the
+    REST create and by the staging room, then healed by a device, so its doc
+    holds several Yjs clients. A probe that reads zero here (it once read only
+    a field `Repo.get` leaves nil, then only the snapshot without the update
+    tail) cannot be trusted by test_97/98/100."""
+    seen = read_lineages(vault_id, folder)
+    assert seen.notes == 1 and seen.max_clients >= 2, f"lineage probe misreads: {seen}"
+
+
 def _assert_keys_once(vault: Path, rel: str) -> str:
     text = _disk(vault, rel)
     assert fm_keys(text) == KEYS, f"{vault}: frontmatter keys {fm_keys(text)} != {KEYS}:\n{text!r}"
     return text
 
 
-async def _damaged_note_on_both(folder, vault_a, vault_b, cdp_a, cdp_b, api_sync, sync_vault_id):
+async def _damaged_note_on_both(
+    folder, vault_a, vault_b, cdp_a, cdp_b, api_sync, sync_vault_id, body=BODY
+):
     """Fixture for the old-plugin-damaged shape, independent of the plugin under
     test: the server doc holds the fence in its body and an empty map, and both
     devices pull it as their FIRST sight of the note.
@@ -141,16 +162,18 @@ async def _damaged_note_on_both(folder, vault_a, vault_b, cdp_a, cdp_b, api_sync
     Both gates stay shut until the damage is in place, so neither device sees
     the healthy version first."""
     path = f"{folder}/Damaged.md"
+    note = FENCE + body
+    last_line = body.strip().splitlines()[-1]
     await cdp_a.set_sync_blocked(True)
     await cdp_b.set_sync_blocked(True)
     try:
-        api_sync.create_note(path, CRLF_NOTE)
+        api_sync.create_note(path, note)
         note_id = api_sync.wait_for_note_id(path)
         damage_server_doc(sync_vault_id, note_id, FENCE)
-        _wait_server_doc(
+        await _wait_server_doc(
             sync_vault_id,
             note_id,
-            lambda d: d.order == [] and d.values == {} and d.body == CRLF_NOTE,
+            lambda d: d.order == [] and d.values == {} and d.body == note,
             "the damaged fixture shape (fence in body, empty map)",
         )
     finally:
@@ -158,10 +181,10 @@ async def _damaged_note_on_both(folder, vault_a, vault_b, cdp_a, cdp_b, api_sync
         await cdp_b.set_sync_blocked(False)
     for cdp, vault in ((cdp_a, vault_a), (cdp_b, vault_b)):
         await cdp.trigger_full_sync()
-        wait_for_content(vault, path, "body line two", timeout=DELIVERY_TIMEOUT)
+        wait_for_content(vault, path, last_line, timeout=DELIVERY_TIMEOUT)
     # A device projects the damaged doc to the CRLF bytes verbatim.
     for vault in (vault_a, vault_b):
-        assert _disk(vault, path) == CRLF_NOTE, f"{vault} did not pull the damaged note"
+        assert _disk(vault, path) == note, f"{vault} did not pull the damaged note"
     return path, note_id
 
 
@@ -180,7 +203,7 @@ async def test_crlf_note_syncs_with_properties_as_properties(
     await cdp_b.trigger_full_sync()
     wait_for_content(vault_b, path, "body line two", timeout=DELIVERY_TIMEOUT)
 
-    _wait_server_doc(
+    await _wait_server_doc(
         sync_vault_id,
         note_id,
         lambda d: _properties_are_properties(d, {"title": "Crlf note", "status": "draft"}),
@@ -189,8 +212,7 @@ async def test_crlf_note_syncs_with_properties_as_properties(
     assert read_server_doc(sync_vault_id, note_id).body == BODY
 
     await _hold_bytes(vault_a, path, CRLF_NOTE, "sync rewrote the user's CRLF file on A")
-    b_text = _assert_keys_once(vault_b, path)
-    assert b_text.endswith(BODY), f"B's body differs from A's:\n{b_text!r}"
+    await _hold_bytes(vault_b, path, B_NOTE, "B's file is not the projection of A's note")
     await _assert_no_copies(folder, cdp_a, cdp_b)
     _assert_one_note(folder, path, api_sync, vault_a, vault_b)
 
@@ -214,7 +236,7 @@ async def test_crlf_property_edit_reaches_b(
     await cdp_b.trigger_full_sync()
     wait_for_content(vault_b, path, "status: published", timeout=DELIVERY_TIMEOUT)
 
-    doc = _wait_server_doc(
+    doc = await _wait_server_doc(
         sync_vault_id,
         note_id,
         lambda d: _properties_are_properties(d, {"status": "published"}),
@@ -223,9 +245,12 @@ async def test_crlf_property_edit_reaches_b(
     assert doc.body == BODY, f"server body changed by a property edit: {doc.body!r}"
 
     await _hold_bytes(vault_a, path, edited, "sync rewrote the user's CRLF file on A")
-    b_text = _assert_keys_once(vault_b, path)
-    assert "status: draft" not in b_text, f"B kept the old value:\n{b_text!r}"
-    assert b_text.endswith(BODY), f"B's body changed:\n{b_text!r}"
+    await _hold_bytes(
+        vault_b,
+        path,
+        B_NOTE.replace("status: draft", "status: published"),
+        "B's file is not the projection of the edited note",
+    )
     await _assert_no_copies(folder, cdp_a, cdp_b)
     _assert_one_note(folder, path, api_sync, vault_a, vault_b)
 
@@ -246,7 +271,7 @@ async def test_damaged_crlf_note_heals_on_open(
     try:
         print(f"\nbefore open: {read_server_doc(sync_vault_id, note_id)}")
         await cdp_a.open_in_editor(path)
-        doc = _wait_server_doc(
+        doc = await _wait_server_doc(
             sync_vault_id,
             note_id,
             lambda d: _properties_are_properties(d, {"title": "Crlf note", "status": "draft"}),
@@ -257,6 +282,7 @@ async def test_damaged_crlf_note_heals_on_open(
 
         await _hold_bytes(vault_a, path, CRLF_NOTE, "healing rewrote A's CRLF file", open_in_editor=True)
         await _hold_bytes(vault_b, path, CRLF_NOTE, "healing rewrote B's CRLF file")
+        _assert_probe_sees_writers(sync_vault_id, folder)
         _assert_keys_once(vault_a, path)
         _assert_keys_once(vault_b, path)
         await _assert_no_copies(folder, cdp_a, cdp_b)
@@ -276,8 +302,9 @@ async def test_concurrent_heal_of_damaged_crlf_note(
     folder = _folder()
     await _arm(cdp_a, cdp_b)
     path, note_id = await _damaged_note_on_both(
-        folder, vault_a, vault_b, cdp_a, cdp_b, api_sync, sync_vault_id
+        folder, vault_a, vault_b, cdp_a, cdp_b, api_sync, sync_vault_id, body=LIST_BODY
     )
+    note = FENCE + LIST_BODY
     try:
         release_room(note_id)
         await asyncio.gather(
@@ -285,7 +312,7 @@ async def test_concurrent_heal_of_damaged_crlf_note(
             cdp_b.open_in_editor(path),
             asyncio.to_thread(bind_room, sync_vault_id, note_id),
         )
-        doc = _wait_server_doc(
+        doc = await _wait_server_doc(
             sync_vault_id,
             note_id,
             lambda d: _properties_are_properties(d, {"title": "Crlf note", "status": "draft"}),
@@ -295,10 +322,12 @@ async def test_concurrent_heal_of_damaged_crlf_note(
         await await_quiescent(cdp_b, api_sync)
         doc = read_server_doc(sync_vault_id, note_id)
         print(f"\nafter concurrent heal: raw order={doc.order}")
-        assert doc.unique_order == KEYS and doc.body == BODY, f"server doc: {doc}"
+        assert doc.unique_order == KEYS, f"server doc: {doc}"
+        assert doc.body == LIST_BODY, f"the concurrent heal ate body characters: {doc.body!r}"
 
-        await _hold_bytes(vault_a, path, CRLF_NOTE, "the heal rewrote A's CRLF file", open_in_editor=True)
-        await _hold_bytes(vault_b, path, CRLF_NOTE, "the heal rewrote B's CRLF file", open_in_editor=True)
+        await _hold_bytes(vault_a, path, note, "the heal rewrote A's file", open_in_editor=True)
+        await _hold_bytes(vault_b, path, note, "the heal rewrote B's file", open_in_editor=True)
+        _assert_probe_sees_writers(sync_vault_id, folder)
         _assert_keys_once(vault_a, path)
         _assert_keys_once(vault_b, path)
         await _assert_no_copies(folder, cdp_a, cdp_b)
@@ -316,14 +345,14 @@ async def test_duplicate_order_key_projects_once_and_mints_nothing(
     opening + saving the unchanged note on A writes nothing to the doc."""
     folder = _folder()
     path = f"{folder}/DupOrder.md"
-    api_sync.create_note(path, "---\ntitle: Dup\nstatus: draft\narea: sync\n---\n\nbody\n")
+    api_sync.create_note(path, DUP_NOTE)
     note_id = api_sync.wait_for_note_id(path)
     for cdp, vault in ((cdp_a, vault_a), (cdp_b, vault_b)):
         await cdp.trigger_full_sync()
         wait_for_content(vault, path, "body", timeout=DELIVERY_TIMEOUT)
 
     append_order_key(sync_vault_id, note_id, "title")
-    _wait_server_doc(
+    await _wait_server_doc(
         sync_vault_id,
         note_id,
         lambda d: d.order == [*KEYS, "title"],
@@ -349,4 +378,4 @@ async def test_duplicate_order_key_projects_once_and_mints_nothing(
         f"(state vector {before} -> {after.state_vector}); doc: {after}"
     )
     _assert_keys_once(vault_a, path)
-    _assert_keys_once(vault_b, path)
+    assert _disk(vault_b, path) == DUP_NOTE, f"B's file changed: {_disk(vault_b, path)!r}"
