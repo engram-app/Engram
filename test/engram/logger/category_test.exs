@@ -12,6 +12,7 @@ defmodule Engram.Logger.CategoryTest do
              :crypto,
              :lifecycle,
              :oban,
+             :oban_retry,
              :boot,
              :data,
              :websocket,
