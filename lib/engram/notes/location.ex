@@ -219,9 +219,10 @@ defmodule Engram.Notes.Location do
 
   @doc """
   `%{id => path}`: where each row IS for the lookup that found it. A row
-  `derivable?/1` gets its folder's path plus its name (one chain read, in
-  its own tenant block unless the caller is in one); any other row, or one
-  whose name or chain does not open, its stored path: the decrypted `:path`
+  `derivable?/1` in a vault with a folder moved without a cascade (the
+  same gate as `at/5`) gets its folder's path plus its name (one chain
+  read, in its own tenant block unless the caller is in one); any other
+  row, or one whose name or chain does not open, its stored path: the decrypted `:path`
   it carries, else its `path_ciphertext` decrypted here. Rows are notes of
   one user, from any of their vaults.
   """
@@ -243,7 +244,9 @@ defmodule Engram.Notes.Location do
           Repo.with_tenant!(user.id, fn ->
             named
             |> Enum.group_by(& &1.vault_id, & &1.folder_ref_id)
-            |> Enum.flat_map(fn {vault_id, ids} -> Rows.chain_rows(vault_id, Enum.uniq(ids)) end)
+            |> Enum.flat_map(fn {vault_id, ids} ->
+              Rows.chain_rows(vault_id, Enum.uniq(ids), moved_only: true)
+            end)
           end)
 
         derive(dek, named, &Rows.chain_paths(dek, chains, &1))

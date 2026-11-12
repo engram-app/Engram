@@ -6185,7 +6185,8 @@ defmodule Engram.Notes do
   # asked path has that name, that is the one (writers still cascade in S3,
   # so this is every row, and nothing more is read). Otherwise (its stored
   # path is stale, or two asked paths share the name) only those rows get
-  # their path derived (`Location.paths/3`, one folder read).
+  # their path derived (`Location.paths/2`, one folder read, and only in
+  # a vault with a folder moved without a cascade).
   defp asked_paths(_filter_key, _paths, _hmacs, false), do: nil
 
   defp asked_paths(filter_key, paths, hmacs, true),
@@ -6209,14 +6210,16 @@ defmodule Engram.Notes do
       end
 
     # A row can answer two asked paths: its stored one (it holds it) and the
-    # one its folder and name put it at (no row holds that one).
-    fn row ->
-      case paths[row.id] do
-        path when is_binary(path) ->
-          Enum.uniq([row.path_hmac, Crypto.hmac_field(filter_key, path)])
+    # one its folder and name put it at, unless another row holds that.
+    held = MapSet.new(rows, & &1.path_hmac)
 
-        _ ->
-          [row.path_hmac]
+    fn row ->
+      with path when is_binary(path) <- paths[row.id],
+           derived = Crypto.hmac_field(filter_key, path),
+           true <- derived == row.path_hmac or not MapSet.member?(held, derived) do
+        Enum.uniq([row.path_hmac, derived])
+      else
+        _ -> [row.path_hmac]
       end
     end
   end
