@@ -1217,7 +1217,7 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   defp require_markdown(path) do
-    if markdown_path?(path), do: :ok, else: {:error, :not_markdown}
+    if CrdtBridge.markdown_path?(path), do: :ok, else: {:error, :not_markdown}
   end
 
   defp take_sync_update(frame), do: take_sync(frame, :sync_update, :not_sync_update)
@@ -1252,8 +1252,6 @@ defmodule EngramWeb.CrdtChannel do
   defp seed_outcome(reason) when is_atom(reason) do
     :telemetry.execute([:engram, :crdt, :genesis_seed], %{count: 1}, %{reason: reason})
   end
-
-  defp markdown_path?(path), do: is_binary(path) and String.ends_with?(path, ".md")
 
   # Test-only seam (#1409): fires just before the write transaction below, so a
   # test can register a room in exactly the window `evict_racing_room/1` exists
@@ -2420,7 +2418,7 @@ defmodule EngramWeb.CrdtChannel do
   #
   # So suppress exactly what the backstop covers, and no more. If the `.md` gate
   # in announce_ready/4 ever widens, widen this with it.
-  defp backstopped?(path), do: is_binary(path) and String.ends_with?(path, ".md")
+  defp backstopped?(path), do: CrdtBridge.markdown_path?(path)
 
   # `{announce?, socket}` — false exactly once per drain, so a LATER drain of the
   # same doc_id is independently suppressed rather than the note going

@@ -36,6 +36,7 @@ defmodule Engram.Notes do
     Helpers,
     Identity,
     Keys,
+    LineEndings,
     Location,
     Name,
     Note,
@@ -3438,12 +3439,21 @@ defmodule Engram.Notes do
   # fallback) and tags, all from the MERGED result — the public-API contract
   # is "server merges, never clobbers."
   #
+  # The ONE door every REST/MCP/web write's text enters the doc through, so it
+  # converts a markdown note to LF here (Engram.Notes.LineEndings); a canvas or
+  # base note is merged byte-exact.
+  defp maybe_merge_crdt(existing, incoming_content, user, note_id, vault_id, path, merge_doc) do
+    incoming = LineEndings.for_path(incoming_content, path)
+    merge_crdt(existing, incoming, user, note_id, vault_id, path, merge_doc)
+  end
+
   # A locked read-modify-write: `merge_doc` is this row's snapshot with the tail
   # already replayed, and `incoming_content` was derived from its projection.
   # Diffing two-way into it applies exactly the caller's edit. The three-way
   # path below would re-insert every tail edit, because the incoming text
   # already carries them and the snapshot ancestor does not.
-  defp maybe_merge_crdt(
+
+  defp merge_crdt(
          %Note{},
          incoming_content,
          user,
@@ -3459,7 +3469,7 @@ defmodule Engram.Notes do
   # A genesis insert with the client's doc: stored as the client built it, no
   # diff (re-ingesting would add server ops for nothing). Its own lineage, so
   # a retried frame merges as a no-op instead of doubling (#846).
-  defp maybe_merge_crdt(nil, _incoming, user, note_id, _vault_id, path, %Yex.Doc{} = doc) do
+  defp merge_crdt(nil, _incoming, user, note_id, _vault_id, path, %Yex.Doc{} = doc) do
     with {:ok, state} <- Yex.encode_state_as_update(doc),
          do:
            crdt_merge_result(%{state: state, text: CrdtBridge.text_of(doc)}, user, note_id, path)
@@ -3469,7 +3479,7 @@ defmodule Engram.Notes do
   # when the new text was derived. A tail that appears since (a room's client
   # seed plus keystrokes) is text the rebuild never saw, and diffing into it
   # would delete those keystrokes: refuse, so the caller reads again.
-  defp maybe_merge_crdt(%Note{}, incoming_content, user, note_id, vault_id, path, :empty_tail) do
+  defp merge_crdt(%Note{}, incoming_content, user, note_id, vault_id, path, :empty_tail) do
     {:ok, doc} = CrdtBridge.doc_from_state(nil)
 
     case CrdtPersistence.replay_tail(doc, user, note_id, vault_id) do
@@ -3482,7 +3492,7 @@ defmodule Engram.Notes do
     end
   end
 
-  defp maybe_merge_crdt(existing, incoming_content, user, note_id, vault_id, path, nil) do
+  defp merge_crdt(existing, incoming_content, user, note_id, vault_id, path, nil) do
     prior_state =
       case existing do
         %Note{} = note ->

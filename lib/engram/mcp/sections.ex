@@ -232,7 +232,6 @@ defmodule Engram.MCP.Sections do
             e - back
         end
 
-      {lines, text} = splice_eol(lines, at, at, text, content)
       {:ok, lines |> List.insert_at(at, text) |> Enum.join("\n")}
     end
   end
@@ -241,55 +240,6 @@ defmodule Engram.MCP.Sections do
     do: {:error, {:hidden_heading, l}}
 
   defp refuse_hidden(_position, _found), do: :ok
-
-  # Makes `text`'s line endings match `source`'s (the note being edited).
-  # Per-line, so it only ever touches the FRAGMENT being written -- never the
-  # untouched lines around it, even in a note that mixes a CRLF line with LF
-  # lines elsewhere.
-  @spec match_eol(String.t(), String.t()) :: String.t()
-  def match_eol(text, source) do
-    if String.contains?(source, "\r\n") do
-      text |> String.split("\n") |> Enum.map_join("\n", &(String.trim_trailing(&1, "\r") <> "\r"))
-    else
-      text
-    end
-  end
-
-  # match_eol/2 alone assumes the fragment is always followed by more
-  # content (so its own last line can safely end in "\r", relying on the
-  # next line to supply the pairing "\n"). That's false exactly when the
-  # fragment lands as the new end of file in a note with no trailing
-  # newline: the line that WAS last never got a "\r" (nothing followed it),
-  # and the fragment must not gain a stray trailing "\r" either (source had
-  # no trailing newline, so neither should the result).
-  #
-  # `before_count` is where the fragment is inserted relative to `lines`
-  # (`Enum.slice(lines, 0, before_count)` is what precedes it); `after_from`
-  # is where the untouched remainder resumes (`Enum.drop(lines, after_from)`
-  # -- equal to `before_count` for a pure insert with nothing removed, but
-  # can be larger for a replace that removes a range).
-  @spec splice_eol([String.t()], non_neg_integer(), non_neg_integer(), String.t(), String.t()) ::
-          {[String.t()], String.t()}
-  def splice_eol(lines, before_count, after_from, text, source) do
-    if String.contains?(source, "\r\n") do
-      n = length(lines)
-      no_trailing_nl = not String.ends_with?(source, "\n")
-
-      lines =
-        if before_count == n and no_trailing_nl,
-          do: List.update_at(lines, before_count - 1, &(&1 <> "\r")),
-          else: lines
-
-      text = match_eol(text, source)
-
-      text =
-        if after_from >= n and no_trailing_nl, do: String.trim_trailing(text, "\r"), else: text
-
-      {lines, text}
-    else
-      {lines, text}
-    end
-  end
 
   # -- Parsing --
 

@@ -66,7 +66,13 @@ defmodule Engram.Notes.CrdtPersistence do
     :dek_version,
     :content_hash,
     :crdt_state_ciphertext,
-    :crdt_state_nonce
+    :crdt_state_nonce,
+    # The path (decrypted with its folder) says whether this is a markdown doc
+    # for the room-open heal below.
+    :path_ciphertext,
+    :path_nonce,
+    :folder_ciphertext,
+    :folder_nonce
   ]
 
   @impl true
@@ -183,7 +189,7 @@ defmodule Engram.Notes.CrdtPersistence do
             # `notes.content` is a DERIVED projection maintained by the
             # checkpoint materializer.
 
-            :ok = CrdtBridge.normalize_doc(doc)
+            if markdown_doc?(note, user), do: :ok = CrdtBridge.normalize_doc(doc)
 
             if in_room?(),
               do: Process.put(:crdt_clean, applied == [] and projects?(doc, note, user))
@@ -405,6 +411,15 @@ defmodule Engram.Notes.CrdtPersistence do
 
   # Whether the bound doc projects the row's stored content (so a checkpoint
   # of it would change nothing). A key error answers no: checkpoint as before.
+  # A `.canvas`/`.base` doc stays byte-exact. A path that cannot be read is
+  # treated as markdown: the heal is what bind has always run.
+  defp markdown_doc?(note, user) do
+    case Crypto.maybe_decrypt_note_fields(note, user) do
+      {:ok, %Note{path: path}} when is_binary(path) -> CrdtBridge.markdown_path?(path)
+      _ -> true
+    end
+  end
+
   defp projects?(doc, %Note{content_hash: hash}, user) do
     case Crypto.dek_content_hash_key(user) do
       {:ok, key} -> Crypto.hmac_content_hash(key, CrdtBridge.text_of(doc)) == hash

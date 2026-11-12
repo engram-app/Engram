@@ -1288,11 +1288,6 @@ defmodule Engram.MCP.Handlers do
 
         # `s + span` keeps the whole heading: span is 2+ for a setext
         # heading (every paragraph line plus the underline), 1 for ATX.
-        # splice_eol/5 keeps the CRLF conversion LOCAL to `replacement`
-        # (and the one boundary line next to it, if replacing lands at end
-        # of file with no trailing newline) -- it never touches any other
-        # line in the note.
-        {lines, replacement} = Sections.splice_eol(lines, s + span, e, replacement, current)
 
         final_content =
           (Enum.slice(lines, 0, s + span) ++

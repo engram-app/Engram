@@ -69,7 +69,7 @@ defmodule Engram.Notes.CrdtDeliver do
     # the user's next real edit as an echo — silently dropping the write. Those
     # files sync via the legacy push path, so only deliver/announce for `.md`.
     if CrdtBridge.markdown_path?(path) do
-      push_to_live_room(user, note, content)
+      push_to_live_room(user, note, Engram.Notes.LineEndings.to_lf(content))
       # fanout_idle ALWAYS runs, even when a live room exists. It is NOT redundant
       # with the room's `update_v1`: `update_v1` broadcasts a DELTA (converges a
       # device that already holds the note, via gap-heal), while `fanout_idle`

@@ -30,7 +30,14 @@ defmodule Engram.Notes.LineEndingsWriteTest do
   defp state_vector(user, note_id) do
     row =
       Engram.Repo.with_tenant!(user.id, fn ->
-        NoteBody.get(note_id, [:id, :user_id, :crdt_state_ciphertext, :crdt_state_nonce])
+        NoteBody.get(note_id, [
+          :id,
+          :user_id,
+          :vault_id,
+          :dek_version,
+          :crdt_state_ciphertext,
+          :crdt_state_nonce
+        ])
       end)
 
     {:ok, state} = Engram.Crypto.decrypt_crdt_state(row, user)

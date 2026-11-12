@@ -299,6 +299,10 @@ defmodule Engram.Notes.CrdtBridge do
 
     apply_frontmatter(doc, order, values, raws)
     text = Yex.Doc.get_text(doc, @text_name)
+    # A legacy doc can still hold CRs while the incoming text is LF. Strip them
+    # one by one first so the diff below is only the real edit, not one span
+    # from the first CR to the last that would undo a concurrent tail edit.
+    if not String.contains?(body, "\r"), do: strip_cr(text)
     :ok = diff_into_text(text, body)
     :ok
   end
@@ -309,11 +313,53 @@ defmodule Engram.Notes.CrdtBridge do
   a key collision; fence-only keys are appended to the order array) and strip
   the fence from the body. Loops so stacked fences fully heal in one call.
 
-  Idempotent: a doc whose body has no leading fence, or whose top block is not
-  valid map YAML, is left unchanged.
+  Also converts the body to LF (markdown docs hold LF only, see
+  `Engram.Notes.LineEndings`) with one small edit per CR. Runs on every room
+  open, unconditionally: an old plugin can write CRs or a body fence back
+  through the room at any time, and both checks are a scan of a body this
+  already reads. Callers gate it on `markdown_path?/1`.
+
+  Idempotent: a doc whose body has no CR and no leading fence, or whose top
+  block is not valid map YAML, is left unchanged and mints no ops.
   """
   @spec normalize_doc(Yex.Doc.t()) :: :ok
   def normalize_doc(%Yex.Doc{} = doc) do
+    # One transaction: a heal of N CRs is one update (one tail row, one
+    # broadcast) instead of N.
+    Yex.Doc.transaction(doc, fn ->
+      strip_cr(Yex.Doc.get_text(doc, @text_name))
+      lift_fences(doc)
+    end)
+  end
+
+  # Each CR is its own small edit, back to front so earlier offsets hold: the
+  # `\r` of a `\r\n` is deleted, a lone `\r` becomes `\n`. Never one diff over
+  # the body: a concurrent heal by the plugin deletes the same Y items, and an
+  # edit between two CRs is never re-inserted. (Two concurrent heals of a LONE
+  # `\r` both insert a `\n`; lone CRs are rare old-Mac files, accepted.)
+  defp strip_cr(%Yex.Text{} = text) do
+    body = Yex.Text.to_string(text)
+
+    case :binary.matches(body, "\r") do
+      [] ->
+        :ok
+
+      matches ->
+        bytes = Enum.map(matches, &elem(&1, 0))
+
+        bytes
+        |> Enum.zip(Native.utf16_offsets(body, bytes))
+        |> Enum.reverse()
+        |> Enum.each(fn {byte, u16} ->
+          Yex.Text.delete(text, u16, 1)
+
+          if binary_part(body, byte, min(2, byte_size(body) - byte)) != "\r\n",
+            do: Yex.Text.insert(text, u16, "\n")
+        end)
+    end
+  end
+
+  defp lift_fences(doc) do
     body = body_of(doc)
 
     case Frontmatter.split(body) do
@@ -368,7 +414,7 @@ defmodule Engram.Notes.CrdtBridge do
 
             # The body may now begin with another fence (stacked); heal again.
             # Terminates: each pass strips one fence so the body strictly shrinks.
-            normalize_doc(doc)
+            lift_fences(doc)
 
           :error ->
             # Malformed or non-map YAML at the top: not real frontmatter. Leave as-is.
@@ -381,11 +427,16 @@ defmodule Engram.Notes.CrdtBridge do
     upsert_map(Yex.Doc.get_map(doc, @frontmatter_name), values)
     upsert_map(Yex.Doc.get_map(doc, @raw_frontmatter_name), raws)
 
-    # Replace the order array wholesale (small list; simplest correct form).
+    # Replace the order array wholesale (small list; simplest correct form),
+    # and only when it changed: a repeated ingest of the same text mints no ops.
     arr = Yex.Doc.get_array(doc, @order_name)
-    len = arr |> Yex.Array.to_list() |> length()
-    if len > 0, do: Yex.Array.delete_range(arr, 0, len)
-    if order != [], do: Yex.Array.insert_list(arr, 0, order)
+    current = Yex.Array.to_list(arr)
+
+    if current != order do
+      if current != [], do: Yex.Array.delete_range(arr, 0, length(current))
+      if order != [], do: Yex.Array.insert_list(arr, 0, order)
+    end
+
     :ok
   end
 
