@@ -1,6 +1,8 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState, type StateField } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
+import { TreeFragment } from "@lezer/common";
+import { parser } from "@lezer/markdown";
 import { describe, expect, test } from "vitest";
 import { attachmentEmbeds } from "./attachment-embed";
 import { blockquoteDepthPlugin } from "./blockquote-depth";
@@ -143,4 +145,25 @@ describe("render core fuzz", () => {
 		}
 		expect(failures).toEqual([]);
 	}, 120_000);
+
+	// Known upstream (not render-core) divergences. Fresh seeds outside 1-160 that
+	// fail ONLY through one of these are not our bug; anything else is.
+	//
+	// Seed 7207, "indented code" layer: @lezer/markdown (1.7.2, still in 1.8.1)
+	// reuses a stale CodeBlock on an incremental reparse after the first line's
+	// indent is deleted, so the incremental tree differs from a fresh parse. Later
+	// edits re-parse that region without a change there, so the core never
+	// re-renders it. This canary fails once upstream fixes it: then add 7207 to
+	// the fuzz run as a regression.
+	test("known upstream: lezer keeps a stale CodeBlock after an indent is deleted", () => {
+		const pre = "\tcode1\n\tcode2\npara\n";
+		const post = pre.slice(1);
+		const reused = TreeFragment.applyChanges(TreeFragment.addTree(parser.parse(pre)), [
+			{ fromA: 0, toA: 1, fromB: 0, toB: 0 },
+		]);
+		expect(parser.parse(post).toString()).toBe("Document(Paragraph)");
+		expect(parser.parse(post, reused).toString()).toBe(
+			"Document(CodeBlock(CodeText,CodeText),Paragraph)",
+		);
+	});
 });
