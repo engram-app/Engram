@@ -103,6 +103,10 @@ defmodule Engram.Notes.LocationTest do
     ])
   end
 
+  # Incompressible, so its stored size is its length.
+  defp random_text(n),
+    do: n |> :crypto.strong_rand_bytes() |> Base.encode64() |> binary_part(0, n)
+
   defp got_ids(user, vault, paths) do
     for {p, fetch} <- Notes.get_notes_within(user, vault, paths, 10_000_000), into: %{} do
       {p, with(%{id: id} <- fetch.(), do: id)}
@@ -348,6 +352,32 @@ defmodule Engram.Notes.LocationTest do
       got = got_ids(u, v, ["Z/x.md", "A/B/x.md"])
       assert got["A/B/x.md"] == note.id
       assert got["Z/x.md"] == holder.id
+    end
+
+    # Fourth review m12: past the byte budget, a drift row read by the greedy
+    # pass took the folder-ref path its holder had already answered (and a
+    # drift row on the first page hid a holder past the cut).
+    test "past the budget a drift row never replaces the holder of a path",
+         %{user: u, vault: v, note: note} do
+      holder = note!(u, v, "Z/x.md")
+
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"path" => "big.md", "content" => random_text(200_000)},
+          actor: "api"
+        )
+
+      move_folder_row!(u, folder_id(u, v, "A"), "A")
+
+      for paths <- [["Z/x.md", "big.md", "A/B/x.md"], ["A/B/x.md", "big.md", "Z/x.md"]] do
+        got =
+          for {p, fetch} <- Notes.get_notes_within(u, v, paths, 50_000), into: %{} do
+            {p, with(%{id: id} <- fetch.(), do: id)}
+          end
+
+        assert got["Z/x.md"] == holder.id, inspect(paths)
+        assert got["A/B/x.md"] == note.id, inspect(paths)
+        assert got["big.md"] == :over_budget, inspect(paths)
+      end
     end
 
     test "outputs keep the stored path under a cascaded folder", %{user: u, vault: v, note: note} do
