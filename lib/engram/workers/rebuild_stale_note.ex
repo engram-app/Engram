@@ -48,6 +48,24 @@ defmodule Engram.Workers.RebuildStaleNote do
   @impl Oban.Worker
   def timeout(job), do: EmbedNote.timeout(job)
 
+  @doc """
+  Re-indexes a note whose content is unchanged but whose derived reading of
+  it moved (a key alias table, a title rule): every unchanged vector is
+  reused (0 Voyage) and only a chunk whose context changed re-embeds,
+  unmetered and paced by the maintenance bucket.
+
+  The `key_aliases: true` arg names that pass for every release that has
+  it (`EmbedNote`'s route), so an older node in a rolling deploy runs it
+  the same way. Lowest priority, as the reconcile sweep queues an upgrade:
+  never ahead of the v5 pass's jobs.
+  """
+  @spec enqueue_reread(Ecto.UUID.t(), Ecto.UUID.t()) :: :ok
+  def enqueue_reread(note_id, user_id) do
+    args = %{note_id: note_id, user_id: user_id, upgrade: true, key_aliases: true}
+    {:ok, _} = Oban.insert(new(args, priority: EmbedNote.backfill_priority()))
+    :ok
+  end
+
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"upgrade" => true}} = job) do
     with :ok <- Rebuild.pace(job), do: Rebuild.paced(fn -> EmbedNote.perform(job) end)
