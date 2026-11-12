@@ -61,11 +61,11 @@ defmodule Engram.DataMigrations.MaintenancePoolRegistryTest do
     end
   end
 
-  setup do
-    # `stacktrace: true`: each fleet query's telemetry names its callers, so
-    # the named entry points below can be checked without a tracer.
-    Engram.Test.MaintenancePool.start!(stacktrace: true)
-
+  # The committed fixtures live for the module, and are removed after every
+  # test's sandbox is gone: a pass that writes through the app pool (in the
+  # test's sandbox transaction) holds row locks on them until then, so a
+  # per-test cleanup deleting them would wait on its own test and time out.
+  setup_all do
     jobs_before =
       Sandbox.unboxed_run(Repo, fn -> Repo.one(from(j in Oban.Job, select: max(j.id))) || 0 end)
 
@@ -99,6 +99,14 @@ defmodule Engram.DataMigrations.MaintenancePoolRegistryTest do
         Repo.delete_all(from(j in Oban.Job, where: j.id > ^jobs_before))
       end)
     end)
+
+    :ok
+  end
+
+  setup do
+    # `stacktrace: true`: each fleet query's telemetry names its callers, so
+    # the named entry points below can be checked without a tracer.
+    Engram.Test.MaintenancePool.start!(stacktrace: true)
 
     test_pid = self()
     handler = {__MODULE__, make_ref()}
