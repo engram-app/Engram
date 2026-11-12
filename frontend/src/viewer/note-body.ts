@@ -1,3 +1,5 @@
+import { toLf } from "../lib/line-endings";
+
 // Sentinel marks images rewritten from Obsidian `![[X]]` embed syntax. The
 // img component reads it and fetches via the authenticated attachments API.
 const ATTACHMENT_SCHEME = "engram-attachment:";
@@ -17,10 +19,10 @@ const EMBED = "";
 const FRONTMATTER = /^﻿?---[ \t]*\n(?:[\s\S]*?\n)?---[ \t]*(?:\n|$)/u;
 
 // The markdown NoteView renders: frontmatter removed, embeds marked for
-// remarkEmbeds. CRLF is normalised first; the renderer treats both line
-// endings alike.
+// remarkEmbeds. Line endings are converted to LF first (a note not yet opened
+// since LF-only can still be CRLF or classic-Mac).
 function noteBody(content: string): string {
-	return content.replace(/\r\n/g, "\n").replace(FRONTMATTER, "").replaceAll("![[", `[[${EMBED}`);
+	return toLf(content).replace(FRONTMATTER, "").replaceAll("![[", `[[${EMBED}`);
 }
 
 interface MdNode {
