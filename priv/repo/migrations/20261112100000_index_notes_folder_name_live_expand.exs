@@ -62,13 +62,19 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderNameLiveExpand do
   drops the INVALID index and builds again. No `lock_timeout`: see
   20261105150100's `up/0`.
 
-  One builder at a time: two tasks booting together (no migration lock)
-  would otherwise both drop and build. The body runs under a session
-  advisory lock on the pinned connection, polled with
-  `pg_try_advisory_lock` (a blocking wait would hold a snapshot the other
-  task's CONCURRENTLY build must wait out: a deadlock) until the same
-  deadline. The second task then finds each index valid and skips it, or
-  INVALID (the first failed) and rebuilds it.
+  One builder at a time. A prod boot already runs every migration under
+  `Engram.Release`'s global lock (#2128), but that lock lives on its own
+  idle session: a task SIGKILLed mid-build loses it at once while its
+  backend keeps building, and `mix ecto.migrate` takes no lock at all
+  (this file sets `@disable_migration_lock`). Without a lock of its own,
+  the next task would see the in-progress build as INVALID and drop it.
+  So the body runs under a session advisory lock on the pinned connection
+  (the building one, so it lasts as long as an orphaned build), polled with
+  `pg_try_advisory_lock` until the same deadline (a blocking wait holds a
+  snapshot the other CONCURRENTLY build waits on, so the two would wait on
+  each other forever with no deadlock error).
+  The next task then finds each index valid and skips it, or INVALID (the
+  build failed) and rebuilds it.
   """
 
   @indexes [
