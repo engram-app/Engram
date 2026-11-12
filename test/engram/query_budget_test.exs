@@ -90,7 +90,10 @@ defmodule Engram.QueryBudgetTest do
     # OAuth tools/call budget, 2026-10-24; warm it is the override cache),
     # and the `note_split` ledger read behind `Notes.Keys.ids?/0` (1, a 60 s
     # cache too; the reset missed it until 2026-11-02, so a cold run paid it
-    # only when the entry happened to have expired).
+    # only when the entry happened to have expired). Prod also pays the
+    # `note_name` ledger read behind `Notes.Location.on?/0` once a minute per
+    # node (18 cold there); the suite excludes it by config
+    # (`config/test.exs` `:name_reads_ledger`).
     "mcp get_notes oauth cold" => 17,
     # Each kept query required:
     #  1 rotation lock: a write reads it fresh from the DB (RotationGate).
