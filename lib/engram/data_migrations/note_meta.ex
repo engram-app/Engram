@@ -240,6 +240,8 @@ defmodule Engram.DataMigrations.NoteMeta do
   defp unchanged(note),
     do:
       from(n in Note,
-        where: n.id == ^note.id and n.version == ^note.version and is_nil(n.deleted_at)
+        where:
+          n.id == ^note.id and n.kind == "note" and n.version == ^note.version and
+            is_nil(n.deleted_at)
       )
 end
