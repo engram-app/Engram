@@ -1,7 +1,7 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { commentDecoration } from "./comment-decoration";
 
 // Comments (`%%…%%` and `<!-- -->`) stay visible while editing, greyed like
@@ -62,4 +62,21 @@ describe("commentDecoration", () => {
 		view.dispatch({ changes: { from: 5, insert: " %%later%%" } });
 		expect(marked()).toBe("%%later%%");
 	});
+});
+
+test("a comment in code stays plain when the first parse runs out of time", () => {
+	// Every clock read is 30 ms later, so the language's own 20 ms mount parse
+	// stops early. The render core's mount parse still covers the fence, and the
+	// comment layer must read that tree, not syntaxTree(state).
+	let now = Date.now();
+	const clock = vi.spyOn(Date, "now").mockImplementation(() => {
+		now += 30;
+		return now;
+	});
+	try {
+		mount("para\n\n```\n%%x%%\n```\n\n`%%y%%`\n\ntail");
+	} finally {
+		clock.mockRestore();
+	}
+	expect(marked()).toBe("");
 });
