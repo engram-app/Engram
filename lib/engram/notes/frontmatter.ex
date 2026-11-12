@@ -355,6 +355,16 @@ defmodule Engram.Notes.Frontmatter do
   defp deep_sort(value), do: value
 
   @doc """
+  The key order with each key once, at its FIRST position. Concurrent lifts of
+  one fence each append to the `frontmatter_order` Y.Array and the CRDT keeps
+  both inserts, so every reader of the order goes through this (the web app's
+  `uniqueKeys` and the plugin do the same), and every replica shows and writes
+  the key once, in the same place.
+  """
+  @spec unique_order([String.t()]) :: [String.t()]
+  def unique_order(order) when is_list(order), do: Enum.uniq(order)
+
+  @doc """
   Render ordered keys and JSON-encoded values into a YAML block (no fences).
   Empty inputs yield "". Output parses back to the same values (self-idempotent).
 
@@ -375,11 +385,8 @@ defmodule Engram.Notes.Frontmatter do
 
   def emit(order, values, raws)
       when is_list(order) and is_map(values) and is_map(raws) do
-    # Concurrent lifts of one fence each append to `frontmatter_order` and the
-    # CRDT keeps both inserts: a key emits once, at its FIRST position, as the
-    # plugin renders it, so every replica writes the same block.
     order
-    |> Enum.uniq()
+    |> unique_order()
     |> Enum.filter(fn k -> Map.has_key?(raws, k) or Map.has_key?(values, k) end)
     |> Enum.map_join("", fn key ->
       case Map.fetch(raws, key) do
