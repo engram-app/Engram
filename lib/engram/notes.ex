@@ -133,7 +133,8 @@ defmodule Engram.Notes do
                     :dek_version,
                     :path_ciphertext,
                     :path_nonce,
-                    :path_hmac
+                    :path_hmac,
+                    :name_hmac
                   ] ++ Location.fields()
 
   @note_crdt_fields @note_meta_fields ++ [:crdt_state_ciphertext, :crdt_state_nonce]
@@ -1912,7 +1913,8 @@ defmodule Engram.Notes do
   # invisible there. A target held by a ROW with no entry would sail through and
   # strand a durable claim on a path the relocate is about to refuse.
   defp claim_free_target(user, vault, note_id, new_path) do
-    case note_ids_at(user, vault, [new_path]) do
+    # The lookup `genesis_relocate_live`'s row check uses (`located_ids_at/3`).
+    case located_ids_at(user, vault, [new_path]) do
       {:error, reason} ->
         {:error, reason}
 
@@ -4520,6 +4522,48 @@ defmodule Engram.Notes do
     end
   end
 
+  # `note_ids_at/3` through the row checks' own lookup (`Location.at_any/5`,
+  # what `note_by_path_query/4` reads), for the claim checks that guard one
+  # rename or relocate: a claim decided on a different lookup than the row
+  # check after it strands a durable Identity claim (#2523 review M5). A few
+  # paths only (one folder walk each). Rows are keyed back to the asked paths
+  # as `get_notes_within/4` keys them; the moved-vault flag rides the same
+  # statement, so with no moved folder nothing more is read.
+  defp located_ids_at(_user, _vault, []), do: %{}
+
+  defp located_ids_at(user, vault, paths) do
+    case Crypto.dek_filter_key(user) do
+      {:ok, filter_key} ->
+        ids? = Keys.ids?()
+        on? = Location.on?()
+        hmacs = Enum.map(paths, &Crypto.hmac_field(filter_key, &1))
+
+        rows =
+          Repo.with_tenant!(user.id, fn ->
+            from(n in live_notes(user, vault, ids?),
+              where: ^Location.at_any(filter_key, vault_id(vault), paths, ids?, on?),
+              select: map(n, ^@located_fields)
+            )
+            |> select_merge(^Location.moved_column(vault_id(vault)))
+            |> Repo.all()
+          end)
+
+        asked = if Location.moved?(rows), do: asked_paths(filter_key, paths, hmacs, on?)
+        key = path_key_of(user, filter_key, rows, asked)
+        path_of = Map.new(Enum.zip(hmacs, paths))
+
+        for row <- rows,
+            k <- key.(row),
+            path = path_of[k],
+            path != nil,
+            into: %{},
+            do: {path, row.id}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
   # True when `path` holds a note tombstoned within the delete-wins window whose
   # stored content_hash equals the incoming push's — the resurrection signature
   # (a stale re-push of the exact note just deleted). A byte-different note or a
@@ -4679,8 +4723,9 @@ defmodule Engram.Notes do
 
   defp claim_for_note(user, vault, old_path, new_path) do
     # ONE query for both ends. Looking the source and the target up separately
-    # doubled the query count on the hottest path in the module.
-    case note_ids_at(user, vault, [old_path, new_path]) do
+    # doubled the query count on the hottest path in the module. The lookup
+    # the row checks use (`located_ids_at/3`), so the two never disagree.
+    case located_ids_at(user, vault, [old_path, new_path]) do
       {:error, reason} -> {:error, reason}
       held -> decide_claim(user, vault, held, old_path, new_path)
     end
