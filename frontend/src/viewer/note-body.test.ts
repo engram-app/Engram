@@ -10,6 +10,10 @@ describe("noteBody", () => {
 		expect(noteBody("---\r\ntitle: A\r\n---\r\n# Body\r\n")).toBe("# Body\n");
 	});
 
+	test("treats a lone CR as a line break, like the editor", () => {
+		expect(noteBody("---\rtitle: A\r---\r# Body\r")).toBe("# Body\n");
+	});
+
 	// gray-matter ran a `---js` block through eval: note content is untrusted
 	// (MCP agents, shared vaults), so a fence with a language tag must stay
 	// plain text and never execute.
