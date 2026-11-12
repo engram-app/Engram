@@ -71,7 +71,14 @@ defmodule Engram.Notes.Location do
 
   # Read from the ledger row itself, not `NoteName.done?/0`, whose `true` is
   # kept for the node's lifetime (`Engram.Notes.Keys.ids?/0` does the same).
+  # `:name_reads_ledger` is unset in prod (the row is read); the test suite
+  # sets `:done`, prod's state, since its DB never completes the ledger
+  # (`config/test.exs`).
   defp ledger_done? do
+    Engram.ServiceConfig.get(:name_reads_ledger, :read) == :done or ledger_row_done?()
+  end
+
+  defp ledger_row_done? do
     Engram.Cache.fetch(:note_name, :done, fn ->
       Repo.exists?(
         from(e in Entry,
