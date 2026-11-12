@@ -192,8 +192,9 @@ defmodule Engram.DataMigrations.NoteMeta do
         end
       end)
 
-    if result == :rewritten and title_moved?(note, meta),
-      do: NameIndex.announce(note.vault_id, note.id, note.path, elem(meta, 0))
+    _ =
+      if result == :rewritten and title_moved?(note, meta),
+        do: NameIndex.announce(note.vault_id, note.id, note.path, elem(meta, 0))
 
     result
   end

@@ -144,7 +144,7 @@ defmodule Engram.Notes.Helpers do
   @meta_version 1
 
   @doc "The title/tags/links derivation rules' version, stamped as `notes.meta_version`."
-  @spec meta_version() :: pos_integer()
+  # No @spec: dialyzer's :underspecs flags `pos_integer()` against the literal.
   def meta_version, do: @meta_version
 
   @doc """
