@@ -507,6 +507,19 @@ defmodule Engram.Notes do
   # `Rows.ensure_all/3` result (`refs`: %{folder => id}): a batch resolves each
   # distinct folder once, before its per-row loop and outside the per-row
   # savepoints, and passes the map down. Without one, resolve it here.
+  # A rewrite that writes a new path (a legacy unsanitized row moved to its
+  # sanitized path: `inject_phase_b_fields/7` carries path columns only
+  # then) names the new path's folder row, as every other path writer does.
+  defp put_moved_folder_ref(changeset, %{path_ciphertext: _}, user, vault_id, folder, refs),
+    do:
+      Ecto.Changeset.put_change(
+        changeset,
+        :folder_ref_id,
+        Map.get_lazy(refs || %{}, folder, fn -> ensure_folder_row!(user, vault_id, folder) end)
+      )
+
+  defp put_moved_folder_ref(changeset, _phase_b, _user, _vault_id, _folder, _refs), do: changeset
+
   defp folder_ref_for(nil, user, vault_id, folder), do: ensure_folder_row!(user, vault_id, folder)
   defp folder_ref_for(refs, _user, _vault_id, folder), do: Map.fetch!(refs, folder)
 
@@ -3241,6 +3254,7 @@ defmodule Engram.Notes do
         existing
         |> Note.changeset(Map.put(phase_b, :version, existing.version + 1))
         |> Ecto.Changeset.put_change(:seq, seq)
+        |> put_moved_folder_ref(phase_b, user, existing.vault_id, folder, opts[:folder_refs])
 
       # #1335. The WHERE was the primary key ALONE, so this write landed on
       # top of anything that committed after `existing` was read.
