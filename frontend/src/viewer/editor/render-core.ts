@@ -55,15 +55,20 @@ interface TextRenderer<T> {
 	 * Scan from `from`, always a line start where the scan is neutral. Emit tokens
 	 * in order, non-empty. At every LATER line start where the scan is neutral,
 	 * call `neutral(lineStart)` and return if it says true.
+	 *
+	 * `tree` is the syntax tree the core renders against. Read it, not
+	 * syntaxTree(state): at mount the core parses further than the language's own
+	 * 20 ms first pass, which on a slow or cold parser stops before the code.
 	 */
 	scan(
 		state: EditorState,
 		from: number,
 		emit: (t: Token<T>) => void,
 		neutral: (lineStart: number) => boolean,
+		tree: Tree,
 	): void;
-	/** Decorations for one token. Each must start inside [token.from, token.to). */
-	decorate(state: EditorState, token: Token<T>): Range<Decoration>[];
+	/** Decorations for one token. Each must start inside [token.from, token.to). `tree` as in scan. */
+	decorate(state: EditorState, token: Token<T>, tree: Tree): Range<Decoration>[];
 	/** Skip decorating a token the selection touches, so its raw source shows. */
 	reveal?: boolean;
 	/** Tokens read the syntax tree (code detection), so rescan where it changes. */
@@ -155,12 +160,13 @@ function decorateTokens(
 	r: TextRenderer<unknown>,
 	tokens: Iterable<Token<unknown>>,
 	out: Range<Decoration>[],
+	tree: Tree,
 ) {
 	for (const t of tokens) {
 		if (r.reveal && selectionTouches(state.selection, t.from, t.to)) {
 			continue;
 		}
-		out.push(...r.decorate(state, t));
+		out.push(...r.decorate(state, t, tree));
 	}
 }
 
@@ -199,6 +205,7 @@ function rescan(
 	old: RangeSet<TokenMark<unknown>>,
 	span: Span,
 	floor: number,
+	tree: Tree,
 ): number {
 	const { doc } = state;
 	// One line of context before the edit (a line can extend the block above it),
@@ -226,9 +233,10 @@ function rescan(
 			}
 			return false;
 		},
+		tree,
 	);
 	const decos: Range<Decoration>[] = [];
-	decorateTokens(state, r, found, decos);
+	decorateTokens(state, r, found, decos, tree);
 	layer.tokens = patch(
 		layer.tokens,
 		p,
@@ -517,17 +525,17 @@ function build(state: EditorState): CoreState {
 		const layer: Layer = { tokens: RangeSet.empty, decos: Decoration.none };
 		layers.set(r, layer);
 		if (r.kind === "text") {
-			rescan(state, r, layer, RangeSet.empty, [0, state.doc.length], 0);
+			rescan(state, r, layer, RangeSet.empty, [0, state.doc.length], 0, tree);
 		} else {
 			tree$.push([r, layer]);
 		}
 	}
 	renderTree(state, tree, tree$, [[0, tree.length]]);
-	// The watermark is the LEAST any renderer scanned against. ensureSyntaxTree
-	// hands back a longer tree than syntaxTree(state) still reports, and the
-	// text renderers read the latter, so recording the ensured length left the
-	// stretch between the two unscanned for code-ness forever (a `%%` in a fence
-	// greyed the rest of the note).
+	// The watermark is the shorter of the two trees. ensureSyntaxTree hands back a
+	// longer tree than syntaxTree(state) still reports, and later updates render
+	// against the latter, so recording the ensured length could leave a stretch
+	// rendered against neither (a `%%` in a fence greyed the rest of the note).
+	// The cost is one rescan of that stretch when the state's tree catches up.
 	return { layers, treeLen: Math.min(tree.length, syntaxTree(state).length) };
 }
 
@@ -571,7 +579,7 @@ function update(value: CoreState, tr: Transaction): CoreState {
 		}
 		if (r.refresh?.(tr)) {
 			const decos: Range<Decoration>[] = [];
-			decorateTokens(state, r, allTokens(old), decos);
+			decorateTokens(state, r, allTokens(old), decos, tree);
 			layer.decos = Decoration.set(decos, true);
 		}
 		let floor = 0;
@@ -579,10 +587,16 @@ function update(value: CoreState, tr: Transaction): CoreState {
 			if (span[1] < floor || kept(state, r, old, span)) {
 				continue;
 			}
-			floor = rescan(state, r, layer, old, span, floor);
+			floor = rescan(state, r, layer, old, span, floor, tree);
 		}
 		if (r.reveal && (tr.selection || tr.docChanged)) {
-			revealPatch(state, r, layer, [...selectionSpans(oldSel), ...selectionSpans(state.selection)]);
+			revealPatch(
+				state,
+				r,
+				layer,
+				[...selectionSpans(oldSel), ...selectionSpans(state.selection)],
+				tree,
+			);
 		}
 	}
 	renderTree(state, tree, tree$, tSpans);
@@ -590,7 +604,13 @@ function update(value: CoreState, tr: Transaction): CoreState {
 }
 
 /** Re-decorate the tokens under the old and new selection, and nothing else. */
-function revealPatch(state: EditorState, r: TextRenderer<unknown>, layer: Layer, spans: Span[]) {
+function revealPatch(
+	state: EditorState,
+	r: TextRenderer<unknown>,
+	layer: Layer,
+	spans: Span[],
+	tree: Tree,
+) {
 	const hit = new Map<string, Token<unknown>>();
 	const add = (from: number, to: number, value: unknown) =>
 		hit.set(`${from}:${to}`, { from, to, value });
@@ -611,7 +631,7 @@ function revealPatch(state: EditorState, r: TextRenderer<unknown>, layer: Layer,
 	}
 	for (const t of [...hit.values()].sort((x, y) => x.from - y.from || y.to - x.to)) {
 		const decos: Range<Decoration>[] = [];
-		decorateTokens(state, r, [t], decos);
+		decorateTokens(state, r, [t], decos, tree);
 		layer.decos = patch(layer.decos, t.from, t.to, decos);
 	}
 }
