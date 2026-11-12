@@ -121,10 +121,13 @@ defmodule Engram.Links.TargetCandidatesEquivalenceTest do
       test "each call shape answers as the six-part union", %{a: a} do
         for {shape, rows} <- @shapes do
           link!(a, Enum.map(rows, &elem(&1, 0)))
-          {runs, _sql} = shape_runs(a)
+          {runs, sql} = shape_runs(a)
 
           assert runs == [Enum.map(rows, &elem(&1, 1))],
                  "#{shape} call: #{inspect(runs)}"
+
+          # The call really took its pruned path.
+          assert {sql =~ "path_ci_", sql =~ "min("} == sent_parts(shape), sql
         end
       end
 
@@ -222,6 +225,11 @@ defmodule Engram.Links.TargetCandidatesEquivalenceTest do
         end)
     end
   end
+
+  # {pathed part sent?, shortest part sent?} per call shape.
+  defp sent_parts(:bare), do: {false, true}
+  defp sent_parts(:qualified), do: {true, false}
+  defp sent_parts(:mixed), do: {true, true}
 
   # 8 calls' distinct answers, and the union the last one sent.
   defp shape_runs(ctx) do

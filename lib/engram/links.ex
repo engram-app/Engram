@@ -1011,6 +1011,9 @@ defmodule Engram.Links do
     {resolved, candidates}
   end
 
+  # Each candidate part and the key list it filters on (`candidate_queries/4`).
+  @candidate_parts [stale: :hmacs, pathed: :path_keys, shortest: :bare_hmacs]
+
   # `[{basename_hmac, target_text}]` -> the indexed candidate sets
   # `resolve_prefetched/3` needs to resolve every one of them.
   defp target_candidates(_user, _vault_id, [], _dek), do: %{notes: %{}, attachments: %{}}
@@ -1026,9 +1029,21 @@ defmodule Engram.Links do
         pathed |> Enum.flat_map(fn {_h, t} -> variant_keys(filter_key, t) end) |> Enum.uniq()
     }
 
+    # A part whose key list is empty returns no row, but Postgres still plans
+    # it against every index on its table (an `= ANY('{}')` is constant-false,
+    # which implies every partial index predicate), so it is not sent. `stale`
+    # always has keys: `targets` is non-empty.
+    #
+    # The union stays UNNAMED (a custom plan per call, `Repo.prepare_query/3`)
+    # like every keyed `notes` lookup: its generic plan walks the vault
+    # (`notes_user_vault_live`, the key only a row filter), as the 11-02 path
+    # lookup did. `TargetCandidatesPlanTest` pins both.
+    parts = for {part, k} <- @candidate_parts, keys[k] != [], do: part
+
     rows =
       [:notes, :attachments]
       |> Enum.flat_map(&candidate_queries(user.id, vault_id, keys, &1))
+      |> Enum.flat_map(fn {part, query} -> if part in parts, do: [query], else: [] end)
       |> Enum.reduce(fn part, acc -> union_all(acc, ^part) end)
       |> Repo.all(skip_tenant_check: true)
       |> Enum.uniq_by(&{&1.table, &1.id})
@@ -1175,7 +1190,7 @@ defmodule Engram.Links do
             keys_v_current(c.link_keys_v)
       )
 
-    [stale, pathed, shortest]
+    [stale: stale, pathed: pathed, shortest: shortest]
   end
 
   defp hmac_candidate_queries(user_id, vault_id, keys, table) do
@@ -1235,7 +1250,7 @@ defmodule Engram.Links do
             keys_current(c.link_keys_stamp, c.path_nonce)
       )
 
-    [stale, pathed, shortest]
+    [stale: stale, pathed: pathed, shortest: shortest]
   end
 
   defp note_paths_by_id(_user, [], _dek), do: %{}

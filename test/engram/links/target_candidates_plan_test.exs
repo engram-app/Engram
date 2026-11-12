@@ -1,7 +1,8 @@
 defmodule Engram.Links.TargetCandidatesPlanTest do
   # The link-target union (`Links.target_candidates/4`, behind
   # `links_for_note/2`, `backlinks_for_note/3` and the extract-links writer)
-  # stays UNNAMED: a custom plan per call, never a cached generic one.
+  # stays UNNAMED (a custom plan per call, never a cached generic one), and
+  # sends only the parts its keys can match.
   #
   # Why unnamed, measured 2026-11-12 (`docs/context/notes-generic-plan-mis-pick.md`):
   # with `prepare: :named` the union went generic after 5 calls, and at
@@ -106,6 +107,18 @@ defmodule Engram.Links.TargetCandidatesPlanTest do
 
         refute prepared?(sql),
                "the candidate union is a named prepared statement, so it can go generic:\n#{sql}"
+      end
+
+      test "a bare-names call sends no pathed part", ctx do
+        sql = union_sql(ctx, "[[index]] [[one]] [[img.png]]")
+        refute sql =~ "path_ci_", sql
+        assert sql =~ "min(", sql
+      end
+
+      test "a folder-qualified-only call sends no shortest part", ctx do
+        sql = union_sql(ctx, "[[Hub/index]] [[A/one]]")
+        refute sql =~ "min(", sql
+        assert sql =~ "path_ci_", sql
       end
     end
   end
