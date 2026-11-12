@@ -282,6 +282,31 @@ defmodule Engram.Notes.CrdtBridgeTest do
       assert CrdtBridge.body_of(doc) == "body\n"
     end
 
+    # Review of Engram-obsidian#697 (HIGH): the plugin lifts a body fence by
+    # deleting exactly [0, fence). A server heal that DIFFED to the rest
+    # trimmed the shared leading `-` and deleted different Y items, so a
+    # concurrent lift by both merged to the union and ate the list marker.
+    test "a concurrent heal with the plugin keeps a body starting with `-`" do
+      fence = "---\r\ntitle: T\r\n---\r\n"
+      body = "- item one\r\n- item two\r\n"
+      base = CrdtBridge.new_doc() |> seed_body(fence <> body)
+      {:ok, state} = Yex.encode_state_as_update(base)
+      {:ok, server} = CrdtBridge.doc_from_state(state)
+      {:ok, plugin} = CrdtBridge.doc_from_state(state)
+
+      assert :ok = CrdtBridge.normalize_doc(server)
+      # The plugin's lift (note-seed.ts liftBodyFence): delete [0, fence).
+      Yex.Text.delete(Yex.Doc.get_text(plugin, CrdtBridge.text_name()), 0, byte_size(fence))
+
+      {:ok, from_server} = Yex.encode_state_as_update(server)
+      {:ok, from_plugin} = Yex.encode_state_as_update(plugin)
+      :ok = Yex.apply_update(plugin, from_server)
+      :ok = Yex.apply_update(server, from_plugin)
+
+      assert CrdtBridge.body_of(server) == body
+      assert CrdtBridge.body_of(plugin) == body
+    end
+
     test "no-op when the body has no leading fence" do
       doc = CrdtBridge.new_doc() |> seed_body("just body\nmore\n")
       assert :ok = CrdtBridge.normalize_doc(doc)
