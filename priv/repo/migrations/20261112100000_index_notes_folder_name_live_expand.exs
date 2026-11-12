@@ -13,22 +13,26 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderNameLiveExpand do
   `notes_folder_name_live`: a live note by its folder row and its own name
   (O(1) folder rename plan, S3 read switch, Engram#2523). The by-path lookup
   (`Engram.Notes.Location`) walks the folder chain on `folders_live_name`,
-  then probes this index with `(vault_id, name_ci_hmac, folder_ref_id)` and
-  filters the exact `name_hmac` on the rows it returns: at most the case
+  then probes this index with `(vault_id, name_ci_hmac || folder_ref_id)`
+  and filters the exact `name_hmac` on the rows it returns: at most the case
   variants of one name in one folder, never a scan of the folder's notes
   (`notes_folder_ref_live_id` would read every note in the folder).
 
-  The name leads, after the vault: led by `(vault_id, folder_ref_id)` it
-  would tie with `notes_folder_ref_live` / `notes_folder_ref_live_id` for
-  every by-folder read (the `folders_release_refs` trigger's update picked
-  it, FolderRefReleaseTest), a wider index for no gain.
+  One concatenated key, not two columns: led by `(vault_id, folder_ref_id)`
+  the index tied with `notes_folder_ref_live` for every by-folder read (the
+  `folders_release_refs` trigger's update picked it, FolderRefReleaseTest),
+  and led by `(vault_id, name_ci_hmac)` Postgres 18 skip-scanned it for a
+  folder cascade's `folder_ref_id = ANY(...)` (NotesVaultScanTest). An
+  expression serves only a query that names the same expression, so no
+  by-folder read can pick it. `name_ci_hmac` is a fixed 32 bytes, so the
+  concatenation is unambiguous. A root note (`folder_ref_id` NULL) has a
+  NULL key and is not in it: S3 reads root notes by their stored path.
 
-  Keyed on the casefolded name so the same columns can later carry the S5
-  per-folder name uniqueness (`UNIQUE (vault_id, name_ci_hmac,
-  folder_ref_id)`, the same constraint in any column order). It is NOT
-  unique here: names that differ only by case coexist today
-  (`path_ci_hmac` is not unique either), so a unique build first needs the
-  prod duplicate probe (#2523 risk R2) and a decision on those rows.
+  Keyed on the casefolded name so the same key can later carry the S5
+  per-folder name uniqueness. It is NOT unique here: names that differ only
+  by case coexist today (`path_ci_hmac` is not unique either), so a unique
+  build first needs the prod duplicate probe (#2523 risk R2) and a decision
+  on those rows.
 
   Write cost: one more entry on a note write that changes the folder or the
   name (`folder_ref_id`, `name_ci_hmac` and the liveness columns change only
@@ -54,7 +58,7 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderNameLiveExpand do
       repo().query!(
         """
         CREATE INDEX CONCURRENTLY IF NOT EXISTS #{@index}
-        ON notes (vault_id, name_ci_hmac, folder_ref_id)
+        ON notes (vault_id, (name_ci_hmac || uuid_send(folder_ref_id)))
         WHERE deleted_at IS NULL AND kind = 'note'
         """,
         [],

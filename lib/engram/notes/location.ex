@@ -10,7 +10,7 @@ defmodule Engram.Notes.Location do
     * **by-path lookup** (`at/5`, `at_any/5`): ONE statement. The folder part
       of the path is walked on `folders_live_name` (one unique-index probe
       per segment, a recursive CTE in a scalar subquery), then the note is
-      probed on `notes_folder_name_live` by `(vault_id, name_ci_hmac,
+      probed on `notes_folder_name_live` by `(vault_id, name_ci_hmac ||
       folder_ref_id)` with the exact `name_hmac` as a filter. A row whose name
       cannot be trusted is matched by its stored path key instead (see
       below), in an OR the planner serves as a BitmapOr of the two indexes.
@@ -125,26 +125,27 @@ defmodule Engram.Notes.Location do
 
         dynamic(
           [n],
-          (^in_folder(vault_id, segs) and n.name_ci_hmac == ^ci and n.name_hmac == ^exact and
-             ^current()) or ^by_path
+          (^in_folder(vault_id, segs, ci) and n.name_hmac == ^exact and ^current()) or ^by_path
         )
     end
   end
 
-  # `folder_ref_id` is the live folder at the end of `segs` (name hmacs,
-  # root first): one probe of `folders_live_name` per level (unique, so at
-  # most one row a level, and the scalar subquery never sees two; none
-  # gives NULL, which matches nothing). Each level is a LATERAL probe keyed
-  # by the level above, so the planner cannot hash-join a whole vault's
-  # folders per level. Uncorrelated, so it runs once (an InitPlan) and its
-  # id is an index key for the notes probe. It reads `folders` in the
-  # statement's own tenant (FORCE RLS).
-  defp in_folder(vault_id, segs) do
+  # The row's `(name_ci_hmac, folder_ref_id)` key, as `notes_folder_name_live`
+  # indexes it (one bytea, so no read by folder alone can use that index),
+  # equals `ci` plus the live folder at the end of `segs` (name hmacs, root
+  # first). The folder is one probe of `folders_live_name` per level
+  # (unique, so at most one row a level, and the scalar subquery never sees
+  # two; none gives NULL, which matches nothing). Each level is a LATERAL
+  # probe keyed by the level above, so the planner cannot hash-join a whole
+  # vault's folders per level. Uncorrelated, so it runs once (an InitPlan)
+  # and the key is an index condition for the notes probe. It reads
+  # `folders` in the statement's own tenant (FORCE RLS).
+  defp in_folder(vault_id, segs, ci) do
     dynamic(
       [n],
       fragment(
         """
-        ? = (WITH RECURSIVE w(i, id) AS (
+        (? || uuid_send(?)) = (? || uuid_send((WITH RECURSIVE w(i, id) AS (
            SELECT 1, f.id FROM folders f
            WHERE f.vault_id = ? AND f.parent_id IS NULL AND f.name_hmac = (?)[1]
              AND f.deleted_at IS NULL
@@ -155,9 +156,11 @@ defmodule Engram.Notes.Location do
                AND f.deleted_at IS NULL
              LIMIT 1
            ) c
-         ) SELECT w.id FROM w WHERE w.i = ?)
+         ) SELECT w.id FROM w WHERE w.i = ?)))
         """,
+        n.name_ci_hmac,
         n.folder_ref_id,
+        type(^ci, :binary),
         type(^vault_id, Ecto.UUID),
         type(^segs, {:array, :binary}),
         type(^vault_id, Ecto.UUID),
