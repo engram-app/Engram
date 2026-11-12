@@ -103,6 +103,24 @@ defmodule Engram.Notes.NoteKeysTest do
       )
     end
 
+    # Decoy TOMBSTONES too. With one tombstone in the vault the tomb lookup
+    # below is an exact cost tie (8.28 each, EXPLAIN 2026-11-12) between
+    # notes_path_tomb (vault_id, path_id, seq) and the older
+    # notes_vault_path_tombstone_index (vault_id, path_hmac), which can only
+    # filter path_id after a vault-wide bitmap scan; table stats then pick
+    # either (CI run 43187059627 took the bitmap at 8.16). With 300 the
+    # vault-wide scan is no longer a candidate, so the pin cannot flip.
+    for _ <- 1..300 do
+      insert(:note,
+        user: u,
+        vault: v,
+        path_hmac: :crypto.strong_rand_bytes(32),
+        folder_hmac: :crypto.strong_rand_bytes(32),
+        basename_hmac: :crypto.strong_rand_bytes(32),
+        deleted_at: DateTime.truncate(DateTime.utc_now(), :second)
+      )
+    end
+
     Engram.Repo.query!("ANALYZE notes")
     ids_on!()
 
