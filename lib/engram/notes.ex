@@ -4357,20 +4357,34 @@ defmodule Engram.Notes do
           :current -> with_tail(base)
         end
 
+      # `:current` is the user-facing read: the note is shown where its folder
+      # row and name put it (`Location`, its folder chain read in this
+      # transaction). The stored-row reads (`:all`, `:crdt`) keep the stored
+      # path their callers write back.
       {:ok, result} =
         Repo.with_tenant(user.id, fn ->
           case Repo.one(query) do
-            %Note{} = note -> {:ok, decrypt_or_raise!(note, user)}
-            %{tail_ids__: _} = row -> {:ok, tail_result(row)}
-            nil -> {:error, :not_found}
+            %Note{} = note ->
+              {:ok, decrypt_or_raise!(note, user)}
+
+            %{tail_ids__: _} = row ->
+              {note, tail} = tail_result(row)
+              {:ok, {note, tail, Location.chains([note])}}
+
+            nil ->
+              {:error, :not_found}
           end
         end)
 
       # The rebuild runs after the transaction, so no pooled connection is held
       # across a doc rebuild.
       case result do
-        {:ok, {note, tail}} -> {:ok, current_note(user, decrypt_or_raise!(note, user), tail)}
-        other -> other
+        {:ok, {note, tail, chains}} ->
+          [note] = Location.put_paths(user, [decrypt_or_raise!(note, user)], chains)
+          {:ok, current_note(user, note, tail)}
+
+        other ->
+          other
       end
     end
   end
@@ -5752,7 +5766,7 @@ defmodule Engram.Notes do
     names? = Location.on?()
 
     # The resolved row replaces the page's copy wholesale, so every field in
-    # the emitted change comes from one coherent DB row — EXCEPT `seq`,
+    # the emitted change comes from one coherent DB row, EXCEPT `seq`,
     # which stays the page's below because it is the cursor this page is
     # keyed on and moving it would break pagination. So a checkpoint landing
     # mid-page yields post-checkpoint content under a pre-checkpoint seq, and
@@ -7206,16 +7220,24 @@ defmodule Engram.Notes do
               )
 
             query = if after_id, do: where(query, [n], n.id > ^after_id), else: query
-            Repo.all(query)
+            rows = Repo.all(query)
+            # Their folder chains, in this snapshot (`Location.chains/1`).
+            {rows, Location.chains(rows)}
           end)
 
+        {rows, chains} = rows
         {page, next_cursor} = Pager.paginate(rows, limit, scope, & &1.id)
 
         # Phase B.4: title is virtual — sort the page by decrypted title in
         # BEAM since SQL can't order by encrypted columns. Pages themselves
         # are id-ordered; a client wanting a global title order sorts the
         # concatenated pages.
-        notes = page |> decrypt_or_raise!(user) |> Enum.sort_by(& &1.title)
+        notes =
+          page
+          |> decrypt_or_raise!(user)
+          |> then(&Location.put_paths(user, &1, chains))
+          |> Enum.sort_by(& &1.title)
+
         {:ok, %{notes: notes, next_cursor: next_cursor}}
       end
     else

@@ -57,10 +57,23 @@ defmodule Engram.Notes.LocationTest do
     {:ok, fk} = Crypto.dek_filter_key(user)
     {ct, nonce} = Rows.encrypt_name(dek, folder_id, new_name)
 
-    sql!(
-      "UPDATE folders SET name_ciphertext = $2, name_nonce = $3, name_hmac = $4 WHERE id = $1",
-      [dump(folder_id), ct, nonce, Rows.name_hmac(fk, new_name)]
-    )
+    %{rows: [[vault_id]]} =
+      sql!(
+        "UPDATE folders SET name_ciphertext = $2, name_nonce = $3, name_hmac = $4 " <>
+          "WHERE id = $1 RETURNING vault_id",
+        [dump(folder_id), ct, nonce, Rows.name_hmac(fk, new_name)]
+      )
+
+    # Its own path key too (S5 keeps that one row's keys current).
+    {:ok, path} =
+      Repo.with_tenant!(user.id, fn ->
+        Rows.path_by_id(user, Ecto.UUID.load!(vault_id), folder_id)
+      end)
+
+    sql!("UPDATE folders SET full_path_hmac = $2 WHERE id = $1", [
+      dump(folder_id),
+      Rows.path_hmac(fk, path)
+    ])
   end
 
   defp folder_id(user, path), do: Engram.FolderRows.tree(user)[path].id
@@ -216,6 +229,24 @@ defmodule Engram.Notes.LocationTest do
 
       {:ok, %{changes: [meta]}} = Notes.list_changes_by_seq(u, v, 0, fields: :meta)
       assert meta.path == "A/C/x.md"
+    end
+
+    test "get_note_by_id shows the derived path; the stored-row read keeps the stored one",
+         %{user: u, vault: v, note: note} do
+      rename_folder_row!(u, folder_id(u, "A/B"), "C")
+      names_on!()
+
+      assert {:ok, %{path: "A/C/x.md", folder: "A/C"}} = Notes.get_note_by_id(u, v, note.id)
+      assert {:ok, %{path: "A/B/x.md"}} = Notes.get_note_row_by_id(u, v, note.id)
+    end
+
+    test "a folder listing (MCP list_folder) shows the derived paths",
+         %{user: u, vault: v} do
+      rename_folder_row!(u, folder_id(u, "A/B"), "C")
+      names_on!()
+
+      assert {:ok, %{notes: [%{path: "A/C/x.md"}]}} =
+               Notes.list_notes_in_folder_page(u, v, "A/C")
     end
 
     test "a tombstone keeps the path it was deleted at", %{user: u, vault: v} do
