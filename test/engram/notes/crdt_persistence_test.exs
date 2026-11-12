@@ -1016,6 +1016,40 @@ defmodule Engram.Notes.CrdtPersistenceTest do
       assert tail_count(user, note.id) == 1
       assert_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}
     end
+
+    # An old plugin seeds a CRLF disk file into a live room as raw `\r`
+    # inserts. The room is the one healer: it strips them in its own update
+    # path, as ONE transaction (one tail row, one broadcast).
+    test "a live update that inserts CRs is healed by the room in one transaction", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      room = start_room(user, vault, note)
+
+      :ok =
+        SharedDoc.update_doc(room, fn doc ->
+          doc |> Yex.Doc.get_text(CrdtBridge.text_name()) |> Yex.Text.insert(0, "a\r\nb\rc\r\n")
+        end)
+
+      # The heal is the room's next message after the client update.
+      _ = :sys.get_state(room)
+      _ = :sys.get_state(room)
+
+      assert CrdtBridge.body_of(SharedDoc.get_doc(room)) == "a\nb\nc\nbase"
+      assert tail_count(user, note.id) == 2
+    end
+
+    test "a live update with no CR mints no heal", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      room = start_room(user, vault, note)
+
+      :ok =
+        SharedDoc.update_doc(room, fn doc ->
+          doc |> Yex.Doc.get_text(CrdtBridge.text_name()) |> Yex.Text.insert(0, "a\nb")
+        end)
+
+      _ = :sys.get_state(room)
+      _ = :sys.get_state(room)
+      assert tail_count(user, note.id) == 1
+    end
   end
 
   # ── short-lived rooms compact the tail they hold ───────────────────────────

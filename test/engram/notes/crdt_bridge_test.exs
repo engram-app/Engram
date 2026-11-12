@@ -442,10 +442,102 @@ defmodule Engram.Notes.CrdtBridgeTest do
     end
   end
 
-  describe "ingest_plaintext/2 on a doc that still holds CRs" do
-    # A legacy (never opened) note's doc is CRLF; the write path hands ingest
-    # LF text. Healing the CRs one by one first keeps the body diff to the
-    # real edit, so a concurrent tail edit between two CRs is not undone.
+  describe "a writer other than the room, on a doc that still holds CRs" do
+    # Docs seeded before LF-only (or by an old plugin) still hold CRs. Only the
+    # room removes them; every other writer diffs its LF text against an LF
+    # VIEW of the body and maps the edit back to raw offsets, so it never
+    # emits an op on a CR already in the doc.
+    defp raw_doc(body) do
+      doc = CrdtBridge.new_doc()
+      doc |> Yex.Doc.get_text(CrdtBridge.text_name()) |> Yex.Text.insert(0, body)
+      doc
+    end
+
+    defp fork(doc) do
+      {:ok, state} = Yex.encode_state_as_update(doc)
+      {:ok, a} = CrdtBridge.doc_from_state(state)
+      {:ok, b} = CrdtBridge.doc_from_state(state)
+      {a, b}
+    end
+
+    defp sync(a, b) do
+      {:ok, from_a} = Yex.encode_state_as_update(a)
+      {:ok, from_b} = Yex.encode_state_as_update(b)
+      :ok = Yex.apply_update(a, from_b)
+      :ok = Yex.apply_update(b, from_a)
+    end
+
+    test "an LF write leaves the doc's CRs alone and applies only the edit" do
+      doc = raw_doc("a\r\nb\rc\r\n")
+      :ok = CrdtBridge.ingest_plaintext(doc, "a\nbX\nc\nd\n", lf_view: true)
+      assert CrdtBridge.body_of(doc) == "a\r\nbX\rc\r\nd\n"
+    end
+
+    test "an edit next to a CRLF never splits the pair" do
+      doc = raw_doc("a\r\nb")
+      :ok = CrdtBridge.ingest_plaintext(doc, "aX\nb", lf_view: true)
+      assert CrdtBridge.body_of(doc) == "aX\r\nb"
+    end
+
+    test "an unchanged LF write mints no ops on a CRLF doc" do
+      doc = raw_doc("a\r\nb\r\n")
+      sv = Yex.encode_state_vector!(doc)
+      :ok = CrdtBridge.ingest_plaintext(doc, "a\nb\n", lf_view: true)
+      assert Yex.encode_state_vector!(doc) == sv
+    end
+
+    test "a deletion spanning a CRLF takes the CR with it" do
+      doc = raw_doc("a\r\nb\r\nc")
+      :ok = CrdtBridge.ingest_plaintext(doc, "ac", lf_view: true)
+      assert CrdtBridge.body_of(doc) == "ac"
+    end
+
+    test "without lf_view (canvas) the write lands byte-exact" do
+      doc = raw_doc("{\r\n}")
+      :ok = CrdtBridge.ingest_plaintext(doc, "{\n}")
+      assert CrdtBridge.body_of(doc) == "{\n}"
+    end
+
+    # Plugin-style seed (LF-view diff) racing the room heal on a lone-CR note.
+    test "a concurrent LF-view seed plus the room heal give ONE line break" do
+      {seed, room} = fork(raw_doc("a\rb\n"))
+      :ok = CrdtBridge.ingest_plaintext(seed, "a\nb\nedit\n", lf_view: true)
+      :ok = CrdtBridge.normalize_doc(room)
+      sync(seed, room)
+      assert CrdtBridge.body_of(seed) == "a\nb\nedit\n"
+      assert CrdtBridge.body_of(room) == "a\nb\nedit\n"
+    end
+
+    # Review MED 2: a REST/MCP write right after a room open. The room's heal
+    # is in the tail, the snapshot still holds the lone CR.
+    test "a three-way write after a room heal does not double a lone CR" do
+      {:ok, %{state: snap}} = CrdtBridge.merge_plaintext(nil, "a\rb\n")
+      {:ok, snapshot_doc} = CrdtBridge.doc_from_state(snap)
+      {:ok, tail_doc} = CrdtBridge.doc_from_state(snap)
+      :ok = CrdtBridge.normalize_doc(tail_doc)
+
+      assert {:ok, %{text: text}} =
+               CrdtBridge.merge_plaintext_relative_to_snapshot(
+                 snapshot_doc,
+                 tail_doc,
+                 "a\nb\nx",
+                 lf_view: true
+               )
+
+      assert text == "a\nb\nx"
+    end
+
+    test "a classic-Mac note written by two writers converges with no doubling" do
+      {w1, w2} = fork(raw_doc("one\rtwo\rthree\r"))
+      :ok = CrdtBridge.ingest_plaintext(w1, "ONE\ntwo\nthree\n", lf_view: true)
+      :ok = CrdtBridge.ingest_plaintext(w2, "one\ntwo\nTHREE\n", lf_view: true)
+      sync(w1, w2)
+      {room, _} = fork(w1)
+      :ok = CrdtBridge.normalize_doc(room)
+      assert CrdtBridge.body_of(room) == "ONE\ntwo\nTHREE\n"
+    end
+
+    # A concurrent tail edit between two CRs survives the three-way merge.
     test "the three-way merge keeps a tail delete that sits between CRs" do
       {:ok, %{state: snap}} = CrdtBridge.merge_plaintext(nil, "a\r\none two\r\nb\r\n")
       {:ok, snapshot_doc} = CrdtBridge.doc_from_state(snap)
@@ -456,10 +548,11 @@ defmodule Engram.Notes.CrdtBridgeTest do
                CrdtBridge.merge_plaintext_relative_to_snapshot(
                  snapshot_doc,
                  tail_doc,
-                 "a\none two\nb\n"
+                 "a\none two\nb\nz\n",
+                 lf_view: true
                )
 
-      assert text == "a\none\nb\n"
+      assert text == "a\r\none\r\nb\r\nz\n"
     end
 
     test "ingesting the same text twice mints no ops the second time" do
@@ -467,6 +560,26 @@ defmodule Engram.Notes.CrdtBridgeTest do
       :ok = CrdtBridge.ingest_plaintext(doc, "---\ntitle: T\n---\na\nb\n")
       sv = Yex.encode_state_vector!(doc)
       :ok = CrdtBridge.ingest_plaintext(doc, "---\ntitle: T\n---\na\nb\n")
+      assert Yex.encode_state_vector!(doc) == sv
+    end
+  end
+
+  describe "normalize_doc/1 and raw frontmatter" do
+    # Review LOW 4: a degraded key's verbatim span ingested as CRLF.
+    test "rewrites a raw frontmatter span that holds CRs, and nothing when clean" do
+      doc = CrdtBridge.new_doc()
+      raw = Yex.Doc.get_map(doc, "frontmatter_raw")
+      Yex.Map.set(raw, "date", "date: {[a, b]: 1}\r\n")
+      Yex.Map.set(raw, "ok", "ok: {[c]: 2}\n")
+      :ok = CrdtBridge.normalize_doc(doc)
+
+      assert CrdtBridge.raw_frontmatter_of(doc) == %{
+               "date" => "date: {[a, b]: 1}\n",
+               "ok" => "ok: {[c]: 2}\n"
+             }
+
+      sv = Yex.encode_state_vector!(doc)
+      :ok = CrdtBridge.normalize_doc(doc)
       assert Yex.encode_state_vector!(doc) == sv
     end
   end
