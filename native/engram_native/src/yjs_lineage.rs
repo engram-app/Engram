@@ -1,4 +1,5 @@
-//! Rival-lineage detector over a Yjs v1 update (read-only audit).
+//! Rival-lineage detector over a Yjs v1 update (read-only audit), and the
+//! room's "did this update insert a CR" check ([`inserts_cr`]).
 //!
 //! A ROOT insert is an item with neither an origin nor a right origin: it was
 //! inserted into an EMPTY sequence. Yjs keeps deleted neighbours as origins,
@@ -47,75 +48,35 @@ pub type RootLineage = (u64, u32, u32);
 /// "original deleted, rival live" (a cleared note a fresh device re-seeded):
 /// both leave one live lineage, so the caller needs the dead ones too.
 pub fn root_inserts(update: &[u8], root: &str) -> Result<Vec<RootLineage>, Error> {
-    let mut d = DecoderV1::new(Cursor::new(update));
-    let clients: u32 = d.read_var()?;
     let mut lineages: Vec<Lineage> = Vec::new();
-    for _ in 0..clients {
-        let structs: u32 = d.read_var()?;
-        let client = d.read_client()?;
-        let mut clock: u32 = d.read_var()?;
-        // Whether the previous struct of this client belongs to the last lineage.
-        let mut extends = false;
-        for _ in 0..structs {
-            match d.read_info()? {
-                BLOCK_SKIP_REF_NUMBER => {
-                    let len: u32 = d.read_var()?;
-                    clock += len;
-                    extends = false;
-                }
-                BLOCK_GC_REF_NUMBER => {
-                    clock += d.read_len()?;
-                    extends = false;
-                }
-                info => {
-                    let has_origin = info & HAS_ORIGIN != 0;
-                    let has_right = info & HAS_RIGHT_ORIGIN != 0;
-                    let origin = if has_origin {
-                        Some(d.read_left_id()?)
-                    } else {
-                        None
-                    };
-                    if has_right {
-                        d.read_right_id()?;
-                    }
-                    let mut is_root = false;
-                    if !has_origin && !has_right {
-                        is_root = if d.read_parent_info()? {
-                            d.read_string()? == root
-                        } else {
-                            d.read_left_id()?; // nested type: never the body
-                            false
-                        };
-                        if info & HAS_PARENT_SUB != 0 {
-                            d.read_string()?;
-                            is_root = false; // a map entry, not a sequence insert
-                        }
-                    }
-                    let len = ItemContent::decode(&mut d, info)?.len(OffsetKind::Utf16);
-                    let continues = extends
-                        && !has_right
-                        && origin.is_some_and(|o| o.client == client && o.clock + 1 == clock);
-                    if is_root {
-                        lineages.push(Lineage {
-                            client,
-                            clocks: clock..clock + len,
-                        });
-                        extends = true;
-                    } else if continues {
-                        if let Some(l) = lineages.last_mut() {
-                            l.clocks.end = clock + len;
-                        }
-                    } else {
-                        extends = false;
-                    }
-                    clock += len;
-                }
+    // Whether the previous struct of this client belongs to the last lineage.
+    let mut extends = false;
+    let deleted = walk_structs(update, |s| {
+        let Some(it) = s else {
+            extends = false;
+            return;
+        };
+        let len = it.content.len(OffsetKind::Utf16);
+        let is_root = it.root.as_deref() == Some(root);
+        let continues = extends
+            && !it.has_right
+            && it
+                .origin
+                .is_some_and(|o| o.client == it.client && o.clock + 1 == it.clock);
+        if is_root {
+            lineages.push(Lineage {
+                client: it.client,
+                clocks: it.clock..it.clock + len,
+            });
+            extends = true;
+        } else if continues {
+            if let Some(l) = lineages.last_mut() {
+                l.clocks.end = it.clock + len;
             }
+        } else {
+            extends = false;
         }
-    }
-    // The trailing delete set. A root GC'd to `ItemContent::Deleted` is in it
-    // too, so this one check covers both.
-    let deleted = DeleteSet::decode(&mut d)?;
+    })?;
     Ok(lineages
         .into_iter()
         .map(|l| {
@@ -128,7 +89,101 @@ pub fn root_inserts(update: &[u8], root: &str) -> Result<Vec<RootLineage>, Error
         .collect())
 }
 
-/// Clock units of `span` covered by `ranges` (may overlap or be unsorted).
+/// Whether any text the update inserts holds a `\r`. O(update): the room
+/// calls it on every update it applies, to heal only when one did. Y.Text
+/// inserts are `ItemContent::String`; map values (frontmatter) are `Any` and
+/// never match. Same input rule as [`root_inserts`]: yrs's own encode (the
+/// room's update monitor emits exactly that), never raw client bytes.
+pub fn inserts_cr(update: &[u8]) -> Result<bool, Error> {
+    let mut found = false;
+    walk_structs(update, |s| {
+        if let Some(Item {
+            content: ItemContent::String(text),
+            ..
+        }) = s
+        {
+            found |= text.as_str().contains('\r');
+        }
+    })?;
+    Ok(found)
+}
+
+/// One item struct of a v1 update, as [`walk_structs`] reads it.
+struct Item {
+    client: u64,
+    clock: u32,
+    origin: Option<yrs::ID>,
+    has_right: bool,
+    /// The root type a ROOT insert (no origin, no right origin) was written
+    /// into; `None` for every other item, nested types and map entries included.
+    root: Option<String>,
+    content: ItemContent,
+}
+
+/// Calls `f` for every struct of `update` in order: `Some(item)` for an item,
+/// `None` for a skip or GC run (a break in a client's clock sequence). Returns
+/// the trailing delete set. Shared by every reader of a stored update here.
+fn walk_structs(update: &[u8], mut f: impl FnMut(Option<&Item>)) -> Result<DeleteSet, Error> {
+    let mut d = DecoderV1::new(Cursor::new(update));
+    let clients: u32 = d.read_var()?;
+    for _ in 0..clients {
+        let structs: u32 = d.read_var()?;
+        let client = d.read_client()?;
+        let mut clock: u32 = d.read_var()?;
+        for _ in 0..structs {
+            match d.read_info()? {
+                BLOCK_SKIP_REF_NUMBER => {
+                    let len: u32 = d.read_var()?;
+                    clock += len;
+                    f(None);
+                }
+                BLOCK_GC_REF_NUMBER => {
+                    clock += d.read_len()?;
+                    f(None);
+                }
+                info => {
+                    let has_origin = info & HAS_ORIGIN != 0;
+                    let has_right = info & HAS_RIGHT_ORIGIN != 0;
+                    let origin = if has_origin {
+                        Some(d.read_left_id()?)
+                    } else {
+                        None
+                    };
+                    if has_right {
+                        d.read_right_id()?;
+                    }
+                    let mut root = None;
+                    if !has_origin && !has_right {
+                        if d.read_parent_info()? {
+                            root = Some(d.read_string()?.to_owned());
+                        } else {
+                            d.read_left_id()?; // nested type: never the body
+                        }
+                        if info & HAS_PARENT_SUB != 0 {
+                            d.read_string()?;
+                            root = None; // a map entry, not a sequence insert
+                        }
+                    }
+                    let content = ItemContent::decode(&mut d, info)?;
+                    let len = content.len(OffsetKind::Utf16);
+                    f(Some(&Item {
+                        client,
+                        clock,
+                        origin,
+                        has_right,
+                        root,
+                        content,
+                    }));
+                    clock += len;
+                }
+            }
+        }
+    }
+    // The trailing delete set. A root GC'd to `ItemContent::Deleted` is in it
+    // too, so this one check covers both.
+    DeleteSet::decode(&mut d)
+}
+
 fn covered<'a>(ranges: impl Iterator<Item = &'a Range<u32>>, span: &Range<u32>) -> u32 {
     let mut parts: Vec<Range<u32>> = ranges
         .map(|r| r.start.max(span.start)..r.end.min(span.end))
@@ -286,6 +341,21 @@ mod tests {
         let (a, at) = doubled();
         remove(&a, at + 10, 20);
         assert_eq!(roots(&a), vec![(1, 17, 17), (2, 10, 30)]);
+    }
+
+    #[test]
+    fn inserts_cr_sees_only_text_holding_a_cr() {
+        let doc = seeded(1, "a\nb");
+        let sv = doc.transact().state_vector();
+        let t = doc.get_or_insert_text("content");
+        t.insert(&mut doc.transact_mut(), 1, "\r");
+        let delta = doc.transact().encode_state_as_update_v1(&sv);
+        assert!(inserts_cr(&delta).unwrap());
+        assert!(!inserts_cr(&state(&seeded(2, "a\nb"))).unwrap());
+        let m = doc.get_or_insert_map("frontmatter");
+        let sv = doc.transact().state_vector();
+        m.insert(&mut doc.transact_mut(), "k", "v\r");
+        assert!(!inserts_cr(&doc.transact().encode_state_as_update_v1(&sv)).unwrap());
     }
 
     #[test]

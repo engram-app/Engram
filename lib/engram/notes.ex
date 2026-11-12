@@ -3447,12 +3447,15 @@ defmodule Engram.Notes do
     merge_crdt(existing, incoming, user, note_id, vault_id, path, merge_doc)
   end
 
+  # A markdown merge diffs against the doc's LF view, so it never emits an op
+  # on a CR already in the doc: only the room heals those (LineEndings).
+  defp merge_opts(path), do: [lf_view: CrdtBridge.markdown_path?(path)]
+
   # A locked read-modify-write: `merge_doc` is this row's snapshot with the tail
   # already replayed, and `incoming_content` was derived from its projection.
   # Diffing two-way into it applies exactly the caller's edit. The three-way
   # path below would re-insert every tail edit, because the incoming text
   # already carries them and the snapshot ancestor does not.
-
   defp merge_crdt(
          %Note{},
          incoming_content,
@@ -3462,7 +3465,8 @@ defmodule Engram.Notes do
          path,
          %Yex.Doc{} = doc
        ) do
-    with {:ok, merged} <- CrdtBridge.merge_plaintext_into_doc(doc, incoming_content),
+    with {:ok, merged} <-
+           CrdtBridge.merge_plaintext_into_doc(doc, incoming_content, merge_opts(path)),
          do: crdt_merge_result(merged, user, note_id, path)
   end
 
@@ -3484,7 +3488,8 @@ defmodule Engram.Notes do
 
     case CrdtPersistence.replay_tail(doc, user, note_id, vault_id) do
       [] ->
-        with {:ok, merged} <- CrdtBridge.merge_plaintext_into_doc(doc, incoming_content),
+        with {:ok, merged} <-
+               CrdtBridge.merge_plaintext_into_doc(doc, incoming_content, merge_opts(path)),
              do: crdt_merge_result(merged, user, note_id, path)
 
       [_ | _] ->
@@ -3527,7 +3532,7 @@ defmodule Engram.Notes do
           # Brand-new insert: no note row, no tail rows can exist yet. Skip the
           # replay entirely and call merge_plaintext/2 directly (restores the
           # simple two-way path that predates tail-aware merging).
-          CrdtBridge.merge_plaintext(nil, incoming_content)
+          CrdtBridge.merge_plaintext(nil, incoming_content, merge_opts(path))
 
         is_nil(prior_state) ->
           # Pre-CRDT note (existing %Note{} with nil crdt_state columns): tail
@@ -3536,7 +3541,7 @@ defmodule Engram.Notes do
           # text against the tail-inclusive doc to avoid full-body duplication.
           with {:ok, doc} <- CrdtBridge.doc_from_state(nil) do
             _count = CrdtPersistence.replay_tail(doc, user, note_id, vault_id)
-            CrdtBridge.merge_plaintext_into_doc(doc, incoming_content)
+            CrdtBridge.merge_plaintext_into_doc(doc, incoming_content, merge_opts(path))
           end
 
         true ->
@@ -3551,7 +3556,12 @@ defmodule Engram.Notes do
               # two-way path as a nil snapshot (reusing the hydrated doc keeps
               # the empty snapshot's lineage continuity).
               _count = CrdtPersistence.replay_tail(snapshot_doc, user, note_id, vault_id)
-              CrdtBridge.merge_plaintext_into_doc(snapshot_doc, incoming_content)
+
+              CrdtBridge.merge_plaintext_into_doc(
+                snapshot_doc,
+                incoming_content,
+                merge_opts(path)
+              )
             else
               # Two independent docs from the same snapshot:
               # - snapshot_doc: the shared ancestor; the incoming diff is applied
@@ -3568,7 +3578,8 @@ defmodule Engram.Notes do
                 CrdtBridge.merge_plaintext_relative_to_snapshot(
                   snapshot_doc,
                   tail_doc,
-                  incoming_content
+                  incoming_content,
+                  merge_opts(path)
                 )
               end
             end

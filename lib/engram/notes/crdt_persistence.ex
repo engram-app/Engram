@@ -33,7 +33,7 @@ defmodule Engram.Notes.CrdtPersistence do
   # observable symptom if that ever stops holding.
 
   import Ecto.Query
-  alias Engram.{Accounts, Crypto, Repo}
+  alias Engram.{Accounts, Crypto, Native, Repo}
   alias Engram.Logger.Metadata
 
   alias Engram.Notes.{
@@ -189,7 +189,10 @@ defmodule Engram.Notes.CrdtPersistence do
             # `notes.content` is a DERIVED projection maintained by the
             # checkpoint materializer.
 
-            if markdown_doc?(note, user), do: :ok = CrdtBridge.normalize_doc(doc)
+            markdown? = markdown_doc?(note, user)
+            if markdown?, do: :ok = CrdtBridge.normalize_doc(doc)
+            # The room's update path heals CRs live updates insert (update_v1/4).
+            if in_room?(), do: Process.put(:crdt_markdown, markdown?)
 
             if in_room?(),
               do: Process.put(:crdt_clean, applied == [] and projects?(doc, note, user))
@@ -225,7 +228,23 @@ defmodule Engram.Notes.CrdtPersistence do
     # Any doc change after bind ends the read-only close skip (`unbind/3`),
     # even one whose append raises before it is counted.
     Process.put(:crdt_clean, false)
-    append_update(state, update, name, doc)
+    state = append_update(state, update, name, doc)
+    heal_inserted_cr(update, doc)
+    state
+  end
+
+  # The room is the ONE actor that removes CRs already in a markdown doc (see
+  # `Engram.Notes.LineEndings`). An old plugin seeds a CRLF disk file as raw
+  # `\r` inserts while the room is open, and the room may stay open for hours,
+  # so the open-time heal alone is not enough. The check is O(update) (the
+  # NIF reads what the update inserted), so a keystroke never scans the body.
+  # The heal is its own transaction: its update comes back through here to be
+  # appended and broadcast, and inserts no CR, so it stops there.
+  defp heal_inserted_cr(update, doc) do
+    if Process.get(:crdt_markdown, false) and Native.yjs_inserts_cr(update) == {:ok, true},
+      do: :ok = CrdtBridge.heal_line_endings(doc)
+
+    :ok
   end
 
   # A row this big is a whole body inserted through the room (genesis

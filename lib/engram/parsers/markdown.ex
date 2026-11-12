@@ -11,6 +11,7 @@ defmodule Engram.Parsers.Markdown do
   alias Engram.Notes.Frontmatter
   alias Engram.Notes.Helpers
   alias Engram.Notes.KeyAliases
+  alias Engram.Notes.LineEndings
   alias Engram.Notes.OkfFields
 
   # #1620 — bump when a change alters the chunks `parse/2` emits for input it
@@ -110,7 +111,7 @@ defmodule Engram.Parsers.Markdown do
     content =
       content
       |> Helpers.scrub_utf8()
-      |> String.replace("\r\n", "\n")
+      |> LineEndings.to_lf()
       |> String.replace_prefix("\uFEFF", "")
 
     {folder, title} =

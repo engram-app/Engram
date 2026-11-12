@@ -16,6 +16,7 @@ defmodule Engram.Notes.CrdtBridge do
   alias Engram.Native
   alias Engram.Notes.CrdtTransport
   alias Engram.Notes.Frontmatter
+  alias Engram.Notes.LineEndings
 
   @text_name "content"
   @frontmatter_name "frontmatter"
@@ -169,12 +170,13 @@ defmodule Engram.Notes.CrdtBridge do
   This is a thin wrapper around `merge_plaintext_into_doc/2` for callers that
   hold a raw state binary (or nil for a fresh doc). Use `merge_plaintext_into_doc/2`
   directly when you already hold a doc (e.g. after replaying the tail-log).
+  `opts` as for `ingest_plaintext/3`.
   """
-  @spec merge_plaintext(binary() | nil, String.t()) ::
+  @spec merge_plaintext(binary() | nil, String.t(), keyword()) ::
           {:ok, %{state: binary(), text: String.t()}} | {:error, term()}
-  def merge_plaintext(state, incoming) when is_binary(incoming) do
+  def merge_plaintext(state, incoming, opts \\ []) when is_binary(incoming) do
     with {:ok, doc} <- doc_from_state(state) do
-      merge_plaintext_into_doc(doc, incoming)
+      merge_plaintext_into_doc(doc, incoming, opts)
     end
   end
 
@@ -192,12 +194,14 @@ defmodule Engram.Notes.CrdtBridge do
   For a convergent three-way merge where `doc` was built from a snapshot plus
   a replayed update-log tail, use `merge_plaintext_relative_to_snapshot/3`
   instead — that preserves both the tail edits and the incoming edits as
-  concurrent CRDT operations on the shared ancestor.
+  concurrent CRDT operations on the shared ancestor. `opts` as for
+  `ingest_plaintext/3`.
   """
-  @spec merge_plaintext_into_doc(Yex.Doc.t(), String.t()) ::
+  @spec merge_plaintext_into_doc(Yex.Doc.t(), String.t(), keyword()) ::
           {:ok, %{state: binary(), text: String.t()}} | {:error, term()}
-  def merge_plaintext_into_doc(%Yex.Doc{} = doc, incoming) when is_binary(incoming) do
-    with :ok <- ingest_plaintext(doc, incoming),
+  def merge_plaintext_into_doc(%Yex.Doc{} = doc, incoming, opts \\ [])
+      when is_binary(incoming) do
+    with :ok <- ingest_plaintext(doc, incoming, opts),
          {:ok, encoded} <- Yex.encode_state_as_update(doc) do
       {:ok, %{state: encoded, text: project_doc(doc)}}
     else
@@ -219,14 +223,17 @@ defmodule Engram.Notes.CrdtBridge do
   reuse a doc after calling this function.
 
   `tail_doc` is mutated (the incoming update is applied). Pass a doc built
-  from the snapshot binary with the tail already replayed.
+  from the snapshot binary with the tail already replayed. `opts` as for
+  `ingest_plaintext/3`: with `lf_view: true` the captured ops never touch a CR
+  in the snapshot, so a room heal already in the tail is never repeated.
   """
-  @spec merge_plaintext_relative_to_snapshot(Yex.Doc.t(), Yex.Doc.t(), String.t()) ::
+  @spec merge_plaintext_relative_to_snapshot(Yex.Doc.t(), Yex.Doc.t(), String.t(), keyword()) ::
           {:ok, %{state: binary(), text: String.t()}} | {:error, term()}
   def merge_plaintext_relative_to_snapshot(
         %Yex.Doc{} = snapshot_doc,
         %Yex.Doc{} = tail_doc,
-        incoming
+        incoming,
+        opts \\ []
       )
       when is_binary(incoming) do
     # Capture the snapshot's current state vector BEFORE applying the diff.
@@ -237,7 +244,7 @@ defmodule Engram.Notes.CrdtBridge do
     # theoretically possible but Yjs-inherent and accepted as negligible.
     sv_before = Yex.encode_state_vector!(snapshot_doc)
 
-    with :ok <- ingest_plaintext(snapshot_doc, incoming),
+    with :ok <- ingest_plaintext(snapshot_doc, incoming, opts),
          {:ok, incoming_update} <- Yex.encode_state_as_update(snapshot_doc, sv_before),
          :ok <- Yex.apply_update(tail_doc, incoming_update),
          {:ok, encoded} <- Yex.encode_state_as_update(tail_doc) do
@@ -255,18 +262,53 @@ defmodule Engram.Notes.CrdtBridge do
   astral codepoint (emoji, U+10000+) contributes 2 to every index and the diff
   never slices through a surrogate pair. The span comes from
   `Engram.Native.text_diff/2`.
+
+  `lf_view: true` (markdown, `incoming` already LF): when the body still holds
+  CRs, the diff runs against its LF view and maps back to raw offsets, so no
+  op lands on a CR already in the doc. Only the room removes those
+  (`normalize_doc/1`, `heal_line_endings/1`): a lone `\\r` heal is a delete
+  plus an insert, and two actors healing the same one leave two line breaks.
   """
-  @spec diff_into_text(Yex.Text.t(), String.t()) :: :ok
-  def diff_into_text(%Yex.Text{} = text, incoming) when is_binary(incoming) do
+  @spec diff_into_text(Yex.Text.t(), String.t(), keyword()) :: :ok
+  def diff_into_text(%Yex.Text{} = text, incoming, opts \\ []) when is_binary(incoming) do
     current = Yex.Text.to_string(text)
 
-    if current != incoming do
-      {prefix_u16, delete_u16, start, len} = Native.text_diff(current, incoming)
-      if delete_u16 > 0, do: Yex.Text.delete(text, prefix_u16, delete_u16)
-      if len > 0, do: Yex.Text.insert(text, prefix_u16, binary_part(incoming, start, len))
+    if Keyword.get(opts, :lf_view, false) and String.contains?(current, "\r") and
+         not String.contains?(incoming, "\r") do
+      diff_against_lf_view(text, current, incoming)
+    else
+      if current != incoming do
+        {prefix_u16, delete_u16, start, len} = Native.text_diff(current, incoming)
+        if delete_u16 > 0, do: Yex.Text.delete(text, prefix_u16, delete_u16)
+        if len > 0, do: Yex.Text.insert(text, prefix_u16, binary_part(incoming, start, len))
+      end
     end
 
     :ok
+  end
+
+  # The view is `LineEndings.to_lf(raw)`: a `\r\n` is one `\n` there (the raw
+  # `\r` dropped), a lone `\r` is a `\n` at the same offset. So a view offset
+  # `v` sits `count(CRLF whose view newline is before v)` units earlier than
+  # its raw offset. A view newline that came from a CRLF maps to its `\r`, so
+  # an edit next to it never lands between the `\r` and the `\n`, and a
+  # deletion that covers it takes both.
+  defp diff_against_lf_view(text, raw, incoming) do
+    view = LineEndings.to_lf(raw)
+
+    if view != incoming do
+      {prefix_u16, delete_u16, start, len} = Native.text_diff(view, incoming)
+      crlf = :binary.matches(raw, "\r\n") |> Enum.map(&elem(&1, 0))
+
+      view_newlines =
+        raw |> Native.utf16_offsets(crlf) |> Enum.with_index(fn cr_u16, i -> cr_u16 - i end)
+
+      to_raw = fn v -> v + Enum.count(view_newlines, &(&1 < v)) end
+      from = to_raw.(prefix_u16)
+      until = to_raw.(prefix_u16 + delete_u16)
+      if until > from, do: Yex.Text.delete(text, from, until - from)
+      if len > 0, do: Yex.Text.insert(text, from, binary_part(incoming, start, len))
+    end
   end
 
   @doc """
@@ -278,9 +320,13 @@ defmodule Engram.Notes.CrdtBridge do
   front because the frontmatter map is written before the body diff, which
   would otherwise raise with the map half-applied. `String.valid?/1` costs
   about 6 ms on a 1.2 MB note (min of 5), small next to the ingest itself.
+
+  `opts`: `lf_view: true` for a markdown doc whose caller converted
+  `plaintext` to LF (see `diff_into_text/3`); the default diffs raw, which a
+  canvas or base doc needs to land byte-exact.
   """
-  @spec ingest_plaintext(Yex.Doc.t(), String.t()) :: :ok
-  def ingest_plaintext(%Yex.Doc{} = doc, plaintext) when is_binary(plaintext) do
+  @spec ingest_plaintext(Yex.Doc.t(), String.t(), keyword()) :: :ok
+  def ingest_plaintext(%Yex.Doc{} = doc, plaintext, opts \\ []) when is_binary(plaintext) do
     if not String.valid?(plaintext) do
       raise ArgumentError, "ingest_plaintext: plaintext is not valid UTF-8"
     end
@@ -298,12 +344,7 @@ defmodule Engram.Notes.CrdtBridge do
       end
 
     apply_frontmatter(doc, order, values, raws)
-    text = Yex.Doc.get_text(doc, @text_name)
-    # A legacy doc can still hold CRs while the incoming text is LF. Strip them
-    # one by one first so the diff below is only the real edit, not one span
-    # from the first CR to the last that would undo a concurrent tail edit.
-    if not String.contains?(body, "\r"), do: strip_cr(text)
-    :ok = diff_into_text(text, body)
+    :ok = diff_into_text(Yex.Doc.get_text(doc, @text_name), body, opts)
     :ok
   end
 
@@ -313,11 +354,13 @@ defmodule Engram.Notes.CrdtBridge do
   a key collision; fence-only keys are appended to the order array) and strip
   the fence from the body. Loops so stacked fences fully heal in one call.
 
-  Also converts the body to LF (markdown docs hold LF only, see
-  `Engram.Notes.LineEndings`) with one small edit per CR. Runs on every room
+  Also runs the line-ending heal (`heal_line_endings/1`). Runs on every room
   open, unconditionally: an old plugin can write CRs or a body fence back
   through the room at any time, and both checks are a scan of a body this
-  already reads. Callers gate it on `markdown_path?/1`.
+  already reads. A heal that already ran is never repeated by anyone: its ops
+  reach every replica, and no other writer touches a CR already in the doc
+  (`diff_into_text/3` with `lf_view`). Room only; callers gate it on
+  `markdown_path?/1`.
 
   Idempotent: a doc whose body has no CR and no leading fence, or whose top
   block is not valid map YAML, is left unchanged and mints no ops.
@@ -327,16 +370,40 @@ defmodule Engram.Notes.CrdtBridge do
     # One transaction: a heal of N CRs is one update (one tail row, one
     # broadcast) instead of N.
     Yex.Doc.transaction(doc, fn ->
-      strip_cr(Yex.Doc.get_text(doc, @text_name))
+      heal_cr(doc)
       lift_fences(doc)
+    end)
+  end
+
+  @doc """
+  The line-ending heal, as ONE transaction: strip every CR from the body
+  `Y.Text` and from the out-of-band raw frontmatter spans. The room's update
+  path runs it when an update inserted a CR (an old plugin seeding a CRLF
+  file). Only the room calls it: the room is the single healer, so a lone
+  `\\r` (delete plus insert) is healed exactly once.
+  """
+  @spec heal_line_endings(Yex.Doc.t()) :: :ok
+  def heal_line_endings(%Yex.Doc{} = doc), do: Yex.Doc.transaction(doc, fn -> heal_cr(doc) end)
+
+  defp heal_cr(doc) do
+    strip_cr(Yex.Doc.get_text(doc, @text_name))
+
+    # O(frontmatter); writes only the spans `to_lf` changes.
+    raw_map = Yex.Doc.get_map(doc, @raw_frontmatter_name)
+
+    Enum.each(Yex.Map.to_map(raw_map), fn {k, v} ->
+      lf = LineEndings.to_lf(v)
+      if lf != v, do: Yex.Map.set(raw_map, k, lf)
     end)
   end
 
   # Each CR is its own small edit, back to front so earlier offsets hold: the
   # `\r` of a `\r\n` is deleted, a lone `\r` becomes `\n`. Never one diff over
-  # the body: a concurrent heal by the plugin deletes the same Y items, and an
-  # edit between two CRs is never re-inserted. (Two concurrent heals of a LONE
-  # `\r` both insert a `\n`; lone CRs are rare old-Mac files, accepted.)
+  # the body, so an edit between two CRs is never re-inserted. A lone CR's LF
+  # is inserted at the CR FIRST, then the CR (now one to the right) deleted:
+  # the LF's right origin is then the CR item, so it sorts before anything a
+  # device inserted right after that CR. Delete-then-insert gives it whatever
+  # followed the CR, and a concurrent append there can land before the LF.
   defp strip_cr(%Yex.Text{} = text) do
     body = Yex.Text.to_string(text)
 
@@ -351,10 +418,12 @@ defmodule Engram.Notes.CrdtBridge do
         |> Enum.zip(Native.utf16_offsets(body, bytes))
         |> Enum.reverse()
         |> Enum.each(fn {byte, u16} ->
-          Yex.Text.delete(text, u16, 1)
-
-          if binary_part(body, byte, min(2, byte_size(body) - byte)) != "\r\n",
-            do: Yex.Text.insert(text, u16, "\n")
+          if binary_part(body, byte, min(2, byte_size(body) - byte)) == "\r\n" do
+            Yex.Text.delete(text, u16, 1)
+          else
+            Yex.Text.insert(text, u16, "\n")
+            Yex.Text.delete(text, u16 + 1, 1)
+          end
         end)
     end
   end

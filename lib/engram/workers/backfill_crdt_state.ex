@@ -77,7 +77,7 @@ defmodule Engram.Workers.BackfillCrdtState do
   alias Engram.Crypto.RotationGate
   alias Engram.Jobs
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog, Note, NoteBody}
+  alias Engram.Notes.{CrdtBridge, CrdtRegistry, CrdtUpdateLog, LineEndings, Note, NoteBody}
   alias Engram.Repo
   alias Engram.Vaults
   alias Engram.Vaults.Vault
@@ -395,7 +395,11 @@ defmodule Engram.Workers.BackfillCrdtState do
   defp do_seed(user, note_id, raw_note) do
     with {:ok, raw_note} <- migrate_legacy_row(user, raw_note),
          {:ok, note} <- Crypto.maybe_decrypt_note_fields(raw_note, user),
-         {:ok, %{state: state}} <- CrdtBridge.merge_plaintext(nil, note.content || ""),
+         {:ok, %{state: state}} <-
+           CrdtBridge.merge_plaintext(
+             nil,
+             LineEndings.for_path(note.content || "", note.path)
+           ),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id) do
       case write_seed(note_id, ct, nonce) do
         1 -> :seeded

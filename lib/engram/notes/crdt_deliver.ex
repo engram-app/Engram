@@ -238,7 +238,9 @@ defmodule Engram.Notes.CrdtDeliver do
             :ok
 
           {:ok, nil, _seq} ->
-            room_apply(room, note_id, fn doc -> CrdtBridge.ingest_plaintext(doc, content) end)
+            room_apply(room, note_id, fn doc ->
+              CrdtBridge.ingest_plaintext(doc, content, lf_view: true)
+            end)
 
           {:error, reason} ->
             # Already logged in load_merged_state. Deliberately no ingest —
