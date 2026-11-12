@@ -64,3 +64,27 @@ test("an embed inside an indented code block or inline code stays literal", () =
 	});
 	expect(view.dom.querySelector(".cm-attachment-embed")).toBeNull();
 });
+
+test("an embed in code stays literal when the first parse runs out of time", () => {
+	// A loaded machine or a cold parser: every clock read is 30 ms later, so the
+	// language's own 20 ms mount parse stops early. The render core's mount parse
+	// (a larger budget) still covers the code, and the embed check must use it.
+	let now = Date.now();
+	const clock = vi.spyOn(Date, "now").mockImplementation(() => {
+		now += 30;
+		return now;
+	});
+	try {
+		view = new EditorView({
+			state: EditorState.create({
+				doc: "para\n\n\t![[pic.png]]\n\nuse `![[pic.png]]` here\n\ntail",
+				selection: { anchor: 0 },
+				extensions: [markdown({ base: markdownLanguage }), attachmentEmbeds({ resolve, load })],
+			}),
+			parent: document.body,
+		});
+	} finally {
+		clock.mockRestore();
+	}
+	expect(view.dom.querySelector(".cm-attachment-embed")).toBeNull();
+});

@@ -85,7 +85,7 @@ export function workDuring(r: TreeRenderer | TextRenderer<unknown>, run: () => v
 		return chars;
 	}
 	const original = r.scan.bind(r);
-	const spy = vi.spyOn(r, "scan").mockImplementation((state, from, emit, neutral) => {
+	const spy = vi.spyOn(r, "scan").mockImplementation((state, from, emit, neutral, tree) => {
 		let reached = from;
 		original(
 			state,
@@ -98,6 +98,7 @@ export function workDuring(r: TreeRenderer | TextRenderer<unknown>, run: () => v
 				reached = Math.max(reached, x);
 				return neutral(x);
 			},
+			tree,
 		);
 		chars += reached - from;
 	});

@@ -11,13 +11,21 @@ const field = listRails[0] as StateField<DecorationSet>;
 const parsed = (doc: string) => parsedState(doc, ext);
 
 const NESTED = "- a\n\t- b\n\t\t- c\n";
+// 1200 lines, 6000 chars: twice the core's 3000-char mount parse, and 30x the
+// 200-char work bound below, so a full rebuild cannot pass. Bigger docs only
+// slowed the setup (two full parses and builds) toward vitest's 5 s limit.
+const LONG = NESTED.repeat(400);
 
 describe("list rails render incrementally", () => {
 	test("a keystroke at the end of a long list keeps every rail above it (no rebuild)", () => {
-		const s = parsed(NESTED.repeat(2000));
+		const s = parsed(LONG);
 		const before = placed(s.field(field));
 		const end = s.doc.length;
-		const after = s.update({ changes: { from: end, insert: "x" } }).state;
+		let after = s;
+		const work = workDuring(listRailsRenderer, () => {
+			after = s.update({ changes: { from: end, insert: "x" } }).state;
+		});
+		expect(work).toBeLessThan(200);
 		const now = placed(after.field(field));
 		// The first rail is far from the edit: the SAME object, mapped, not rebuilt.
 		expect(now[0]?.[2]).toBe(before[0]?.[2]);
@@ -25,10 +33,10 @@ describe("list rails render incrementally", () => {
 		expect(diffFromFresh(settle(after), ext, field)).toEqual([]);
 	});
 
-	test("a keystroke in the middle of a 6000-line list re-renders one item, not the list", () => {
-		const s = parsed(NESTED.repeat(2000));
+	test("a keystroke in the middle of a long list re-renders one item, not the list", () => {
+		const s = parsed(LONG);
 		let after = s;
-		const mid = s.doc.line(3001).to;
+		const mid = s.doc.line(601).to;
 		const work = workDuring(listRailsRenderer, () => {
 			after = s.update({ changes: { from: mid, insert: "x" } }).state;
 		});

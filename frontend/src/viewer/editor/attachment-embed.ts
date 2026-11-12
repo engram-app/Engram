@@ -1,4 +1,3 @@
-import { syntaxTree } from "@codemirror/language";
 import { StateEffect } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
@@ -124,13 +123,13 @@ function embedRenderer(opts: AttachmentEmbedOpts): TextRenderer<EmbedToken> {
 				},
 			);
 		},
-		decorate(state, t) {
+		decorate(state, t, tree) {
 			const embed = t.value;
 			if (embed === null) {
 				return [];
 			}
 			const path = opts.resolve(embed.target);
-			if (path === null || inCode(syntaxTree(state), t.from)) {
+			if (path === null || inCode(tree, t.from)) {
 				return [];
 			}
 			const width = /^\d+$/u.test(embed.alias) ? Number(embed.alias) : null;

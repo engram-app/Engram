@@ -1,4 +1,3 @@
-import { syntaxTree } from "@codemirror/language";
 import { Decoration } from "@codemirror/view";
 import { COMMENT_DELIMS, type CommentKind, findOpener } from "../../lib/comments";
 import { defineRenderer, inCodeBlock, searchForward, type TextRenderer } from "./render-core";
@@ -21,9 +20,8 @@ const QUOTE_PREFIX = /^(?: {0,3}>[ \t]?)*[ \t]*/u;
 export const commentRenderer: TextRenderer<CommentKind> = {
 	kind: "text",
 	usesTree: true,
-	scan(state, from, emit, neutral) {
+	scan(state, from, emit, neutral, tree) {
 		const { doc } = state;
-		const tree = syntaxTree(state);
 		let resume = from; // a multi-line comment swallows the lines it spans
 		for (let n = doc.lineAt(from).number; n <= doc.lines; n++) {
 			const line = doc.line(n);
