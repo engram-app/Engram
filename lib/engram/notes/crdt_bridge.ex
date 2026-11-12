@@ -356,8 +356,15 @@ defmodule Engram.Notes.CrdtBridge do
               Yex.Array.insert_list(arr, length(existing_order), to_append)
             end
 
+            # Delete EXACTLY the fence prefix, never a diff to `rest`: a diff
+            # trims the common prefix, so a body starting with `-` (a list item,
+            # a `---` rule) deletes different Y items than the plugin's own lift
+            # (`liftBodyFence`, which deletes `[0, fence)`), and a concurrent
+            # lift by both then merges to the union of the two deletes, eating
+            # the body's first characters. Same range on both sides = same items.
             text = Yex.Doc.get_text(doc, @text_name)
-            :ok = diff_into_text(text, rest)
+            [fence_u16] = Native.utf16_offsets(body, [byte_size(body) - byte_size(rest)])
+            Yex.Text.delete(text, 0, fence_u16)
 
             # The body may now begin with another fence (stacked); heal again.
             # Terminates: each pass strips one fence so the body strictly shrinks.
