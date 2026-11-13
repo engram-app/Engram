@@ -3047,9 +3047,13 @@ defmodule Engram.Notes do
   # Repair paths that re-derive persisted fields from unchanged content
   # (e.g. Utf8Backfill fixing corrupt tags) pass `force: true` to opt out.
   # Return shape matches do_rewrite_note's 4-tuple: merged_text is the
-  # incoming content, which every caller has already found equal to what a
-  # reader is served, so the last field is its hash. That can differ from
-  # the row's when a CRDT tail is pending; the row is returned unchanged.
+  # incoming content and the last field is its hash; the row is returned
+  # unchanged. The `current_text` and `served_base` callers found that content
+  # equal to what a reader is served, so the hash is the served one even with
+  # a CRDT tail pending. The row-hash branch compares only the STORED row: a
+  # blind write equal to the row while a live edit waits in the tail replies
+  # with the older row hash, not what get_notes returns. A retry with that
+  # hash gets a stale-base refusal, never an overwrite.
   # Checked BEFORE the stale-base gate: a hash-equal push is a no-op whatever
   # base the writer declared.
   defp idempotent_repush(existing, base_attrs) do
