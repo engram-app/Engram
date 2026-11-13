@@ -180,6 +180,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Invalid UTF-8 at rest (bytea bypasses PG validation) → `Jason.encode` 500 at every JSON egress; fix + backfill task → `docs/context/invalid-utf8-at-rest-json-500.md`
 
 **Perf & Quality**
+- A plan test passes but staging reads the whole vault, an expression index unused under RLS, or a predicate applying `||`/`uuid_send`/a cast to a column (non-leakproof quals cannot drive an index under FORCE RLS; superuser plan tests hide it; test with `QueryPlan.rls_plans/3` as `engram_app`) → `docs/context/rls-leakproof-index-quals.md`
 - Adding `prepare: :named` to a query, a keyed `notes` lookup reading a vault-led index, or a union whose planning outweighs its execution (generic plans pick `notes_user_vault_live` at 40 tenants; the link-target union stays unnamed; prune empty parts instead) → `docs/context/notes-generic-plan-mis-pick.md`
 - Prod RDS SwapUsage alert while RAM looks fine, finding which job/query loaded the DB (RDSOSMetrics processList, slow log, PI group names), or adding a cron/maintenance job (no O(table) scans, no index on a save-written column, `cron_scan_bound_test`) → `docs/context/maintenance-job-db-load.md`
 - Read-path decrypt perf — parallel_map economics, when it helps vs hurts → `docs/context/read-path-decrypt-perf.md`

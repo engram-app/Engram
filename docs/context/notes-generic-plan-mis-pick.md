@@ -91,6 +91,10 @@ assertions are what catch that.
 
 ## Rules
 
+- Read every plan as `engram_app` with a tenant (`QueryPlan.rls_plans/3`). As
+  the suite's superuser RLS is skipped and a qual it would bar from an index
+  looks fine (rls-leakproof-index-quals.md, the S3 lookup 2026-11-13).
+
 - A keyed `notes` lookup stays unnamed. To name one, first add a
   generic-plan test at the 40-tenant shape that asserts EVERY scan reads its
   key index, and run it under `engram_app` with seq scans on.
