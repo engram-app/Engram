@@ -3,6 +3,7 @@ Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:9,68D560D
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:36,141C874
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:57,107CCB3
 Config.HTTPS: HTTPS Not Enabled,config/prod.exs:0,2B5C077
+Crypto.WeakHash: Weak or Inappropriate Hash,lib/engram/indexing/point_id.ex:48,28307D4
 Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes/tags_term.ex:17,30FF95
 SQL.Query: SQL injection,lib/engram/attachments/bulk_update.ex:84,1FC5E27
 SQL.Query: SQL injection,lib/engram/attachments/bulk_update.ex:124,507CBBE

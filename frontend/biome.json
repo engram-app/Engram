@@ -1,5 +1,5 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+	"$schema": "https://biomejs.dev/schemas/2.6.5/schema.json",
 	"vcs": {
 		"enabled": true,
 		"clientKind": "git",
@@ -13,7 +13,8 @@
 			"!public",
 			"!**/playwright-report",
 			"!**/test-results",
-			"!bun.lock"
+			"!bun.lock",
+			"!**/*.md"
 		]
 	},
 	"css": {
@@ -67,14 +68,17 @@
 					"a11y": {
 						"noLabelWithoutControl": {
 							"level": "error",
-							"options": { "inputComponents": ["Checkbox", "Input", "RadioGroupItem", "Textarea"] }
+							"options": {
+								"inputComponents": ["Checkbox", "Input", "RadioGroupItem", "Textarea"]
+							}
 						}
 					},
 					"complexity": {
 						"noExcessiveLinesPerFunction": "off",
 						"useMaxParams": "off",
 						"noExcessiveCognitiveComplexity": "off",
-						"noForEach": "off"
+						"noForEach": "off",
+						"useRegexpTest": "off"
 					},
 					"correctness": {
 						"useQwikValidLexicalScope": "off",
@@ -82,30 +86,52 @@
 						"noInvalidPositionAtImportRule": "off",
 						"noUndeclaredDependencies": "off",
 						"useImageSize": "off",
-						"useUniqueElementIds": "off"
+						"useUniqueElementIds": "off",
+						"noReactNativeRawText": "off",
+						"noComponentHookFactories": "off"
 					},
 					"nursery": {
+						"noArrayForEach": "off",
+						"noChainedComparison": "off",
+						"noDanglingUnderscore": "off",
+						"noDynamicDelete": "off",
+						"noEagerArrayMethodsInLoops": "off",
+						"noExcessiveNestedBlocks": "off",
+						"noExcessiveStatementsPerFunction": "off",
+						"noMapSpread": "off",
+						"noNestedTemplateLiterals": "off",
+						"noNull": "off",
+						"noPlaywrightNthMethods": "off",
+						"noProcessExit": "off",
+						"noPromiseExecutorReturn": "off",
+						"noReturnArrayPush": "off",
+						"noSyncMethods": "off",
+						"noTailwindLegacyUtilities": "off",
+						"noTailwindRestyledComponents": "off",
+						"noUnreadableForOfExpression": "off",
+						"noUselessRecursion": "off",
+						"noUselessSplice": "off",
+						"useBlockStatementOverIife": "off",
+						"useCapitalizedConstructors": "off",
+						"useConsistentLightnessNotation": "off",
+						"useExpectToContain": "off",
+						"useFencedCodeLanguage": "off",
+						"useLowercaseTestTitle": "off",
+						"useNamedFunction": "off",
+						"useSimplifiedBooleanReturn": "off",
+						"useTailwindSortedClasses": "off",
+						"useTailwindStaticClassStrings": "off",
+						"useTailwindVariablesShorthand": "off",
+						"useTanstackQueryStableQueryClient": "off",
 						"useExplicitType": "off",
 						"useExplicitReturnType": "off",
-						"noReactNativeRawText": "off",
-						"noComponentHookFactories": "off",
-						"noConditionalExpect": "off",
 						"noThisOutsideOfClass": "off",
 						"useReactNamingConvention": "off",
-						"noDuplicateSelectors": "off",
-						"noInlineStyles": "off",
 						"noTailwindArbitraryValue": "off",
 						"noTailwindRawColors": "off",
-						"useBaseline": "off",
 						"useConsistentFunctionStyle": "off",
-						"useDomQuerySelector": "off",
 						"useLogicalProperties": "off",
-						"useExpect": "off",
 						"useReactFunctionComponentDefinition": "off",
-						"useRegexpTest": "off",
-						"useTestHooksOnTop": "off",
-						"useThisInClassMethods": "off",
-						"useUnicodeRegex": "off",
 						"useValidTestTitle": "off"
 					},
 					"performance": {
@@ -184,21 +210,35 @@
 						"noParameterProperties": "off",
 						"useComponentExportOnlyModules": "off",
 						"useConsistentMemberAccessibility": "off",
-						"useConsistentMethodSignatures": "off"
+						"useConsistentMethodSignatures": "off",
+						"noInlineStyles": "off",
+						"useDomQuerySelector": "off",
+						"useTestHooksOnTop": "off",
+						"useThisInClassMethods": "off",
+						"useUnicodeRegex": "off"
 					},
 					"suspicious": {
 						"noReactSpecificProps": "off",
 						"noAlert": "off",
-						"noConsole": { "level": "error", "options": { "allow": ["error", "warn"] } },
+						"noConsole": {
+							"level": "error",
+							"options": { "allow": ["error", "warn"] }
+						},
 						"noSkippedTests": "off",
-						"noUnnecessaryConditions": "off"
+						"noUnnecessaryConditions": "off",
+						"noConditionalExpect": "off",
+						"noDuplicateSelectors": "off",
+						"useBaseline": "off",
+						"useExpect": "off"
 					}
 				}
 			}
 		},
 		{
 			"includes": ["src/components/ui/input-group.tsx"],
-			"linter": { "rules": { "nursery": { "useTailwindShorthandClasses": "off" } } }
+			"linter": {
+				"rules": { "nursery": { "useTailwindShorthandClasses": "off" } }
+			}
 		},
 		{
 			"includes": ["src/lib/notify.ts", "**/*.test.ts", "**/*.test.tsx"],
@@ -253,19 +293,18 @@
 						"noProcessGlobal": "off",
 						"noGlobalDirnameFilename": "off"
 					},
-					"style": { "noProcessEnv": "off" },
+					"style": { "noProcessEnv": "off", "useConsistentTestIt": "off" },
 					"suspicious": {
 						"noConsole": "off",
 						"noExplicitAny": "off",
 						"useAwait": "off",
 						"noShadow": "off",
-						"noEmptyBlockStatements": "off"
+						"noEmptyBlockStatements": "off",
+						"noPlaywrightWaitForTimeout": "off"
 					},
 					"performance": { "noDelete": "off" },
 					"nursery": {
-						"noPlaywrightWaitForTimeout": "off",
 						"noUnsafeTypeAssertion": "off",
-						"useConsistentTestIt": "off",
 						"useReactCompiler": "off"
 					}
 				}

@@ -46,7 +46,9 @@ export function useBootstrap(): BootstrapState {
 	// block — `config.bootstrap` is undefined and we drop through to the
 	// public /api/auth/bootstrap endpoint.
 	if (!seeded) {
+		// biome-ignore lint/nursery/useReactCompiler: module-level seed-once cache, deliberate: the first render reads /config.json synchronously and every later call must see the same value.
 		cached = config?.bootstrap;
+		// biome-ignore lint/nursery/useReactCompiler: module-level seed-once cache, deliberate: the first render reads /config.json synchronously and every later call must see the same value.
 		seeded = true;
 	}
 

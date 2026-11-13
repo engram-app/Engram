@@ -198,14 +198,14 @@ defmodule Engram.MixProject do
       {:mox, "~> 1.1", only: :test},
       {:bypass, "~> 2.1", only: :test},
       # Validates the MCP server card against the upstream JSON Schema (2020-12).
-      {:jsv, "~> 0.26.0", only: :test},
+      {:jsv, "~> 0.27.0", only: :test},
       {:stream_data, "~> 1.1", only: [:test, :dev]},
 
       # Quality tooling (dev/test only — never loaded in prod release)
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
-      {:sobelow, "~> 0.16.0", only: [:dev, :test], runtime: false},
+      {:sobelow, "~> 0.18.1", only: [:dev, :test], runtime: false},
 
       # Tidewave MCP — runtime introspection of the running dev app
       # (project_eval, DB queries, logs). Dev-only: it is RCE by design
