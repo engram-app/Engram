@@ -6,7 +6,7 @@ When to read this: shipping a change an older release cannot read (a write stop,
 
 ## What it is
 
-The rollback floor is the oldest release prod may run. It is one line in `priv/release_floor` (`release-vX.Y.Z`, today `release-v0.81.0`), the single source of truth for `Engram.Release.Floor` and for both deploy checks below.
+The rollback floor is the oldest release prod may run. It is one line in `priv/release_floor` (`release-vX.Y.Z`, today `release-v0.82.0`), the single source of truth for `Engram.Release.Floor` and for both deploy checks below.
 
 - **Raising the floor** is a PR changing that line, the one source of truth (tests read the file). It is Todd's decision, because it removes rollback targets. The tag must exist first: the floor names a released tag, never a commit on main. `scripts/check_floor_tag_on_main.sh` (verify.yml static checks) fails a floor whose tag does not exist or is not on main, because such a floor refuses every deploy and the override cannot pass a missing tag.
 - **Code that needs a floor** states it with a test, `assert Floor.at_least?("release-vX.Y.Z")`. That test is red while the file says less, so the code cannot merge before the floor is raised. Example: R9 release E's note folder hash write stop needs the floor at the release that ships C, because 0.76 matches folder search by the hash and 0.78.1 matches folder deletes by it.
@@ -14,7 +14,7 @@ The rollback floor is the oldest release prod may run. It is one line in `priv/r
 
 ## The checks
 
-1. **engram-infra `engram-rollback-floor.yml` (the real gate, NOT live yet).** It is pending in engram-infra#1806; until that merges and the check is required, nothing stops a rollback below the floor. Once merged it runs on every engram-infra PR, report-only at first, including the ones that move an Engram image pin (the prod bump PR, rollbacks included, and the staging bump PR). It fails unless each pinned commit descends from the floor tag in this repo's main. Details and the image-path table are in engram-infra `docs/context/engram-rollback-floor.md`. Making it a required check is a ruleset change, an owner decision.
+1. **engram-infra `engram-rollback-floor.yml` (the real gate, LIVE).** engram-infra#1806 merged 2026-11-11 09:26Z, and `engram-rollback-floor` is a required check on engram-infra main (`main/github/repos.tf:43`, `required_checks = ["ci", "engram-rollback-floor"]`). It runs on every engram-infra PR, including the ones that move an Engram image pin (the prod bump PR, rollbacks included, and the staging bump PR). It fails unless each pinned commit descends from the floor tag in this repo's main, so a red check blocks the merge. Details and the image-path table are in engram-infra `docs/context/engram-rollback-floor.md`.
 2. **`deploy-prod.yml` `release-floor-gate` (defense in depth).** It reads the floor from `origin/main:priv/release_floor`, never from the tagged commit (an old commit carries an older floor), and runs `scripts/check_release_floor.sh`, which fails closed. A refusal posts `DEPLOY BLOCKED` to the Discord alerts channel. **It cannot stop a rollback to a commit from before this job existed:** a tag push runs the deploy-prod.yml OF THE TAGGED COMMIT, and that file has no floor step. That is why the engram-infra check exists.
 
 ## Accepted risk: the floor tag can be moved
