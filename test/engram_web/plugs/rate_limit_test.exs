@@ -105,6 +105,15 @@ defmodule EngramWeb.Plugs.RateLimitTest do
     @strict_limit 10
     @body %{email: "nobody@example.test", password: "wrong-password", token: "fake_token"}
 
+    # Each burst of 11 starts with its whole length left in the window
+    # (`reset_buckets!/1`): Hammer's window is fixed and epoch-aligned, and a
+    # burst across its edge lands the 11th request in a new window (CI
+    # 2026-11-13: the login burst ran 06:39:58.4 to 06:40:01.3). Login and
+    # register hash a password per request (~290 ms on CI, 3.2-3.5 s a burst
+    # locally); the rest take well under the default margin.
+    @slow_ms 6_000
+    @slow ~w(/api/auth/login /api/auth/register)
+
     setup do
       Application.delete_env(:engram, :rate_limit_override)
       :ok
@@ -115,6 +124,10 @@ defmodule EngramWeb.Plugs.RateLimitTest do
     for path <- ~w(/api/auth/login /api/auth/register /api/auth/refresh /api/auth/logout
                    /api/auth/password/reset /api/telemetry/ping /api/auth/clear-cache) do
       test "#{path} stays at #{@strict_limit} per IP" do
+        if unquote(path) in @slow,
+          do: EngramWeb.RateLimiter.reset_buckets!(@slow_ms),
+          else: EngramWeb.RateLimiter.reset_buckets!()
+
         for _ <- 1..@strict_limit do
           refute post(build_conn(), unquote(path), @body).status == 429
         end
@@ -125,6 +138,7 @@ defmodule EngramWeb.Plugs.RateLimitTest do
 
     for path <- ~w(/api/auth/bootstrap /api/auth/invite/some-token) do
       test "GET #{path} stays at #{@strict_limit} per IP" do
+        EngramWeb.RateLimiter.reset_buckets!()
         for _ <- 1..@strict_limit, do: refute(get(build_conn(), unquote(path)).status == 429)
 
         assert get(build_conn(), unquote(path)).status == 429

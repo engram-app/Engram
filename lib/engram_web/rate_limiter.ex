@@ -117,11 +117,17 @@ defmodule EngramWeb.RateLimiter do
     mean "with a window ahead to burst into". Measured: a 17ms CRDT burst
     across `07:22:10.000` (10s window) and an 11ms device-flow burst across
     `07:24:00.000` (60s window) both went red in one CI run.
+
+    `burst_ms`: how long the caller's burst may take (default: the margin,
+    for a burst of plain requests). A burst through a slow route passes its
+    own: 11 logins hash 11 passwords, ~290 ms each on CI, and one such burst
+    ran across `06:40:00.000` (2026-11-13). It must fit inside one 10s
+    window.
     """
-    def reset_buckets! do
+    def reset_buckets!(burst_ms \\ @window_margin_ms) when burst_ms < @window_edge_ms do
       clear_buckets!()
 
-      case fresh_window_wait_ms(System.system_time(:millisecond)) do
+      case fresh_window_wait_ms(System.system_time(:millisecond), burst_ms) do
         0 -> :ok
         wait -> Process.sleep(wait)
       end
@@ -158,9 +164,9 @@ defmodule EngramWeb.RateLimiter do
     @doc false
     # Pure, so the edge arithmetic is testable without a clock. Same clock and
     # same `div/rem` shape Hammer's fix_window uses.
-    def fresh_window_wait_ms(now_ms) do
+    def fresh_window_wait_ms(now_ms, burst_ms \\ @window_margin_ms) do
       left = @window_edge_ms - rem(now_ms, @window_edge_ms)
-      if left < @window_margin_ms, do: left + 1, else: 0
+      if left < burst_ms, do: left + 1, else: 0
     end
   end
 end
