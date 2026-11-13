@@ -9,18 +9,24 @@ defmodule Engram.Notes.Location do
   what the plugin holds and what the unique `notes_path_live` slot names.
   With `on?/0`:
 
-    * **by-path lookup** (`at/5`, `at_any/5`): ONE statement. A live note
-      whose stored path key is the asked path is that path's note, always.
-      Only in a vault holding a folder moved without a cascade (from S5 on,
-      so never in S3 alone) and only when no row holds the path does the
-      name answer: the folder part
+    * **by-path lookup** (`at/5`, `at_any/5`): ONE statement,
+      `path_key OR id = <name match>`. A live note whose stored path key is
+      the asked path is that path's note, always. Only in a vault holding a
+      folder moved without a cascade (from S5 on, so never in S3 alone) and
+      only when no row holds the path does the name answer: the folder part
       of the path is walked on `folders_live_name` (`Engram.Folders.WalkSql`,
       one unique-index probe per segment), then the note is probed on
-      `notes_folder_name_live` by `(vault_id, name_ci_hmac || folder_ref_id)`
-      with the exact `name_hmac` and a CURRENT name stamp as filters. Several
-      such rows (drift) give the lowest id, never two rows. Cost: depth + 3
-      index probes (the path key twice: the match and the no-holder check),
-      never a scan of a folder or a vault.
+      `notes_name_key_live` by `(vault_id, name_key)`, the stored
+      `name_ci_hmac || folder_ref_id` the `notes_set_name_key` trigger keeps
+      (NULL unless the name stamp is current), with the exact `name_hmac`.
+      Several such rows (drift) give the lowest id, never two rows. Every
+      qual compares a plain column to a bound value or an InitPlan result,
+      so each drives its index under FORCE RLS
+      (docs/context/rls-leakproof-index-quals.md). Cost, measured as
+      `engram_app` on a 1,000-note vault: an unmoved vault reads the path
+      index plus one probe of the empty `folders_moved_live` (4 buffers,
+      0.83.0's 3); a moved one adds depth + 2 index probes. Never a scan of
+      a folder or a vault.
     * **output paths** (`chains/1`, `put_paths/3`): a live note is shown where
       its folder row puts it ONLY when a folder on its chain was renamed
       without a cascade (`folders.notes_cascaded = false`, written from S5
@@ -51,7 +57,7 @@ defmodule Engram.Notes.Location do
   alias Engram.Crypto.{Envelope, NameKeys, PathCrypto}
   alias Engram.DataMigrations.{Entry, NoteName}
   alias Engram.Folders.{Rows, WalkSql}
-  alias Engram.Notes.{Helpers, Keys, Name, Note}
+  alias Engram.Notes.{Helpers, Keys, Name}
   alias Engram.Repo
 
   require NameKeys
@@ -113,6 +119,18 @@ defmodule Engram.Notes.Location do
     |> Enum.reduce(dynamic(false), &dynamic(^&2 or ^&1))
   end
 
+  # The stored path's row, or the row the path's folder row and name name
+  # (`WalkSql.name_match_by_id/0`): `path_key OR id = <name match>`. Both
+  # arms compare a plain column to a bound value or an InitPlan parameter,
+  # so under FORCE RLS each drives its own index (`notes_path_live`, the
+  # primary key); a qual applying a non-leakproof function to a column would
+  # drive none, and the lookup would read the whole vault
+  # (docs/context/rls-leakproof-index-quals.md). The name match runs only in
+  # a vault holding a folder moved without a cascade (one probe of the
+  # empty-until-S5 `folders_moved_live`), and only when no live note holds
+  # the path: until S5 writes one, a name match can only be drift, a row the
+  # user sees somewhere else, so every lookup, push, delete and CRDT create
+  # reads stored paths exactly as 0.83.0 did.
   defp named(filter_key, vault_id, path, path_key, ids?) do
     case path |> String.split("/") |> Enum.split(-1) do
       {[], _root} ->
@@ -120,62 +138,48 @@ defmodule Engram.Notes.Location do
 
       {folders, [name]} ->
         segs = Enum.map(folders, &Rows.name_hmac(filter_key, &1))
-
-        by_name =
-          by_name(vault_id, segs, Name.ci_hmac(filter_key, name), Name.hmac(filter_key, name))
-
-        live = from(m in Note, where: m.vault_id == ^vault_id and is_nil(m.deleted_at))
-
-        # No row holds the path (the stored path wins while writers cascade).
-        holder =
-          from(p in live,
-            where: p.kind == "note",
-            where: ^path_key,
-            where: ^Keys.kind_match(:note, ids?),
-            select: p.id
-          )
-
-        # Of the rows the name matches, the lowest id: one row, never two.
-        first =
-          from(m in live,
-            where: m.kind == "note",
-            where: ^by_name,
-            order_by: [asc: m.id],
-            limit: 1,
-            select: m.id
-          )
-
-        dynamic(
-          [n],
-          ^path_key or
-            (^by_name and not exists(subquery(holder)) and n.id in subquery(first))
-        )
+        hmac = Crypto.hmac_field(filter_key, path)
+        ci = Name.ci_hmac(filter_key, name)
+        exact = Name.hmac(filter_key, name)
+        dynamic([n], ^path_key or n.id == ^name_match(vault_id, segs, ci, exact, hmac, ids?))
     end
   end
 
-  # The row's name key, folder and current stamp match: the folder walked
-  # down from the root (`WalkSql.key_eq/0`, on `notes_folder_name_live`),
-  # the exact name, a name whose stamp is current. Only in a vault holding a
-  # folder moved without a cascade (`key_eq/0` checks it first, one probe of the
-  # empty-until-S5 `folders_moved_live`): until S5 writes one, a name match
-  # can only be drift, a row the user sees somewhere else, so every lookup,
-  # push, delete and CRDT create reads stored paths exactly as 0.83.0 did.
-  defp by_name(vault_id, segs, ci, exact) do
+  defp name_match(vault_id, segs, ci, exact, hmac, true) do
     dynamic(
-      [n],
       fragment(
-        WalkSql.key_eq(),
-        n.name_ci_hmac,
-        n.folder_ref_id,
+        WalkSql.name_match_by_id(),
+        type(^vault_id, Ecto.UUID),
+        type(^vault_id, Ecto.UUID),
+        type(^vault_id, Ecto.UUID),
+        type(^segs, {:array, :binary}),
+        type(^vault_id, Ecto.UUID),
+        type(^segs, {:array, :binary}),
         type(^ci, :binary),
+        ^length(segs),
+        type(^exact, :binary),
+        type(^vault_id, Ecto.UUID),
+        type(^Keys.id(hmac), Ecto.UUID)
+      )
+    )
+  end
+
+  defp name_match(vault_id, segs, ci, exact, hmac, false) do
+    dynamic(
+      fragment(
+        WalkSql.name_match_by_hmac(),
+        type(^vault_id, Ecto.UUID),
         type(^vault_id, Ecto.UUID),
         type(^vault_id, Ecto.UUID),
         type(^segs, {:array, :binary}),
         type(^vault_id, Ecto.UUID),
         type(^segs, {:array, :binary}),
-        ^length(segs)
-      ) and n.name_hmac == ^exact and
-        fragment(NameKeys.current_sql(), n.name_stamp, n.path_nonce, ^Name.version())
+        type(^ci, :binary),
+        ^length(segs),
+        type(^exact, :binary),
+        type(^vault_id, Ecto.UUID),
+        type(^hmac, :binary)
+      )
     )
   end
 

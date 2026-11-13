@@ -613,7 +613,7 @@ defmodule Engram.Folders.Rows do
   still encrypted (what `chain_paths/3` and `moved_paths/3` take): ONE
   recursive read. The CTE is a UNION, so a shared ancestor is read once: at
   most the distinct ancestors of `ids`, never more than min(the vault's
-  folders, `length(ids)` x depth), each step a primary-key probe. A dead or
+  folders, `length(ids)` x depth), each step a primary-key probe per row. A dead or
   missing row stops its chain. Runs inside the caller's tenant transaction;
   decrypt outside it.
 
@@ -625,38 +625,65 @@ defmodule Engram.Folders.Rows do
   def chain_rows(_vault_id, [], _opts), do: []
 
   def chain_rows(vault_id, ids, opts) do
-    live = fn query -> where(query, [f], f.vault_id == ^vault_id and is_nil(f.deleted_at)) end
-
     leaf =
       from(f in Folder,
-        where: f.id in ^Enum.uniq(ids),
-        select: %{id: f.id, parent_id: f.parent_id}
+        where: f.id in ^Enum.uniq(ids) and f.vault_id == ^vault_id and is_nil(f.deleted_at),
+        select: %{
+          id: f.id,
+          parent_id: f.parent_id,
+          dek_version: f.dek_version,
+          ct: f.name_ciphertext,
+          nonce: f.name_nonce,
+          cascaded: f.notes_cascaded
+        }
       )
-      |> live.()
 
     leaf =
       if opts[:moved_only],
         do: where(leaf, fragment(WalkSql.moved(), type(^vault_id, Ecto.UUID))),
         else: leaf
 
-    up =
+    # Each step one primary-key probe per row (a LATERAL LIMIT 1), never a
+    # join the planner may hash over the vault's folders; and the CTE
+    # carries every column, so no final join reads the tenant's folders.
+    parent =
       from(f in Folder,
-        join: t in "folder_up",
-        on: f.id == t.parent_id,
-        select: %{id: f.id, parent_id: f.parent_id}
+        where:
+          f.id == parent_as(:up).parent_id and f.vault_id == ^vault_id and is_nil(f.deleted_at),
+        limit: 1,
+        select: %{
+          id: f.id,
+          parent_id: f.parent_id,
+          dek_version: f.dek_version,
+          ct: f.name_ciphertext,
+          nonce: f.name_nonce,
+          cascaded: f.notes_cascaded
+        }
       )
-      |> live.()
 
-    from(f in Folder,
-      join: t in "folder_up",
-      on: f.id == t.id,
+    up =
+      from(t in "folder_up",
+        as: :up,
+        inner_lateral_join: f in subquery(parent),
+        on: true,
+        select: %{
+          id: f.id,
+          parent_id: f.parent_id,
+          dek_version: f.dek_version,
+          ct: f.ct,
+          nonce: f.nonce,
+          cascaded: f.cascaded
+        }
+      )
+
+    from(t in "folder_up",
       select: %{
-        id: f.id,
-        parent_id: f.parent_id,
-        dek_version: f.dek_version,
-        ct: f.name_ciphertext,
-        nonce: f.name_nonce,
-        cascaded: f.notes_cascaded
+        id: type(t.id, Ecto.UUID),
+        parent_id: type(t.parent_id, Ecto.UUID),
+        dek_version: t.dek_version,
+        ct: t.ct,
+        nonce: t.nonce,
+        cascaded: t.cascaded
       }
     )
     |> recursive_ctes(true)
