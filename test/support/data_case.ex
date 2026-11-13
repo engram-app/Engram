@@ -134,8 +134,9 @@ defmodule Engram.DataCase do
 
   @doc """
   Empties the request-lookup caches (user, api_key, subscription, vaults,
-  onboarding actions, note counts, and `:note_split`, the ledger read behind
-  `Engram.Notes.Keys.ids?/0`).
+  onboarding actions, note counts, and `:note_split` and `:note_name`, the
+  ledger reads behind `Engram.Notes.Keys.ids?/0` and
+  `Engram.Notes.Location.on?/0`).
 
   `:note_split` lives 60 s. Left out, an entry another test warmed could
   expire between a budget test's warm-up and its measured call, and the
@@ -155,7 +156,8 @@ defmodule Engram.DataCase do
           :vaults,
           :onboarding_actions,
           :note_counts,
-          :note_split
+          :note_split,
+          :note_name
         ],
         do: Engram.Cache.clear_local(c)
 

@@ -29,8 +29,10 @@ defmodule Engram.Notes.Keys do
 
   # Plus `folder_ref_id` (R9.5 step 3): the folder readers look notes up by
   # their folder row, and a generic plan costs that like any key, for an
-  # average vault (`NotesGenericPlanTest`, "a folder listing").
-  @key_columns (@cols |> Map.values() |> Enum.flat_map(&Tuple.to_list/1)) ++ [:folder_ref_id]
+  # average vault (`NotesGenericPlanTest`, "a folder listing"). And the
+  # name keys the S3 by-path lookup probes (`Engram.Notes.Location`).
+  @key_columns (@cols |> Map.values() |> Enum.flat_map(&Tuple.to_list/1)) ++
+                 [:folder_ref_id, :name_hmac, :name_ci_hmac]
 
   @typedoc "The key families `notes` carries both ways."
   @type kind :: :path | :folder | :basename | :path_ci | :type

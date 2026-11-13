@@ -13,6 +13,12 @@ config :engram, Engram.Native, features: ["test-hooks"]
 # of 10 req/min would be exhausted immediately across the full test suite.
 # The RateLimitTest validates the 10-req limit explicitly, with per-test resets.
 config :engram, :rate_limit_override, 10_000
+
+# The S3 name reads run as in prod, where the `note_name` ledger is done
+# (`Engram.Notes.Location.on?/0`). A test of the fallback puts a per-process
+# `ServiceConfig.put_override(:name_reads_ledger, :read)`: the ledger row,
+# which the test DB never completes.
+config :engram, :name_reads_ledger, :done
 # The OAuth limiter's coarse per-IP bucket (EngramWeb.Plugs.OAuthRateLimit):
 # every test shares 127.0.0.1, so it needs the same high ceiling.
 config :engram, :oauth_ip_rate_limit_override, 10_000

@@ -816,7 +816,7 @@ defmodule Engram.FoldersTest do
     } do
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
-      {:ok, _} =
+      {:ok, note} =
         Notes.upsert_note(user, vault, %{"path" => "Docs/a.md", "content" => "x", "mtime" => 1.0},
           actor: "api"
         )
@@ -825,7 +825,9 @@ defmodule Engram.FoldersTest do
       rename_folder_row_in_place!(user, vault, "Docs", "Moved")
 
       assert {:ok, %{notes: 0}} = Notes.delete_scanned(user, vault, matches)
-      assert {:ok, _} = Notes.get_note(user, vault, "Docs/a.md")
+      # By id: the note survived, still served at its stored path (its folder
+      # row was renamed in place, a cascaded row, so S3 keeps the stored path).
+      assert {:ok, %{path: "Docs/a.md"}} = Notes.get_note_by_id(user, vault, note.id)
     end
 
     test "a delete of the live folder still removes its notes", %{user: user, vault: vault} do

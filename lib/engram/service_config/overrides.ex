@@ -66,6 +66,9 @@ defmodule Engram.ServiceConfig.Overrides do
     backfill_max_xact_s: {:integer, 1..86_400},
     # The plugin's `folder_op` wire (#2523 S4), default off: `Engram.Folders.Wire`.
     folder_ops: :boolean,
+    # The S3 read switch's kill switch (#2523): off, notes are found and shown
+    # by their stored path again (`Engram.Notes.Location.on?/0`).
+    name_reads: :boolean,
     # `name_terms` backfill kill switch and the search leg's (`Engram.Search.NameTerms`).
     name_terms_backfill: :boolean,
     name_terms_search: :boolean,

@@ -36,6 +36,7 @@ defmodule Engram.Notes do
     Helpers,
     Identity,
     Keys,
+    Location,
     Name,
     Note,
     NoteBody,
@@ -116,8 +117,25 @@ defmodule Engram.Notes do
     :created_at,
     :updated_at,
     :parse_status,
-    :parse_reason
+    :parse_reason,
+    # Where the note is by its folder row and name (`Engram.Notes.Location`).
+    :folder_ref_id,
+    :name_ciphertext,
+    :name_nonce,
+    :name_stamp
   ]
+
+  # A row's location columns, for `Location.paths/2` on a narrow select.
+  @located_fields [
+                    :id,
+                    :vault_id,
+                    :deleted_at,
+                    :dek_version,
+                    :path_ciphertext,
+                    :path_nonce,
+                    :path_hmac,
+                    :name_hmac
+                  ] ++ Location.fields()
 
   @note_crdt_fields @note_meta_fields ++ [:crdt_state_ciphertext, :crdt_state_nonce]
 
@@ -220,27 +238,32 @@ defmodule Engram.Notes do
   def search_hits_by_qdrant_points(_user, []), do: {:ok, %{}}
 
   def search_hits_by_qdrant_points(user, qdrant_ids) when is_list(qdrant_ids) do
-    {:ok, rows} =
+    # The hits' folder chains (`Location.chains/1`) ride the same tenant
+    # transaction: one more statement while names are on.
+    {:ok, {rows, chains}} =
       Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from([c, n] in point_chunks(qdrant_ids),
-            left_join: p in ChunkPoint,
-            on: p.point_id == c.qdrant_point_id,
-            select:
-              {%{
-                 qdrant_point_id: c.qdrant_point_id,
-                 note_id: c.note_id,
-                 position: p.position,
-                 slice_sum: p.slice_sum,
-                 display_ct: p.display_ct
-               }, struct(n, @note_meta_fields)}
+        rows =
+          Repo.all(
+            from([c, n] in point_chunks(qdrant_ids),
+              left_join: p in ChunkPoint,
+              on: p.point_id == c.qdrant_point_id,
+              select:
+                {%{
+                   qdrant_point_id: c.qdrant_point_id,
+                   note_id: c.note_id,
+                   position: p.position,
+                   slice_sum: p.slice_sum,
+                   display_ct: p.display_ct
+                 }, struct(n, @note_meta_fields)}
+            )
           )
-        )
+
+        {rows, rows |> Enum.map(&elem(&1, 1)) |> Enum.uniq_by(& &1.id) |> Location.chains()}
       end)
 
     with {:ok, dek} <- hits_dek(user, rows) do
       {chunks, notes} = Enum.unzip(rows)
-      decrypted = decrypt_per_note(notes, user)
+      decrypted = decrypt_per_note(notes, user, chains)
       ck = dek && Crypto.dek_content_hash_key_from_bytes(dek)
       derived = derived_chunks(user, Enum.zip(chunks, decrypted), ck)
 
@@ -293,13 +316,20 @@ defmodule Engram.Notes do
   # Search rows are one per HIT, and the hits of a query cluster in a few
   # notes (reranked / diversified searches fetch up to 4x the page). Decrypt
   # each distinct note once and hand every hit its note's result.
-  defp decrypt_per_note(notes, user) do
+  defp decrypt_per_note(notes, user, chains) do
     unique = Enum.uniq_by(notes, & &1.id)
+    results = Crypto.decrypt_notes_batch(unique, user)
+
+    # A hit shows the note where its folder row and name put it.
+    located =
+      user
+      |> Location.put_paths(for({:ok, n} <- results, do: n), chains)
+      |> Map.new(&{&1.id, {:ok, &1}})
 
     by_id =
       unique
-      |> Enum.zip(Crypto.decrypt_notes_batch(unique, user))
-      |> Map.new(fn {n, r} -> {n.id, r} end)
+      |> Enum.zip(results)
+      |> Map.new(fn {n, r} -> {n.id, Map.get(located, n.id, r)} end)
 
     Enum.map(notes, &Map.fetch!(by_id, &1.id))
   end
@@ -478,6 +508,19 @@ defmodule Engram.Notes do
   # `Rows.ensure_all/3` result (`refs`: %{folder => id}): a batch resolves each
   # distinct folder once, before its per-row loop and outside the per-row
   # savepoints, and passes the map down. Without one, resolve it here.
+  # A rewrite that writes a new path (a legacy unsanitized row moved to its
+  # sanitized path: `inject_phase_b_fields/7` carries path columns only
+  # then) names the new path's folder row, as every other path writer does.
+  defp put_moved_folder_ref(changeset, %{path_ciphertext: _}, user, vault_id, folder, refs),
+    do:
+      Ecto.Changeset.put_change(
+        changeset,
+        :folder_ref_id,
+        Map.get_lazy(refs || %{}, folder, fn -> ensure_folder_row!(user, vault_id, folder) end)
+      )
+
+  defp put_moved_folder_ref(changeset, _phase_b, _user, _vault_id, _folder, _refs), do: changeset
+
   defp folder_ref_for(nil, user, vault_id, folder), do: ensure_folder_row!(user, vault_id, folder)
   defp folder_ref_for(refs, _user, _vault_id, folder), do: Map.fetch!(refs, folder)
 
@@ -1870,7 +1913,8 @@ defmodule Engram.Notes do
   # invisible there. A target held by a ROW with no entry would sail through and
   # strand a durable claim on a path the relocate is about to refuse.
   defp claim_free_target(user, vault, note_id, new_path) do
-    case note_ids_at(user, vault, [new_path]) do
+    # The lookup `genesis_relocate_live`'s row check uses (`located_ids_at/3`).
+    case located_ids_at(user, vault, [new_path]) do
       {:error, reason} ->
         {:error, reason}
 
@@ -3212,6 +3256,7 @@ defmodule Engram.Notes do
         existing
         |> Note.changeset(Map.put(phase_b, :version, existing.version + 1))
         |> Ecto.Changeset.put_change(:seq, seq)
+        |> put_moved_folder_ref(phase_b, user, existing.vault_id, folder, opts[:folder_refs])
 
       # #1335. The WHERE was the primary key ALONE, so this write landed on
       # top of anything that committed after `existing` was read.
@@ -3581,7 +3626,7 @@ defmodule Engram.Notes do
     with {:ok, query} <- note_by_path_query(user, vault, path, :raw),
          {:ok, {%Note{} = note, tail}} <-
            Repo.with_tenant(user.id, fn -> query |> with_tail() |> Repo.one() |> tail_result() end) do
-      {:ok, decrypt_or_raise!(note, user), tail}
+      {:ok, note |> decrypt_or_raise!(user) |> Location.found_at(path), tail}
     else
       _ -> {:error, :not_found}
     end
@@ -4328,20 +4373,34 @@ defmodule Engram.Notes do
           :current -> with_tail(base)
         end
 
+      # `:current` is the user-facing read: the note is shown where its folder
+      # row and name put it (`Location`, its folder chain read in this
+      # transaction). The stored-row reads (`:all`, `:crdt`) keep the stored
+      # path their callers write back.
       {:ok, result} =
         Repo.with_tenant(user.id, fn ->
           case Repo.one(query) do
-            %Note{} = note -> {:ok, decrypt_or_raise!(note, user)}
-            %{tail_ids__: _} = row -> {:ok, tail_result(row)}
-            nil -> {:error, :not_found}
+            %Note{} = note ->
+              {:ok, decrypt_or_raise!(note, user)}
+
+            %{tail_ids__: _} = row ->
+              {note, tail} = tail_result(row)
+              {:ok, {note, tail, Location.chains([note])}}
+
+            nil ->
+              {:error, :not_found}
           end
         end)
 
       # The rebuild runs after the transaction, so no pooled connection is held
       # across a doc rebuild.
       case result do
-        {:ok, {note, tail}} -> {:ok, current_note(user, decrypt_or_raise!(note, user), tail)}
-        other -> other
+        {:ok, {note, tail, chains}} ->
+          [note] = Location.put_paths(user, [decrypt_or_raise!(note, user)], chains)
+          {:ok, current_note(user, note, tail)}
+
+        other ->
+          other
       end
     end
   end
@@ -4395,10 +4454,12 @@ defmodule Engram.Notes do
   # just `fields`; `:raw` leaves the select to the caller.
   defp note_by_path_query(user, vault, path, fields \\ :all) do
     with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
-      hmac = Crypto.hmac_field(filter_key, path)
-
       ids? = Keys.ids?()
-      query = from(n in live_notes(user, vault, ids?), where: ^Keys.eq(:path, hmac, ids?))
+
+      query =
+        from(n in live_notes(user, vault, ids?),
+          where: ^Location.at(filter_key, vault_id(vault), path, ids?)
+        )
 
       {:ok,
        case fields do
@@ -4416,6 +4477,9 @@ defmodule Engram.Notes do
   # read `notes_kind_shape_v4_check`). Folder markers have `path_hmac IS NULL` by
   # that CHECK, so the kind filter drops nothing a path lookup could match.
   # NotesPathIndexPlanTest pins the plans.
+  defp vault_id(%{id: id}), do: id
+  defp vault_id(id), do: id
+
   defp live_notes(user, vault, ids?) do
     from(n in scoped_live(user, vault),
       where: n.kind == "note",
@@ -4453,6 +4517,46 @@ defmodule Engram.Notes do
       # No filter key means no way to look anything up. Answering "nothing is
       # taken" would let a claim through unvalidated, which is the failure this
       # validation exists to prevent — so callers treat :error as fatal.
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # `note_ids_at/3` through the row checks' own lookup (`Location.at_any/5`,
+  # what `note_by_path_query/4` reads), for the claim checks that guard one
+  # rename or relocate: a claim decided on a different lookup than the row
+  # check after it strands a durable Identity claim (#2523 review M5). A few
+  # paths only (one folder walk each). Rows are keyed back to the asked paths
+  # as `get_notes_within/4` keys them; the moved-vault flag rides the same
+  # statement, so with no moved folder nothing more is read.
+  defp located_ids_at(user, vault, paths) do
+    case Crypto.dek_filter_key(user) do
+      {:ok, filter_key} ->
+        ids? = Keys.ids?()
+        on? = Location.on?()
+        hmacs = Enum.map(paths, &Crypto.hmac_field(filter_key, &1))
+
+        rows =
+          Repo.with_tenant!(user.id, fn ->
+            from(n in live_notes(user, vault, ids?),
+              where: ^Location.at_any(filter_key, vault_id(vault), paths, ids?, on?),
+              select: map(n, ^@located_fields)
+            )
+            |> select_merge(^Location.moved_column(vault_id(vault)))
+            |> Repo.all()
+          end)
+
+        asked = if Location.moved?(rows), do: asked_paths(filter_key, paths, hmacs, on?)
+        key = path_key_of(user, filter_key, rows, asked)
+        path_of = Map.new(Enum.zip(hmacs, paths))
+
+        for row <- rows,
+            k <- key.(row),
+            path = path_of[k],
+            path != nil,
+            into: %{},
+            do: {path, row.id}
+
       {:error, _} = err ->
         err
     end
@@ -4617,8 +4721,9 @@ defmodule Engram.Notes do
 
   defp claim_for_note(user, vault, old_path, new_path) do
     # ONE query for both ends. Looking the source and the target up separately
-    # doubled the query count on the hottest path in the module.
-    case note_ids_at(user, vault, [old_path, new_path]) do
+    # doubled the query count on the hottest path in the module. The lookup
+    # the row checks use (`located_ids_at/3`), so the two never disagree.
+    case located_ids_at(user, vault, [old_path, new_path]) do
       {:error, reason} -> {:error, reason}
       held -> decide_claim(user, vault, held, old_path, new_path)
     end
@@ -5673,14 +5778,29 @@ defmodule Engram.Notes do
     # while decrypting, see `decrypt_within_budget/4`.
     #
     # :meta carries no content, so it has no byte hazard and no budget.
-    {notes, budget_more} =
+    #
+    # `chains`: the folder rows the page's live notes are placed by
+    # (`Location.chains/1`), in the page's own tenant transaction. The
+    # budgeted page statement itself says whether the vault holds a folder
+    # moved without a cascade (`Location.moved_column/1`), so the chains are
+    # read only then.
+    moved = Location.moved_column(vault_id(vault))
+
+    {notes, budget_more, chains} =
       case {fields, max_bytes} do
         {:all, b} when is_integer(b) and b > 0 ->
-          budgeted_page(base, user, limit, b)
+          budgeted_page(base, user, limit, b, moved)
 
         _ ->
-          {:ok, notes} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
-          {notes, false}
+          # Unbudgeted (`:meta`, or no byte budget): the chains statement
+          # itself probes for a moved folder.
+          {:ok, {notes, chains}} =
+            Repo.with_tenant(user.id, fn ->
+              notes = Repo.all(query)
+              {notes, Location.chains(notes)}
+            end)
+
+          {notes, false, chains}
       end
 
     {page, has_more} =
@@ -5706,21 +5826,30 @@ defmodule Engram.Notes do
     interleave_hook(:feed_after_page_read)
 
     resolved = resolve_stale_page(user, decrypted, fields)
+    names? = Location.on?()
+
+    # The resolved row replaces the page's copy wholesale, so every field in
+    # the emitted change comes from one coherent DB row, EXCEPT `seq`,
+    # which stays the page's below because it is the cursor this page is
+    # keyed on and moving it would break pagination. So a checkpoint landing
+    # mid-page yields post-checkpoint content under a pre-checkpoint seq, and
+    # the plugin fences CRDT rows by seq alone. Self-healing: the
+    # checkpoint's new seq is above this page's max, so the row is
+    # re-delivered on a later page.
+    #
+    # Live rows are served where their folder row and name put them
+    # (`Location.put_paths/2`, one folder read for the page); tombstones keep
+    # the path they were deleted at.
+    located =
+      decrypted
+      |> Enum.map(&if(fields == :all, do: Map.get(resolved, &1.id, &1), else: &1))
+      |> then(&Location.put_paths(user, &1, chains))
 
     changes =
-      Enum.map(decrypted, fn note ->
-        # The resolved row replaces the page's copy wholesale, so every field in
-        # the emitted change comes from one coherent DB row — EXCEPT `seq`,
-        # which stays the page's below because it is the cursor this page is
-        # keyed on and moving it would break pagination. So a checkpoint landing
-        # mid-page yields post-checkpoint content under a pre-checkpoint seq, and
-        # the plugin fences CRDT rows by seq alone. Self-healing: the
-        # checkpoint's new seq is above this page's max, so the row is
-        # re-delivered on a later page.
-        resolved_note = if fields == :all, do: Map.get(resolved, note.id, note), else: note
-
+      Enum.zip_with(decrypted, located, fn note, resolved_note ->
         resolved_note
         |> change_map(fields)
+        |> Map.merge(Location.wire_fields(resolved_note, names?))
         |> Map.put(:seq, note.seq)
       end)
 
@@ -5834,12 +5963,21 @@ defmodule Engram.Notes do
   # The next page (up to `limit + 1` rows of `base`), cut at the byte budget
   # (`budget_cut/5`), and whether the budget (not the row limit) is what
   # stopped it.
-  defp budgeted_page(base, user, limit, max_bytes) do
-    {notes, total, _spent} =
-      budget_cut(base, dynamic([n], n.seq), @note_fields_without_crdt, user, max_bytes)
+  defp budgeted_page(base, user, limit, max_bytes, moved) do
+    {rows, total, _spent, chains} =
+      budget_cut_rows(
+        base,
+        dynamic([n], n.seq),
+        @note_fields_without_crdt,
+        user,
+        max_bytes,
+        moved,
+        &if(Location.moved?(&1), do: Location.chains(&1))
+      )
 
+    notes = Enum.map(rows, &elem(&1, 0))
     fits = length(notes)
-    {notes, fits <= limit and total > fits}
+    {notes, fits <= limit and total > fits, chains}
   end
 
   # ONE statement for a byte-budgeted read of `base` (a notes query, maybe
@@ -5852,16 +5990,14 @@ defmodule Engram.Notes do
   # cut is a prefix. Only the kept ids are then joined back for `fields`, so
   # only kept rows' bodies are read; the window buffers narrow rows only.
   #
-  # Returns `{notes, total, spent}`: the kept rows in order, how many `base`
-  # matched, and the kept rows' summed stored size.
-  defp budget_cut(base, ord1, fields, user, max_bytes) do
-    {rows, total, spent} = budget_cut_rows(base, ord1, fields, user, max_bytes, %{})
-    {Enum.map(rows, &elem(&1, 0)), total, spent}
-  end
-
-  # `budget_cut/5` with `extra` (`select_map` extras) read in the same
-  # statement: the kept rows come back as `{note, extras}`.
-  defp budget_cut_rows(base, ord1, fields, user, max_bytes, extra) do
+  # Returns `{rows, total, spent, aside}`: the kept rows in order, how many
+  # `base` matched, the kept rows' summed stored size, and `aside`'s result.
+  #
+  # `extra` (`select_map` extras) is read in the same statement: the kept
+  # rows come back as `{note, extras}`. `aside` runs on the raw kept rows
+  # inside the same tenant transaction (the feed's `Location.chains/1`), its
+  # result returned fourth.
+  defp budget_cut_rows(base, ord1, fields, user, max_bytes, extra, aside \\ fn _ -> nil end) do
     sized =
       base
       |> NoteBody.join()
@@ -5896,11 +6032,15 @@ defmodule Engram.Notes do
         })
       )
 
-    {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
+    {:ok, {rows, aside}} =
+      Repo.with_tenant(user.id, fn ->
+        rows = Repo.all(query)
+        {rows, aside.(rows)}
+      end)
 
     {total, spent} = Enum.reduce(rows, {0, 0}, fn row, _ -> {row.total__, row.run__} end)
     keys = [:run__, :total__ | Map.keys(extra)]
-    {Enum.map(rows, &NoteBody.to_note(&1, keys)), total, spent}
+    {Enum.map(rows, &NoteBody.to_note(&1, keys)), total, spent, aside}
   end
 
   @doc """
@@ -5934,8 +6074,10 @@ defmodule Engram.Notes do
   defp notes_within(user, vault, paths, filter_key, max_bytes) do
     hmacs = Enum.map(paths, &Crypto.hmac_field(filter_key, &1))
     ids? = Keys.ids?()
+    on? = Location.on?()
+    at = &Location.at_any(filter_key, vault_id(vault), &1, ids?, on?)
 
-    base = from(n in live_notes(user, vault, ids?), where: ^Keys.in_any(:path, hmacs, ids?))
+    base = from(n in live_notes(user, vault, ids?), where: ^at.(paths))
 
     ord =
       dynamic(
@@ -5948,44 +6090,78 @@ defmodule Engram.Notes do
     # the state it replays on) rides in the same statement: `get_notes` serves
     # the current text (`current_note/3`), and a second read would break the
     # statement budget of this hot path.
-    {rows, total, spent} =
+    {rows, total, spent, _} =
       budget_cut_rows(base, ord, @note_fields_without_crdt, user, max_bytes, batch_tail_columns())
 
-    by_hmac = Map.new(rows, &{elem(&1, 0).path_hmac, batch_row(&1)})
     notes = Enum.map(rows, &elem(&1, 0))
+    asked = asked_paths(filter_key, paths, hmacs, on?)
+    key = path_key_of(user, filter_key, notes, asked)
+    read = keyed(rows, &key.(elem(&1, 0)), &batch_row/1)
 
-    {by_hmac, over} =
-      if total > length(notes),
-        do: past_the_cut(user, vault, Enum.zip(paths, hmacs), by_hmac, spent, max_bytes, ids?),
-        else: {by_hmac, MapSet.new()}
+    {{held, named}, over} =
+      if total > length(notes) do
+        ctx = %{
+          ids?: ids?,
+          at: at,
+          key: &path_key_of(user, filter_key, &1, asked),
+          read: Enum.map(notes, & &1.id)
+        }
 
+        past_the_cut(user, vault, Enum.zip(paths, hmacs), read, spent, max_bytes, ctx)
+      else
+        {read, MapSet.new()}
+      end
+
+    # The note that holds a path answers it, then a budget miss, and only
+    # then a note whose folder and name put it there.
     Enum.zip_with(paths, hmacs, fn path, hmac ->
-      case by_hmac do
-        %{^hmac => {note, tail}} ->
-          {path, fn -> note |> decrypt_or_raise!(user) |> then(&current_note(user, &1, tail)) end}
-
-        _ ->
-          if MapSet.member?(over, hmac),
-            do: {path, fn -> :over_budget end},
-            else: {path, fn -> nil end}
+      cond do
+        is_map_key(held, hmac) -> {path, serve(user, held[hmac])}
+        MapSet.member?(over, hmac) -> {path, fn -> :over_budget end}
+        is_map_key(named, hmac) -> {path, serve(user, named[hmac])}
+        true -> {path, fn -> nil end}
       end
     end)
   end
 
-  # The unread paths, in request order: each note that still fits the budget
-  # (stored sizes, `spent` so far) is read; the rest are over budget. Returns
-  # the read notes merged into `by_hmac`, and the over-budget HMACs.
-  defp past_the_cut(user, vault, pairs, by_hmac, spent, max_bytes, ids?) do
-    unread = for {_path, hmac} <- pairs, not is_map_key(by_hmac, hmac), uniq: true, do: hmac
+  defp serve(user, {note, tail}),
+    do: fn -> note |> decrypt_or_raise!(user) |> then(&current_note(user, &1, tail)) end
+
+  # `{held, named}`: each row by the path it holds (its stored path, the
+  # first `key` answer) and by the paths its folder and name put it at (the
+  # rest), so one never displaces the other.
+  defp keyed(rows, key, value \\ & &1) do
+    Enum.reduce(rows, {%{}, %{}}, fn row, {held, named} ->
+      [stored | derived] = key.(row)
+      v = value.(row)
+      {Map.put(held, stored, v), Enum.reduce(derived, named, &Map.put(&2, &1, v))}
+    end)
+  end
+
+  # The paths no read note holds, in request order: each note there not
+  # read yet that still fits the budget (stored sizes, `spent` so far) is
+  # read; the rest are over budget. Returns `{held, named}` with the read
+  # notes merged in, and the over-budget HMACs.
+  defp past_the_cut(user, vault, pairs, {held, named}, spent, max_bytes, ctx) do
+    %{ids?: ids?, at: at, key: key, read: read_ids} = ctx
+
+    unread_pairs =
+      for {_path, hmac} = p <- pairs, not is_map_key(held, hmac), uniq: true, do: p
+
+    unread = Enum.map(unread_pairs, &elem(&1, 1))
 
     sizes =
-      from(n in live_notes(user, vault, ids?), where: ^Keys.in_any(:path, unread, ids?))
+      from(n in live_notes(user, vault, ids?),
+        where: ^at.(Enum.map(unread_pairs, &elem(&1, 0))),
+        where: n.id not in ^read_ids
+      )
       |> NoteBody.join()
-      |> select([n], %{id: n.id, hmac: n.path_hmac})
+      |> select([n], map(n, ^@located_fields))
       |> select_merge(^%{size: NoteBody.byte_length(:content)})
 
     {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.all(sizes) end)
-    by_unread = Map.new(rows, &{&1.hmac, &1})
+    {by_path, by_name} = keyed(rows, key.(rows))
+    by_unread = Map.merge(by_name, by_path)
 
     {pick, over, _spent} =
       Enum.reduce(unread, {[], MapSet.new(), spent}, fn hmac, {pick, over, spent} ->
@@ -6015,13 +6191,60 @@ defmodule Engram.Notes do
         notes
       end
 
-    fresh =
-      Map.new(read, fn row ->
-        {n, _} = pair = NoteBody.to_note(row, @tail_keys ++ @tail_state_keys)
-        {n.path_hmac, batch_row(pair)}
-      end)
+    pairs = Enum.map(read, &NoteBody.to_note(&1, @tail_keys ++ @tail_state_keys))
+    key_of = key.(Enum.map(pairs, &elem(&1, 0)))
+    {fresh_held, fresh_named} = keyed(pairs, &key_of.(elem(&1, 0)), &batch_row/1)
 
-    {Map.merge(by_hmac, fresh), over}
+    {{Map.merge(held, fresh_held), Map.merge(fresh_named, named)}, over}
+  end
+
+  # What `get_notes_within/4` keys a row by: the path hashes it answers,
+  # so it lands on every path it was asked for.
+  #
+  # With names off (`asked` nil), its stored `path_hmac`: the only match.
+  # With them on, a row read by its path (`Location.derivable?/1` false) is
+  # at its stored path too. A row read by its folder and name matched SOME
+  # asked path with its name; when its stored path is asked and no other
+  # asked path has that name, that is the one (writers still cascade in S3,
+  # so this is every row, and nothing more is read). Otherwise (its stored
+  # path is stale, or two asked paths share the name) only those rows get
+  # their path derived (`Location.paths/2`, one folder read, and only in
+  # a vault with a folder moved without a cascade).
+  defp asked_paths(_filter_key, _paths, _hmacs, false), do: nil
+
+  defp asked_paths(filter_key, paths, hmacs, true),
+    do: %{
+      hmacs: MapSet.new(hmacs),
+      names: Enum.frequencies_by(paths, &Name.hmac(filter_key, Name.of_path(&1)))
+    }
+
+  defp path_key_of(_user, _filter_key, _rows, nil), do: &[&1.path_hmac]
+
+  defp path_key_of(user, filter_key, rows, %{hmacs: hmacs, names: names}) do
+    paths =
+      rows
+      |> Enum.filter(fn row ->
+        Location.derivable?(row) and
+          (not MapSet.member?(hmacs, row.path_hmac) or Map.get(names, row.name_hmac, 0) > 1)
+      end)
+      |> case do
+        [] -> %{}
+        moved -> Location.paths(user, moved)
+      end
+
+    # A row can answer two asked paths: its stored one (it holds it) and the
+    # one its folder and name put it at, unless another row holds that.
+    held = MapSet.new(rows, & &1.path_hmac)
+
+    fn row ->
+      with path when is_binary(path) <- paths[row.id],
+           derived = Crypto.hmac_field(filter_key, path),
+           true <- derived == row.path_hmac or not MapSet.member?(held, derived) do
+        Enum.uniq([row.path_hmac, derived])
+      else
+        _ -> [row.path_hmac]
+      end
+    end
   end
 
   # Resolves the authority for every note on this page whose façade lags,
@@ -7091,16 +7314,24 @@ defmodule Engram.Notes do
               )
 
             query = if after_id, do: where(query, [n], n.id > ^after_id), else: query
-            Repo.all(query)
+            rows = Repo.all(query)
+            # Their folder chains, in this snapshot (`Location.chains/1`).
+            {rows, Location.chains(rows)}
           end)
 
+        {rows, chains} = rows
         {page, next_cursor} = Pager.paginate(rows, limit, scope, & &1.id)
 
         # Phase B.4: title is virtual — sort the page by decrypted title in
         # BEAM since SQL can't order by encrypted columns. Pages themselves
         # are id-ordered; a client wanting a global title order sorts the
         # concatenated pages.
-        notes = page |> decrypt_or_raise!(user) |> Enum.sort_by(& &1.title)
+        notes =
+          page
+          |> decrypt_or_raise!(user)
+          |> then(&Location.put_paths(user, &1, chains))
+          |> Enum.sort_by(& &1.title)
+
         {:ok, %{notes: notes, next_cursor: next_cursor}}
       end
     else
@@ -7450,7 +7681,7 @@ defmodule Engram.Notes do
         # folder reference (`fenced_delete_query/1`).
         live =
           from(n in scoped_live(user, vault),
-            select: struct(n, ^[:folder_ref_id | @note_meta_fields])
+            select: struct(n, ^@note_meta_fields)
           )
 
         row_hmac = Map.new(refs, &{&1.id, &1.full_path_hmac})
