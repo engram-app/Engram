@@ -17,7 +17,7 @@ defmodule Engram.Instance.SetupTokenGrantsTest do
   alias Engram.Repo
 
   @migration_mod Engram.Repo.Migrations.GrantInstanceSetupTokenExpand
-  @migration_file "priv/repo/migrations/20261110120000_grant_instance_setup_token_expand.exs"
+  @migration_file "priv/repo/migrations/20261114000100_grant_instance_setup_token_expand.exs"
 
   defp migration do
     unless Code.ensure_loaded?(@migration_mod),
