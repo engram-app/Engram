@@ -163,6 +163,19 @@ defmodule Engram.Notes.LocationRlsPlanTest do
       refute Map.has_key?(lookup, :generic)
       assert custom =~ "notes_path_live", custom
       assert QueryPlan.buffers(custom) <= @lookup_buffers, custom
+
+      # 0.83.0's statement: no walk, no name probe, no moved-folder probe
+      # inside it (each costs planning on every unnamed call).
+      refute custom =~ "folders", custom
+
+      # The moved-folder probe is its own statement: one read of
+      # `folders_moved_live` in the custom and the generic plan.
+      assert [probe] = for({sql, p} <- plans, sql =~ "notes_cascaded", do: p)
+
+      for mode <- [:custom, :generic] do
+        assert probe[mode] =~ "folders_moved_live", probe[mode]
+        assert QueryPlan.buffers(probe[mode]) <= 2, probe[mode]
+      end
     end
 
     test "a moved folder: name key and walk on their indexes, no vault scan", ctx do
