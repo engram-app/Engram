@@ -1,6 +1,6 @@
 defmodule Engram.Migrations.AddMetaVersionLockTest do
   @moduledoc """
-  20261111150000 runs at boot and takes ACCESS EXCLUSIVE on `notes`. A
+  20261113150000 runs at boot and takes ACCESS EXCLUSIVE on `notes`. A
   statement that hits its 5 s `lock_timeout` (55P03) must be retried, not
   queue every notes read and write behind it or crash every task.
   """
@@ -11,7 +11,7 @@ defmodule Engram.Migrations.AddMetaVersionLockTest do
   alias Engram.LockTimeoutRepo
 
   setup_all do
-    Engram.MigrationFile.load!("20261111150000_add_meta_version_to_notes_expand.exs")
+    Engram.MigrationFile.load!("20261113150000_add_meta_version_to_notes_expand.exs")
     :ok
   end
 
