@@ -18,6 +18,7 @@ import time
 import uuid
 
 
+from helpers.auth_provider import SETUP_TOKEN
 from helpers.http_retry import RetryClient
 
 API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
@@ -36,7 +37,7 @@ def register(email: str, password: str = PASSWORD) -> dict:
     """Register a new user and return the response body (access_token, user)."""
     resp = http.post(
         f"{API_URL}/auth/register",
-        json={"email": email, "password": password},
+        json={"setup_token": SETUP_TOKEN, "email": email, "password": password},
         timeout=10,
     )
     assert resp.status_code == 201, f"register failed: {resp.status_code} {resp.text}"

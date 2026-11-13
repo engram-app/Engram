@@ -20,6 +20,7 @@ import uuid
 
 import pytest
 
+from helpers.auth_provider import SETUP_TOKEN
 from helpers.http_retry import RetryClient
 
 API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
@@ -54,7 +55,7 @@ class TestRegistration:
         email = unique_email("admin")
         resp = http.post(
             f"{API_URL}/auth/register",
-            json={"email": email, "password": PASSWORD},
+            json={"setup_token": SETUP_TOKEN, "email": email, "password": PASSWORD},
             timeout=10,
         )
         assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
@@ -69,7 +70,7 @@ class TestRegistration:
         email = unique_email("cookie")
         resp = http.post(
             f"{API_URL}/auth/register",
-            json={"email": email, "password": PASSWORD},
+            json={"setup_token": SETUP_TOKEN, "email": email, "password": PASSWORD},
             timeout=10,
         )
         assert resp.status_code == 201
@@ -80,14 +81,14 @@ class TestRegistration:
         email = unique_email("dup")
         resp1 = http.post(
             f"{API_URL}/auth/register",
-            json={"email": email, "password": PASSWORD},
+            json={"setup_token": SETUP_TOKEN, "email": email, "password": PASSWORD},
             timeout=10,
         )
         assert resp1.status_code == 201
 
         resp2 = http.post(
             f"{API_URL}/auth/register",
-            json={"email": email, "password": PASSWORD},
+            json={"setup_token": SETUP_TOKEN, "email": email, "password": PASSWORD},
             timeout=10,
         )
         assert resp2.status_code == 422, f"Expected 422 for dup, got {resp2.status_code}"
@@ -96,7 +97,7 @@ class TestRegistration:
         """Registration without password returns 422."""
         resp = http.post(
             f"{API_URL}/auth/register",
-            json={"email": unique_email("nopass")},
+            json={"setup_token": SETUP_TOKEN, "email": unique_email("nopass")},
             timeout=10,
         )
         assert resp.status_code == 422
@@ -113,7 +114,7 @@ class TestLogin:
         email = unique_email("login")
         resp = http.post(
             f"{API_URL}/auth/register",
-            json={"email": email, "password": PASSWORD},
+            json={"setup_token": SETUP_TOKEN, "email": email, "password": PASSWORD},
             timeout=10,
         )
         assert resp.status_code == 201
@@ -162,7 +163,7 @@ class TestRefresh:
         self.email = unique_email("refresh")
         resp = http.post(
             f"{API_URL}/auth/register",
-            json={"email": self.email, "password": PASSWORD},
+            json={"setup_token": SETUP_TOKEN, "email": self.email, "password": PASSWORD},
             timeout=10,
         )
         assert resp.status_code == 201
@@ -253,7 +254,7 @@ class TestLogout:
         # Register
         reg = http.post(
             f"{API_URL}/auth/register",
-            json={"email": email, "password": PASSWORD},
+            json={"setup_token": SETUP_TOKEN, "email": email, "password": PASSWORD},
             timeout=10,
         )
         assert reg.status_code == 201

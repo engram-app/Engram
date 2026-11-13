@@ -3,15 +3,18 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import LocalSignUp from "./local-sign-up";
 
-const { register, auth } = vi.hoisted(() => ({
+const { register, auth, boot } = vi.hoisted(() => ({
 	register: vi.fn().mockResolvedValue(undefined),
 	auth: { isSignedIn: false },
+	boot: {
+		value: null as { bootstrap_pending: boolean; registration_mode: string } | null,
+	},
 }));
 vi.mock("./use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ register, isSignedIn: auth.isSignedIn }),
 }));
 vi.mock("./use-bootstrap", () => ({
-	useBootstrap: () => null,
+	useBootstrap: () => boot.value,
 }));
 
 function renderPage() {
@@ -25,6 +28,7 @@ function renderPage() {
 afterEach(() => {
 	vi.clearAllMocks();
 	auth.isSignedIn = false;
+	boot.value = null;
 });
 
 describe("LocalSignUp", () => {
@@ -46,7 +50,9 @@ describe("LocalSignUp", () => {
 		fireEvent.change(screen.getByLabelText("Password"), { target: { value: "secret123" } });
 		fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "secret123" } });
 		fireEvent.click(screen.getByRole("button", { name: /create account/iu }));
-		await waitFor(() => expect(register).toHaveBeenCalledWith("a@b.com", "secret123", undefined));
+		await waitFor(() =>
+			expect(register).toHaveBeenCalledWith("a@b.com", "secret123", undefined, undefined),
+		);
 	});
 
 	it.each([
@@ -61,6 +67,68 @@ describe("LocalSignUp", () => {
 		fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "secret123" } });
 		fireEvent.click(screen.getByRole("button", { name: /create account/iu }));
 		expect(await screen.findByRole("alert")).toHaveTextContent(shown);
+	});
+});
+
+// First-run admin claim: the backend refuses it without the one-time setup
+// token from the server log, so the form must collect and send it.
+describe("LocalSignUp first-run setup", () => {
+	function fillAndSubmit() {
+		fireEvent.change(screen.getByLabelText("Email"), { target: { value: "a@b.com" } });
+		fireEvent.change(screen.getByLabelText("Password"), { target: { value: "secret123" } });
+		fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "secret123" } });
+		fireEvent.click(screen.getByRole("button", { name: /create account/iu }));
+	}
+
+	it("sends the setup token with the claim", async () => {
+		boot.value = { bootstrap_pending: true, registration_mode: "invite_only" };
+		renderPage();
+		fireEvent.change(screen.getByLabelText("Setup token"), { target: { value: " tok-123 " } });
+		fillAndSubmit();
+		await waitFor(() =>
+			expect(register).toHaveBeenCalledWith("a@b.com", "secret123", undefined, "tok-123"),
+		);
+	});
+
+	it("points the operator at the server log", () => {
+		boot.value = { bootstrap_pending: true, registration_mode: "invite_only" };
+		renderPage();
+		expect(screen.getByLabelText("Setup token")).toHaveAccessibleDescription(/server log/iu);
+	});
+
+	it("shows a translated message when the token is wrong", async () => {
+		boot.value = { bootstrap_pending: true, registration_mode: "invite_only" };
+		register.mockRejectedValueOnce(new Error("setup_token_invalid"));
+		renderPage();
+		fireEvent.change(screen.getByLabelText("Setup token"), { target: { value: "nope" } });
+		fillAndSubmit();
+		expect(await screen.findByRole("alert")).toHaveTextContent(/setup token is not valid/iu);
+	});
+
+	// /sign-in bounces straight back to /sign-up while bootstrap is pending.
+	it("hides the sign-in cross-link while no account exists", () => {
+		boot.value = { bootstrap_pending: true, registration_mode: "invite_only" };
+		renderPage();
+		expect(screen.queryByRole("link", { name: /sign in/iu })).not.toBeInTheDocument();
+	});
+
+	// The welcome note used to promise invite links on every instance, while an
+	// `open` one shows the normal sign-up form after the claim.
+	it.each([
+		["invite_only", /new accounts will need an invite link/iu],
+		["open", /anyone with the link can create an account/iu],
+		["closed", /no one else can create an account until you allow it/iu],
+	])("describes sign-ups after the claim for %s mode", (mode, text) => {
+		boot.value = { bootstrap_pending: true, registration_mode: mode };
+		renderPage();
+		expect(screen.getByText(text)).toBeInTheDocument();
+	});
+
+	it("has no setup token field once the instance is claimed", () => {
+		boot.value = { bootstrap_pending: false, registration_mode: "open" };
+		renderPage();
+		expect(screen.queryByLabelText("Setup token")).not.toBeInTheDocument();
+		expect(screen.getByRole("link", { name: /sign in/iu })).toBeInTheDocument();
 	});
 });
 
