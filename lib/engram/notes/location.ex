@@ -9,9 +9,10 @@ defmodule Engram.Notes.Location do
   what the plugin holds and what the unique `notes_path_live` slot names.
   With `on?/0`:
 
-    * **by-path lookup** (`at/5`, `at_any/5`): ONE statement,
-      `path_key OR id = <name match>`. A live note whose stored path key is
-      the asked path is that path's note, always. Only in a vault holding a
+    * **by-path lookup** (`at/5`, `at_any/5`): in a vault `named?/2`
+      finds moved, ONE statement, `path_key OR id = <name match>`. A live
+      note whose stored path key is the asked path is that path's note,
+      always. Only in a vault holding a
       folder moved without a cascade (from S5 on, so never in S3 alone) and
       only when no row holds the path does the name answer: the folder part
       of the path is walked on `folders_live_name` (`Engram.Folders.WalkSql`,
@@ -22,11 +23,11 @@ defmodule Engram.Notes.Location do
       Several such rows (drift) give the lowest id, never two rows. Every
       qual compares a plain column to a bound value or an InitPlan result,
       so each drives its index under FORCE RLS
-      (docs/context/rls-leakproof-index-quals.md). Cost, measured as
-      `engram_app` on a 1,000-note vault: an unmoved vault reads the path
-      index plus one probe of the empty `folders_moved_live` (4 buffers,
-      0.83.0's 3); a moved one adds depth + 2 index probes. Never a scan of
-      a folder or a vault.
+      (docs/context/rls-leakproof-index-quals.md). The caller decides
+      moved-ness first (`named?/2`, one probe of `folders_moved_live`), so
+      an unmoved vault sends 0.83.0's statement as is: planning the arms
+      cost 7 ms a call as `engram_app`. A moved vault adds depth + 2 index
+      probes. Never a scan of a folder or a vault.
     * **output paths** (`chains/1`, `put_paths/3`): a live note is shown where
       its folder row puts it ONLY when a folder on its chain was renamed
       without a cascade (`folders.notes_cascaded = false`, written from S5
@@ -93,22 +94,64 @@ defmodule Engram.Notes.Location do
   end
 
   @doc """
+  What a by-path lookup in `vault_id` passes `at/5` and `at_any/5` as
+  `named?`: names are on AND the vault holds a folder moved without a
+  cascade. One statement, a single probe of `folders_moved_live` (empty
+  everywhere until S5), in `user_id`'s tenant transaction (the caller's
+  when it is in one, else its own).
+
+  Why a statement of its own: the lookup runs unnamed (`Keys.lookup?/1`),
+  so Postgres plans it on every call, and planning the walk and name-match
+  arms as `engram_app` took 7.1-7.5 ms against 1.0 ms without them
+  (staging 2026-11-13, MCP get_notes 40 ms median against 0.83.0's 21).
+  The probe is a named statement with a cached plan; an unmoved vault then
+  sends exactly 0.83.0's lookup (docs/context/notes-generic-plan-mis-pick.md,
+  "send fewer parts").
+
+  One answer per operation: a caller that looks up more than once (a
+  rename's claim and row checks, a read-modify-write's read and write)
+  probes once and passes the answer down. A retry in a new transaction,
+  or an upsert's snapshot retry, probes again.
+
+  Race: a folder moved between this probe and the lookup is missed by that
+  one lookup, which then answers as it would have just before the move
+  (stored paths, which an uncascaded move does not change). Only S5 writes
+  such a move; the next lookup sees it. And a request that names the NEW
+  path always comes after the move committed (the client learns that path
+  from the move), so its probe already sees the move; only a guess of a
+  path no one was told can land in the window, and 0.83.0 misses that one
+  too. The same holds the other way: a stale `true` sends arms whose own
+  in-statement probe (`WalkSql.moved/0`) turns them off.
+  """
+  @spec named?(Ecto.UUID.t(), Ecto.UUID.t()) :: boolean()
+  def named?(user_id, vault_id), do: on?() and moved_vault?(user_id, vault_id)
+
+  defp moved_vault?(user_id, vault_id) do
+    Repo.with_tenant!(user_id, fn ->
+      Repo.one(
+        from(_ in fragment("(SELECT)"),
+          select: fragment(WalkSql.moved(), type(^vault_id, Ecto.UUID))
+        )
+      )
+    end)
+  end
+
+  @doc """
   The filter for the live note at `path` (sanitized) in `vault_id`, under
-  the user's `filter_key`. `ids?` and `on?` are read once by the caller, so
-  the filter and the partial-index predicates agree.
+  the user's `filter_key`. `ids?` (`Keys.ids?/0`) and `named?` (`named?/2`)
+  are read once by the caller, so the filter and the partial-index
+  predicates agree. Not `named?`: 0.83.0's path-key filter, nothing more.
   """
   @spec at(binary(), Ecto.UUID.t(), String.t(), boolean(), boolean()) ::
           Ecto.Query.dynamic_expr()
-  def at(filter_key, vault_id, path, ids? \\ Keys.ids?(), on? \\ on?()) do
+  def at(filter_key, vault_id, path, ids?, named?) do
     path_key = Keys.eq(:path, Crypto.hmac_field(filter_key, path), ids?)
-    if on?, do: named(filter_key, vault_id, path, path_key, ids?), else: path_key
+    if named?, do: named(filter_key, vault_id, path, path_key, ids?), else: path_key
   end
 
   @doc "`at/5` for any of `paths` (a few dozen at most: one walk per path)."
   @spec at_any(binary(), Ecto.UUID.t(), [String.t()], boolean(), boolean()) ::
           Ecto.Query.dynamic_expr()
-  def at_any(filter_key, vault_id, paths, ids? \\ Keys.ids?(), on? \\ on?())
-
   def at_any(filter_key, _vault_id, paths, ids?, false),
     do: Keys.in_any(:path, Enum.map(paths, &Crypto.hmac_field(filter_key, &1)), ids?)
 
@@ -125,12 +168,11 @@ defmodule Engram.Notes.Location do
   # so under FORCE RLS each drives its own index (`notes_path_live`, the
   # primary key); a qual applying a non-leakproof function to a column would
   # drive none, and the lookup would read the whole vault
-  # (docs/context/rls-leakproof-index-quals.md). The name match runs only in
-  # a vault holding a folder moved without a cascade (one probe of the
-  # empty-until-S5 `folders_moved_live`), and only when no live note holds
-  # the path: until S5 writes one, a name match can only be drift, a row the
-  # user sees somewhere else, so every lookup, push, delete and CRDT create
-  # reads stored paths exactly as 0.83.0 did.
+  # (docs/context/rls-leakproof-index-quals.md). Sent only for a vault
+  # holding a folder moved without a cascade (`named?/2`), and matches only
+  # when no live note holds the path: until S5 writes one, a name match can
+  # only be drift, a row the user sees somewhere else, so every lookup,
+  # push, delete and CRDT create reads stored paths exactly as 0.83.0 did.
   defp named(filter_key, vault_id, path, path_key, ids?) do
     case path |> String.split("/") |> Enum.split(-1) do
       {[], _root} ->

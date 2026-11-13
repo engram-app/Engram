@@ -388,6 +388,48 @@ defmodule Engram.Notes.LocationTest do
   end
 
   describe "cost" do
+    # The `notes` statements `fun` sends, in order.
+    defp notes_sql(fun) do
+      {_, queries} = Engram.QueryRecorder.record(fun)
+      Engram.QueryPlan.reading(queries, "notes")
+    end
+
+    # Staging 2026-11-13: names on, the walk and name-match arms cost the
+    # unnamed lookup 7.1-7.5 ms of planning as engram_app (1.0 ms without
+    # them), so MCP get_notes ran at 40 ms against 0.83.0's 21. A vault with
+    # no folder moved without a cascade must send 0.83.0's statement.
+    test "an unmoved vault sends the names-off lookup statement", %{user: u, vault: v} do
+      _ = note!(u, v, "D/y.md")
+
+      calls = fn ->
+        assert Notes.note_exists?(u, v, "A/B/x.md")
+        Notes.get_notes_within(u, v, ["A/B/x.md", "D/y.md"], 1_000_000)
+      end
+
+      on = notes_sql(calls)
+      refute Enum.any?(on, &(&1 =~ "WITH RECURSIVE")), Enum.join(on, "\n\n")
+
+      ServiceConfig.put_override(:name_reads, false)
+      refute Location.on?()
+      assert on == notes_sql(calls)
+    end
+
+    test "a moved vault still sends the walk and name arms, and finds the moved note",
+         %{user: u, vault: v, note: note} do
+      move_folder_row!(u, folder_id(u, v, "A/B"), "C")
+
+      sql = notes_sql(fn -> assert found(u, v, "A/C/x.md") == note.id end)
+
+      assert Enum.any?(sql, &(&1 =~ "WITH RECURSIVE" and &1 =~ "name_key")),
+             Enum.join(sql, "\n\n")
+
+      sql =
+        notes_sql(fn -> assert got_ids(u, v, ["A/C/x.md"]) == %{"A/C/x.md" => note.id} end)
+
+      assert Enum.any?(sql, &(&1 =~ "WITH RECURSIVE" and &1 =~ "name_key")),
+             Enum.join(sql, "\n\n")
+    end
+
     test "get_notes_within at current stored paths reads no folder chains", %{user: u, vault: v} do
       _ = note!(u, v, "D/y.md")
 

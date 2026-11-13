@@ -1076,7 +1076,6 @@ defmodule Engram.Notes do
 
       base_attrs = put_client_ctime(base_attrs, attrs)
 
-      {:ok, lookup_query} = note_by_path_query(user, vault, sanitized_path)
       opts = prepare_expected(opts, base_attrs, user, sanitized_path, folder)
 
       # NOT gated (Vaults.SeqGate): this transaction runs the CRDT merge and
@@ -1084,8 +1083,20 @@ defmodule Engram.Notes do
       # lock at all. Gating it serialized merges per vault (PR 2356 review).
       result =
         Repo.with_tenant(user.id, fn ->
+          # Built inside the tenant transaction: its moved-folder probe
+          # (`Location.named?/2`) is one statement here, not a transaction,
+          # and none when a read-modify-write hands its read's answer in
+          # (`named?:`). A retry re-probes (`requery`).
+          requery = fn named? ->
+            {:ok, query} =
+              note_by_path_query(user, vault, sanitized_path, :all, named?: named?)
+
+            query
+          end
+
           %{
-            query: lookup_query,
+            query: requery.(opts[:named?]),
+            requery: fn -> requery.(nil) end,
             locked: Keyword.get(opts, :locked_note),
             expected: Keyword.get(opts, :expected_note),
             client_id: client_id,
@@ -1918,7 +1929,7 @@ defmodule Engram.Notes do
       {:error, reason} ->
         {:error, reason}
 
-      held ->
+      {held, _named?} ->
         case Map.get(held, new_path) do
           nil -> claim_one(user, vault, new_path, note_id)
           ^note_id -> claim_one(user, vault, new_path, note_id)
@@ -3105,7 +3116,7 @@ defmodule Engram.Notes do
 
     case result do
       :stale_snapshot when retries > 0 ->
-        lookup_and_write(w, retries - 1)
+        lookup_and_write(%{w | query: w.requery.()}, retries - 1)
 
       :stale_snapshot ->
         # Out of retries. Re-read so the conflict we hand back describes the row
@@ -3623,12 +3634,31 @@ defmodule Engram.Notes do
   # The note row (facade content) plus its tail rows, from the same statement
   # (see with_tail/1).
   defp get_note_with_tail(user, vault, path) do
-    with {:ok, query} <- note_by_path_query(user, vault, path, :raw),
-         {:ok, {%Note{} = note, tail}} <-
-           Repo.with_tenant(user.id, fn -> query |> with_tail() |> Repo.one() |> tail_result() end) do
-      {:ok, note |> decrypt_or_raise!(user) |> Location.found_at(path), tail}
-    else
-      _ -> {:error, :not_found}
+    with {:ok, note, tail, _named?} <- read_located(user, vault, path),
+         do: {:ok, note, tail}
+  end
+
+  # `get_note_with_tail/3` plus the lookup's moved-folder answer
+  # (`Location.named?/2`), for a read-modify-write to hand its write
+  # (`named?:` in the upsert opts), so the operation probes once.
+  defp read_located(user, vault, path) do
+    case Repo.with_tenant(user.id, fn -> read_with_tail(user, vault, path) end) do
+      {:ok, {{%Note{} = note, tail}, named?}} ->
+        {:ok, note |> decrypt_or_raise!(user) |> Location.found_at(path), tail, named?}
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
+  # Inside the tenant transaction, so the lookup's moved-folder probe
+  # (`Location.named?/2`) is one statement there.
+  defp read_with_tail(user, vault, path) do
+    named? = Location.named?(user.id, vault_id(vault))
+
+    case note_by_path_query(user, vault, path, :raw, named?: named?) do
+      {:ok, query} -> {query |> with_tail() |> Repo.one() |> tail_result(), named?}
+      error -> error
     end
   end
 
@@ -3767,7 +3797,11 @@ defmodule Engram.Notes do
     # its transaction) seeds the memo, so an unchanged note is not re-parsed.
     # Its note and tail are the optimistic snapshot, so the note is read once.
     {rebuilt, opts} = Keyword.pop(opts, :rebuilt)
-    snapshot = rebuilt && {:ok, rebuilt.note, {:replayed, rebuilt.tail, rebuilt.authority}}
+
+    snapshot =
+      rebuilt &&
+        {:ok, rebuilt.note, {:replayed, rebuilt.tail, rebuilt.authority}, rebuilt.named?}
+
     if rebuilt, do: Process.put(key, {rebuilt.text, rebuilt.result})
 
     try do
@@ -3798,12 +3832,19 @@ defmodule Engram.Notes do
   """
   @spec rmw_prepare(map(), map(), String.t(), (String.t() -> term())) :: {:ok, map()} | :none
   def rmw_prepare(user, vault, path, rebuild) do
-    with {:ok, note, tail} <- get_note_with_tail(user, vault, path),
+    with {:ok, note, tail, named?} <- read_located(user, vault, path),
          {:ok, current, _doc} = authority <- authority(user, note, tail) do
       # The replayed doc rides along, so the transaction does not decrypt and
       # replay the same snapshot again (rebuild/1 never mutates it).
       {:ok,
-       %{note: note, tail: tail, authority: authority, text: current, result: rebuild.(current)}}
+       %{
+         note: note,
+         tail: tail,
+         authority: authority,
+         text: current,
+         result: rebuild.(current),
+         named?: named?
+       }}
     else
       _ -> :none
     end
@@ -3813,10 +3854,15 @@ defmodule Engram.Notes do
   # Outside one a lost race returns :locked for the caller to open one, and a
   # miss is answered as is: no lock would outlive the call anyway, so a
   # caller that creates on a miss opens its own transaction (REST append).
+  # The read's moved-folder answer goes to the write (`named?:`): an
+  # uncascaded move between them leaves the read row's stored path as it
+  # was, so the write's lookup by that answer still finds the row it locks.
+  # A lost race re-reads under the lock (`rmw_locked/5`), which probes anew.
   defp rmw_optimistic(user, vault, path, rebuild, opts, snapshot) do
-    with {:ok, note, tail} <- snapshot || get_note_with_tail(user, vault, path),
+    with {:ok, note, tail, named?} <- snapshot || read_located(user, vault, path),
+         expected = [expected_note: note, named?: named?] ++ opts,
          {{:error, stale}, _} when stale in [:stale_note, :stale_tail] <-
-           rmw_attempt(user, vault, path, {note, tail}, rebuild, [expected_note: note] ++ opts) do
+           rmw_attempt(user, vault, path, {note, tail}, rebuild, expected) do
       locked_or_return(user, vault, path, rebuild, opts)
     else
       {:error, :not_found} = missing ->
@@ -3905,9 +3951,11 @@ defmodule Engram.Notes do
   end
 
   defp rmw_locked(user, vault, path, rebuild, opts) do
-    case get_note_for_update(user, vault, path) do
+    named? = Location.named?(user.id, vault.id)
+
+    case get_note_for_update(user, vault, path, named?) do
       {:ok, note} ->
-        locked = [locked_note: note] ++ opts
+        locked = [locked_note: note, named?: named?] ++ opts
 
         # The row lock does not block tail appends, so a legacy row's tail can
         # still appear after this read. Read once more: it replays now, and
@@ -3967,10 +4015,13 @@ defmodule Engram.Notes do
   The vault row is locked first, in the same statement. Every other note writer
   takes the vault's seq lock (`Vaults.next_seq!/2`) BEFORE it updates the note
   row, so taking the note first would deadlock against them. Pass the result to
-  `upsert_note/4` as `locked_note:`.
+  `upsert_note/4` as `locked_note:`. `named?`: the moved-folder answer
+  (`Engram.Notes.Location.named?/2`) the caller already read in this
+  transaction; nil probes here.
   """
-  @spec get_note_for_update(map(), map(), String.t()) :: {:ok, Note.t()} | {:error, :not_found}
-  def get_note_for_update(user, vault, path) do
+  @spec get_note_for_update(map(), map(), String.t(), boolean() | nil) ::
+          {:ok, Note.t()} | {:error, :not_found}
+  def get_note_for_update(user, vault, path, named? \\ nil) do
     unless Repo.in_transaction?() and Process.get(:engram_tenant) == user.id,
       do:
         raise(
@@ -3978,7 +4029,7 @@ defmodule Engram.Notes do
           "get_note_for_update/3 must run inside the user's tenant transaction"
         )
 
-    with {:ok, query} <- note_by_path_query(user, vault, path),
+    with {:ok, query} <- note_by_path_query(user, vault, path, :all, named?: named?),
          locked = lock_for_write(query, vault.id),
          # A miss is read again once. The statement's snapshot predates its
          # wait on the vault lock, so a note another writer created while we
@@ -4439,12 +4490,11 @@ defmodule Engram.Notes do
   end
 
   defp find_note_by_path(user, vault, path, fields) do
-    case note_by_path_query(user, vault, path, fields) do
-      {:ok, query} ->
-        Repo.with_tenant(user.id, fn -> Repo.one(query) end)
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      Repo.with_tenant(user.id, fn ->
+        {:ok, query} = note_by_path_query(user, vault, path, fields, filter_key: filter_key)
+        Repo.one(query)
+      end)
     end
   end
 
@@ -4452,13 +4502,19 @@ defmodule Engram.Notes do
   # tenant context (or via find_note_by_path/3 when none is active). Selects
   # the whole note, body from `note_bodies` (`NoteBody.select_note/2`), or
   # just `fields`; `:raw` leaves the select to the caller.
-  defp note_by_path_query(user, vault, path, fields \\ :all) do
-    with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+  #
+  # `filter_key:` a key the caller already resolved (then this cannot fail).
+  # `named?:` the moved-folder answer (`Location.named?/2`) the caller read
+  # earlier in the same operation, so one operation probes once; without
+  # it, the probe runs here, in the caller's tenant transaction.
+  defp note_by_path_query(user, vault, path, fields \\ :all, opts \\ []) do
+    with {:ok, filter_key} <- filter_key(user, opts) do
       ids? = Keys.ids?()
+      named? = named?(user, vault, opts)
 
       query =
         from(n in live_notes(user, vault, ids?),
-          where: ^Location.at(filter_key, vault_id(vault), path, ids?)
+          where: ^Location.at(filter_key, vault_id(vault), path, ids?, named?)
         )
 
       {:ok,
@@ -4467,6 +4523,20 @@ defmodule Engram.Notes do
          :all -> NoteBody.select_note(query)
          fields -> NoteBody.select_note(query, fields)
        end}
+    end
+  end
+
+  defp filter_key(user, opts) do
+    case Keyword.fetch(opts, :filter_key) do
+      {:ok, key} -> {:ok, key}
+      :error -> Crypto.dek_filter_key(user)
+    end
+  end
+
+  defp named?(user, vault, opts) do
+    case Keyword.get(opts, :named?) do
+      nil -> Location.named?(user.id, vault_id(vault))
+      named? -> named?
     end
   end
 
@@ -4527,35 +4597,40 @@ defmodule Engram.Notes do
   # rename or relocate: a claim decided on a different lookup than the row
   # check after it strands a durable Identity claim (#2523 review M5). A few
   # paths only (one folder walk each). Rows are keyed back to the asked paths
-  # as `get_notes_within/4` keys them; the moved-vault flag rides the same
-  # statement, so with no moved folder nothing more is read.
+  # as `get_notes_within/4` keys them; with no moved folder (`named?/2`, in
+  # the same tenant transaction) nothing more is read.
   defp located_ids_at(user, vault, paths) do
     case Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
         ids? = Keys.ids?()
-        on? = Location.on?()
         hmacs = Enum.map(paths, &Crypto.hmac_field(filter_key, &1))
 
-        rows =
+        {named?, rows} =
           Repo.with_tenant!(user.id, fn ->
-            from(n in live_notes(user, vault, ids?),
-              where: ^Location.at_any(filter_key, vault_id(vault), paths, ids?, on?),
-              select: map(n, ^@located_fields)
-            )
-            |> select_merge(^Location.moved_column(vault_id(vault)))
-            |> Repo.all()
+            named? = Location.named?(user.id, vault_id(vault))
+
+            {named?,
+             Repo.all(
+               from(n in live_notes(user, vault, ids?),
+                 where: ^Location.at_any(filter_key, vault_id(vault), paths, ids?, named?),
+                 select: map(n, ^@located_fields)
+               )
+             )}
           end)
 
-        asked = if Location.moved?(rows), do: asked_paths(filter_key, paths, hmacs, on?)
+        asked = asked_paths(filter_key, paths, hmacs, named?)
         key = path_key_of(user, filter_key, rows, asked)
         path_of = Map.new(Enum.zip(hmacs, paths))
 
-        for row <- rows,
-            k <- key.(row),
-            path = path_of[k],
-            path != nil,
-            into: %{},
-            do: {path, row.id}
+        held =
+          for row <- rows,
+              k <- key.(row),
+              path = path_of[k],
+              path != nil,
+              into: %{},
+              do: {path, row.id}
+
+        {held, named?}
 
       {:error, _} = err ->
         err
@@ -4674,18 +4749,9 @@ defmodule Engram.Notes do
     now = DateTime.utc_now()
 
     with {:ok, user} <- Crypto.ensure_user_dek(user),
-         {:ok, claimed?} <- claim_rename(user, vault, old_path, new_path, opts) do
+         {:ok, claimed?, named?} <- claim_rename(user, vault, old_path, new_path, opts) do
       try do
-        do_rename_note(
-          user,
-          vault,
-          old_path,
-          new_path,
-          new_folder,
-          now,
-          opts[:note_id],
-          opts[:folder_refs]
-        )
+        do_rename_note(user, vault, {old_path, new_path, new_folder}, now, opts, named?)
       rescue
         # Shed by the vault's SeqGate AFTER the claim committed: the same
         # orphan as a failed rename, so projection converges the row.
@@ -4709,11 +4775,15 @@ defmodule Engram.Notes do
   # deriving rows FROM the map and would otherwise feed itself. Claiming is the
   # DEFAULT so that a new call site is fail-safe rather than fail-silent.
   #
-  # Returns `{:ok, claimed?}` so the caller can tell a rename that failed having
-  # committed a claim from one that failed before committing anything.
+  # Returns `{:ok, claimed?, named?}` so the caller can tell a rename that
+  # failed having committed a claim from one that failed before committing
+  # anything. `named?` is the claim lookup's moved-folder answer
+  # (`Location.named?/2`, nil when nothing was looked up): the row checks
+  # reuse it, so the rename probes once and its claim and row checks read
+  # the vault the same way.
   defp claim_rename(user, vault, old_path, new_path, opts) do
     if Keyword.get(opts, :index, :claim) == :skip or old_path == new_path do
-      {:ok, false}
+      {:ok, false, nil}
     else
       claim_for_note(user, vault, old_path, new_path)
     end
@@ -4724,8 +4794,12 @@ defmodule Engram.Notes do
     # doubled the query count on the hottest path in the module. The lookup
     # the row checks use (`located_ids_at/3`), so the two never disagree.
     case located_ids_at(user, vault, [old_path, new_path]) do
-      {:error, reason} -> {:error, reason}
-      held -> decide_claim(user, vault, held, old_path, new_path)
+      {:error, reason} ->
+        {:error, reason}
+
+      {held, named?} ->
+        with {:ok, claimed?} <- decide_claim(user, vault, held, old_path, new_path),
+             do: {:ok, claimed?, named?}
     end
   end
 
@@ -4812,16 +4886,23 @@ defmodule Engram.Notes do
     :ok
   end
 
-  defp do_rename_note(user, vault, old_path, new_path, new_folder, now, note_id, refs) do
-    {:ok, lookup_query} = note_by_path_query(user, vault, old_path)
-
-    lookup_query =
-      if note_id, do: from(n in lookup_query, where: n.id == ^note_id), else: lookup_query
-
-    {:ok, target_query} = note_by_path_query(user, vault, new_path, [:id])
+  defp do_rename_note(user, vault, {old_path, new_path, new_folder}, now, opts, named?) do
+    note_id = opts[:note_id]
+    refs = opts[:folder_refs]
 
     result =
       SeqGate.with_tenant(user.id, vault.id, fn ->
+        # Inside the tenant transaction, so the moved-folder probe
+        # (`Location.named?/2`, unless the claim already read it) is one
+        # statement, and both lookups share its answer.
+        named? = if is_nil(named?), do: Location.named?(user.id, vault.id), else: named?
+        {:ok, lookup_query} = note_by_path_query(user, vault, old_path, :all, named?: named?)
+
+        lookup_query =
+          if note_id, do: from(n in lookup_query, where: n.id == ^note_id), else: lookup_query
+
+        {:ok, target_query} = note_by_path_query(user, vault, new_path, [:id], named?: named?)
+
         cond do
           # No-op rename: same path. Skip target conflict check so the
           # request becomes idempotent rather than reporting a conflict
@@ -5107,13 +5188,17 @@ defmodule Engram.Notes do
   """
   @spec delete_note_reporting(map(), map(), String.t(), keyword()) :: :deleted | :absent
   def delete_note_reporting(user, vault, path, opts \\ []) do
-    # The HMAC before the transaction: a DekCache miss unwraps through KMS.
-    case note_by_path_query(user, vault, path, @note_core_fields) do
-      {:ok, query} ->
+    # The filter key before the transaction: a DekCache miss unwraps through
+    # KMS. The query inside it, so its moved-folder probe is one statement.
+    case Crypto.dek_filter_key(user) do
+      {:ok, filter_key} ->
         SeqGate.with_vault(
           vault.id,
           fn ->
             Repo.with_tenant!(user.id, fn ->
+              {:ok, query} =
+                note_by_path_query(user, vault, path, @note_core_fields, filter_key: filter_key)
+
               case Repo.one(query) do
                 %Note{} = note -> tombstone_note(user, vault, path, note, opts)
                 nil -> :absent
@@ -6074,8 +6159,8 @@ defmodule Engram.Notes do
   defp notes_within(user, vault, paths, filter_key, max_bytes) do
     hmacs = Enum.map(paths, &Crypto.hmac_field(filter_key, &1))
     ids? = Keys.ids?()
-    on? = Location.on?()
-    at = &Location.at_any(filter_key, vault_id(vault), &1, ids?, on?)
+    named? = Location.named?(user.id, vault_id(vault))
+    at = &Location.at_any(filter_key, vault_id(vault), &1, ids?, named?)
 
     base = from(n in live_notes(user, vault, ids?), where: ^at.(paths))
 
@@ -6094,7 +6179,7 @@ defmodule Engram.Notes do
       budget_cut_rows(base, ord, @note_fields_without_crdt, user, max_bytes, batch_tail_columns())
 
     notes = Enum.map(rows, &elem(&1, 0))
-    asked = asked_paths(filter_key, paths, hmacs, on?)
+    asked = asked_paths(filter_key, paths, hmacs, named?)
     key = path_key_of(user, filter_key, notes, asked)
     read = keyed(rows, &key.(elem(&1, 0)), &batch_row/1)
 
@@ -6201,7 +6286,8 @@ defmodule Engram.Notes do
   # What `get_notes_within/4` keys a row by: the path hashes it answers,
   # so it lands on every path it was asked for.
   #
-  # With names off (`asked` nil), its stored `path_hmac`: the only match.
+  # With names off or no moved folder (`asked` nil, `Location.named?/2`),
+  # its stored `path_hmac`: the only match.
   # With them on, a row read by its path (`Location.derivable?/1` false) is
   # at its stored path too. A row read by its folder and name matched SOME
   # asked path with its name; when its stored path is asked and no other
