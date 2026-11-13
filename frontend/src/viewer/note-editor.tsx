@@ -268,6 +268,7 @@ export default function NoteEditor({
 	// (that would rebuild the markdown language and re-parse the whole note after
 	// every upload). Embeds are told to re-resolve with an effect instead (below).
 	const attachmentsRef = useRef(attachments);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Stable wrappers must always call the latest value without being recreated.
 	attachmentsRef.current = attachments;
 	const resolveAttachment = useCallback(
 		(target: string) => resolveAttachmentTarget(attachmentsRef.current ?? [], target),
@@ -277,10 +278,12 @@ export default function NoteEditor({
 	// a language switch reaches widgets built afterwards without recreating the
 	// view (which would detach yCollab).
 	const tRef = useRef(t);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Stable wrappers must always call the latest value without being recreated.
 	tRef.current = t;
 	const translateText = useRef<Translate>((en, vars) => tRef.current(en, vars)).current;
 	const upload = useUploadAttachment();
 	const uploadRef = useRef(upload.mutateAsync);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Stable wrappers must always call the latest value without being recreated.
 	uploadRef.current = upload.mutateAsync;
 	// Sidebar items and OS files dropped on the text. Files go to the vault root
 	// (Obsidian's default), under a name that does not clobber an existing file,
@@ -304,11 +307,13 @@ export default function NoteEditor({
 	// dependency, so a caller re-rendering with a new onView identity never
 	// recreates the view.
 	const onViewRef = useRef(onView);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Stable wrappers must always call the latest value without being recreated.
 	onViewRef.current = onView;
 	// Same treatment: the extension is baked into the state at creation, so it
 	// must read through a ref or a new callback identity would force a rebuild
 	// and detach yCollab.
 	const onShortcutRef = useRef(onFrontmatterShortcut);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Stable wrappers must always call the latest value without being recreated.
 	onShortcutRef.current = onFrontmatterShortcut;
 	// Same treatment for the link callbacks, for a stronger reason: they live in
 	// the decorations compartment, and reconfiguring it rebuilds the markdown
@@ -316,6 +321,7 @@ export default function NoteEditor({
 	// Callers re-render with new identities on every edit, so the compartment
 	// must only ever see these stable wrappers and swap on a mode change alone.
 	const linksRef = useRef({ resolveWikiLink, openWikiLink, wikiCompletionPaths, openMarkdownLink });
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Stable wrappers must always call the latest value without being recreated.
 	linksRef.current = { resolveWikiLink, openWikiLink, wikiCompletionPaths, openMarkdownLink };
 	const links = useRef({
 		resolveWikiLink: (name: string) => linksRef.current.resolveWikiLink(name),
