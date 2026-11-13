@@ -71,6 +71,22 @@ defmodule Engram.Notes.NameKeyTriggerTest do
     assert {nil, _, nil} = row(note.id)
   end
 
+  # `notes_folder_ref_live_only` blanks `folder_ref_id` on a restore whose
+  # folder row is trashed. A restore that names only `deleted_at` must still
+  # recompute the key, or a revived folder row would match it by name.
+  test "a restore into a trashed folder row clears it", %{user: u, vault: v} do
+    note = note!(u, v, "A/x.md")
+    {key, _, ref} = row(note.id)
+    assert is_binary(key)
+    id = Ecto.UUID.dump!(note.id)
+
+    Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [id])
+    Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [ref])
+    Repo.query!("UPDATE notes SET deleted_at = NULL WHERE id = $1", [id])
+
+    assert {nil, _, nil} = row(note.id)
+  end
+
   # The trigger inlines the stamp's version byte: a bump of
   # `NameKeys.version/0` must ship a new trigger, or no name would match.
   test "the trigger's stamp version is NameKeys.version/0" do

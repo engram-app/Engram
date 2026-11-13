@@ -27,7 +27,8 @@ defmodule Engram.Repo.Migrations.AddNotesNameKeyExpand do
   against 4 on 0.83.0). A plain column compared to a bound value is
   leakproof. See docs/context/rls-leakproof-index-quals.md.
 
-  `notes_set_name_key` (BEFORE INSERT OR UPDATE OF the five inputs) keeps it
+  `notes_set_name_key` (BEFORE INSERT OR UPDATE OF the five inputs and
+  `deleted_at`) keeps it
   for every writer, this release, the previous release's nodes and raw SQL:
   the key while the row is a note with a folder row and current name keys
   (`name_stamp = path_nonce || '\\x01'`, `Engram.Crypto.NameKeys.stamp/1`;
@@ -35,9 +36,13 @@ defmodule Engram.Repo.Migrations.AddNotesNameKeyExpand do
   new trigger, `NameKeyTriggerTest` fails until then), else NULL. So a stale
   name never matches by name. It only assigns `NEW` and fires on a
   statement that lists one of its inputs, which `name_key` is not: it
-  cannot loop. Cost: one plpgsql call per insert, and per update that names
-  an input (create, rename, move, name backfill, folder release); a content
-  save names none.
+  cannot loop. `deleted_at` is listed because `notes_folder_ref_live_only`
+  (same column) blanks `folder_ref_id` on a restore into a trashed folder
+  row, and a trigger's own change does not fire another's `UPDATE OF`. Row
+  triggers of one timing fire in name order, so that one runs first and
+  this one sees the blanked ref. Cost: one plpgsql call per insert, and per
+  update that names an input (create, rename, move, name backfill, folder
+  release, delete, restore); a content save names none.
 
   `notes_name_key_live (vault_id, name_key)` serves that lookup, partial on
   live keyed rows. No other query names `name_key`, so no other read can
@@ -73,7 +78,7 @@ defmodule Engram.Repo.Migrations.AddNotesNameKeyExpand do
       """,
       """
       CREATE OR REPLACE TRIGGER notes_set_name_key
-        BEFORE INSERT OR UPDATE OF kind, folder_ref_id, name_ci_hmac, name_stamp, path_nonce
+        BEFORE INSERT OR UPDATE OF kind, folder_ref_id, name_ci_hmac, name_stamp, path_nonce, deleted_at
         ON notes
         FOR EACH ROW EXECUTE FUNCTION notes_set_name_key()
       """
