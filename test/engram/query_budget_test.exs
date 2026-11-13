@@ -70,11 +70,12 @@ defmodule Engram.QueryBudgetTest do
   # S3 prune (names on, 2026-11-13): every by-path lookup first asks
   # whether the vault holds a folder moved without a cascade
   # (`Location.named?/2`, one cached-plan probe of `folders_moved_live`,
-  # 1 buffer), inside the tenant transaction it already runs in (+1 per
-  # lookup: get_notes, GET, create, update, delete +1; append, write_note
-  # update, append_to_note, edit_note +2; rename +3). It buys back the 7 ms
-  # of planning the unnamed lookup paid for the walk and name arms in every
-  # vault (staging MCP get_notes 40 ms against 0.83.0's 21).
+  # 1 buffer), inside a tenant transaction it already runs in: +1 on every
+  # path below that looks a path up. One probe per operation: a rename's
+  # claim hands its answer to the row checks, a read-modify-write's read to
+  # its write (`named?:`), so append, edits and rename are +1 too. It buys
+  # back the 7 ms of planning the unnamed lookup paid for the walk and name
+  # arms in every vault (staging MCP get_notes 40 ms against 0.83.0's 21).
   @budgets %{
     # Read target 5. begin, tenant_enter, the note, commit.
     "mcp get_notes" => 5,
@@ -117,15 +118,15 @@ defmodule Engram.QueryBudgetTest do
     # Replacing now needs a base_hash (#2480), so the write is append_to_note's
     # optimistic read-modify-write: +1, the locked re-read of the row the
     # base was checked against. The plugin's REST push below still costs 12.
-    "mcp write_note update" => 15,
+    "mcp write_note update" => 14,
     # As write_note, with 4 the unlocked read and 5 the locked re-read of the
     # optimistic read-modify-write (Task 7 ruling F1) instead of the tail read
     # (the tail rides in the read statement).
-    "mcp append_to_note" => 15,
+    "mcp append_to_note" => 14,
     # As append_to_note, but the note read (and the section parse it feeds)
     # runs before the request transaction, in its own short one (+3: begin,
     # enter, commit), so a seconds-long parse holds no pool connection.
-    "mcp edit_note" => 18,
+    "mcp edit_note" => 17,
     # rotation lock, begin, enter, the note row (found once), seq bump,
     # tombstone, usage_meters, the index-delete job insert + its pg_notify,
     # the release joining the warm-up's pending release job (one UPDATE, no
@@ -151,7 +152,7 @@ defmodule Engram.QueryBudgetTest do
     # tenant transactions, not one (+6: two more begin/enter/commit), so the
     # merge and encryption hold no pool connection and the links read runs
     # after the write committed.
-    "POST notes/append" => 21,
+    "POST notes/append" => 20,
     # Not consolidated in Task 10b (no query-classify item; a rename claims its
     # path in the vault index room, which must commit before the row txn):
     #  1-4 claim validation txn (note ids at the paths).
@@ -171,7 +172,7 @@ defmodule Engram.QueryBudgetTest do
     #  the old name's terms, INSERT of the new name's, the stamp UPDATE,
     #  commit. Constant: each a set-based statement over at most 32 rows;
     #  a note with no terms yet (this test) skips the DELETE, so 39 here.
-    "POST notes/rename" => 42,
+    "POST notes/rename" => 40,
     # begin, enter, the note row, seq bump, tombstone, usage_meters, the
     # index-delete job insert + its pg_notify, the release joining the
     # warm-up's pending release job (one UPDATE, no insert), commit. With no
