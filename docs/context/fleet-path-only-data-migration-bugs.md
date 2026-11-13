@@ -3,7 +3,7 @@
 _Last verified: 2026-11-11_
 
 ## Status
-Working. Guard test lands with engram-app/Engram#2528 and #2535 (files below exist only on those PR branches until they merge).
+Working. Guard test merged to main with engram-app/Engram#2528 and #2535 (verified on origin/main 2026-11-11).
 
 ## What This Is
 DataMigrations and backfill workers branch on whether the maintenance pool (`Engram.Repo.Maintenance`, set by `MAINTENANCE_DATABASE_URL`) is configured. The unit suite does not configure it, so it runs the `:per_user` path by default and the fleet-only branch never ran in tests. Prod and staging take the fleet branch.
@@ -31,10 +31,10 @@ It raised on every backfill hop AFTER the hop's commit and BEFORE the successor 
 Note: `select: 1` inside `exists()` IS valid. The restriction is only for `subquery/1` and CTEs.
 
 ## The guard
-`test/engram/data_migrations/maintenance_pool_registry_test.exs` (PR #2528 / #2535):
+`test/engram/data_migrations/maintenance_pool_registry_test.exs` (merged in #2528 / #2535):
 - Iterates the DataMigration registry and runs each migration's pass and `left/0` on a real maintenance pool, started with `Engram.Test.MaintenancePool.start!` from `test/support/maintenance_pool.ex`.
 - Attaches to Ecto query telemetry with `stacktrace: true` and asserts that `ReconcileNotePayloads.queue_window/2`, `FolderTable.scope/2` and `BackfillCrdtState.enqueue_missing/0` actually issue their queries on that pool (proves the fleet branch ran, not the per-user fallback).
-- Migrations whose `enabled?/0` is false (`KeyAliases`, `PersonOriginBackfill`) are NOT exercised. Re-check coverage when one is enabled.
+- Migrations whose `enabled?/0` returns false at test time are NOT exercised. Two are gated by a runtime condition, not hard-disabled: `KeyAliases` runs only when `Engram.Rebuild.mode() == :on` (ServiceConfig `index_rebuild` = `"on"` and the rebuild not halted), and `PersonOriginBackfill` runs only when `Analytics.enabled?() and Analytics.person_reads_enabled?()` (PostHog project key plus personal API key set). Neither holds in the test env. Re-check coverage if the guard test ever sets those conditions.
 - Known gap (post-R3 follow-up): the guard passes silently when a migration's pass makes no maintenance-pool query (`EnvelopeFormat`, `LinkResolutionKeys`, `NoteName`, `KeyAliases`, `PersonOriginBackfill`); it only prints `NO fleet query`. The fix is an explicit expected-list assertion.
 
 ## Rule for new DataMigrations / backfill workers
