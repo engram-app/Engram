@@ -180,6 +180,88 @@ defmodule Engram.QueryPlan do
   defp flunk(message), do: raise(ExUnit.AssertionError, message: message)
 
   @doc """
+  How prod runs `sql`: as `engram_app` with `user_id`'s tenant set (FORCE
+  RLS on), `EXPLAIN (ANALYZE, BUFFERS)` with the recorded `params`, as a
+  custom plan and as a forced generic plan (`PREPARE` under
+  `plan_cache_mode = force_generic_plan`, then `EXECUTE` with the same
+  values), after `DISCARD PLANS`, with seq scans off (a Seq Scan left in
+  the plan means no index can serve it). Returns `%{custom:, generic:}` plan texts.
+
+  A plan read as the suite's superuser skips RLS, so it cannot show a qual
+  the security barrier keeps from driving an index: under RLS a qual that
+  applies a non-leakproof function (`byteacat`, `uuid_send`, most casts) to
+  a column is evaluated only after the policy's own quals, so it is never an
+  index condition and the scan falls back to the tenant's index
+  (`docs/context/rls-leakproof-index-quals.md`). Read-only statements only:
+  the run rolls back, but an EXPLAIN ANALYZE executes the statement.
+  """
+  @spec rls_plans(Ecto.UUID.t(), String.t(), list()) :: %{custom: String.t(), generic: String.t()}
+  def rls_plans(user_id, sql, params) do
+    name = "rls_plan_#{System.unique_integer([:positive])}"
+    explain = "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF) "
+
+    rolled_back(fn ->
+      Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+      Repo.query!("SELECT set_config('app.current_tenant', $1, true)", [user_id])
+      Repo.query!("DISCARD PLANS")
+      # A test table is a page or two, where a seq scan wins on cost alone.
+      # Off, a Seq Scan still in the plan means no index can serve it.
+      Repo.query!("SET LOCAL enable_seqscan = off")
+      custom = plan_text(Repo.query!(explain <> sql, params))
+
+      Repo.query!("SET LOCAL plan_cache_mode = force_generic_plan")
+      Repo.query!("PREPARE #{name} AS " <> sql)
+
+      try do
+        # EXECUTE takes no protocol parameters: the values go in as literals
+        # of the types the PREPARE inferred.
+        %{rows: [[types]]} =
+          Repo.query!(
+            "SELECT parameter_types::text[] FROM pg_prepared_statements WHERE name = $1",
+            [name]
+          )
+
+        args = Enum.zip_with(params, types, &literal/2)
+        execute = if args == [], do: name, else: "#{name}(#{Enum.join(args, ", ")})"
+        %{custom: custom, generic: plan_text(Repo.query!(explain <> "EXECUTE " <> execute))}
+      after
+        Repo.query("DEALLOCATE #{name}")
+      end
+    end)
+  end
+
+  defp literal(nil, type), do: "NULL::#{type}"
+
+  defp literal(list, type) when is_list(list) do
+    elem_type = String.trim_trailing(type, "[]")
+    "ARRAY[#{Enum.map_join(list, ", ", &literal(&1, elem_type))}]::#{type}"
+  end
+
+  defp literal(<<_::128>> = uuid, "uuid"), do: "'#{Ecto.UUID.load!(uuid)}'::uuid"
+  defp literal(bin, "bytea") when is_binary(bin), do: "'\\x#{Base.encode16(bin)}'::bytea"
+  defp literal(bin, type) when is_binary(bin), do: "'#{String.replace(bin, "'", "''")}'::#{type}"
+  defp literal(%DateTime{} = t, type), do: "'#{DateTime.to_iso8601(t)}'::#{type}"
+  defp literal(%NaiveDateTime{} = t, type), do: "'#{NaiveDateTime.to_iso8601(t)}'::#{type}"
+  defp literal(value, type) when is_number(value) or is_boolean(value), do: "#{value}::#{type}"
+
+  @doc "The top node's `shared hit + read` buffer count of an `rls_plans/3` plan."
+  @spec buffers(String.t()) :: non_neg_integer()
+  def buffers(plan) do
+    case Regex.run(~r/Buffers: shared ([^\n]+)/, plan) do
+      [_, counts] ->
+        ~r/(?:hit|read)=(\d+)/
+        |> Regex.scan(counts)
+        |> Enum.map(fn [_, n] -> String.to_integer(n) end)
+        |> Enum.sum()
+
+      nil ->
+        0
+    end
+  end
+
+  defp plan_text(%{rows: rows}), do: rows |> List.flatten() |> Enum.join("\n")
+
+  @doc """
   The statements the calling process recorded whose SQL reads `table`, in
   order. The recorder's telemetry handler sees every process's queries, so an
   async sibling test's reads would otherwise land in this list.

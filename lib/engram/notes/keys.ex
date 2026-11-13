@@ -133,10 +133,21 @@ defmodule Engram.Notes.Keys do
   plan per call, about 0.5-1 ms on prod RDS, on ~70k lookups a day.
   """
   @spec lookup?(term()) :: boolean()
-  def lookup?(%Ecto.Query{from: %{source: {"notes", _}}, wheres: wheres}),
-    do: Enum.any?(wheres, &key_compare?(&1.expr))
+  def lookup?(%Ecto.Query{} = query),
+    do: keyed_notes?(query) or Enum.any?(subqueries(query), &lookup?/1)
 
   def lookup?(_), do: false
+
+  defp keyed_notes?(%Ecto.Query{from: %{source: {"notes", _}}, wheres: wheres}),
+    do: Enum.any?(wheres, &key_compare?(&1.expr))
+
+  defp keyed_notes?(_), do: false
+
+  # A keyed read inside a FROM or JOIN subquery (`get_notes_within/4`'s
+  # budget cut) makes the whole statement one: its generic plan would scan
+  # the vault for it all the same.
+  defp subqueries(%Ecto.Query{from: from, joins: joins}),
+    do: for(%{source: %Ecto.SubQuery{query: q}} <- [from | joins], do: q)
 
   defp key_compare?({op, _, [left, right]}) when op in [:==, :in],
     do: key_column?(left) or key_column?(right)

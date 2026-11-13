@@ -19,6 +19,16 @@ defmodule Engram.Migrations.AddNamesLockTest do
   defp migration,
     do: String.to_existing_atom("Elixir.Engram.Repo.Migrations.AddNamesExpand")
 
+  # Runs the migration's down out of order, on the current schema: a later
+  # migration's object that depends on a column it drops goes first, as a
+  # rollback in order would drop it first. 20261113100000's
+  # `notes_set_name_key` fires on `UPDATE OF ... name_stamp`, so it depends
+  # on S2's columns. Inside the test's transaction, rolled back with it.
+  defp run_down! do
+    Engram.Repo.query!("DROP TRIGGER IF EXISTS notes_set_name_key ON notes")
+    migration().run_down(Engram.Repo)
+  end
+
   defp columns do
     Engram.Repo.query!("""
     SELECT table_name || '.' || column_name FROM information_schema.columns
@@ -32,7 +42,7 @@ defmodule Engram.Migrations.AddNamesLockTest do
 
   test "a statement that hits its lock timeout is retried, then every column lands" do
     landed = columns()
-    migration().run_down(Engram.Repo)
+    run_down!()
     # Folders' own name columns predate S2; only the ones S2 adds are gone.
     refute Enum.any?(
              columns(),
@@ -55,7 +65,7 @@ defmodule Engram.Migrations.AddNamesLockTest do
   end
 
   test "one summary line, counts only: the columns present" do
-    migration().run_down(Engram.Repo)
+    run_down!()
     previous = Logger.level()
     Logger.configure(level: :info)
     on_exit(fn -> Logger.configure(level: previous) end)

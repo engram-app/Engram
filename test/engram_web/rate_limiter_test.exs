@@ -12,7 +12,7 @@ defmodule EngramWeb.RateLimiterTest do
   # reset_buckets!/0 must hand back a window with room to burst into. Hammer's
   # fix_window is epoch-aligned, so a burst started just before a 10s edge
   # splits and the N+1th request is allowed (two CI reds on 2026-09-11).
-  describe "fresh_window_wait_ms/1" do
+  describe "fresh_window_wait_ms/2" do
     test "waits past the edge when it is inside the margin" do
       assert RateLimiter.fresh_window_wait_ms(9_990) == 11
       assert RateLimiter.fresh_window_wait_ms(9_001) == 1_000
@@ -25,6 +25,24 @@ defmodule EngramWeb.RateLimiterTest do
       assert RateLimiter.fresh_window_wait_ms(0) == 0
       assert RateLimiter.fresh_window_wait_ms(10_000) == 0
       assert RateLimiter.fresh_window_wait_ms(4_321) == 0
+    end
+
+    test "a longer burst waits until it fits before the next edge" do
+      # 3.5 s left, a 4 s burst: wait past the edge.
+      assert RateLimiter.fresh_window_wait_ms(6_500, 4_000) == 3_501
+      assert RateLimiter.fresh_window_wait_ms(1_789_000_008_400, 6_000) == 1_601
+      # 5 s left: it fits.
+      assert RateLimiter.fresh_window_wait_ms(5_000, 4_000) == 0
+    end
+
+    test "reset_buckets!/1 returns with the burst's time before the next edge" do
+      RateLimiter.reset_buckets!(4_000)
+      left = 10_000 - rem(System.system_time(:millisecond), 10_000)
+      assert left >= 3_990, "only #{left}ms left in the window after reset"
+    end
+
+    test "a burst longer than a window is refused" do
+      assert_raise FunctionClauseError, fn -> RateLimiter.reset_buckets!(10_000) end
     end
 
     test "reset_buckets!/0 returns with at least the margin before the next edge" do

@@ -72,9 +72,12 @@ migrations at boot.
 ### Testing a per-minute limiter
 
 The Hammer window is fixed and epoch-aligned (`div(now, scale)`). Start the
-burst just after the minute turns. In tests, `reset_buckets!` in
-`lib/engram_web/rate_limiter.ex` waits past the next 10s edge only when less
-than 1s remains before it, so keep a burst under 1s.
+burst just after the minute turns. In tests, `reset_buckets!/1` in
+`lib/engram_web/rate_limiter.ex` waits past the next 10s edge when less than
+`burst_ms` (default 1s) remains before it. A burst through a slow route
+passes its own length: 11 logins hash 11 passwords (~290 ms each on CI), and
+one such burst crossed `06:40:00` on 2026-11-13 (`rate_limit_test.exs`,
+"shipped auth limits", now `reset_buckets!(6_000)`).
 
 ## Failed Approaches / Dead Ends
 
