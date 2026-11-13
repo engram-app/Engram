@@ -99,15 +99,20 @@ defmodule Engram.Notes.LocationPlanTest do
     assert_plan(ctx.user, ctx.vault, "notes_user_vault_path_v2")
   end
 
-  # The walk sits behind the moved-folder probe (`WalkSql.name_match_by_id/0`):
-  # an unmoved vault never runs it. Run for real on the statement the app
-  # sends, not inferred from the plan's shape.
+  # An unmoved vault does not send the walk at all (`Location.named?/2`
+  # decides first: planning the arms on every unnamed lookup cost 7 ms as
+  # `engram_app`); a moved one sends it and runs it. Run for real on the
+  # statements the app sends, not inferred from the plan's shape.
   defp walk_line(plan) do
     plan |> String.split("\n") |> Enum.find(&(&1 =~ "Recursive Union")) || flunk(plan)
   end
 
-  test "an unmoved vault never runs the folder walk; a moved one does", ctx do
-    assert walk_line(lookup_plan(ctx.user, ctx.vault, "A/B/new.md", false)) =~ "never executed"
+  test "an unmoved vault never sends the folder walk; a moved one runs it", ctx do
+    {_, queries} =
+      QueryRecorder.record(fn -> refute Notes.note_exists?(ctx.user, ctx.vault, "A/B/new.md") end)
+
+    refute Enum.any?(queries, &(&1.sql =~ "WITH RECURSIVE"))
+
     mark_moved!(ctx.user, ctx.vault)
     refute walk_line(lookup_plan(ctx.user, ctx.vault, "A/B/new.md", false)) =~ "never executed"
   end

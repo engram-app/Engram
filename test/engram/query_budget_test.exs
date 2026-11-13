@@ -67,14 +67,22 @@ defmodule Engram.QueryBudgetTest do
   # is dropped), and a row-locked read takes its body from `note_bodies` in a
   # fresh statement after the lock (+1 on the locked read-modify-write paths:
   # append, edit_note), so the lock never de-TOASTs the notes copy.
+  # S3 prune (names on, 2026-11-13): every by-path lookup first asks
+  # whether the vault holds a folder moved without a cascade
+  # (`Location.named?/2`, one cached-plan probe of `folders_moved_live`,
+  # 1 buffer), inside the tenant transaction it already runs in (+1 per
+  # lookup: get_notes, GET, create, update, delete +1; append, write_note
+  # update, append_to_note, edit_note +2; rename +3). It buys back the 7 ms
+  # of planning the unnamed lookup paid for the walk and name arms in every
+  # vault (staging MCP get_notes 40 ms against 0.83.0's 21).
   @budgets %{
     # Read target 5. begin, tenant_enter, the note, commit.
-    "mcp get_notes" => 4,
+    "mcp get_notes" => 5,
     # Three paths, the same four: the notes come in one statement.
-    "mcp get_notes 3 paths" => 4,
+    "mcp get_notes 3 paths" => 5,
     # 20 non-markdown paths cost what 20 markdown ones do: the batch reads no
     # per-note CRDT state (#2486 round 6 removed a per-note state read).
-    "mcp get_notes 20 canvas paths" => 4,
+    "mcp get_notes 20 canvas paths" => 5,
     # begin, enter, the page (rows + budget), commit; one resolve chunk:
     # begin, enter, tail rows, commit.
     "catch-up page" => 8,
@@ -82,7 +90,7 @@ defmodule Engram.QueryBudgetTest do
     # `sub` (not cached; an API key resolves through the :api_key cache). The
     # grant behind the token's `gid` is read from the `:oauth_grant` cache:
     # 0 queries warm.
-    "mcp get_notes oauth" => 5,
+    "mcp get_notes oauth" => 6,
     # Every 60 s cache cold: the warm 5, the ONE grant query
     # (`OAuth.load_grant/1`: liveness, levels, owner, granted_at), the
     # subscription block (4), the onboarding gate's users row, the vault list
@@ -94,7 +102,7 @@ defmodule Engram.QueryBudgetTest do
     # `note_name` ledger read behind `Notes.Location.on?/0` once a minute per
     # node (18 cold there); the suite excludes it by config
     # (`config/test.exs` `:name_reads_ledger`).
-    "mcp get_notes oauth cold" => 17,
+    "mcp get_notes oauth cold" => 18,
     # Each kept query required:
     #  1 rotation lock: a write reads it fresh from the DB (RotationGate).
     #  2, 3, 11 begin / tenant_enter / commit: the one tenant txn (RLS).
@@ -109,28 +117,28 @@ defmodule Engram.QueryBudgetTest do
     # Replacing now needs a base_hash (#2480), so the write is append_to_note's
     # optimistic read-modify-write: +1, the locked re-read of the row the
     # base was checked against. The plugin's REST push below still costs 12.
-    "mcp write_note update" => 13,
+    "mcp write_note update" => 15,
     # As write_note, with 4 the unlocked read and 5 the locked re-read of the
     # optimistic read-modify-write (Task 7 ruling F1) instead of the tail read
     # (the tail rides in the read statement).
-    "mcp append_to_note" => 13,
+    "mcp append_to_note" => 15,
     # As append_to_note, but the note read (and the section parse it feeds)
     # runs before the request transaction, in its own short one (+3: begin,
     # enter, commit), so a seconds-long parse holds no pool connection.
-    "mcp edit_note" => 16,
+    "mcp edit_note" => 18,
     # rotation lock, begin, enter, the note row (found once), seq bump,
     # tombstone, usage_meters, the index-delete job insert + its pg_notify,
     # the release joining the warm-up's pending release job (one UPDATE, no
     # insert: ReleaseIndexEntries.enqueue/3 coalesces per vault), commit.
-    "mcp delete_note" => 11,
+    "mcp delete_note" => 12,
     # Read target 5; floor 6: begin, enter, change_seq (it decides whether the
     # rows are read at all), notes rows, attachments rows, commit.
     "GET sync/manifest" => 6,
-    "GET notes/*path" => 5,
+    "GET notes/*path" => 6,
     # The plugin's push: rotation lock, begin, enter, note row, crdt tail, seq
     # bump, UPDATE, revision touch, outbox INSERT + pg_notify, commit, plus
     # the response's note_links read.
-    "POST notes update" => 12,
+    "POST notes update" => 13,
     # Rotation lock, begin, enter, path lookup, notes cap (usage_meters),
     # path-collision probe, seq bump, INSERT, the inserted row's re-read,
     # usage_meters increment, the NoteCommitted outbox INSERT + its pg_notify
@@ -138,12 +146,12 @@ defmodule Engram.QueryBudgetTest do
     # 4), the vault_populated probe, the response's links read, the folder row
     # lookup (`Folders.Rows.ensure/4`: one indexed probe by path hash when the
     # folder is not the root), commit.
-    "POST notes create" => 16,
+    "POST notes create" => 17,
     # The read, the write and the response's note_links read are three short
     # tenant transactions, not one (+6: two more begin/enter/commit), so the
     # merge and encryption hold no pool connection and the links read runs
     # after the write committed.
-    "POST notes/append" => 19,
+    "POST notes/append" => 21,
     # Not consolidated in Task 10b (no query-classify item; a rename claims its
     # path in the vault index room, which must commit before the row txn):
     #  1-4 claim validation txn (note ids at the paths).
@@ -163,12 +171,12 @@ defmodule Engram.QueryBudgetTest do
     #  the old name's terms, INSERT of the new name's, the stamp UPDATE,
     #  commit. Constant: each a set-based statement over at most 32 rows;
     #  a note with no terms yet (this test) skips the DELETE, so 39 here.
-    "POST notes/rename" => 39,
+    "POST notes/rename" => 42,
     # begin, enter, the note row, seq bump, tombstone, usage_meters, the
     # index-delete job insert + its pg_notify, the release joining the
     # warm-up's pending release job (one UPDATE, no insert), commit. With no
     # release pending it is the UPDATE (0 rows) + insert + notify instead.
-    "DELETE notes/*path" => 10,
+    "DELETE notes/*path" => 11,
     # Warm: every loader is a cache hit; what remains is the controller's one
     # tenant block (begin, enter, commit), opened unconditionally (fix round 1
     # ruling: bootstrap's DB work runs in ONE block).

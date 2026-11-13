@@ -37,7 +37,11 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   # terms, one set-based INSERT in the row transaction (its stamp rides the
   # folder INSERT). The note's own terms are written by its index pass, not
   # here, so the create still writes its row once.
-  @statements 19
+  # 19 -> 20: S3 prune, the create's by-path lookup first probes whether the
+  # vault holds a folder moved without a cascade (`Location.named?/2`, one
+  # cached-plan statement in the row transaction), so an unmoved vault sends
+  # 0.83.0's lookup, not one whose walk and name arms cost 7 ms to plan.
+  @statements 20
   @tenant_txns 1
   @subscription_reads 0
 

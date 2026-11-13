@@ -1076,7 +1076,6 @@ defmodule Engram.Notes do
 
       base_attrs = put_client_ctime(base_attrs, attrs)
 
-      {:ok, lookup_query} = note_by_path_query(user, vault, sanitized_path)
       opts = prepare_expected(opts, base_attrs, user, sanitized_path, folder)
 
       # NOT gated (Vaults.SeqGate): this transaction runs the CRDT merge and
@@ -1084,6 +1083,10 @@ defmodule Engram.Notes do
       # lock at all. Gating it serialized merges per vault (PR 2356 review).
       result =
         Repo.with_tenant(user.id, fn ->
+          # Built inside the tenant transaction: its moved-folder probe
+          # (`Location.named?/2`) is one statement here, not a transaction.
+          {:ok, lookup_query} = note_by_path_query(user, vault, sanitized_path)
+
           %{
             query: lookup_query,
             locked: Keyword.get(opts, :locked_note),
@@ -3623,12 +3626,21 @@ defmodule Engram.Notes do
   # The note row (facade content) plus its tail rows, from the same statement
   # (see with_tail/1).
   defp get_note_with_tail(user, vault, path) do
-    with {:ok, query} <- note_by_path_query(user, vault, path, :raw),
-         {:ok, {%Note{} = note, tail}} <-
-           Repo.with_tenant(user.id, fn -> query |> with_tail() |> Repo.one() |> tail_result() end) do
-      {:ok, note |> decrypt_or_raise!(user) |> Location.found_at(path), tail}
-    else
-      _ -> {:error, :not_found}
+    case Repo.with_tenant(user.id, fn -> read_with_tail(user, vault, path) end) do
+      {:ok, {%Note{} = note, tail}} ->
+        {:ok, note |> decrypt_or_raise!(user) |> Location.found_at(path), tail}
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
+  # Inside the tenant transaction, so the lookup's moved-folder probe
+  # (`Location.named?/2`) is one statement there.
+  defp read_with_tail(user, vault, path) do
+    case note_by_path_query(user, vault, path, :raw) do
+      {:ok, query} -> query |> with_tail() |> Repo.one() |> tail_result()
+      error -> error
     end
   end
 
@@ -4439,12 +4451,10 @@ defmodule Engram.Notes do
   end
 
   defp find_note_by_path(user, vault, path, fields) do
-    case note_by_path_query(user, vault, path, fields) do
-      {:ok, query} ->
-        Repo.with_tenant(user.id, fn -> Repo.one(query) end)
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, _} <- Crypto.dek_filter_key(user) do
+      Repo.with_tenant(user.id, fn ->
+        with {:ok, query} <- note_by_path_query(user, vault, path, fields), do: Repo.one(query)
+      end)
     end
   end
 
@@ -4458,7 +4468,14 @@ defmodule Engram.Notes do
 
       query =
         from(n in live_notes(user, vault, ids?),
-          where: ^Location.at(filter_key, vault_id(vault), path, ids?)
+          where:
+            ^Location.at(
+              filter_key,
+              vault_id(vault),
+              path,
+              ids?,
+              Location.named?(user.id, vault_id(vault))
+            )
         )
 
       {:ok,
@@ -4527,26 +4544,28 @@ defmodule Engram.Notes do
   # rename or relocate: a claim decided on a different lookup than the row
   # check after it strands a durable Identity claim (#2523 review M5). A few
   # paths only (one folder walk each). Rows are keyed back to the asked paths
-  # as `get_notes_within/4` keys them; the moved-vault flag rides the same
-  # statement, so with no moved folder nothing more is read.
+  # as `get_notes_within/4` keys them; with no moved folder (`named?/2`, in
+  # the same tenant transaction) nothing more is read.
   defp located_ids_at(user, vault, paths) do
     case Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
         ids? = Keys.ids?()
-        on? = Location.on?()
         hmacs = Enum.map(paths, &Crypto.hmac_field(filter_key, &1))
 
-        rows =
+        {named?, rows} =
           Repo.with_tenant!(user.id, fn ->
-            from(n in live_notes(user, vault, ids?),
-              where: ^Location.at_any(filter_key, vault_id(vault), paths, ids?, on?),
-              select: map(n, ^@located_fields)
-            )
-            |> select_merge(^Location.moved_column(vault_id(vault)))
-            |> Repo.all()
+            named? = Location.named?(user.id, vault_id(vault))
+
+            {named?,
+             Repo.all(
+               from(n in live_notes(user, vault, ids?),
+                 where: ^Location.at_any(filter_key, vault_id(vault), paths, ids?, named?),
+                 select: map(n, ^@located_fields)
+               )
+             )}
           end)
 
-        asked = if Location.moved?(rows), do: asked_paths(filter_key, paths, hmacs, on?)
+        asked = asked_paths(filter_key, paths, hmacs, named?)
         key = path_key_of(user, filter_key, rows, asked)
         path_of = Map.new(Enum.zip(hmacs, paths))
 
@@ -4813,15 +4832,17 @@ defmodule Engram.Notes do
   end
 
   defp do_rename_note(user, vault, old_path, new_path, new_folder, now, note_id, refs) do
-    {:ok, lookup_query} = note_by_path_query(user, vault, old_path)
-
-    lookup_query =
-      if note_id, do: from(n in lookup_query, where: n.id == ^note_id), else: lookup_query
-
-    {:ok, target_query} = note_by_path_query(user, vault, new_path, [:id])
-
     result =
       SeqGate.with_tenant(user.id, vault.id, fn ->
+        # Inside the tenant transaction, so each moved-folder probe
+        # (`Location.named?/2`) is one statement, not a transaction.
+        {:ok, lookup_query} = note_by_path_query(user, vault, old_path)
+
+        lookup_query =
+          if note_id, do: from(n in lookup_query, where: n.id == ^note_id), else: lookup_query
+
+        {:ok, target_query} = note_by_path_query(user, vault, new_path, [:id])
+
         cond do
           # No-op rename: same path. Skip target conflict check so the
           # request becomes idempotent rather than reporting a conflict
@@ -5107,13 +5128,16 @@ defmodule Engram.Notes do
   """
   @spec delete_note_reporting(map(), map(), String.t(), keyword()) :: :deleted | :absent
   def delete_note_reporting(user, vault, path, opts \\ []) do
-    # The HMAC before the transaction: a DekCache miss unwraps through KMS.
-    case note_by_path_query(user, vault, path, @note_core_fields) do
-      {:ok, query} ->
+    # The filter key before the transaction: a DekCache miss unwraps through
+    # KMS. The query inside it, so its moved-folder probe is one statement.
+    case Crypto.dek_filter_key(user) do
+      {:ok, _} ->
         SeqGate.with_vault(
           vault.id,
           fn ->
             Repo.with_tenant!(user.id, fn ->
+              {:ok, query} = note_by_path_query(user, vault, path, @note_core_fields)
+
               case Repo.one(query) do
                 %Note{} = note -> tombstone_note(user, vault, path, note, opts)
                 nil -> :absent
@@ -6074,8 +6098,8 @@ defmodule Engram.Notes do
   defp notes_within(user, vault, paths, filter_key, max_bytes) do
     hmacs = Enum.map(paths, &Crypto.hmac_field(filter_key, &1))
     ids? = Keys.ids?()
-    on? = Location.on?()
-    at = &Location.at_any(filter_key, vault_id(vault), &1, ids?, on?)
+    named? = Location.named?(user.id, vault_id(vault))
+    at = &Location.at_any(filter_key, vault_id(vault), &1, ids?, named?)
 
     base = from(n in live_notes(user, vault, ids?), where: ^at.(paths))
 
@@ -6094,7 +6118,7 @@ defmodule Engram.Notes do
       budget_cut_rows(base, ord, @note_fields_without_crdt, user, max_bytes, batch_tail_columns())
 
     notes = Enum.map(rows, &elem(&1, 0))
-    asked = asked_paths(filter_key, paths, hmacs, on?)
+    asked = asked_paths(filter_key, paths, hmacs, named?)
     key = path_key_of(user, filter_key, notes, asked)
     read = keyed(rows, &key.(elem(&1, 0)), &batch_row/1)
 
@@ -6201,7 +6225,8 @@ defmodule Engram.Notes do
   # What `get_notes_within/4` keys a row by: the path hashes it answers,
   # so it lands on every path it was asked for.
   #
-  # With names off (`asked` nil), its stored `path_hmac`: the only match.
+  # With names off or no moved folder (`asked` nil, `Location.named?/2`),
+  # its stored `path_hmac`: the only match.
   # With them on, a row read by its path (`Location.derivable?/1` false) is
   # at its stored path too. A row read by its folder and name matched SOME
   # asked path with its name; when its stored path is asked and no other

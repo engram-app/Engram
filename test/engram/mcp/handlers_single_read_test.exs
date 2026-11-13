@@ -486,7 +486,9 @@ defmodule Engram.MCP.HandlersSingleReadTest do
       )
   end
 
-  test "a batch read serves each tailed note's current text in the same 4 statements", ctx do
+  # begin, enter, the moved-folder probe (`Location.named?/2`), the notes,
+  # commit: the tails ride in the notes statement.
+  test "a batch read serves each tailed note's current text in the same 5 statements", ctx do
     %{conn: conn, user: user, vault: vault} = ctx
     put_note(user, vault, "b.md", "# B\n\nbee\n")
 
@@ -509,7 +511,7 @@ defmodule Engram.MCP.HandlersSingleReadTest do
     end
 
     qs = Enum.reject(qs, &(&1.source == "tenant_exit_sandbox"))
-    assert length(qs) == 4, QueryRecorder.format(qs)
+    assert length(qs) == 5, QueryRecorder.format(qs)
   end
 
   test "a note past the byte budget still serves its tail via the greedy pass", ctx do
