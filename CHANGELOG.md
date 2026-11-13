@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.84.0](https://github.com/engram-app/Engram/compare/0.83.0...0.84.0) (2026-11-13)
+
+
+### Features
+
+* **notes:** S3 read switch, notes by folder row and name ([#2587](https://github.com/engram-app/Engram/issues/2587)) ([a5952f8](https://github.com/engram-app/Engram/commit/a5952f8accfb833940a0c3cf55431a82c4f1fbe4))
+
+
+### Bug Fixes
+
+* **notes:** S3 lookup drives its indexes under RLS ([#2589](https://github.com/engram-app/Engram/issues/2589)) ([60550dd](https://github.com/engram-app/Engram/commit/60550dd6ee09eef198455f8f8e9ebdd5dd5648c5))
+* **notes:** S3 sends 0.83.0's lookup in an unmoved vault ([#2590](https://github.com/engram-app/Engram/issues/2590)) ([9050a40](https://github.com/engram-app/Engram/commit/9050a40b8380269f5e8f041950313138a3f4d4c7))
+
+
+### Performance Improvements
+
+* **links:** send only the union parts with keys ([#2584](https://github.com/engram-app/Engram/issues/2584)) ([6db368f](https://github.com/engram-app/Engram/commit/6db368f0fc57a1f1274b6fd979fa8a055ead7ffe))
+
 ## [0.83.0](https://github.com/engram-app/Engram/compare/0.82.0...0.83.0) (2026-11-12)
 
 
