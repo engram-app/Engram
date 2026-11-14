@@ -254,6 +254,24 @@ defmodule Engram.Crypto do
   def key_outcome({:error, _reason}), do: :later
 
   @doc """
+  The owner's DEK for a backfill walk, or what to do with their rows when it
+  does not load: `{:ok, dek}`, else `{key_outcome/1, key_reason/1}`. A user
+  mid DEK rotation is `{:later, :rotation_in_progress}`: the walk leaves the
+  rows and a later walk retries them. Shared by `BackfillNoteNames` and
+  `BackfillNoteLinkQualified`.
+  """
+  @spec walk_dek(User.t() | nil) :: {:ok, binary()} | {:park | :later, atom()}
+  def walk_dek(user) do
+    with %User{} <- user,
+         :ok <- Engram.Crypto.RotationGate.check_user(user),
+         {:ok, dek} <- get_dek(user) do
+      {:ok, dek}
+    else
+      failed -> {key_outcome(failed), key_reason(failed)}
+    end
+  end
+
+  @doc """
   The bounded label of a failed key load, for the counters and logs next to
   `key_outcome/1`: `:no_user` for a missing user, the error atom, or
   `:dek_error` for anything else (never the term itself).

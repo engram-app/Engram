@@ -85,6 +85,10 @@ defmodule Engram.ServiceConfig.Overrides do
     note_name_backfill: :boolean,
     note_name_backfill_max_rows: {:integer, 1..100_000},
     note_name_backfill_writes_per_s: {:integer, 1..10_000},
+    # The `NoteLinkQualified` backfill (`BackfillNoteLinkQualified`): kill switch, rows per hop, rows a second.
+    note_link_qualified_backfill: :boolean,
+    note_link_qualified_backfill_max_rows: {:integer, 1..100_000},
+    note_link_qualified_backfill_writes_per_s: {:integer, 1..10_000},
     # `Engram.Workers.InactivityCleanup` (#2566): the soft-delete kill switch
     # (default on) and the days between the final notice and the delete.
     inactivity_soft_delete: :boolean,
