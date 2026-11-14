@@ -79,8 +79,8 @@ defmodule Engram.Links do
   @backlink_read_fields [:link_keys_stamp, :target_key_hmac | @edge_read_fields]
   @backlinks_limit 200
 
-  # Rows per `insert_all` statement. See replace_links/4: 17 binds per row
-  # against the protocol's 65535 cap leaves room for 3855, so 2000 is a
+  # Rows per `insert_all` statement. See replace_links/4: 18 binds per row
+  # against the protocol's 65535 cap leaves room for 3640, so 2000 is a
   # deliberate half-margin — a new optional column must not silently re-arm
   # the overflow.
   @insert_chunk Batch.insert_rows()
@@ -164,6 +164,41 @@ defmodule Engram.Links do
   """
   @spec target_key_hmac(binary(), String.t()) :: binary()
   def target_key_hmac(filter_key, target), do: ci_hmac(filter_key, target)
+
+  @doc """
+  True when a link names its target by path (`[[Folder/Note]]`, `[[../Note]]`,
+  `[x](Folder/Note.md)`) rather than by name alone (`[[Note]]`). `target` is
+  the parser's DECODED target (`Engram.Links.Parser`), so alias, heading and
+  percent-encoding never count. The one source of truth for
+  `note_links.qualified` and the rename rewrite's form rule
+  (`Engram.Links.Rewriter`): a bare link resolves by name, so a folder rename
+  or move never needs to rewrite it (O(1) folder rename plan S4.6/S5,
+  Engram#2523).
+  """
+  @spec qualified?(String.t()) :: boolean()
+  def qualified?(target), do: String.contains?(target, "/")
+
+  @doc """
+  The plaintext target of a stored link row (`id`, `dek_version`,
+  `target_text_ciphertext`, `target_text_nonce`) under its owner's `dek`, or
+  nil when it does not decrypt (logged).
+  """
+  @spec decrypt_target(map(), binary()) :: String.t() | nil
+  def decrypt_target(row, dek),
+    do:
+      decrypt_field(
+        row.target_text_ciphertext,
+        row.target_text_nonce,
+        dek,
+        row.dek_version,
+        :note_links,
+        :target_text,
+        row.id
+      )
+
+  @doc "Writer level of `note_links.qualified` (S4.6), for `Engram.Cluster.Readiness`."
+  @spec qualified_writer_level() :: 1
+  def qualified_writer_level, do: 1
 
   defp keys_current?(stamp, nonce),
     do: is_binary(stamp) and is_binary(nonce) and stamp == nonce <> @link_keys_version
@@ -249,7 +284,7 @@ defmodule Engram.Links do
       edges =
         Enum.map(with_hmacs, fn {p, hmac} ->
           {p.position, p.link_type, hmac, target_key_hmac(filter_key, p.target), p.target,
-           p.alias, p.anchor, Crypto.row_version_aad_bound()}
+           p.alias, p.anchor, Crypto.row_version_aad_bound(), qualified?(p.target)}
         end)
 
       links_query =
@@ -265,14 +300,14 @@ defmodule Engram.Links do
         Repo.delete_all(links_query, skip_tenant_check: true)
 
         # Chunked, not one statement: the wire protocol caps a query at 65535
-        # bind parameters, and a NoteLink row binds up to 15 of them (11 base +
+        # bind parameters, and a NoteLink row binds up to 18 of them (14 base +
         # the optional alias/anchor envelopes). One MOC-style note with a few
         # thousand wikilinks therefore overflows the limit, and Postgrex
         # answers that by KILLING the connection ("can not handle N
         # parameters"), not by returning a query error — so a single oversized
         # note costs a pooled connection and takes the whole extraction down
         # with it. Observed on a real vault at 145792 params (8576 links).
-        # @insert_chunk keeps the worst case at 34k.
+        # @insert_chunk keeps the worst case at 36k.
         now = DateTime.utc_now()
 
         edges
@@ -281,7 +316,8 @@ defmodule Engram.Links do
         |> Enum.each(&Repo.insert_all(NoteLink, &1, skip_tenant_check: true))
       end
 
-      {changed?, for({_pos, _type, hmac, _key, _t, _a, _n, _v} <- edges, uniq: true, do: hmac)}
+      {changed?,
+       for({_pos, _type, hmac, _key, _t, _a, _n, _v, _q} <- edges, uniq: true, do: hmac)}
     end)
   end
 
@@ -340,16 +376,26 @@ defmodule Engram.Links do
           do: l.target_key_hmac,
           else: :stale
 
-      {l.position, l.link_type, l.target_basename_hmac, key,
-       decrypt.(l.target_text_ciphertext, l.target_text_nonce, :target_text),
-       decrypt.(l.alias_ciphertext, l.alias_nonce, :alias),
-       decrypt.(l.anchor_ciphertext, l.anchor_nonce, :anchor), l.dek_version}
+      {
+        l.position,
+        l.link_type,
+        l.target_basename_hmac,
+        key,
+        decrypt.(l.target_text_ciphertext, l.target_text_nonce, :target_text),
+        decrypt.(l.alias_ciphertext, l.alias_nonce, :alias),
+        decrypt.(l.anchor_ciphertext, l.anchor_nonce, :anchor),
+        l.dek_version,
+        # NULL (written by 0.84.0 or earlier) compares unequal: the next
+        # extraction rewrites the row with its `qualified` set.
+        l.qualified
+      }
     end)
     |> Enum.sort()
   end
 
   defp link_row(edge, user, vault, source_note_id, dek, now) do
-    {position, link_type, hmac, key_hmac, target, alias_text, anchor_text, dek_version} = edge
+    {position, link_type, hmac, key_hmac, target, alias_text, anchor_text, dek_version, qualified} =
+      edge
 
     id = Engram.Notes.mint_id()
 
@@ -371,6 +417,7 @@ defmodule Engram.Links do
       link_type: link_type,
       position: position,
       dek_version: dek_version,
+      qualified: qualified,
       inserted_at: now
     }
     |> put_optional_envelope(:alias, alias_text, dek, id)

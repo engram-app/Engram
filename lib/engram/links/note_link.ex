@@ -25,6 +25,9 @@ defmodule Engram.Links.NoteLink do
     field :anchor_ciphertext, :binary
     field :anchor_nonce, :binary
     field :link_type, :string
+    # `Engram.Links.qualified?/1` of the target; NULL = written before S4.6
+    # (`Engram.DataMigrations.NoteLinkQualified` fills it).
+    field :qualified, :boolean
     field :position, :integer
     field :dek_version, :integer, default: 2
 

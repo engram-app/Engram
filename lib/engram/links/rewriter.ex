@@ -157,7 +157,7 @@ defmodule Engram.Links.Rewriter do
   # to the other — that would be authoring content the user didn't write.
   defp replacement_target(occ, %{new_path: new_path, collision?: collision?}) do
     %{target: occ_target, form: form} = occ
-    qualified? = String.contains?(occ_target, "/") or collision?
+    qualified? = Links.qualified?(occ_target) or collision?
     occ_ext = occ_target |> Path.basename() |> Path.extname() |> String.downcase()
     keep_note_ext? = occ_ext in @note_exts
 
