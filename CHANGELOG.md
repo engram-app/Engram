@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.84.1](https://github.com/engram-app/Engram/compare/0.84.0...0.84.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **auth:** require a one-time setup token to claim a self-host admin (supersedes [#2459](https://github.com/engram-app/Engram/issues/2459)) ([#2538](https://github.com/engram-app/Engram/issues/2538)) ([e145696](https://github.com/engram-app/Engram/commit/e145696ede733db7e0b3e2db7b97aad18e0313de))
+* **crdt:** LF-only markdown docs on the server + CRLF e2e ([#2585](https://github.com/engram-app/Engram/issues/2585)) ([ed82433](https://github.com/engram-app/Engram/commit/ed82433c55d390fc33f7aa418f05b8d3439f755e))
+* editor and frontmatter follow-ups to [#2564](https://github.com/engram-app/Engram/issues/2564) ([#2579](https://github.com/engram-app/Engram/issues/2579)) ([bfd04a1](https://github.com/engram-app/Engram/commit/bfd04a1112de593632002716ca60ce6871192625))
+* **mcp:** return content_hash on write, name the exact retry ([#2518](https://github.com/engram-app/Engram/issues/2518)) ([c0ba54a](https://github.com/engram-app/Engram/commit/c0ba54a0842fb25d629a5d90f8c391267295dcf9))
+
 ## [0.84.0](https://github.com/engram-app/Engram/compare/0.83.0...0.84.0) (2026-11-13)
 
 
