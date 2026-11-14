@@ -56,6 +56,14 @@ defmodule Engram.Links.QualifiedWriterTest do
     assert qualified_by_position(source.id) == [false, true, false, true, false]
   end
 
+  # #2579 split the writer body into `Links.sync_links/4` (`NoteMeta`'s
+  # re-derivation calls it directly); `replace_links_basenames/4` wraps it.
+  test "sync_links (NoteMeta's entry point) sets qualified", %{user: user, vault: vault} do
+    source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
+    assert {true, _} = Links.sync_links(user, vault, source.id, Parser.extract(@content))
+    assert qualified_by_position(source.id) == [false, true, false, true, false]
+  end
+
   test "ExtractNoteLinks (the note-write path) sets qualified", %{user: user, vault: vault} do
     {:ok, note} =
       Notes.upsert_note(user, vault, %{"path" => "S.md", "content" => @content}, actor: "api")
