@@ -98,7 +98,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
 
   import Ecto.Query
 
-  alias Engram.Crypto.Envelope
+  alias Engram.Crypto.{Envelope, HMAC}
   alias Engram.DataMigrations.NoteSizes
   alias Engram.Logger.Metadata
   alias Engram.Notes.{CrdtBloat, Note, NoteBody}
@@ -202,7 +202,10 @@ defmodule Engram.Workers.CrdtBloatSweep do
     baseline = baseline(now)
     since = if baseline, do: elem(baseline, 0), else: DateTime.add(now, -@first_window_s)
     narrow? = NoteSizes.done?()
-    {written, commit} = if narrow?, do: written_versions(), else: {nil, fn -> :ok end}
+
+    {written, owners, commit} =
+      if narrow?, do: written_versions(), else: {nil, nil, fn -> :ok end}
+
     _ = if narrow?, do: refresh_sizes(Map.keys(written) ++ backstop_ids())
 
     %Postgrex.Result{rows: [row]} =
@@ -227,10 +230,11 @@ defmodule Engram.Workers.CrdtBloatSweep do
           count(*) FILTER (
             WHERE has_state AND big AND ratio > $2::float8 AND state_bytes >= $4::int
           )::bigint,
-          -- Both ORDER BY id: two aggregates have no shared order otherwise,
-          -- and the arrays are zipped id to version.
+          -- All ORDER BY id: aggregates have no shared order otherwise, and
+          -- the arrays are zipped id to version and id to owner.
           coalesce(array_agg(id ORDER BY id) FILTER (WHERE written), '{}'),
-          coalesce(array_agg(version ORDER BY id) FILTER (WHERE written), '{}')
+          coalesce(array_agg(version ORDER BY id) FILTER (WHERE written), '{}'),
+          coalesce(array_agg(user_id ORDER BY id) FILTER (WHERE written), '{}')
         FROM (
           #{sized_rows(narrow?)}
         ) sized
@@ -259,14 +263,16 @@ defmodule Engram.Workers.CrdtBloatSweep do
       content_bytes,
       over,
       ids,
-      versions
+      versions,
+      users
     ] =
       row
 
-    versions =
-      if narrow?,
-        do: written,
-        else: Map.new(Enum.zip(Enum.map(ids, &Ecto.UUID.load!/1), versions))
+    ids = Enum.map(ids, &Ecto.UUID.load!/1)
+    versions = if narrow?, do: written, else: Map.new(Enum.zip(ids, versions))
+
+    owners =
+      if narrow?, do: owners, else: Map.new(Enum.zip(ids, Enum.map(users, &Ecto.UUID.load!/1)))
 
     Engram.Cache.put(:crdt_sweep_versions, :last, {now, versions})
     # The feed moves only once its rows are refreshed and measured.
@@ -289,7 +295,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
       # "frozen". `time() - this` is that missing signal, and it costs a field.
       measured_at_unix: System.system_time(:second)
     }
-    |> Map.merge(save_rate(baseline, now, versions))
+    |> Map.merge(save_rate(baseline, now, versions, owners))
   end
 
   # The per-note sizes, one row per live note. Once `NoteSizes` has filled the
@@ -307,6 +313,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
       SELECT
         s.note_id AS id,
         0 AS version,
+        NULL::uuid AS user_id,
         false AS written,
         s.has_state,
         coalesce(s.state_bytes, 0) AS state_bytes,
@@ -328,6 +335,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
       SELECT
         w.id,
         w.version,
+        w.user_id,
         w.updated_at >= $5 AS written,
         w.state_len > 0 AS has_state,
         greatest(w.state_len - $1::int, 0) AS state_bytes,
@@ -345,7 +353,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
   defp wide_lengths do
     from(n in Note,
       where: is_nil(n.deleted_at) and n.kind == "note",
-      select: %{id: n.id, version: n.version, updated_at: n.updated_at}
+      select: %{id: n.id, version: n.version, user_id: n.user_id, updated_at: n.updated_at}
     )
     |> NoteBody.join()
     |> select_merge(
@@ -380,11 +388,11 @@ defmodule Engram.Workers.CrdtBloatSweep do
     end)
   end
 
-  # Ids and versions of the live notes written since the last sweep, from the
-  # sync change sequence (`Engram.Maintenance.ChangeFeed`, index reads only).
+  # Versions and owners of the live notes written since the last sweep, from
+  # the sync change sequence (`Engram.Maintenance.ChangeFeed`, index reads only).
   defp written_versions do
     {rows, commit} = Engram.Maintenance.ChangeFeed.changed("crdt_bloat_sweep")
-    {Map.new(rows, &{&1.id, &1.version}), commit}
+    {Map.new(rows, &{&1.id, &1.version}), Map.new(rows, &{&1.id, &1.user_id}), commit}
   end
 
   # Backstop for size changes the change feed cannot see (a snapshot
@@ -442,20 +450,47 @@ defmodule Engram.Workers.CrdtBloatSweep do
   # ponytail: a note first written in this window has no baseline version, so
   # a loop that starts mid-hour shows one sweep later. The baseline only holds
   # notes written in the previous window, which keeps it small.
-  defp save_rate(nil, _now, _versions), do: %{}
+  # Most save-loop notes one sweep logs (`crdt_save_loop_note`), fastest first.
+  @save_loop_log_cap 20
 
-  defp save_rate({at, before}, now, versions) do
+  @doc false
+  def save_loop_log_cap, do: @save_loop_log_cap
+
+  defp save_rate(nil, _now, _versions, _owners), do: %{}
+
+  defp save_rate({at, before}, now, versions, owners) do
     # Per hour, never faster: the cron is hourly, and a hand-run sweep minutes
     # after the last must not divide a few writes by a few minutes.
     hours = max(DateTime.diff(now, at), 3_600) / 3_600
 
     rates =
-      for {id, v} <- versions, prev = before[id], is_integer(prev), do: round((v - prev) / hours)
+      for {id, v} <- versions,
+          prev = before[id],
+          is_integer(prev),
+          do: {id, round((v - prev) / hours)}
+
+    looping = for {_id, rate} = r <- rates, rate > CrdtBloat.save_rate_threshold(), do: r
+    log_save_loops(looping, owners)
 
     %{
-      notes_save_rate_over_threshold: Enum.count(rates, &(&1 > CrdtBloat.save_rate_threshold())),
-      save_rate_max_per_hour: Enum.max(rates, fn -> 0 end)
+      notes_save_rate_over_threshold: length(looping),
+      save_rate_max_per_hour: rates |> Enum.map(&elem(&1, 1)) |> Enum.max(fn -> 0 end)
     }
+  end
+
+  # One line per looping note, fastest first, so `engram-prod-crdt-save-loop`
+  # can be pinned to a note. Ids are HMAC'd (never raw, never a path or title).
+  defp log_save_loops(looping, owners) do
+    looping
+    |> Enum.sort_by(fn {id, rate} -> {-rate, id} end)
+    |> Enum.take(@save_loop_log_cap)
+    |> Enum.each(fn {id, rate} ->
+      Logger.warning(
+        "crdt_save_loop_note note=#{HMAC.hash_id(id)} user=#{HMAC.hash_user_id(owners[id])} " <>
+          "rate_per_hour=#{rate} threshold=#{CrdtBloat.save_rate_threshold()}",
+        Metadata.with_category(:warning, :oban, [])
+      )
+    end)
   end
 
   # `enforced?/0` answers a live query and reports `true` when it cannot tell, so

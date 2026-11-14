@@ -7,9 +7,13 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
   """
   use Engram.DataCase, async: false
 
+  import Ecto.Query
+
+  alias Engram.Crypto.HMAC
   alias Engram.DataMigrations
   alias Engram.DataMigrations.NoteSizes
   alias Engram.Notes
+  alias Engram.Notes.{CrdtBloat, Note}
   alias Engram.Repo
   alias Engram.Workers.CrdtBloatSweep
   alias Engram.Workers.DataMigrationsRunner
@@ -254,5 +258,54 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
     Repo.query!("DELETE FROM note_index_state WHERE note_id = $1", [Ecto.UUID.dump!(n.id)])
     assert {:more, _} = NoteSizes.run_pass()
     refute DataMigrations.done?(NoteSizes.name(), NoteSizes.version())
+  end
+
+  # A write as the change feed sees it: the version moves AND the note takes
+  # the vault's next seq, which is what `ChangeFeed.changed/1` walks.
+  defp bump_with_seq!(user, vault, note, by) do
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        seq = Engram.Vaults.next_seq!(vault.id)
+
+        Repo.update_all(from(n in Note, where: n.id == ^note.id),
+          inc: [version: by],
+          set: [seq: seq, updated_at: NaiveDateTime.utc_now()]
+        )
+      end)
+  end
+
+  test "the narrow path logs a save-loop note with its owner's hashed id", %{
+    notes: [looping, steady | _],
+    user: user,
+    vault: vault
+  } do
+    Engram.Cache.evict(:crdt_sweep_versions, :last)
+    on_exit(fn -> Engram.Cache.evict(:crdt_sweep_versions, :last) end)
+
+    assert :done = DataMigrationsRunner.run(NoteSizes)
+    assert NoteSizes.done?()
+
+    # 1st sweep starts the feed cursor; 2nd records a baseline for the notes
+    # written in between; 3rd diffs against it.
+    CrdtBloatSweep.measure_and_emit()
+    for n <- [looping, steady], do: bump_with_seq!(user, vault, n, 1)
+    CrdtBloatSweep.measure_and_emit()
+
+    bump_with_seq!(user, vault, looping, 200)
+    bump_with_seq!(user, vault, steady, CrdtBloat.save_rate_threshold())
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+        assert %{notes_save_rate_over_threshold: 1} = CrdtBloatSweep.measure_and_emit()
+      end)
+
+    assert [line] = log |> String.split("\n") |> Enum.filter(&(&1 =~ "crdt_save_loop_note"))
+
+    assert line =~
+             "crdt_save_loop_note note=#{HMAC.hash_id(looping.id)} " <>
+               "user=#{HMAC.hash_user_id(user.id)} rate_per_hour=200"
+
+    refute log =~ HMAC.hash_id(steady.id)
+    for id <- [user.id, looping.id, steady.id], do: refute(log =~ id)
   end
 end

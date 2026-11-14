@@ -1,11 +1,11 @@
 defmodule Engram.Crypto.HMAC do
   @moduledoc """
   Stable hashing for use in telemetry, logs, and other low-trust observability
-  surfaces where the raw `user_id` must not leak.
+  surfaces where a raw id (a `user_id` or a note id) must not leak.
 
   Distinct from per-user filter keys (`Engram.Crypto.dek_filter_key/1`) and
   domain HMAC subkeys used inside the encryption envelope — this module's
-  key is a single global secret used only to obscure user identifiers in
+  key is a single global secret used only to obscure user and note ids in
   metric labels and log lines.
   """
 
@@ -22,10 +22,17 @@ defmodule Engram.Crypto.HMAC do
   # other than a user PK, and we want that to fail loudly rather than silently
   # hash the wrong value.
   @spec hash_user_id(String.t()) :: String.t()
-  def hash_user_id(user_id) when is_binary(user_id) do
+  def hash_user_id(user_id) when is_binary(user_id), do: hash_id(user_id)
+
+  @doc """
+  Stable hex HMAC of any row id (a note id, say), same key and digest as
+  `hash_user_id/1`, so a log line can name a row without leaking it.
+  """
+  @spec hash_id(String.t()) :: String.t()
+  def hash_id(id) when is_binary(id) do
     key = Application.fetch_env!(:engram, :hmac_key_user_id)
 
-    :crypto.mac(:hmac, :sha256, key, user_id)
+    :crypto.mac(:hmac, :sha256, key, id)
     |> Base.encode16(case: :lower)
   end
 end

@@ -76,6 +76,12 @@ defmodule Engram.Jobs do
       period: :infinity,
       states: [:available, :scheduled, :retryable]
     ],
+    # Same shape: one fleet-wide chain (S4.6).
+    Engram.Workers.BackfillNoteLinkQualified => [
+      fields: [:worker],
+      period: :infinity,
+      states: [:available, :scheduled, :retryable]
+    ],
     Engram.Workers.BookkeepingCanary => [period: 3000, states: :incomplete],
     Engram.Workers.BookkeepingDrain => [period: 600, states: :incomplete],
     Engram.Workers.CancelReasonMarker => [

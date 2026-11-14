@@ -15,7 +15,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   import Engram.RlsCase, only: [as_prod_role: 1]
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
-  alias Engram.Crypto.Envelope
+  alias Engram.Crypto.{Envelope, HMAC}
   alias Engram.Notes.{CrdtBloat, CrdtBridge, CrdtCheckpoint, Note}
   alias Engram.Workers.CrdtBloatSweep
 
@@ -373,6 +373,49 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
       assert_receive {:sweep, second, _}
       assert second.save_rate_max_per_hour == 200
       assert second.notes_save_rate_over_threshold == 1
+    end
+
+    test "each note over the save-rate threshold logs one line with hashed ids", ctx do
+      %{user: user, vault: vault} = ctx
+      cap = CrdtBloatSweep.save_loop_log_cap()
+
+      loopers =
+        for i <- 0..cap do
+          {:ok, n} =
+            Notes.upsert_note(user, vault, %{"path" => "loop#{i}.md", "content" => "x"},
+              actor: "api"
+            )
+
+          n
+        end
+
+      steady = seeded_note(user, vault, "steady.md", noisy(150))
+
+      assert :ok = perform_job(CrdtBloatSweep, %{})
+
+      # The first looper is the fastest, so it is the one the cap keeps.
+      loopers
+      |> Enum.with_index()
+      |> Enum.each(fn {n, i} -> bump_version!(user, n, if(i == 0, do: 500, else: 200)) end)
+
+      bump_version!(user, steady, CrdtBloat.save_rate_threshold())
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          assert :ok = perform_job(CrdtBloatSweep, %{})
+        end)
+
+      lines = log |> String.split("\n") |> Enum.filter(&(&1 =~ "crdt_save_loop_note"))
+      assert length(lines) == cap, log
+
+      [fastest] = Enum.filter(lines, &(&1 =~ HMAC.hash_id(hd(loopers).id)))
+      assert fastest =~ "rate_per_hour=500"
+      assert fastest =~ "user=#{HMAC.hash_user_id(user.id)}"
+
+      refute log =~ user.id
+      refute log =~ steady.id
+      refute log =~ HMAC.hash_id(steady.id)
+      for n <- loopers, do: refute(log =~ n.id)
     end
   end
 end

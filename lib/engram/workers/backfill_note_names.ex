@@ -67,7 +67,7 @@ defmodule Engram.Workers.BackfillNoteNames do
   alias Engram.Attachments.Attachment
   alias Engram.Backfill.{IdWindows, PacedChain, Throttle}
   alias Engram.Crypto
-  alias Engram.Crypto.{Envelope, NameKeys, PathCrypto, RotationGate}
+  alias Engram.Crypto.{Envelope, NameKeys, PathCrypto}
   alias Engram.DataMigrations
   alias Engram.DataMigrations.NoteName
   alias Engram.Folders.{Folder, Rows}
@@ -340,7 +340,8 @@ defmodule Engram.Workers.BackfillNoteNames do
     rows
     |> Enum.group_by(& &1.user_id)
     |> Enum.reduce({[], [], false}, fn {user_id, rows}, {fixes, parks, left} ->
-      case user_dek(users[user_id]) do
+      # `Crypto.walk_dek/1`: only rows that can never be read are parked.
+      case Crypto.walk_dek(users[user_id]) do
         {:ok, dek} ->
           fk = Crypto.dek_filter_key_from_bytes(dek)
 
@@ -357,22 +358,6 @@ defmodule Engram.Workers.BackfillNoteNames do
           {fixes, Enum.map(rows, &{&1, reason}) ++ parks, left}
       end
     end)
-  end
-
-  # The owner's DEK, or what to do with their rows when it does not load:
-  # `Crypto.key_outcome/1` (shared with `Engram.Search.NameTerms`) parks only
-  # rows that can never be read (owner gone, no key, a wrapped key that is
-  # provably not one); everything else, a rotation in progress included, is
-  # `:later`: the rows are left untouched and the next walk retries them.
-  # Each with its bounded label (`Crypto.key_reason/1`).
-  defp user_dek(user) do
-    with %User{} <- user,
-         :ok <- RotationGate.check_user(user),
-         {:ok, dek} <- Crypto.get_dek(user) do
-      {:ok, dek}
-    else
-      failed -> {Crypto.key_outcome(failed), Crypto.key_reason(failed)}
-    end
   end
 
   # Exported as `engram_prom_ex_search_note_name_deferred_total{reason}`.
