@@ -583,8 +583,6 @@ export default {
 		"Ralat yang tidak dijangka berlaku pada halaman ini. Cuba muat semula. Jika ia berterusan, hubungi {support}.",
 	"Copied to clipboard": "Disalin ke papan keratan",
 	"Could not copy": "Tidak dapat menyalin",
-	"Administration is only available on self-hosted instances.":
-		"Pentadbiran hanya tersedia pada sistem yang dikendalikan sendiri.",
 	"Loading…": "Memuatkan…",
 	"You don't have administrator access on this instance.":
 		"Anda tidak mempunyai akses pentadbir pada sistem ini.",

@@ -620,8 +620,6 @@ export default {
 		"Un error inesperado interrumpió esta página. Intenta recargar. Si sigue ocurriendo, contacta a {support}.",
 	"Copied to clipboard": "Copiado al portapapeles",
 	"Could not copy": "No se pudo copiar",
-	"Administration is only available on self-hosted instances.":
-		"La administración solo está disponible en instancias autoalojadas.",
 	"Loading…": "Cargando…",
 	"You don't have administrator access on this instance.":
 		"No tienes permisos de administrador en esta instancia.",

@@ -192,6 +192,27 @@ defmodule Engram.RuntimeConfigTest do
     end
   end
 
+  describe "selfhost_gate!/2" do
+    test "refuses a local-auth (self-host) boot without the unlock flag" do
+      assert_raise RuntimeError, ~r/Self-hosting Engram is not available/, fn ->
+        RuntimeConfig.selfhost_gate!(:local, getenv(%{}))
+      end
+
+      assert_raise RuntimeError, ~r/ENGRAM_SELFHOST_UNLOCK/, fn ->
+        RuntimeConfig.selfhost_gate!(:local, getenv(%{"ENGRAM_SELFHOST_UNLOCK" => "1"}))
+      end
+    end
+
+    test "boots local auth when ENGRAM_SELFHOST_UNLOCK=true" do
+      assert RuntimeConfig.selfhost_gate!(:local, getenv(%{"ENGRAM_SELFHOST_UNLOCK" => "true"})) ==
+               :ok
+    end
+
+    test "never blocks the hosted service (clerk)" do
+      assert RuntimeConfig.selfhost_gate!(:clerk, getenv(%{})) == :ok
+    end
+  end
+
   describe "validate_saas_origins!/3" do
     test "raises when a Clerk (saas) deploy has no PHX_HOST and is not CI" do
       assert_raise RuntimeError, ~r/PHX_HOST/, fn ->

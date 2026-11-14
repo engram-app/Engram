@@ -17,8 +17,8 @@ defmodule EngramWeb.StorageController do
     summary: "Get storage usage and caps",
     description:
       "Returns the user's current attachment storage usage and file count alongside the " <>
-        "total storage cap and the per-file size limit resolved from their plan. On self-host " <>
-        "(limits not enforced) the per-file cap is reported as the Pro ceiling.",
+        "total storage cap and the per-file size limit resolved from their plan. Where limits are not " <>
+        "enforced, the per-file cap is reported as the Pro ceiling.",
     tags: ["Account"],
     responses: [ok: {"Storage usage", "application/json", Schemas.StorageUsage}]
   )

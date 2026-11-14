@@ -616,8 +616,6 @@ export default {
 		"Um erro inesperado interrompeu esta página. Tente recarregar. Se continuar acontecendo, entre em contato com {support}.",
 	"Copied to clipboard": "Copiado para a área de transferência",
 	"Could not copy": "Não foi possível copiar",
-	"Administration is only available on self-hosted instances.":
-		"A administração está disponível apenas em instâncias auto-hospedadas.",
 	"Loading…": "Carregando…",
 	"You don't have administrator access on this instance.":
 		"Você não tem acesso de administrador nesta instância.",

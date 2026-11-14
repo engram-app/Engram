@@ -619,8 +619,6 @@ export default {
 		"Une erreur inattendue a empêché l'affichage de cette page. Essaie de recharger. Si le problème persiste, contacte {support}.",
 	"Copied to clipboard": "Copié dans le presse-papiers",
 	"Could not copy": "Impossible de copier",
-	"Administration is only available on self-hosted instances.":
-		"L'administration n'est disponible que sur les instances auto-hébergées.",
 	"Loading…": "Chargement…",
 	"You don't have administrator access on this instance.":
 		"Tu n'as pas les droits d'administrateur sur cette instance.",

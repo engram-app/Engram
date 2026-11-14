@@ -579,8 +579,6 @@ export default {
 		"予期せぬエラーにより、このページが利用できません。再読み込みを試してください。それでも改善しない場合は、{support} までご連絡ください。",
 	"Copied to clipboard": "クリップボードにコピーされました",
 	"Could not copy": "コピーできませんでした",
-	"Administration is only available on self-hosted instances.":
-		"管理機能は、セルフホスト環境でのみ利用可能です。",
 	"Loading…": "読み込み中…",
 	"You don't have administrator access on this instance.": "この環境では管理者権限がありません。",
 	Administration: "管理",

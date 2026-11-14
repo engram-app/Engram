@@ -586,8 +586,6 @@ export default {
 		"Beklenmedik bir hata bu sayfayı bozdu. Yeniden yüklemeyi deneyin. Hala devam ederse, {support} ile iletişime geçin.",
 	"Copied to clipboard": "Kopyalandı",
 	"Could not copy": "Kopyalanamadı",
-	"Administration is only available on self-hosted instances.":
-		"Yönetim yalnızca kendi sunucunuzda barındırılan kurulumlarda kullanılabilir.",
 	"Loading…": "Yükleniyor…",
 	"You don't have administrator access on this instance.": "Bu kurulumda yönetici erişiminiz yok.",
 	Administration: "Yönetim",

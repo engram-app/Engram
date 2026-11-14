@@ -32,9 +32,6 @@ If you'd like to encrypt, ask in your first email and we'll arrange a key.
 ## Out of scope
 
 - Older releases superseded by a newer tagged version
-- Self-host deployments running on a private LAN (e.g., `engram.ax`,
-  user-operated docker-compose) — security depends on the operator's
-  network and infra
 - Third-party services we integrate with — please report directly upstream:
   - Clerk (auth) — `security@clerk.com`
   - Paddle (billing) — Paddle's responsible disclosure program
