@@ -733,6 +733,21 @@ adding callers.
   local `MIX_ENV=prod mix compile` the next dev/test compile sees its digest
   change, recompiles the module and rebuilds the env's own library. (Touching
   `native.ex` would not: Mix compares digests, not mtimes.)
+- **A shared `CARGO_TARGET_DIR` loads another branch's `.so` (2026-11-07).**
+  On the dev box every builder sets
+  `CARGO_TARGET_DIR=$HOME/.cache/engram-native-target` (with `nice -n 19` and
+  `CARGO_BUILD_JOBS=2`) so worktrees do not each rebuild the NIF at full
+  speed; a hook enforces the prefix. That dir is shared by every branch. When
+  one branch changes the Rust NIF (R3c added `chunk_nif/6`), its build writes
+  its `.so` there, and a NON-forced `mix compile` on a different branch then
+  picked up that library silently. The BEAM stubs and the loaded NIF
+  disagreed, so tests passed or failed for reasons unrelated to the branch.
+  A `mix compile --force` rebuilt the right `.so`. Rules:
+  - A branch that changes `native/` builds with its own target dir, e.g.
+    `CARGO_TARGET_DIR=$HOME/.cache/engram-native-target-<branch>`.
+  - Every other branch makes its first compile after ANY NIF change lands
+    elsewhere (another worktree, a rebase onto it) a forced one.
+  - Trust no test result from a non-forced build when a NIF changed nearby.
 - rustler: the crate and the hex package move together (0.38 both). The hex
   dep carries `override: true` because lingua pins an optional
   `rustler ~> 0.37.1` it only uses to force-build; lingua loads its
