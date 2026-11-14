@@ -482,7 +482,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
   # can be pinned to a note. Ids are HMAC'd (never raw, never a path or title).
   defp log_save_loops(looping, owners) do
     looping
-    |> Enum.sort_by(&elem(&1, 1), :desc)
+    |> Enum.sort_by(fn {id, rate} -> {-rate, id} end)
     |> Enum.take(@save_loop_log_cap)
     |> Enum.each(fn {id, rate} ->
       Logger.warning(

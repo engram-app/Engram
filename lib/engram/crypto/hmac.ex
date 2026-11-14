@@ -1,11 +1,11 @@
 defmodule Engram.Crypto.HMAC do
   @moduledoc """
   Stable hashing for use in telemetry, logs, and other low-trust observability
-  surfaces where the raw `user_id` must not leak.
+  surfaces where a raw id (a `user_id` or a note id) must not leak.
 
   Distinct from per-user filter keys (`Engram.Crypto.dek_filter_key/1`) and
   domain HMAC subkeys used inside the encryption envelope — this module's
-  key is a single global secret used only to obscure user identifiers in
+  key is a single global secret used only to obscure user and note ids in
   metric labels and log lines.
   """
 
