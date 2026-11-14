@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.85.0](https://github.com/engram-app/Engram/compare/0.84.1...0.85.0) (2026-11-14)
+
+
+### Features
+
+* **links:** note_links.qualified expand + backfill (S4.6, Gap B) ([#2592](https://github.com/engram-app/Engram/issues/2592)) ([2a370f0](https://github.com/engram-app/Engram/commit/2a370f05affd3e7ea1db57583cdebe22e4ed6e88))
+
 ## [0.84.1](https://github.com/engram-app/Engram/compare/0.84.0...0.84.1) (2026-11-14)
 
 
