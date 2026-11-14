@@ -2,7 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 // The URL-shape matcher is imported rather than copied: the note route moved
 // once already (/note/:id -> /:vaultSlug/:noteId) and a duplicated regex here
 // is exactly what went stale last time.
-import { noteUrlRe } from "./support/api";
+import { noteUrlRe, SETUP_TOKEN } from "./support/api";
 
 /**
  * E2e coverage for the PropertiesWidget (#frontmatter-properties).
@@ -21,7 +21,7 @@ async function registerAndLogin(baseURL: string, email: string): Promise<string>
 	const reg = await fetch(`${baseURL}/api/auth/register`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ email, password: PASS }),
+		body: JSON.stringify({ email, password: PASS, setup_token: SETUP_TOKEN }),
 	});
 	if (!reg.ok && reg.status !== 422) {
 		throw new Error(`register failed: ${reg.status} ${await reg.text()}`);

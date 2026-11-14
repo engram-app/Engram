@@ -53,9 +53,18 @@ export default {
 	"That password is too long.": "Mật khẩu đó quá dài.",
 	"This invite link is invalid or has already been used.":
 		"Liên kết mời này không hợp lệ hoặc đã được sử dụng.",
+	"Enter the setup token from the server log.": "Nhập mã kích hoạt từ nhật ký máy chủ.",
+	"That setup token is not valid. Use the newest one in the server log.":
+		"Mã kích hoạt này không hợp lệ. Sử dụng mã mới nhất trong nhật ký máy chủ.",
 	"Registration not available for this auth provider":
 		"Không thể đăng ký với nhà cung cấp xác thực này",
 	"Registration failed": "Đăng ký không thành công",
+	"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.":
+		"Tài khoản đầu tiên sẽ trở thành quản trị viên. Sau khi đăng ký, bất kỳ ai có liên kết đều có thể tạo tài khoản. Quản lý thành viên, lời mời và chế độ đăng ký trong Cài đặt → Quản trị.",
+	"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.":
+		"Tài khoản đầu tiên sẽ trở thành quản trị viên. Sau khi đăng ký, không ai khác có thể tạo tài khoản cho đến khi bạn cho phép. Quản lý thành viên, lời mời và chế độ đăng ký trong Cài đặt → Quản trị.",
+	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
+		"Tài khoản đầu tiên này sẽ là quản trị viên. Sau khi đăng ký, các tài khoản mới sẽ cần một liên kết mời. Quản lý thành viên, mời và chế độ đăng ký trong Cài đặt → Quản trị.",
 	"Passwords do not match": "Mật khẩu không khớp",
 	Loading: "Đang tải",
 	"Sign-ups are closed": "Đăng ký đã đóng",
@@ -68,14 +77,15 @@ export default {
 	"Set up your instance": "Thiết lập phiên bản của bạn",
 	"Create your account": "Tạo tài khoản của bạn",
 	"Welcome — you're setting up this instance.": "Chào mừng — bạn đang thiết lập phiên bản này.",
-	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
-		"Tài khoản đầu tiên này sẽ là quản trị viên. Sau khi đăng ký, các tài khoản mới sẽ cần một liên kết mời. Quản lý thành viên, mời và chế độ đăng ký trong Cài đặt → Quản trị.",
 	"You've been invited ({label}) — finish below to join.":
 		"Bạn đã được mời ({label}) — hoàn thành phần dưới để tham gia.",
 	"You've been invited — finish below to join.":
 		"Bạn đã được mời — hoàn thành phần dưới để tham gia.",
 	"This invite link is invalid, expired, or already used.":
 		"Liên kết mời này không hợp lệ, đã hết hạn hoặc đã được sử dụng.",
+	"Setup token": "Mã kích hoạt",
+	"Printed in the Engram server log when it started.":
+		"Được in trong nhật ký máy chủ Engram khi khởi động.",
 	"Confirm password": "Xác nhận mật khẩu",
 	"Creating account…": "Đang tạo tài khoản…",
 	"Create account": "Tạo tài khoản",

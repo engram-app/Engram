@@ -49,8 +49,17 @@ export default {
 	"That password is too short.": "該密碼太短。",
 	"That password is too long.": "該密碼太長。",
 	"This invite link is invalid or has already been used.": "該邀請連結無效或已使用過。",
+	"Enter the setup token from the server log.": "輸入伺服器日誌中的設定 Token。",
+	"That setup token is not valid. Use the newest one in the server log.":
+		"該設定 Token 無效。請使用伺服器日誌中的最新 Token。",
 	"Registration not available for this auth provider": "此驗證方式不支援註冊",
 	"Registration failed": "註冊失敗",
+	"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.":
+		"該第一個帳戶成為管理者。註冊後，擁有連結的人都可以建立帳戶。在「設定」→「管理」中管理成員、邀請和註冊模式。",
+	"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.":
+		"該第一個帳戶成為管理者。註冊後，除非您允許，否則沒有其他人可以建立帳戶。在「設定」→「管理」中管理成員、邀請和註冊模式。",
+	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
+		"這個第一個帳戶會成為管理者。註冊後，新的帳戶需要邀請連結。在「設定」→「管理」中管理成員、邀請和註冊模式。",
 	"Passwords do not match": "密碼不一致",
 	Loading: "載入中",
 	"Sign-ups are closed": "暫停註冊",
@@ -63,12 +72,12 @@ export default {
 	"Set up your instance": "設定您的實例",
 	"Create your account": "建立您的帳戶",
 	"Welcome — you're setting up this instance.": "歡迎 — 您正在設定此實例。",
-	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
-		"這個第一個帳戶會成為管理者。註冊後，新的帳戶需要邀請連結。在「設定」→「管理」中管理成員、邀請和註冊模式。",
 	"You've been invited ({label}) — finish below to join.":
 		"您已收到邀請 ({label}) — 請在下方完成以加入。",
 	"You've been invited — finish below to join.": "您已收到邀請 — 請在下方完成以加入。",
 	"This invite link is invalid, expired, or already used.": "這個邀請連結無效、已過期或已使用過。",
+	"Setup token": "設定 Token",
+	"Printed in the Engram server log when it started.": "啟動時，會在 Engram 伺服器日誌中顯示。",
 	"Confirm password": "確認密碼",
 	"Creating account…": "正在建立帳戶…",
 	"Create account": "建立帳戶",

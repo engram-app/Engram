@@ -81,6 +81,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Changing a request shape an older plugin still sends, or raising the plugin version floor (mark the old path `compat(plugin)`, delete shims at the floor) → `docs/context/plugin-compat-shims.md`
 
 **Auth, OAuth & MCP**
+- Self-host first-run admin claim, the setup token printed at boot, `ENGRAM_SETUP_TOKEN` for CI/e2e/dev, or a fresh instance refusing signup with `setup_token_required` → `docs/context/self-host-setup-token.md`
 - Gating a Phoenix **channel** on onboarding/billing, or a paywalled account is syncing anyway (`RequireOnboarding` is a Plug and never runs on a socket; `user:` must stay UNGATED) → `docs/context/onboarding-gate-is-http-only.md`
 - A test asserting paywall/tier/onboarding behavior passes but shouldn't (`config/runtime.exs` clobbers `billing_enabled` to false for the whole suite) → `docs/context/onboarding-gate-is-http-only.md`
 - OAuth 2.1 + DCR on `/api/mcp` — wire flow, endpoints, token model, scopes → `docs/context/mcp-oauth.md`

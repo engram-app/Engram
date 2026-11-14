@@ -54,9 +54,18 @@ export default {
 	"That password is too long.": "To hasło jest za długie.",
 	"This invite link is invalid or has already been used.":
 		"Ten link zaproszenia jest nieprawidłowy lub został już użyty.",
+	"Enter the setup token from the server log.": "Wprowadź token konfiguracji z logu serwera.",
+	"That setup token is not valid. Use the newest one in the server log.":
+		"Ten token konfiguracji jest nieprawidłowy. Użyj najnowszego tokenu z logu serwera.",
 	"Registration not available for this auth provider":
 		"Rejestracja niedostępna dla tego dostawcy uwierzytelniania",
 	"Registration failed": "Rejestracja nie powiodła się",
+	"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.":
+		"To pierwsze konto staje się administratorem. Po rejestracji, każdy, kto ma link, może utworzyć konto. Zarządzaj członkami, zaproszeniami i trybem rejestracji w Ustawieniach → Administracja.",
+	"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.":
+		"To pierwsze konto staje się administratorem. Po rejestracji, nikt inny nie może utworzyć konta, dopóki nie zezwolisz na to. Zarządzaj członkami, zaproszeniami i trybem rejestracji w Ustawieniach → Administracja.",
+	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
+		"To pierwsze konto staje się administratorem. Po rejestracji nowe konta będą wymagały linku zaproszenia. Zarządzaj członkami, zaproszeniami i trybem rejestracji w Ustawieniach → Administracja.",
 	"Passwords do not match": "Hasła nie pasują do siebie",
 	Loading: "Ładowanie",
 	"Sign-ups are closed": "Rejestracja jest wyłączona",
@@ -69,13 +78,14 @@ export default {
 	"Set up your instance": "Skonfiguruj swoją instancję",
 	"Create your account": "Utwórz swoje konto",
 	"Welcome — you're setting up this instance.": "Witaj – konfigurujesz tę instancję.",
-	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
-		"To pierwsze konto staje się administratorem. Po rejestracji nowe konta będą wymagały linku zaproszenia. Zarządzaj członkami, zaproszeniami i trybem rejestracji w Ustawieniach → Administracja.",
 	"You've been invited ({label}) — finish below to join.":
 		"Zaproszono Cię ({label}) – zakończ poniżej, aby dołączyć.",
 	"You've been invited — finish below to join.": "Zaproszono Cię – zakończ poniżej, aby dołączyć.",
 	"This invite link is invalid, expired, or already used.":
 		"Ten link zaproszenia jest nieprawidłowy, wygasł lub został już użyty.",
+	"Setup token": "Token konfiguracji",
+	"Printed in the Engram server log when it started.":
+		"Wyświetlany w logu serwera Engram podczas uruchamiania.",
 	"Confirm password": "Potwierdź hasło",
 	"Creating account…": "Tworzenie konta…",
 	"Create account": "Utwórz konto",

@@ -55,9 +55,18 @@ export default {
 	"That password is too long.": "Этот пароль слишком длинный.",
 	"This invite link is invalid or has already been used.":
 		"Эта ссылка-приглашение недействительна или уже использована.",
+	"Enter the setup token from the server log.": "Введите токен активации из журнала сервера.",
+	"That setup token is not valid. Use the newest one in the server log.":
+		"Этот токен активации недействителен. Используйте самый новый токен из журнала сервера.",
 	"Registration not available for this auth provider":
 		"Регистрация недоступна для этого провайдера аутентификации",
 	"Registration failed": "Регистрация не удалась",
+	"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.":
+		"Этот первый аккаунт становится администратором. После регистрации любой, у кого есть ссылка, может создать аккаунт. Управляйте участниками, приглашениями и режимом регистрации в разделе Настройки → Администрирование.",
+	"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.":
+		"Этот первый аккаунт становится администратором. После регистрации никто другой не сможет создать аккаунт, пока вы не разрешите это. Управляйте участниками, приглашениями и режимом регистрации в разделе Настройки → Администрирование.",
+	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
+		"Эта первая учётная запись становится администратором. После регистрации новым учётным записям потребуется ссылка-приглашение. Управляйте участниками, приглашениями и режимом регистрации в разделе Настройки → Администрирование.",
 	"Passwords do not match": "Пароли не совпадают",
 	Loading: "Загрузка",
 	"Sign-ups are closed": "Регистрация временно приостановлена",
@@ -71,14 +80,15 @@ export default {
 	"Create your account": "Создайте свою учётную запись",
 	"Welcome — you're setting up this instance.":
 		"Добро пожаловать — вы настраиваете этот экземпляр.",
-	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
-		"Эта первая учётная запись становится администратором. После регистрации новым учётным записям потребуется ссылка-приглашение. Управляйте участниками, приглашениями и режимом регистрации в разделе Настройки → Администрирование.",
 	"You've been invited ({label}) — finish below to join.":
 		"Вам было отправлено приглашение ({label}) — завершите регистрацию ниже, чтобы присоединиться.",
 	"You've been invited — finish below to join.":
 		"Вам было отправлено приглашение — завершите регистрацию ниже, чтобы присоединиться.",
 	"This invite link is invalid, expired, or already used.":
 		"Эта ссылка-приглашение недействительна, истекла или уже использована.",
+	"Setup token": "Токен активации",
+	"Printed in the Engram server log when it started.":
+		"Отображается в журнале сервера Engram при запуске.",
 	"Confirm password": "Подтвердите пароль",
 	"Creating account…": "Создание учётной записи…",
 	"Create account": "Создать учётную запись",

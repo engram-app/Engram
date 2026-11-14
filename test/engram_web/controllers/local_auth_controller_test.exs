@@ -2,10 +2,18 @@ defmodule EngramWeb.LocalAuthControllerTest do
   # async: false — tests mutate global Application config
   use EngramWeb.ConnCase, async: false
 
+  alias Engram.Instance.SetupToken
+
+  # Every first signup in this file is the admin claim, which needs the
+  # one-time setup token. Boot never runs the mint under test, so mint a known
+  # one here through the same path boot uses.
+  @setup_token "test-setup-token-0123456789"
+
   setup do
     prev = Application.get_env(:engram, :auth_provider)
     Application.put_env(:engram, :auth_provider, :local)
     on_exit(fn -> Application.put_env(:engram, :auth_provider, prev || :local) end)
+    {:ok, _} = SetupToken.mint(@setup_token)
     :ok
   end
 
@@ -40,7 +48,11 @@ defmodule EngramWeb.LocalAuthControllerTest do
   describe "POST /api/auth/register" do
     test "creates user and returns access token + refresh cookie", %{conn: conn} do
       conn =
-        post(conn, "/api/auth/register", %{email: "new@test.com", password: "StrongPass123!"})
+        post(conn, "/api/auth/register", %{
+          setup_token: @setup_token,
+          email: "new@test.com",
+          password: "StrongPass123!"
+        })
 
       assert %{"access_token" => token, "user" => %{"email" => "new@test.com", "role" => "admin"}} =
                json_response(conn, 201)
@@ -67,7 +79,11 @@ defmodule EngramWeb.LocalAuthControllerTest do
       with_endpoint_url("https://engram.example", fn ->
         conn =
           %{conn | host: "engram.example"}
-          |> post("/api/auth/register", %{email: "tls@test.com", password: "StrongPass123!"})
+          |> post("/api/auth/register", %{
+            setup_token: @setup_token,
+            email: "tls@test.com",
+            password: "StrongPass123!"
+          })
 
         assert json_response(conn, 201)
         assert conn.resp_cookies["refresh_token"].secure == true
@@ -80,7 +96,11 @@ defmodule EngramWeb.LocalAuthControllerTest do
       # withholds the cookie on the next request).
       with_endpoint_url("http://localhost:4000", fn ->
         conn =
-          post(conn, "/api/auth/register", %{email: "plain@test.com", password: "StrongPass123!"})
+          post(conn, "/api/auth/register", %{
+            setup_token: @setup_token,
+            email: "plain@test.com",
+            password: "StrongPass123!"
+          })
 
         assert json_response(conn, 201)
         refute conn.resp_cookies["refresh_token"].secure
@@ -111,7 +131,11 @@ defmodule EngramWeb.LocalAuthControllerTest do
       with_endpoint_url("https://engram.example", fn ->
         conn =
           %{conn | host: "10.0.20.5"}
-          |> post("/api/auth/register", %{email: "lan@test.com", password: "StrongPass123!"})
+          |> post("/api/auth/register", %{
+            setup_token: @setup_token,
+            email: "lan@test.com",
+            password: "StrongPass123!"
+          })
 
         assert json_response(conn, 201)
         assert conn.resp_cookies["refresh_token"].secure == true
@@ -129,7 +153,11 @@ defmodule EngramWeb.LocalAuthControllerTest do
       # about.
       with_endpoint_url("https://engram.example", fn ->
         %{conn | host: "engram.example"}
-        |> post("/api/auth/register", %{email: "all@test.com", password: "StrongPass123!"})
+        |> post("/api/auth/register", %{
+          setup_token: @setup_token,
+          email: "all@test.com",
+          password: "StrongPass123!"
+        })
 
         login =
           %{build_conn() | host: "engram.example"}
@@ -152,12 +180,18 @@ defmodule EngramWeb.LocalAuthControllerTest do
     end
 
     test "first user is admin, second is member", %{conn: conn} do
-      post(conn, "/api/auth/register", %{email: "first@test.com", password: "StrongPass123!"})
+      post(conn, "/api/auth/register", %{
+        setup_token: @setup_token,
+        email: "first@test.com",
+        password: "StrongPass123!"
+      })
+
       # Default mode is invite_only; open up so the second signup isn't gated.
       {:ok, _} = Engram.Instance.set_registration_mode("open")
 
       conn2 =
         post(build_conn(), "/api/auth/register", %{
+          setup_token: @setup_token,
           email: "second@test.com",
           password: "StrongPass123!"
         })
@@ -166,11 +200,17 @@ defmodule EngramWeb.LocalAuthControllerTest do
     end
 
     test "rejects duplicate email with generic error", %{conn: conn} do
-      post(conn, "/api/auth/register", %{email: "dup@test.com", password: "StrongPass123!"})
+      post(conn, "/api/auth/register", %{
+        setup_token: @setup_token,
+        email: "dup@test.com",
+        password: "StrongPass123!"
+      })
+
       {:ok, _} = Engram.Instance.set_registration_mode("open")
 
       conn2 =
         post(build_conn(), "/api/auth/register", %{
+          setup_token: @setup_token,
           email: "dup@test.com",
           password: "StrongPass123!"
         })
@@ -179,7 +219,12 @@ defmodule EngramWeb.LocalAuthControllerTest do
     end
 
     test "rejects short password with specific error", %{conn: conn} do
-      conn = post(conn, "/api/auth/register", %{email: "short@test.com", password: "abc"})
+      conn =
+        post(conn, "/api/auth/register", %{
+          setup_token: @setup_token,
+          email: "short@test.com",
+          password: "abc"
+        })
 
       assert %{"error" => "password_too_short"} = json_response(conn, 422)
     end
@@ -187,6 +232,7 @@ defmodule EngramWeb.LocalAuthControllerTest do
     test "rejects password over 72 bytes", %{conn: conn} do
       conn =
         post(conn, "/api/auth/register", %{
+          setup_token: @setup_token,
           email: "long@test.com",
           password: String.duplicate("a", 73)
         })
@@ -195,7 +241,7 @@ defmodule EngramWeb.LocalAuthControllerTest do
     end
 
     test "rejects missing fields", %{conn: conn} do
-      conn = post(conn, "/api/auth/register", %{email: "no@pass.com"})
+      conn = post(conn, "/api/auth/register", %{setup_token: @setup_token, email: "no@pass.com"})
 
       assert %{"error" => "email and password required"} = json_response(conn, 422)
     end
@@ -203,7 +249,12 @@ defmodule EngramWeb.LocalAuthControllerTest do
 
   describe "POST /api/auth/login" do
     setup %{conn: conn} do
-      post(conn, "/api/auth/register", %{email: "login@test.com", password: "StrongPass123!"})
+      post(conn, "/api/auth/register", %{
+        setup_token: @setup_token,
+        email: "login@test.com",
+        password: "StrongPass123!"
+      })
+
       :ok
     end
 
@@ -234,6 +285,7 @@ defmodule EngramWeb.LocalAuthControllerTest do
       {:ok, _} = Engram.Instance.set_registration_mode("open")
 
       post(build_conn(), "/api/auth/register", %{
+        setup_token: @setup_token,
         email: "sus@test.com",
         password: "StrongPass123!"
       })
@@ -254,7 +306,11 @@ defmodule EngramWeb.LocalAuthControllerTest do
   describe "POST /api/auth/refresh" do
     test "issues new access token from refresh cookie", %{conn: conn} do
       register_conn =
-        post(conn, "/api/auth/register", %{email: "refresh@test.com", password: "StrongPass123!"})
+        post(conn, "/api/auth/register", %{
+          setup_token: @setup_token,
+          email: "refresh@test.com",
+          password: "StrongPass123!"
+        })
 
       cookie = register_conn.resp_cookies["refresh_token"]
 
@@ -279,7 +335,11 @@ defmodule EngramWeb.LocalAuthControllerTest do
   describe "POST /api/auth/logout" do
     test "clears refresh cookie", %{conn: conn} do
       register_conn =
-        post(conn, "/api/auth/register", %{email: "logout@test.com", password: "StrongPass123!"})
+        post(conn, "/api/auth/register", %{
+          setup_token: @setup_token,
+          email: "logout@test.com",
+          password: "StrongPass123!"
+        })
 
       cookie = register_conn.resp_cookies["refresh_token"]
 
@@ -322,14 +382,22 @@ defmodule EngramWeb.LocalAuthControllerTest do
       Application.put_env(:engram, :auth_provider, :clerk)
 
       conn =
-        post(conn, "/api/auth/register", %{email: "blocked@test.com", password: "StrongPass123!"})
+        post(conn, "/api/auth/register", %{
+          setup_token: @setup_token,
+          email: "blocked@test.com",
+          password: "StrongPass123!"
+        })
 
       assert %{"error" => "not_found"} = json_response(conn, 404)
     end
 
     test "allows requests when auth_provider is local", %{conn: conn} do
       conn =
-        post(conn, "/api/auth/register", %{email: "allowed@test.com", password: "StrongPass123!"})
+        post(conn, "/api/auth/register", %{
+          setup_token: @setup_token,
+          email: "allowed@test.com",
+          password: "StrongPass123!"
+        })
 
       assert json_response(conn, 201)
     end
@@ -375,7 +443,11 @@ defmodule EngramWeb.LocalAuthControllerTest do
       {:ok, _} = Engram.Instance.set_registration_mode("closed")
 
       conn =
-        post(conn, ~p"/api/auth/register", %{email: "boss@x.com", password: "longpassword1"})
+        post(conn, ~p"/api/auth/register", %{
+          setup_token: @setup_token,
+          email: "boss@x.com",
+          password: "longpassword1"
+        })
 
       assert json_response(conn, 201)["user"]["role"] == "admin"
     end
@@ -386,7 +458,11 @@ defmodule EngramWeb.LocalAuthControllerTest do
       {:ok, _} = Engram.Instance.set_registration_mode("closed")
 
       conn =
-        post(conn, ~p"/api/auth/register", %{email: "b@x.com", password: "longpassword1"})
+        post(conn, ~p"/api/auth/register", %{
+          setup_token: @setup_token,
+          email: "b@x.com",
+          password: "longpassword1"
+        })
 
       assert json_response(conn, 403)["error"] == "registration_closed"
     end
@@ -397,7 +473,11 @@ defmodule EngramWeb.LocalAuthControllerTest do
       {:ok, _} = Engram.Instance.set_registration_mode("open")
 
       conn =
-        post(conn, ~p"/api/auth/register", %{email: "c@x.com", password: "longpassword1"})
+        post(conn, ~p"/api/auth/register", %{
+          setup_token: @setup_token,
+          email: "c@x.com",
+          password: "longpassword1"
+        })
 
       assert json_response(conn, 201)["user"]["role"] == "member"
     end
@@ -408,7 +488,11 @@ defmodule EngramWeb.LocalAuthControllerTest do
       {:ok, _} = Engram.Instance.set_registration_mode("invite_only")
 
       conn =
-        post(conn, ~p"/api/auth/register", %{email: "d@x.com", password: "longpassword1"})
+        post(conn, ~p"/api/auth/register", %{
+          setup_token: @setup_token,
+          email: "d@x.com",
+          password: "longpassword1"
+        })
 
       assert json_response(conn, 403)["error"] == "invite_required"
     end
@@ -421,6 +505,7 @@ defmodule EngramWeb.LocalAuthControllerTest do
 
       conn =
         post(conn, ~p"/api/auth/register", %{
+          setup_token: @setup_token,
           email: "e@x.com",
           password: "longpassword1",
           invite: raw
@@ -437,12 +522,141 @@ defmodule EngramWeb.LocalAuthControllerTest do
 
       conn =
         post(conn, ~p"/api/auth/register", %{
+          setup_token: @setup_token,
           email: "f@x.com",
           password: "longpassword1",
           invite: "garbage"
         })
 
       assert json_response(conn, 403)["error"] == "invite_invalid"
+    end
+  end
+
+  # The first-run admin claim. Without the setup token gate, the first stranger
+  # to reach a fresh instance becomes its admin. Each negative case is the
+  # exact denied request: bootstrap pending, everything valid but the token.
+  describe "POST /api/auth/register — first-run setup token" do
+    defp claim(params) do
+      post(
+        build_conn(),
+        ~p"/api/auth/register",
+        Map.merge(%{email: "owner@x.com", password: "longpassword1"}, params)
+      )
+    end
+
+    defp user_count do
+      Engram.Repo.aggregate(Engram.Accounts.User, :count, skip_tenant_check: true)
+    end
+
+    test "refuses the claim without a token" do
+      conn = claim(%{})
+
+      assert json_response(conn, 403)["error"] == "setup_token_required"
+      assert user_count() == 0
+      assert Engram.Instance.bootstrap_pending?()
+    end
+
+    test "refuses the claim with a wrong token" do
+      conn = claim(%{setup_token: "not-the-token"})
+
+      assert json_response(conn, 403)["error"] == "setup_token_invalid"
+      assert user_count() == 0
+      assert Engram.Instance.bootstrap_pending?()
+    end
+
+    test "refuses the claim when no token was ever minted (fails closed)" do
+      :ok = SetupToken.burn()
+
+      conn = claim(%{setup_token: @setup_token})
+
+      assert json_response(conn, 403)["error"] == "setup_token_invalid"
+      assert user_count() == 0
+    end
+
+    test "accepts the claim with the token and makes that user admin" do
+      conn = claim(%{setup_token: @setup_token})
+
+      assert json_response(conn, 201)["user"]["role"] == "admin"
+      refute Engram.Instance.bootstrap_pending?()
+    end
+
+    test "tolerates surrounding whitespace from a copy-paste" do
+      conn = claim(%{setup_token: "  #{@setup_token}\n"})
+
+      assert json_response(conn, 201)["user"]["role"] == "admin"
+    end
+
+    test "burns the token: it cannot be reused once the admin exists" do
+      assert json_response(claim(%{setup_token: @setup_token}), 201)
+      refute SetupToken.valid?(@setup_token)
+
+      # The default (invite_only) and closed modes still apply to the token
+      # holder: it bypasses nothing after the claim.
+      conn = claim(%{email: "second@x.com", setup_token: @setup_token})
+      assert json_response(conn, 403)["error"] == "invite_required"
+
+      {:ok, _} = Engram.Instance.set_registration_mode("closed")
+      conn = claim(%{email: "third@x.com", setup_token: @setup_token})
+      assert json_response(conn, 403)["error"] == "registration_closed"
+
+      assert user_count() == 1
+    end
+  end
+
+  describe "POST /api/auth/register: :claim_lost retry" do
+    # Forces the lock race deterministically: right after the controller's token
+    # lookup, close the claim window, so the request reaches the bootstrap lock
+    # as a claim with bootstrap already complete.
+    defp lose_claim_after_token_check do
+      id = "claim-lost-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        id,
+        [:engram, :repo, :query],
+        fn _event, _m, meta, _c ->
+          if String.contains?(to_string(meta[:query]), "instance_setup_token") and
+               Engram.Instance.bootstrap_pending?() do
+            {:ok, _} = Engram.Instance.mark_bootstrap_complete()
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+    end
+
+    defp late_register(conn) do
+      post(conn, ~p"/api/auth/register", %{
+        setup_token: @setup_token,
+        email: "late@x.com",
+        password: "longpassword1"
+      })
+    end
+
+    defp total_users,
+      do: Engram.Repo.aggregate(Engram.Accounts.User, :count, skip_tenant_check: true)
+
+    test "loser re-runs the mode check: closed -> 403, no user created", %{conn: conn} do
+      {:ok, _} = Engram.Instance.set_registration_mode("closed")
+      lose_claim_after_token_check()
+
+      assert json_response(late_register(conn), 403)["error"] == "registration_closed"
+      assert total_users() == 0
+    end
+
+    test "loser re-runs the mode check: invite_only without invite -> 403", %{conn: conn} do
+      {:ok, _} = Engram.Instance.set_registration_mode("invite_only")
+      lose_claim_after_token_check()
+
+      assert json_response(late_register(conn), 403)["error"] == "invite_required"
+      assert total_users() == 0
+    end
+
+    test "loser in open mode registers as a member, never admin", %{conn: conn} do
+      {:ok, _} = Engram.Instance.set_registration_mode("open")
+      lose_claim_after_token_check()
+
+      assert json_response(late_register(conn), 201)["user"]["role"] == "member"
     end
   end
 end

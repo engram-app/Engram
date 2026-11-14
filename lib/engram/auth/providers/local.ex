@@ -22,8 +22,8 @@ defmodule Engram.Auth.Providers.Local do
   end
 
   @impl true
-  def register_user(email, password, _opts) do
-    case Engram.Accounts.create_user_with_password(email, password) do
+  def register_user(email, password, opts) do
+    case Engram.Accounts.create_user_with_password(email, password, claim: opts[:claim] == true) do
       {:ok, user} -> {:ok, %{external_id: user.external_id, email: user.email}}
       {:error, :password_too_short} -> {:error, :password_too_short}
       {:error, changeset} -> {:error, changeset}

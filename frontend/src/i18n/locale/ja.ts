@@ -56,8 +56,18 @@ export default {
 	"That password is too long.": "そのパスワードは長すぎます。",
 	"This invite link is invalid or has already been used.":
 		"この招待リンクが無効か、すでに使用されています。",
+	"Enter the setup token from the server log.":
+		"サーバーログからセットアップトークンを入力してください。",
+	"That setup token is not valid. Use the newest one in the server log.":
+		"そのセットアップトークンは無効です。サーバーログで最新のものを使用してください。",
 	"Registration not available for this auth provider": "この認証プロバイダでの登録は利用できません",
 	"Registration failed": "登録に失敗しました",
+	"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.":
+		"最初のユーザーアカウントは管理者になります。登録後、リンクを持つ人は誰でもアカウントを作成できます。メンバー、招待、登録モードは、設定 → 管理で管理します。",
+	"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.":
+		"最初のユーザーアカウントは管理者になります。登録後、許可するまで他のユーザーはアカウントを作成できません。メンバー、招待、登録モードは、設定 → 管理で管理します。",
+	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
+		"最初に作成されたアカウントは管理者となります。サインアップ後、新規アカウントは招待リンクが必要です。メンバー、招待、登録モードは、設定 → 管理で管理します。",
 	"Passwords do not match": "パスワードが一致しません",
 	Loading: "読み込み中",
 	"Sign-ups are closed": "新規登録は終了しています",
@@ -70,14 +80,15 @@ export default {
 	"Set up your instance": "インスタンスの設定",
 	"Create your account": "アカウントを作成",
 	"Welcome — you're setting up this instance.": "ようこそ — このインスタンスの設定中です。",
-	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
-		"最初に作成されたアカウントは管理者となります。サインアップ後、新規アカウントは招待リンクが必要です。メンバー、招待、登録モードは、設定 → 管理で管理します。",
 	"You've been invited ({label}) — finish below to join.":
 		"招待を受けました ({label}) — 参加するには、下記を完了してください。",
 	"You've been invited — finish below to join.":
 		"招待を受けました — 参加するには、下記を完了してください。",
 	"This invite link is invalid, expired, or already used.":
 		"この招待リンクは無効、期限切れ、またはすでに使用されています。",
+	"Setup token": "セットアップトークン",
+	"Printed in the Engram server log when it started.":
+		"起動時に Engram サーバーログに表示されます。",
 	"Confirm password": "パスワードの確認",
 	"Creating account…": "アカウント作成中…",
 	"Create account": "アカウントを作成",

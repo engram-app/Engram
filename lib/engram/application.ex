@@ -112,6 +112,21 @@ defmodule Engram.Application do
     end
   end
 
+  # Mints and logs the self-host first-run setup token (Engram.Instance.SetupToken)
+  # while no admin exists. Must start after Engram.Repo; runs synchronously during
+  # startup (so the previous boot's token is rotated before requests are served),
+  # returns :ignore, and rescues its own failures so it can never stop the boot. Disabled in :test for
+  # the same sandbox reason as tenancy_guard below; tests call `mint/1` directly.
+  defp setup_token_child do
+    if Application.get_env(:engram, :setup_token_on_boot, true) do
+      %{
+        id: :engram_setup_token,
+        start: {Engram.Instance.SetupToken, :start_link, []},
+        restart: :temporary
+      }
+    end
+  end
+
   # Asks Postgres whether this connection's role is actually subject to RLS,
   # and whether a maintenance pool exists to do the cross-tenant work if it is.
   # Must start after Engram.Repo — it runs a query.
@@ -323,6 +338,7 @@ defmodule Engram.Application do
       maintenance_repo_child(),
       boot_canary_guard(),
       tenancy_guard(),
+      setup_token_child(),
       {DNSCluster, query: Application.get_env(:engram, :dns_cluster_query) || :ignore},
       # Cluster guard for envelope compression: format 0 until every node
       # reads format 1. Its persistent_term defaults to blocked, so writes

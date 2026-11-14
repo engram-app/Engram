@@ -8,6 +8,8 @@ import { ConfigContext } from "../config-context";
 let cached: Bootstrap | null | undefined;
 let seeded = false;
 let inflight: Promise<Bootstrap | null> | null = null;
+// Mounted hooks, so a cache update reaches pages that are already on screen.
+const listeners = new Set<(b: BootstrapState) => void>();
 
 function fetchBootstrap(): Promise<Bootstrap | null> {
 	if (inflight) {
@@ -21,6 +23,22 @@ function fetchBootstrap(): Promise<Bootstrap | null> {
 			return b;
 		});
 	return inflight;
+}
+
+/**
+ * Close the claim window in the cache once an account exists. Without this the
+ * cached `bootstrap_pending: true` outlives the first signup until a reload:
+ * sign-out then bounces /sign-in back to /sign-up, which still shows the
+ * first-run setup token field.
+ */
+export function markBootstrapComplete(): void {
+	inflight = null;
+	if (cached?.bootstrap_pending) {
+		cached = { ...cached, bootstrap_pending: false };
+		for (const notify of listeners) {
+			notify(cached);
+		}
+	}
 }
 
 export interface Bootstrap {
@@ -53,6 +71,13 @@ export function useBootstrap(): BootstrapState {
 	}
 
 	const [state, setState] = useState<BootstrapState>(cached);
+
+	useEffect(() => {
+		listeners.add(setState);
+		return () => {
+			listeners.delete(setState);
+		};
+	}, []);
 
 	useEffect(() => {
 		if (cached !== undefined) {

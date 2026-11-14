@@ -141,6 +141,7 @@ Live. Covers every var `config/runtime.exs` reads (`Engram.EnvVarDocsTest` fails
 |----------|---------|---------|
 | `AUTH_PROVIDER` | `local` | `local` (built-in email/password) or `clerk` (SaaS JWKS). |
 | `ENGRAM_DEFAULT_REGISTRATION_MODE` | `invite_only` | Self-host registration default: `closed` / `invite_only` / `open`. |
+| `ENGRAM_SETUP_TOKEN` | unset (random, printed at boot) | Fixed first-run setup token (16+ chars) for claiming the admin account; for CI/e2e/dev. Only used while no admin exists, never logged. See `self-host-setup-token.md`. |
 | `CLERK_JWKS_URL` |, (required if clerk) | Clerk JWKS endpoint. |
 | `CLERK_ISSUER` |, (required if clerk) | Clerk issuer. |
 | `CLERK_PUBLISHABLE_KEY` |, (required if clerk) | Clerk publishable key. |

@@ -4,6 +4,7 @@ defmodule EngramWeb.LocalAuthController do
   alias Engram.Accounts
   alias Engram.Auth.Providers.Local
   alias Engram.Instance
+  alias Engram.Instance.SetupToken
   alias Engram.Invites
 
   @refresh_cookie_base [
@@ -80,10 +81,10 @@ defmodule EngramWeb.LocalAuthController do
 
   def register(conn, %{"email" => email, "password" => password} = params)
       when is_binary(email) and is_binary(password) do
-    case check_registration_allowed(Map.get(params, "invite")) do
-      :ok ->
+    case check_registration_allowed(params) do
+      {:ok, mode} ->
         # Normalize timing: always run bcrypt even if we'll fail on duplicate email
-        case Local.register_user(email, password, %{}) do
+        case Local.register_user(email, password, %{claim: mode == :claim}) do
           {:ok, %{external_id: ext_id, email: user_email}} ->
             with {:ok, user} <- Accounts.find_by_external_id(ext_id),
                  {:ok, access_token} <- Local.issue_access_token(ext_id, user_email),
@@ -96,6 +97,12 @@ defmodule EngramWeb.LocalAuthController do
               {:error, _} ->
                 conn |> put_status(500) |> json(%{error: "session_creation_failed"})
             end
+
+          {:error, :claim_lost} ->
+            # Another request claimed the admin between our token check and the
+            # lock. Bootstrap is closed now, so run the registration-mode check
+            # (open / invite_only / closed) this request skipped.
+            register(conn, Map.delete(params, "setup_token"))
 
           {:error, :password_too_short} ->
             conn |> put_status(422) |> json(%{error: "password_too_short"})
@@ -122,21 +129,35 @@ defmodule EngramWeb.LocalAuthController do
     conn |> put_status(422) |> json(%{error: "email and password required"})
   end
 
-  # Claim-window first: until bootstrap closes, registration is open and the
-  # first user becomes admin inside `Accounts.create_user_with_password/2`
-  # (advisory-locked, atomic with the bootstrap flag flip). Race note: the
-  # invite is redeemed BEFORE user creation; if creation then fails on a
-  # duplicate email the invite is already consumed — acceptable for v1.
-  defp check_registration_allowed(invite) do
+  # Claim-window first: until bootstrap closes, the first signup becomes admin
+  # inside `Accounts.create_user_with_password/2` (advisory-locked, atomic with
+  # the bootstrap flag flip and the setup-token burn). That claim needs the
+  # one-time setup token printed in the server log (`Engram.Instance.SetupToken`),
+  # so a fresh instance is not claimable by whoever reaches it first. The
+  # registration mode does not apply until the admin exists.
+  #
+  # Race notes: two requests that both hold the valid token can pass this check
+  # at once. The claim is re-checked inside the lock (`claim: true`): the loser
+  # gets `:claim_lost` and goes back through the registration-mode check, so it
+  # is never a second admin nor a member that skipped invite_only / closed. The invite
+  # is redeemed BEFORE user creation; if creation then fails on a duplicate email
+  # the invite is already consumed — acceptable for v1.
+  defp check_registration_allowed(params) do
     if Instance.bootstrap_pending?() do
-      :ok
+      with :ok <- check_setup_token(Map.get(params, "setup_token")), do: {:ok, :claim}
     else
       case Instance.registration_mode() do
-        "open" -> :ok
+        "open" -> {:ok, :member}
         "closed" -> {:error, 403, "registration_closed"}
-        "invite_only" -> check_invite(invite)
+        "invite_only" -> with :ok <- check_invite(Map.get(params, "invite")), do: {:ok, :member}
       end
     end
+  end
+
+  defp check_setup_token(nil), do: {:error, 403, "setup_token_required"}
+
+  defp check_setup_token(token) do
+    if SetupToken.valid?(token), do: :ok, else: {:error, 403, "setup_token_invalid"}
   end
 
   defp check_invite(nil), do: {:error, 403, "invite_required"}

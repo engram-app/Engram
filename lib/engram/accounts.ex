@@ -233,7 +233,19 @@ defmodule Engram.Accounts do
 
   @max_password_bytes 72
 
-  def create_user_with_password(email, password)
+  @doc """
+  Creates a local-auth user. While the instance is unclaimed the user becomes
+  admin and the one-time setup token is burned, atomically under the bootstrap
+  lock.
+
+  `claim: true` means the caller admitted this request on the strength of the
+  setup token while bootstrap was pending. If another claim wins the lock first,
+  returns `{:error, :claim_lost}` instead of quietly creating a member, so the
+  caller can re-run the registration-mode check.
+  """
+  def create_user_with_password(email, password, opts \\ [])
+
+  def create_user_with_password(email, password, opts)
       when byte_size(password) >= 8 and byte_size(password) <= @max_password_bytes do
     cleaned_email = email |> String.trim() |> String.downcase()
     normalized = EmailNormalizer.normalize(email)
@@ -248,6 +260,10 @@ defmodule Engram.Accounts do
         acquire_admin_bootstrap_lock()
 
         bootstrap_pending = Engram.Instance.bootstrap_pending?()
+
+        if Keyword.get(opts, :claim, false) and not bootstrap_pending,
+          do: Repo.rollback(:claim_lost)
+
         role = if bootstrap_pending, do: "admin", else: "member"
 
         with {:ok, user} <-
@@ -274,18 +290,20 @@ defmodule Engram.Accounts do
     )
   end
 
-  def create_user_with_password(_email, password)
+  def create_user_with_password(_email, password, _opts)
       when byte_size(password) > @max_password_bytes do
     {:error, :password_too_long}
   end
 
-  def create_user_with_password(_email, _password) do
+  def create_user_with_password(_email, _password, _opts) do
     {:error, :password_too_short}
   end
 
+  # Closing the claim window also burns the one-time setup token, in the same
+  # transaction, so it cannot outlive the admin it was minted for.
   defp maybe_close_bootstrap(true) do
     case Engram.Instance.mark_bootstrap_complete() do
-      {:ok, _} -> :ok
+      {:ok, _} -> Engram.Instance.SetupToken.burn()
       {:error, cs} -> {:error, cs}
     end
   end

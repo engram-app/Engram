@@ -53,9 +53,18 @@ export default {
 	"That password is too long.": "Bu şifre çok uzun.",
 	"This invite link is invalid or has already been used.":
 		"Bu davet bağlantısı geçersiz veya zaten kullanılmış.",
+	"Enter the setup token from the server log.": "Sunucu günlüğünden kurulum token'ını girin.",
+	"That setup token is not valid. Use the newest one in the server log.":
+		"Bu kurulum token'ı geçerli değil. Sunucu günlüğündeki en yeni olanı kullanın.",
 	"Registration not available for this auth provider":
 		"Bu kimlik doğrulama sağlayıcısı için kayıt mümkün değil",
 	"Registration failed": "Kayıt başarısız oldu",
+	"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.":
+		"Bu ilk hesap yönetici olur. Kayıt olduktan sonra, bağlantısı olan herkes bir hesap oluşturabilir. Üyeleri, davetleri ve kayıt modunu Ayarlar → Yönetim altında yönetin.",
+	"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.":
+		"Bu ilk hesap yönetici olur. Kayıt olduktan sonra, siz izin vermediğiniz sürece başka kimse bir hesap oluşturamaz. Üyeleri, davetleri ve kayıt modunu Ayarlar → Yönetim altında yönetin.",
+	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
+		"Bu ilk hesap yönetici olacak. Kayıt olduktan sonra, yeni hesaplar için bir davet bağlantısı gerekecektir. Üyeleri, davetleri ve kayıt modunu Ayarlar → Yönetim altında yönetin.",
 	"Passwords do not match": "Şifreler eşleşmiyor",
 	Loading: "Yükleniyor",
 	"Sign-ups are closed": "Kayıtlar kapalı",
@@ -68,14 +77,15 @@ export default {
 	"Set up your instance": "Sunucunuzu yapılandırın",
 	"Create your account": "Hesabınızı oluşturun",
 	"Welcome — you're setting up this instance.": "Hoş geldiniz — bu sunucuyu yapılandırıyorsunuz.",
-	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
-		"Bu ilk hesap yönetici olacak. Kayıt olduktan sonra, yeni hesaplar için bir davet bağlantısı gerekecektir. Üyeleri, davetleri ve kayıt modunu Ayarlar → Yönetim altında yönetin.",
 	"You've been invited ({label}) — finish below to join.":
 		"Bir davet aldınız ({label}) — katılmak için aşağıda tamamlayın.",
 	"You've been invited — finish below to join.":
 		"Bir davet aldınız — katılmak için aşağıda tamamlayın.",
 	"This invite link is invalid, expired, or already used.":
 		"Bu davet bağlantısı geçersiz, süresi dolmuş veya zaten kullanılmış.",
+	"Setup token": "Kurulum token'ı",
+	"Printed in the Engram server log when it started.":
+		"Engram sunucu günlüğüne başlatıldığında yazdırılır.",
 	"Confirm password": "Şifreyi onaylayın",
 	"Creating account…": "Hesap oluşturuluyor…",
 	"Create account": "Hesap oluştur",

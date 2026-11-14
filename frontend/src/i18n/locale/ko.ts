@@ -53,8 +53,17 @@ export default {
 	"That password is too long.": "해당 비밀번호는 너무 깁니다.",
 	"This invite link is invalid or has already been used.":
 		"이 초대 링크가 유효하지 않거나 이미 사용되었습니다.",
+	"Enter the setup token from the server log.": "서버 로그에서 설정 토큰을 입력하세요.",
+	"That setup token is not valid. Use the newest one in the server log.":
+		"해당 설정 토큰이 유효하지 않습니다. 서버 로그에서 최신 토큰을 사용하세요.",
 	"Registration not available for this auth provider": "이 인증 방식을 사용할 수 없습니다",
 	"Registration failed": "등록 실패",
+	"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.":
+		"이 첫 번째 계정은 관리자가 됩니다. 가입 후, 링크가 있는 사람은 누구나 계정을 만들 수 있습니다. 설정 → 관리에서 멤버, 초대, 등록 방식을 관리하세요.",
+	"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.":
+		"이 첫 번째 계정은 관리자가 됩니다. 가입 후, 사용자가 허용할 때까지 다른 사람은 계정을 만들 수 없습니다. 설정 → 관리에서 멤버, 초대, 등록 방식을 관리하세요.",
+	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
+		"첫 번째 계정은 관리자가 됩니다. 가입 후에는 새로운 계정이 초대 링크를 통해 가입해야 합니다. 멤버, 초대, 등록 방식을 설정 → 관리에서 관리할 수 있습니다.",
 	"Passwords do not match": "비밀번호가 일치하지 않습니다",
 	Loading: "로딩 중",
 	"Sign-ups are closed": "현재 신규 가입이 제한되었습니다",
@@ -67,13 +76,13 @@ export default {
 	"Set up your instance": "인스턴스 설정",
 	"Create your account": "계정 생성",
 	"Welcome — you're setting up this instance.": "환영합니다. 이 인스턴스를 설정 중입니다.",
-	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
-		"첫 번째 계정은 관리자가 됩니다. 가입 후에는 새로운 계정이 초대 링크를 통해 가입해야 합니다. 멤버, 초대, 등록 방식을 설정 → 관리에서 관리할 수 있습니다.",
 	"You've been invited ({label}) — finish below to join.":
 		"{label}님, 초대받으셨습니다. 가입하려면 아래를 완료하세요.",
 	"You've been invited — finish below to join.": "초대받으셨습니다. 가입하려면 아래를 완료하세요.",
 	"This invite link is invalid, expired, or already used.":
 		"이 초대 링크는 유효하지 않거나 만료되었거나 이미 사용되었습니다.",
+	"Setup token": "설정 토큰",
+	"Printed in the Engram server log when it started.": "Engram 서버 로그 시작 시 출력됩니다.",
 	"Confirm password": "비밀번호 확인",
 	"Creating account…": "계정 생성 중…",
 	"Create account": "계정 만들기",

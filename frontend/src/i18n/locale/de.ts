@@ -57,9 +57,19 @@ export default {
 	"That password is too long.": "Dieses Passwort ist zu lang.",
 	"This invite link is invalid or has already been used.":
 		"Dieser Einladungslink ist ungültig oder wurde bereits verwendet.",
+	"Enter the setup token from the server log.":
+		"Gib den Aktivierungscode aus dem Serverprotokoll ein.",
+	"That setup token is not valid. Use the newest one in the server log.":
+		"Dieser Aktivierungscode ist ungültig. Verwende den neuesten Code im Serverprotokoll.",
 	"Registration not available for this auth provider":
 		"Registrierung nicht für diesen Anmeldedienst verfügbar",
 	"Registration failed": "Registrierung fehlgeschlagen",
+	"This first account becomes the administrator. After signup, anyone with the link can create an account. Manage members, invites, and registration mode under Settings → Administration.":
+		"Dieses erste Konto wird zum Administrator. Nach der Anmeldung kann jeder mit dem Link ein Konto erstellen. Verwalte Mitglieder, Einladungen und den Anmeldemodus unter Einstellungen → Administration.",
+	"This first account becomes the administrator. After signup, no one else can create an account until you allow it. Manage members, invites, and registration mode under Settings → Administration.":
+		"Dieses erste Konto wird zum Administrator. Nach der Anmeldung kann niemand anderes ein Konto erstellen, bis du es erlaubst. Verwalte Mitglieder, Einladungen und den Anmeldemodus unter Einstellungen → Administration.",
+	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
+		"Dieses erste Konto wird zum Administrator. Nach der Anmeldung benötigen neue Konten einen Einladungslink. Verwalte Mitglieder, Einladungen und den Registrierungsmodus unter Einstellungen → Administration.",
 	"Passwords do not match": "Passwörter stimmen nicht überein",
 	Loading: "Laden",
 	"Sign-ups are closed": "Anmeldungen sind geschlossen",
@@ -72,14 +82,15 @@ export default {
 	"Set up your instance": "Deine Instanz einrichten",
 	"Create your account": "Dein Konto erstellen",
 	"Welcome — you're setting up this instance.": "Willkommen – du richtest diese Instanz ein.",
-	"This first account becomes the administrator. After signup, new accounts will need an invite link. Manage members, invites, and registration mode under Settings → Administration.":
-		"Dieses erste Konto wird zum Administrator. Nach der Anmeldung benötigen neue Konten einen Einladungslink. Verwalte Mitglieder, Einladungen und den Registrierungsmodus unter Einstellungen → Administration.",
 	"You've been invited ({label}) — finish below to join.":
 		"Du wurdest eingeladen ({label}) – schließe unten ab, um beizutreten.",
 	"You've been invited — finish below to join.":
 		"Du wurdest eingeladen – schließe unten ab, um beizutreten.",
 	"This invite link is invalid, expired, or already used.":
 		"Dieser Einladungslink ist ungültig, abgelaufen oder bereits verwendet.",
+	"Setup token": "Aktivierungscode",
+	"Printed in the Engram server log when it started.":
+		"Wird im Engram Serverprotokoll angezeigt, wenn es gestartet wurde.",
 	"Confirm password": "Passwort bestätigen",
 	"Creating account…": "Konto wird erstellt…",
 	"Create account": "Konto erstellen",

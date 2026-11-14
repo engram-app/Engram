@@ -4809,6 +4809,8 @@ jobs:
           # Playwright fixtures (which register multiple users) don't 403 with
           # invite_required. Matches ci/compose.local.yml (local-auth e2e stack).
           ENGRAM_DEFAULT_REGISTRATION_MODE: open
+          # First-run admin claim token; frontend/e2e/support sends the same default.
+          ENGRAM_SETUP_TOKEN: e2e-setup-token
           PW_LOCAL_BACKEND_PORT: ${{ steps.ports.outputs.pw_local_backend_port }}
           PW_LOCAL_VITE_PORT: ${{ steps.ports.outputs.pw_local_vite_port }}
           PW_CLERK_BACKEND_PORT: ${{ steps.ports.outputs.pw_clerk_backend_port }}
