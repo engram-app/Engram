@@ -70,6 +70,12 @@ defmodule Engram.Notes.Note do
     # T3.7 introduce a `users.dek_version > 1` cohort.
     field :dek_version, :integer, default: 1
     field :content_hash, :string
+    # Set by `Notes.upsert_note/4` only: the hash of what a reader is served
+    # right after the write. It differs from `content_hash` when the write was
+    # a no-op over a pending CRDT tail (the row is left as it was). A reply
+    # hands this to the writer as its next base; `content_hash` stays the
+    # row's, so the broadcast guard does not see a change that never happened.
+    field :served_hash, :string, virtual: true
     field :embed_hash, :string
     field :dense_indexed_hash, :string
     # #1620 — which chunker built the current index rows. NULL means "a chunker
