@@ -37,9 +37,11 @@ defmodule Engram.Notes.LocationPlanTest do
         for(i <- 1..60, do: "R#{i}") ++ for(i <- 1..60, do: "A/S#{i}")
       )
 
-    # Statistics from these rows, as prod's are current.
-    Repo.query!("ANALYZE notes")
-    Repo.query!("ANALYZE folders")
+    # Statistics and layout from these rows only, as prod's are current:
+    # dead keys earlier tests leave in `notes_name_key_live` flip the name
+    # probe to `notes_user_vault_live` (LocationRlsPlanTest).
+    QueryPlan.fresh!("notes")
+    QueryPlan.fresh!("folders")
 
     on_exit(fn -> Engram.Cache.clear_local(:note_split) end)
     %{user: user, vault: vault}

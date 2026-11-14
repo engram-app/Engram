@@ -73,8 +73,10 @@ defmodule Engram.Notes.LocationRlsPlanTest do
 
     Repo.query!("ALTER TABLE notes ALTER COLUMN user_id SET (n_distinct = 40)")
     Repo.query!("ALTER TABLE notes ALTER COLUMN vault_id SET (n_distinct = 40)")
-    Repo.query!("ANALYZE notes")
-    Repo.query!("ANALYZE folders")
+    # Rewritten, then ANALYZEd: the plan sees this test's rows only, not
+    # the dead entries above or any earlier test's (`QueryPlan.fresh!/1`).
+    QueryPlan.fresh!("notes")
+    QueryPlan.fresh!("folders")
 
     :ok = DataMigrations.mark_done("note_split", 1)
     Engram.Cache.clear_local(:note_split)
