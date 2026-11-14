@@ -57,7 +57,10 @@ def read_server_doc(vault_id: str, note_id: str) -> ServerDoc:
         f"from(x in Engram.Notes.Note, where: x.id == ^{nid}) "
         "|> Engram.Notes.NoteBody.select_note() |> Engram.Repo.one!() "
         "|> load_doc.(u) end); "
-        f"{{o, v}} = {_FM}.frontmatter_of(d); "
+        # The RAW order, not `frontmatter_of/1`: that dedupes on read (#2579),
+        # which hides the duplicate a test injects to prove the dedupe.
+        'o = d |> Yex.Doc.get_array("frontmatter_order") |> Yex.Array.to_list(); '
+        f"{{_, v}} = {_FM}.frontmatter_of(d); "
         'IO.puts("DOC\\t" <> Jason.encode!(%{order: o, values: v, '
         f"body: {_FM}.body_of(d), "
         "sv: Base.encode64(Yex.encode_state_vector!(d))}))"
