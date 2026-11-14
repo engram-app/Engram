@@ -69,6 +69,8 @@ defmodule Engram.Notes.LocationRlsPlanTest do
         for(i <- 1..60, do: "R#{i}") ++ for(i <- 1..60, do: "A/S#{i}")
       )
 
+    leave_dead_name_keys!(vault)
+
     Repo.query!("ALTER TABLE notes ALTER COLUMN user_id SET (n_distinct = 40)")
     Repo.query!("ALTER TABLE notes ALTER COLUMN vault_id SET (n_distinct = 40)")
     Repo.query!("ANALYZE notes")
@@ -80,6 +82,27 @@ defmodule Engram.Notes.LocationRlsPlanTest do
     assert Notes.Location.on?()
 
     %{user: user, vault: vault, after_seq: after_seq}
+  end
+
+  # The physical state earlier tests in a CI partition leave behind: keyed
+  # rows written and rolled back, whose dead entries stay in
+  # `notes_name_key_live` (the sandbox rollback does not undo them). With a
+  # handful of live keyed rows on many index pages, the planner costs that
+  # index above `notes_user_vault_live`, both `user_id` and the probe's
+  # `name_key` being InitPlan params it cannot estimate, and the name arm
+  # read the whole vault (CI seed 805596, 1,124 rows removed by filter).
+  defp leave_dead_name_keys!(vault) do
+    Repo.transaction(fn ->
+      for _ <- 1..50,
+          do:
+            Repo.query!(
+              "UPDATE notes SET name_key = sha512(gen_random_uuid()::text::bytea) " <>
+                "WHERE vault_id = $1 AND name_key IS NULL",
+              [Ecto.UUID.dump!(vault.id)]
+            )
+
+      Repo.rollback(:dead_keys)
+    end)
   end
 
   # The vault holds a folder renamed without a cascade (an empty marker, so
