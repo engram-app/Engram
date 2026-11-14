@@ -150,7 +150,13 @@ defmodule Engram.Notes.LocationRlsPlanTest do
     end)
   end
 
-  @bad ["notes_user_vault_live", "Seq Scan on notes", "Seq Scan on folders", "folders_parent"]
+  @bad [
+    "notes_user_vault_live",
+    "Seq Scan on notes",
+    "Seq Scan on folders",
+    "folders_parent",
+    "notes_recent_index"
+  ]
 
   # Every custom plan; the generic plan of a statement S3 added or changed
   # (each carries the moved-folder probe on `notes_cascaded`: the by-path
