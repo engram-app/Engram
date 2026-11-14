@@ -69,7 +69,23 @@ defmodule Engram.Notes.LocationRlsPlanTest do
         for(i <- 1..60, do: "R#{i}") ++ for(i <- 1..60, do: "A/S#{i}")
       )
 
-    leave_dead_name_keys!(vault)
+    # Every note keyed, as S5 leaves a vault before its first move without
+    # a cascade (the only state the name probe runs in). CI seed 805596 read
+    # the whole vault for the name probe (1,124 rows removed by filter) when
+    # two causes met. Only ~3 of 1,003 rows were keyed, so `name_key` looked
+    # no more selective than the tenant columns. And the `n_distinct = 40`
+    # override below makes the planner expect about 1 row from
+    # `notes_user_vault_live` and `notes_recent_index` (both led by
+    # `user_id, vault_id`), so they tied with `notes_name_key_live` on rows
+    # (`user_id` and the probe's `name_key` are InitPlan params it cannot
+    # estimate). Pages per live tuple broke the tie, and dead entries
+    # earlier tests left in the partition decided it. A random key per row
+    # cannot match a probe.
+    Repo.query!(
+      "UPDATE notes SET name_key = sha512(id::text::bytea) " <>
+        "WHERE vault_id = $1 AND name_key IS NULL AND kind = 'note'",
+      [Ecto.UUID.dump!(vault.id)]
+    )
 
     Repo.query!("ALTER TABLE notes ALTER COLUMN user_id SET (n_distinct = 40)")
     Repo.query!("ALTER TABLE notes ALTER COLUMN vault_id SET (n_distinct = 40)")
@@ -84,27 +100,6 @@ defmodule Engram.Notes.LocationRlsPlanTest do
     assert Notes.Location.on?()
 
     %{user: user, vault: vault, after_seq: after_seq}
-  end
-
-  # The physical state earlier tests in a CI partition leave behind: keyed
-  # rows written and rolled back, whose dead entries stay in
-  # `notes_name_key_live` (the sandbox rollback does not undo them). With a
-  # handful of live keyed rows on many index pages, the planner costs that
-  # index above `notes_user_vault_live`, both `user_id` and the probe's
-  # `name_key` being InitPlan params it cannot estimate, and the name arm
-  # read the whole vault (CI seed 805596, 1,124 rows removed by filter).
-  defp leave_dead_name_keys!(vault) do
-    Repo.transaction(fn ->
-      for _ <- 1..50,
-          do:
-            Repo.query!(
-              "UPDATE notes SET name_key = sha512(gen_random_uuid()::text::bytea) " <>
-                "WHERE vault_id = $1 AND name_key IS NULL",
-              [Ecto.UUID.dump!(vault.id)]
-            )
-
-      Repo.rollback(:dead_keys)
-    end)
   end
 
   # The vault holds a folder renamed without a cascade (an empty marker, so
@@ -240,11 +235,22 @@ defmodule Engram.Notes.LocationRlsPlanTest do
       end
 
       test "get_notes", ctx do
-        refute_vault_scan!(
+        plans =
           plans(ctx.user, fn ->
             Notes.get_notes_within(ctx.user, ctx.vault, ["A/B/x.md", "top.md"], 10_000_000)
           end)
-        )
+
+        refute_vault_scan!(plans)
+
+        # The moved arm's name probe plans on its index. Asserted by name,
+        # not by buffers: both paths are held, so the probe never executes
+        # and a vault-wide fallback (`notes_recent_index`, not in `@bad`)
+        # would read no more buffers than the index does.
+        if unquote(moved?) do
+          probes = for {sql, %{custom: custom}} <- plans, sql =~ "name_key", do: custom
+          assert probes != [], "no name probe recorded"
+          for custom <- probes, do: assert(custom =~ "notes_name_key_live", custom)
+        end
       end
 
       test "feed page", ctx do
