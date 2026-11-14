@@ -4,8 +4,8 @@ defmodule Engram.DataMigrations.NoteLinkQualified do
   `note_links` row carries `qualified` (`Engram.Links.qualified?/1` of its
   decrypted target). Rows written before S4.6, or by the previous release
   during a rolling deploy, are NULL and are the work. S5's folder-rename
-  gate (one EXISTS on `note_links_qualified`) reads the column only once
-  this ledger is done.
+  gate reads the column (its qualified arm; a bare link on a colliding
+  basename needs S5's separate collision arm) only once this ledger is done.
 
   The work runs in ONE paced chain, `Engram.Workers.BackfillNoteLinkQualified`
   (the `NoteName` pattern): each runner pass only starts the chain when none

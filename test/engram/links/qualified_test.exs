@@ -1,10 +1,11 @@
 defmodule Engram.Links.QualifiedTest do
   # `Links.qualified?/1`: the ONE rule for "this link names its target by
   # path" (O(1) folder rename plan S4.6, Engram#2523). `note_links.qualified`
-  # stores it, and the rename rewrite's form rule (`Rewriter`) reads it, so a
-  # link the S5 probe skips is exactly a link the rewrite would keep bare.
-  # A bare `[[Note]]` resolves by name and survives a folder move; a link
-  # with a folder in its target does not.
+  # stores it, and the rename rewrite's form rule (`Rewriter`) reads it for
+  # the path half. It covers path-WRITTEN links only: a bare link whose
+  # moved target's basename collides with another live row is rewritten too
+  # (`collision?`), so S5 needs a separate collision check
+  # (`QualifiedWriterTest` pins that case).
   use ExUnit.Case, async: true
 
   alias Engram.Links

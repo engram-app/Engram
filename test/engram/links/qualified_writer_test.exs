@@ -10,7 +10,7 @@ defmodule Engram.Links.QualifiedWriterTest do
   use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Links
-  alias Engram.Links.Parser
+  alias Engram.Links.{Parser, Rewriter}
   alias Engram.Notes
   alias Engram.Workers.ExtractNoteLinks
 
@@ -62,5 +62,36 @@ defmodule Engram.Links.QualifiedWriterTest do
 
     assert :ok = perform_job(ExtractNoteLinks, %{"note_id" => note.id, "user_id" => user.id})
     assert qualified_by_position(note.id) == [false, true, false, true, false]
+  end
+
+  # Review of #2592 (major): `qualified` is NOT the whole rewrite gate. A bare
+  # `[[Guide]]` to a moved note whose basename collides with a sibling is
+  # stored qualified = false, so a qualified-only EXISTS misses it, yet the
+  # rewriter rewrites it (`collision?`). S5 must add a collision arm; this
+  # test goes red if either half changes.
+  test "a bare link to a moved note with a colliding basename: qualified false, still rewritten",
+       %{user: user, vault: vault} do
+    moved = Engram.Fixtures.insert_note!(user, vault, %{path: "archive-long/Guide.md"})
+    _sibling = Engram.Fixtures.insert_note!(user, vault, %{path: "other/Guide.md"})
+    source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
+    full = "see [[Guide]]"
+    :ok = Links.replace_links(user, vault, source.id, Parser.extract(full))
+
+    assert qualified_by_position(source.id) == [false]
+
+    %{rows: [[probe]]} =
+      Repo.query!(
+        "SELECT EXISTS (SELECT 1 FROM note_links WHERE user_id = $1 AND vault_id = $2 AND qualified)",
+        [Ecto.UUID.dump!(user.id), Ecto.UUID.dump!(vault.id)]
+      )
+
+    refute probe
+
+    {:ok, target} = Rewriter.build_target(user, vault, :note, moved.id, "d/Guide.md")
+    assert target.collision?
+
+    edits = Rewriter.plan_edits(user, vault, full, full, target)
+    assert edits != []
+    assert Rewriter.splice(full, edits) == "see [[archive-long/Guide]]"
   end
 end

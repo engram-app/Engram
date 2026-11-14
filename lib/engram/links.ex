@@ -170,10 +170,15 @@ defmodule Engram.Links do
   `[x](Folder/Note.md)`) rather than by name alone (`[[Note]]`). `target` is
   the parser's DECODED target (`Engram.Links.Parser`), so alias, heading and
   percent-encoding never count. The one source of truth for
-  `note_links.qualified` and the rename rewrite's form rule
-  (`Engram.Links.Rewriter`): a bare link resolves by name, so a folder rename
-  or move never needs to rewrite it (O(1) folder rename plan S4.6/S5,
-  Engram#2523).
+  `note_links.qualified` and the path half of the rename rewrite's form rule
+  (`Engram.Links.Rewriter`).
+
+  NOT a rewrite gate on its own: the rewriter also rewrites a BARE link when
+  the moved note's basename collides with another live row (`collision?`),
+  because shortest-path resolution could hand it to the sibling after the
+  move. So S5's folder-rename gate is "EXISTS qualified link in the vault OR
+  a moved note/attachment basename has more than one live row" (O(1) folder
+  rename plan S4.6/S5, Engram#2523).
   """
   @spec qualified?(String.t()) :: boolean()
   def qualified?(target), do: String.contains?(target, "/")

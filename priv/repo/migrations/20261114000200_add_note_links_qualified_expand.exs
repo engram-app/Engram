@@ -17,8 +17,11 @@ defmodule Engram.Repo.Migrations.AddNoteLinksQualifiedExpand do
   `Engram.Links.qualified?/1` (O(1) folder rename plan S4.6, Engram#2523).
 
   S5 replaces the folder rename's one `RewriteNoteLinks` job per moved note
-  with one EXISTS probe: a bare `[[Note]]` resolves by name and survives a
-  folder move, so a vault with no qualified link needs no rewrite job at all.
+  with a gate. `qualified` covers path-WRITTEN links only. A bare `[[Note]]`
+  resolves by name and survives a folder move UNLESS the moved note's
+  basename collides with another live row (the rewriter then qualifies it,
+  `collision?`), so S5's gate is "EXISTS qualified link OR a moved basename
+  has more than one live row"; this column serves the first arm.
   `note_links_qualified (user_id, vault_id, target_basename_hmac) WHERE
   qualified` serves that probe (one descent on `(user_id, vault_id)`, the
   RLS qual first like every `note_links` index) and S5's paged job by moved
@@ -48,7 +51,7 @@ defmodule Engram.Repo.Migrations.AddNoteLinksQualifiedExpand do
         {"note_links_qualified",
          "ON note_links (user_id, vault_id, target_basename_hmac) WHERE qualified"}
       ],
-      lock_key: 20_261_113_200_000,
+      lock_key: 20_261_114_000_200,
       label: "add_note_links_qualified"
     )
 
