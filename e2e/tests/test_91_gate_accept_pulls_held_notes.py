@@ -29,7 +29,6 @@ from helpers.vault import wait_for_content
 
 NOTE_COUNT = 4
 
-SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
 
 @pytest.mark.asyncio
@@ -42,7 +41,7 @@ async def test_accepting_the_gate_pulls_without_a_manual_sync(vault_b, cdp_b, ap
 
     # Shut the gate, then publish. These rows are now held: a replay fired by the
     # channel join will bail without consuming them.
-    await cdp_b.evaluate(SET_BLOCKED.format("true"))
+    await cdp_b.set_sync_blocked(True)
     gate_open = False
     try:
         for i, path in enumerate(paths):
@@ -65,7 +64,7 @@ async def test_accepting_the_gate_pulls_without_a_manual_sync(vault_b, cdp_b, ap
             )
     finally:
         if not gate_open:
-            await cdp_b.evaluate(SET_BLOCKED.format("false"))
+            await cdp_b.set_sync_blocked(False)
         for path in paths:
             try:
                 api_sync.delete_note(path)

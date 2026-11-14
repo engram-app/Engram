@@ -48,6 +48,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Measuring CRDT doc bloat, or reading the engram-crdt dashboard (the checkpoint flatten was removed in 0.60.1 because it doubles bodies; never reintroduce a server reset) → `docs/context/crdt-bloat-measurement-traps.md`
 - The CRDT bloat alert fires on a small note, or reading `notes.version` as an edit count (it counts debounced checkpoints, Trap 0; 64 KB floor + save-rate gauges, #2175) → `docs/context/crdt-bloat-measurement-traps.md`
 - Note content doubled or interleaved, or the server holds a note TWICE (one-encoder invariant, frontmatter re-seed, flatten boundary #958) → `docs/context/crdt-lineage-doubling.md`
+- A note has CRLF, mixed line endings, a lone `\r`, or you are touching a note ingest point → `docs/context/line-ending-policy.md`
 - Note version history, the outbox write path, adding a content-write path or an MCP write tool → `docs/context/note-revisions-history.md`
 - Every `crdt_create` returns `create_failed` on a NEW vault, or a create leg drops a re-minted note id → `docs/context/crdt-create-cross-vault-id-reuse.md`
 - `Repo.with_tenant/2` funs return bare values (or use `with_tenant!/2`), never `{:ok, _}` → `docs/context/with-tenant-return-wrapping.md`

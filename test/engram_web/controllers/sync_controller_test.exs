@@ -25,6 +25,7 @@ defmodule EngramWeb.SyncControllerTest do
 
       assert body == %{
                "change_seq" => 0,
+               "feed_seq" => 0,
                "pending_crdt_updates" => 0,
                "pending_checkpoints" => 0,
                "deferred_checkpoints" => 0,
@@ -66,6 +67,23 @@ defmodule EngramWeb.SyncControllerTest do
       assert body["pending_crdt_updates"] == 2
       assert body["pending_checkpoints"] == 1
       assert body["change_seq"] > 0
+    end
+
+    # The vault seq also counts folder rows, which the op-log feed never
+    # serves. A client cursor reaching `change_seq` is then impossible until
+    # some later note bump, so the harness waits on `feed_seq`, the highest seq
+    # the feed can hand out (e2e test_concurrent_heal_of_damaged_crlf_note sat
+    # one seq short for 60 s after its note's folder was created).
+    test "feed_seq is the head of the op-log feed, not of folder rows", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "Q/a.md", content: "# A", mtime: 1_000.0})
+      after_note = conn |> get("/api/sync/quiescence") |> json_response(200)
+      post(conn, "/api/folders", %{folder: "Z"})
+      body = conn |> get("/api/sync/quiescence") |> json_response(200)
+
+      assert is_integer(after_note["feed_seq"])
+      assert after_note["feed_seq"] > 0
+      assert body["change_seq"] > after_note["change_seq"]
+      assert body["feed_seq"] == after_note["feed_seq"]
     end
 
     defp insert_checkpoint_jobs(user, vault, note_ids) do

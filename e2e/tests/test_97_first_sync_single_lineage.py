@@ -51,7 +51,6 @@ NOTE_COUNT = 15
 # and reports a generic timeout instead of "converged only N/M".
 CONVERGE_BOUND_S = 90
 
-SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
 
 @pytest.mark.asyncio
@@ -70,7 +69,7 @@ async def test_first_sync_leaves_one_lineage_per_note(
     rooms_before = read_room_starts()
     seeds_before = read_seeds()
 
-    await cdp_a.evaluate(SET_BLOCKED.format("true"))
+    await cdp_a.set_sync_blocked(True)
 
     # Sizes vary deliberately. The production sample doubled notes from 17 KB to
     # 68 KB, and a fixture of uniform tiny notes is exactly the shape that let
@@ -105,7 +104,7 @@ async def test_first_sync_leaves_one_lineage_per_note(
     deadline = started + CONVERGE_BOUND_S
     landed = 0
     while time.monotonic() < deadline:
-        await cdp_a.evaluate(SET_BLOCKED.format("false"))
+        await cdp_a.set_sync_blocked(False)
         await cdp_a.trigger_full_sync()
         manifest = api_sync.get_manifest()
         landed = sum(1 for n in manifest["notes"] if n["path"].startswith(prefix))

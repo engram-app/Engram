@@ -74,7 +74,8 @@ defmodule Engram.Native do
     {:envelope_open, :envelope_open_nif, :envelope_open_dirty_nif, 4},
     {:envelope_open_many, :envelope_open_many_nif, :envelope_open_many_dirty_nif, 3},
     {:b64_decode, :b64_decode_nif, :b64_decode_dirty_nif, 1},
-    {:b64_encode, :b64_encode_nif, :b64_encode_dirty_nif, 1}
+    {:b64_encode, :b64_encode_nif, :b64_encode_dirty_nif, 1},
+    {:yjs_inserts_cr, :yjs_inserts_cr_nif, :yjs_inserts_cr_dirty_nif, 1}
   ]
 
   # NIFs reached only through a wrapper below that fixes their schedule.
@@ -231,6 +232,19 @@ defmodule Engram.Native do
          end) do
       nil -> :error
       roots -> {:ok, roots}
+    end
+  end
+
+  @doc """
+  Whether a Yjs v1 update inserts text holding a `\\r`, or `:error` when it
+  does not decode. O(update), for the room's update path
+  (`CrdtPersistence.update_v1/4`). Same input rule as `yjs_root_inserts/2`:
+  yrs's own encode (the room's update monitor emits that), never client bytes.
+  """
+  def yjs_inserts_cr(update) when is_binary(update) do
+    case sized(:yjs_inserts_cr, update, [update]) do
+      nil -> :error
+      found -> {:ok, found}
     end
   end
 

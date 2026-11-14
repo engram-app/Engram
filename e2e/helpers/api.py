@@ -121,6 +121,14 @@ class ApiClient:
             time.sleep(poll)
         raise TimeoutError(f"Note {path} not on server after {timeout}s")
 
+    def wait_for_note_id(self, path: str, timeout: float = DELIVERY_TIMEOUT) -> str:
+        """Poll until `path` exists on the server and return its note id."""
+        note = self.wait_for_note(path, timeout=timeout)
+        inner = note.get("note", note) if isinstance(note, dict) else {}
+        nid = inner.get("id") or inner.get("note_id") or inner.get("uuid")
+        assert nid, f"no note id in GET /notes/{path}: {note}"
+        return str(nid)
+
     def wait_for_note_content(
         self, path: str, expected: str, timeout: float = DELIVERY_TIMEOUT, poll: float = 0.5
     ) -> dict:

@@ -662,6 +662,15 @@ fn yjs_root_inserts_nif(
     (r.ok(), peak)
 }
 
+/// `CrdtPersistence.update_v1/4`: whether the update inserts text holding a
+/// `\r` (see yjs_lineage.rs `inserts_cr`), `None` for one that does not decode.
+/// O(update); inline for a keystroke, dirty for a whole-body seed.
+fn yjs_inserts_cr(update: Binary) -> (Option<bool>, usize) {
+    memory::measured(|| yjs_lineage::inserts_cr(update.as_slice()).ok())
+}
+
+sized_nif!(yjs_inserts_cr, yjs_inserts_cr_nif, yjs_inserts_cr_dirty_nif, (update: Binary) [update] -> (Option<bool>, usize));
+
 rustler::atoms! { none, zstd, auto, reschedule }
 
 fn envelope_mode(mode: Atom) -> NifResult<envelope::Mode> {

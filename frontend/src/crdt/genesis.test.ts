@@ -39,6 +39,12 @@ describe("buildGenesisFrame", () => {
 		expect(once.endsWith("# Body\ntext\n")).toBe(true);
 	});
 
+	// Docs hold LF only: a CRLF or classic-Mac source (a duplicated legacy note)
+	// enters the doc as LF.
+	it("seeds a CRLF or lone-CR source as LF", () => {
+		expect(applyAndRead(buildGenesisFrame("# T\r\nbody\rmore\r\n"))).toBe("# T\nbody\nmore\n");
+	});
+
 	it("round-trips empty content", () => {
 		expect(applyAndRead(buildGenesisFrame(""))).toBe("");
 	});

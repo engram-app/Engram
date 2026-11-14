@@ -140,13 +140,6 @@ defmodule Engram.MCP.SectionsTest do
     assert headings!("#{@bt} a`b\n# X") |> Enum.map(& &1.text) == ["X"]
   end
 
-  # Review round 2, finding 3: inserting into a CRLF note must not leave a
-  # mix of bare \n and \r\n line endings behind.
-  test "insert converts inserted text to CRLF when the note uses CRLF" do
-    assert {:ok, out} = Sections.insert("## A\r\nx\r\n", "A", 2, "start", "n1\nn2")
-    assert out == "## A\r\nn1\r\nn2\r\nx\r\n"
-  end
-
   test "insert leaves LF-only notes alone" do
     assert {:ok, out} = Sections.insert("## A\nx\n", "A", 2, "start", "n1\nn2")
     assert out == "## A\nn1\nn2\nx\n"
@@ -302,15 +295,6 @@ defmodule Engram.MCP.SectionsTest do
     assert headings!(content) |> Enum.map(& &1.text) == ["X"]
   end
 
-  # Fix round 2, Minor 3: appending to a CRLF note with no trailing newline
-  # must not leave a bare LF or a stray trailing CR.
-  test "insert end on a CRLF note with no trailing newline stays uniform" do
-    assert {:ok, out} = Sections.insert("## A\r\nx", "A", 2, "end", "n1")
-    assert out == "## A\r\nx\r\nn1"
-    refute out =~ ~r/[^\r]\n/
-    refute String.ends_with?(out, "\r")
-  end
-
   # Regressions to keep green: ATX closing #s (already covered above), a
   # spaced dash run is a thematic break not setext, a GFM table delimiter row
   # is not setext, an indented dash run is not setext, and setext still works
@@ -331,17 +315,6 @@ defmodule Engram.MCP.SectionsTest do
   test "a setext heading is recognized in a CRLF note" do
     content = "Title\r\n=====\r\nbody\r\n"
     assert headings!(content) |> Enum.map(&{&1.level, &1.text}) == [{1, "Title"}]
-  end
-
-  # Fix round 3, finding 1: match_eol must stay LOCAL to the edit. A note
-  # that mixes a CRLF line with LF lines elsewhere must not have its
-  # untouched lines rewritten just because the whole file "contains \r\n"
-  # somewhere.
-  test "insert only touches the inserted fragment, not lines outside the edit" do
-    content = "## A\r\nx\n## B\ny"
-    assert {:ok, out} = Sections.insert(content, "A", 2, "start", "n1")
-    assert out == "## A\r\nn1\r\nx\n## B\ny"
-    assert String.ends_with?(out, "x\n## B\ny")
   end
 
   # Fix round 3, finding 2: CommonMark's paragraph-INTERRUPT rules are

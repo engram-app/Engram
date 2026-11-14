@@ -1,6 +1,7 @@
 import * as encoding from "lib0/encoding";
 import * as syncProtocol from "y-protocols/sync";
 import * as Y from "yjs";
+import { toLf } from "@/lib/line-endings";
 import { parseFrontmatter, splitFrontmatter } from "./frontmatter-codec";
 import { applyParsedFrontmatter } from "./frontmatter-doc";
 
@@ -23,7 +24,9 @@ function toB64(bytes: Uint8Array): string {
  * byte-identical to a live `crdt_msg` (CrdtChannel.sendUpdateRaw) and to the
  * plugin's batch-genesis frame, so the backend room applies it uniformly.
  */
-export function buildGenesisFrame(markdown: string): string {
+export function buildGenesisFrame(source: string): string {
+	// Docs hold LF only; a duplicated legacy note can still be CRLF.
+	const markdown = toLf(source);
 	const doc = new Y.Doc();
 	const { fmBlock, body } = splitFrontmatter(markdown);
 	const parsed = fmBlock === null ? { order: [], values: {} } : parseFrontmatter(fmBlock);

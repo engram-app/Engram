@@ -36,6 +36,7 @@ defmodule Engram.Notes do
     Helpers,
     Identity,
     Keys,
+    LineEndings,
     Location,
     Name,
     Note,
@@ -3438,12 +3439,24 @@ defmodule Engram.Notes do
   # fallback) and tags, all from the MERGED result — the public-API contract
   # is "server merges, never clobbers."
   #
+  # The ONE door every REST/MCP/web write's text enters the doc through, so it
+  # converts a markdown note to LF here (Engram.Notes.LineEndings); a canvas or
+  # base note is merged byte-exact.
+  defp maybe_merge_crdt(existing, incoming_content, user, note_id, vault_id, path, merge_doc) do
+    incoming = LineEndings.for_path(incoming_content, path)
+    merge_crdt(existing, incoming, user, note_id, vault_id, path, merge_doc)
+  end
+
+  # A markdown merge diffs against the doc's LF view, so it never emits an op
+  # on a CR already in the doc: only the room heals those (LineEndings).
+  defp merge_opts(path), do: [lf_view: CrdtBridge.markdown_path?(path)]
+
   # A locked read-modify-write: `merge_doc` is this row's snapshot with the tail
   # already replayed, and `incoming_content` was derived from its projection.
   # Diffing two-way into it applies exactly the caller's edit. The three-way
   # path below would re-insert every tail edit, because the incoming text
   # already carries them and the snapshot ancestor does not.
-  defp maybe_merge_crdt(
+  defp merge_crdt(
          %Note{},
          incoming_content,
          user,
@@ -3452,14 +3465,15 @@ defmodule Engram.Notes do
          path,
          %Yex.Doc{} = doc
        ) do
-    with {:ok, merged} <- CrdtBridge.merge_plaintext_into_doc(doc, incoming_content),
+    with {:ok, merged} <-
+           CrdtBridge.merge_plaintext_into_doc(doc, incoming_content, merge_opts(path)),
          do: crdt_merge_result(merged, user, note_id, path)
   end
 
   # A genesis insert with the client's doc: stored as the client built it, no
   # diff (re-ingesting would add server ops for nothing). Its own lineage, so
   # a retried frame merges as a no-op instead of doubling (#846).
-  defp maybe_merge_crdt(nil, _incoming, user, note_id, _vault_id, path, %Yex.Doc{} = doc) do
+  defp merge_crdt(nil, _incoming, user, note_id, _vault_id, path, %Yex.Doc{} = doc) do
     with {:ok, state} <- Yex.encode_state_as_update(doc),
          do:
            crdt_merge_result(%{state: state, text: CrdtBridge.text_of(doc)}, user, note_id, path)
@@ -3469,12 +3483,13 @@ defmodule Engram.Notes do
   # when the new text was derived. A tail that appears since (a room's client
   # seed plus keystrokes) is text the rebuild never saw, and diffing into it
   # would delete those keystrokes: refuse, so the caller reads again.
-  defp maybe_merge_crdt(%Note{}, incoming_content, user, note_id, vault_id, path, :empty_tail) do
+  defp merge_crdt(%Note{}, incoming_content, user, note_id, vault_id, path, :empty_tail) do
     {:ok, doc} = CrdtBridge.doc_from_state(nil)
 
     case CrdtPersistence.replay_tail(doc, user, note_id, vault_id) do
       [] ->
-        with {:ok, merged} <- CrdtBridge.merge_plaintext_into_doc(doc, incoming_content),
+        with {:ok, merged} <-
+               CrdtBridge.merge_plaintext_into_doc(doc, incoming_content, merge_opts(path)),
              do: crdt_merge_result(merged, user, note_id, path)
 
       [_ | _] ->
@@ -3482,7 +3497,7 @@ defmodule Engram.Notes do
     end
   end
 
-  defp maybe_merge_crdt(existing, incoming_content, user, note_id, vault_id, path, nil) do
+  defp merge_crdt(existing, incoming_content, user, note_id, vault_id, path, nil) do
     prior_state =
       case existing do
         %Note{} = note ->
@@ -3517,7 +3532,7 @@ defmodule Engram.Notes do
           # Brand-new insert: no note row, no tail rows can exist yet. Skip the
           # replay entirely and call merge_plaintext/2 directly (restores the
           # simple two-way path that predates tail-aware merging).
-          CrdtBridge.merge_plaintext(nil, incoming_content)
+          CrdtBridge.merge_plaintext(nil, incoming_content, merge_opts(path))
 
         is_nil(prior_state) ->
           # Pre-CRDT note (existing %Note{} with nil crdt_state columns): tail
@@ -3526,7 +3541,7 @@ defmodule Engram.Notes do
           # text against the tail-inclusive doc to avoid full-body duplication.
           with {:ok, doc} <- CrdtBridge.doc_from_state(nil) do
             _count = CrdtPersistence.replay_tail(doc, user, note_id, vault_id)
-            CrdtBridge.merge_plaintext_into_doc(doc, incoming_content)
+            CrdtBridge.merge_plaintext_into_doc(doc, incoming_content, merge_opts(path))
           end
 
         true ->
@@ -3541,7 +3556,12 @@ defmodule Engram.Notes do
               # two-way path as a nil snapshot (reusing the hydrated doc keeps
               # the empty snapshot's lineage continuity).
               _count = CrdtPersistence.replay_tail(snapshot_doc, user, note_id, vault_id)
-              CrdtBridge.merge_plaintext_into_doc(snapshot_doc, incoming_content)
+
+              CrdtBridge.merge_plaintext_into_doc(
+                snapshot_doc,
+                incoming_content,
+                merge_opts(path)
+              )
             else
               # Two independent docs from the same snapshot:
               # - snapshot_doc: the shared ancestor; the incoming diff is applied
@@ -3558,7 +3578,8 @@ defmodule Engram.Notes do
                 CrdtBridge.merge_plaintext_relative_to_snapshot(
                   snapshot_doc,
                   tail_doc,
-                  incoming_content
+                  incoming_content,
+                  merge_opts(path)
                 )
               end
             end
@@ -5783,6 +5804,21 @@ defmodule Engram.Notes do
   # instead of crashing on a Postgrex unique_violation.
   @changes_page_max_limit 500
 
+  # The rows the op-log feed serves: every note row with a seq except folder
+  # rows. One definition for the page and for its head (`feed_head_seq/2`).
+  defp feed_rows(user, vault),
+    do: from(n in scoped(user, vault), where: not is_nil(n.seq) and n.kind != "folder")
+
+  @doc """
+  The highest seq `list_changes_by_seq/4` can serve, or 0. Lower than the
+  vault's `change_seq` whenever its last bump was a folder row. One index seek.
+  """
+  @spec feed_head_seq(map(), map()) :: non_neg_integer()
+  def feed_head_seq(user, vault) do
+    Repo.one(from(n in feed_rows(user, vault), order_by: [desc: n.seq], limit: 1, select: n.seq)) ||
+      0
+  end
+
   @doc """
   Seq-cursor change feed: rows with `(seq, id) > (after_seq, after_id)`,
   ordered by `(seq, id)`, paginated.
@@ -5823,8 +5859,7 @@ defmodule Engram.Notes do
     max_bytes = Keyword.get(opts, :max_bytes) || page_max_bytes()
 
     base =
-      from(n in scoped(user, vault),
-        where: not is_nil(n.seq) and n.kind != "folder",
+      from(n in feed_rows(user, vault),
         order_by: [asc: n.seq, asc: n.id],
         limit: ^(limit + 1)
       )

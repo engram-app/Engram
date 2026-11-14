@@ -752,6 +752,12 @@
             "x-struct": null,
             "x-validate": null
           },
+          "feed_seq": {
+            "description": "Highest seq the op-log catch-up feed can serve (notes and attachments; folder rows bump `change_seq` but are not in the feed).",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
           "pending_checkpoints": {
             "description": "Unfinished checkpoint jobs for this vault's notes whose note has no live room. Includes a snoozed job whose room has since exited.",
             "type": "integer",
@@ -767,6 +773,7 @@
         },
         "required": [
           "change_seq",
+          "feed_seq",
           "pending_crdt_updates",
           "pending_checkpoints",
           "deferred_checkpoints",
@@ -5805,7 +5812,7 @@
     "/api/sync/quiescence": {
       "get": {
         "callbacks": {},
-        "description": "The vault's `change_seq` plus how many CRDT updates still await their checkpoint. A client whose catch-up cursor has reached `change_seq` while both counts are 0 has seen every change the server will make on its own. `deferred_checkpoints` (held by a live room) is reported but is not owed work. `checkpoints_capped` is true when more pending checkpoints exist than the server reads per call; `pending_checkpoints` is then at least 1, never 0.",
+        "description": "The vault's `change_seq`, the op-log feed's head `feed_seq`, and how many CRDT updates still await their checkpoint. A client whose catch-up cursor has reached `feed_seq` while both counts are 0 has seen every change the server will make on its own (`change_seq` also counts folder rows, which the feed never serves). `deferred_checkpoints` (held by a live room) is reported but is not owed work. `checkpoints_capped` is true when more pending checkpoints exist than the server reads per call; `pending_checkpoints` is then at least 1, never 0.",
         "operationId": "sync-quiescence",
         "parameters": [],
         "responses": {

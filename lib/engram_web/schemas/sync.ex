@@ -110,6 +110,12 @@ defmodule EngramWeb.Schemas.SyncQuiescenceResponse do
     type: :object,
     properties: %{
       change_seq: %Schema{type: :integer, description: "Current per-vault sequence watermark."},
+      feed_seq: %Schema{
+        type: :integer,
+        description:
+          "Highest seq the op-log catch-up feed can serve (notes and attachments; " <>
+            "folder rows bump `change_seq` but are not in the feed)."
+      },
       pending_crdt_updates: %Schema{
         type: :integer,
         description: "CRDT updates stored but not yet folded into their note by a checkpoint."
@@ -135,6 +141,7 @@ defmodule EngramWeb.Schemas.SyncQuiescenceResponse do
     },
     required: [
       :change_seq,
+      :feed_seq,
       :pending_crdt_updates,
       :pending_checkpoints,
       :deferred_checkpoints,

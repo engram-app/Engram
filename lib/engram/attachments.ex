@@ -2291,6 +2291,16 @@ defmodule Engram.Attachments do
     end
   end
 
+  # The rows the op-log feed serves. One definition for the page and its head.
+  defp feed_rows(user, vault), do: from(a in scoped(user, vault), where: not is_nil(a.seq))
+
+  @doc "The highest seq `list_changes_by_seq/4` can serve, or 0. One index seek."
+  @spec feed_head_seq(map(), map()) :: non_neg_integer()
+  def feed_head_seq(user, vault) do
+    Repo.one(from(a in feed_rows(user, vault), order_by: [desc: a.seq], limit: 1, select: a.seq)) ||
+      0
+  end
+
   @doc """
   Seq-cursor change feed over attachments: rows with `(seq, id) > (after_seq,
   after_id)`, ordered by `(seq, id)`, paginated. Mirrors
@@ -2321,8 +2331,7 @@ defmodule Engram.Attachments do
     after_id = Keyword.get(opts, :after_id)
 
     base =
-      from(a in scoped(user, vault),
-        where: not is_nil(a.seq),
+      from(a in feed_rows(user, vault),
         order_by: [asc: a.seq, asc: a.id],
         limit: ^(limit + 1)
       )

@@ -47,7 +47,6 @@ NOTE_COUNT = 10
 # and reports a generic timeout instead of "converged only N/M".
 CONVERGE_BOUND_S = 90
 
-SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
 # Re-point the running plugin at a different server vault WITHOUT touching the
 # local vault directory — the device's docs and id map must survive, because
@@ -65,7 +64,7 @@ async def _converge(cdp, api, prefix, expected):
     started = time.monotonic()
     landed = 0
     while time.monotonic() < started + CONVERGE_BOUND_S:
-        await cdp.evaluate(SET_BLOCKED.format("false"))
+        await cdp.set_sync_blocked(False)
         await cdp.trigger_full_sync()
         manifest = api.get_manifest()
         landed = sum(1 for n in manifest["notes"] if n["path"].startswith(prefix))
@@ -87,7 +86,7 @@ async def test_resync_into_fresh_vault_keeps_one_lineage(
     # test_32_vault_api_key_isolation, which asserts Free blocks exactly this.
     grant_vault_headroom(sync_user[0])
 
-    await cdp_a.evaluate(SET_BLOCKED.format("true"))
+    await cdp_a.set_sync_blocked(True)
 
     # Mixed sizes: the production doubling ran from 17 KB to 68 KB per note, and
     # two lineages over a very short note can merge into one run and hide the

@@ -33,15 +33,6 @@ logger = logging.getLogger(__name__)
 CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert
 
 
-def _note_id(api_sync, path: str) -> str:
-    """Server note id for `path` (the SPA opens the note at its vault-scoped
-    URL; /note/<id> only redirects there). Shape-robust."""
-    note = api_sync.wait_for_note(path, timeout=CRDT_TIMEOUT)
-    inner = note.get("note", note) if isinstance(note, dict) else {}
-    nid = inner.get("id") or inner.get("note_id") or inner.get("uuid")
-    assert nid, f"no note id in GET /notes/{path}: {note}"
-    return str(nid)
-
 
 @pytest.mark.asyncio
 async def test_web_edit_reaches_obsidian_live(web, vault_b, cdp_b, api_sync, sync_vault_id):
@@ -57,7 +48,7 @@ async def test_web_edit_reaches_obsidian_live(web, vault_b, cdp_b, api_sync, syn
 
     # The web SPA opens the note and edits it in the CodeMirror editor — a real
     # crdt_msg over the crdt: channel.
-    note_id = _note_id(api_sync, path)
+    note_id = api_sync.wait_for_note_id(path)
     await web.open_note(note_id, sync_vault_id)
     await web.append("\nEDIT-FROM-WEB-crdt\n")
     t_edit = time.monotonic()
@@ -92,7 +83,7 @@ async def test_web_edit_reaches_obsidian_that_missed_room_open(
     api_sync.create_note(path, "# Missed Open\nbase content.\n")
     await cdp_b.trigger_full_sync()
     wait_for_content(vault_b, path, "base content", timeout=CRDT_TIMEOUT)
-    note_id = _note_id(api_sync, path)
+    note_id = api_sync.wait_for_note_id(path)
 
     # B goes OFF the channel, THEN the web opens the room — so B misses the
     # room-open announce entirely.

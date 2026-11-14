@@ -7,7 +7,7 @@ lives on branch `test/frontmatter-fidelity-repro` until #1928 fix 2 lands.
 from __future__ import annotations
 
 import asyncio
-import json
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -19,9 +19,6 @@ from helpers.vault import write_note
 CONVERGE_BOUND_S = 90
 # Catch-up after the push is what fires the drift branch. Prod drift-copied
 # within ~20s of the push sweep; give a few manual syncs room to run it.
-
-
-SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
 
 # A conflict copy needs a THREE-way disagreement: the user's raw bytes, the
 # plugin's re-emit and the backend's re-emit must all differ. If the plugin
@@ -62,12 +59,23 @@ PLUGIN_EMIT = {
 }
 
 
+# The shared fence rule (docs/context/frontmatter-fence-rule.md): open at byte
+# 0 on a bare `---` line ending LF or CRLF, close on `---` plus optional
+# spaces/tabs, then a line ending or end of text.
+_FENCED = re.compile(r"\A---\r?\n(.*?\r?\n)??---[ \t]*(?:\r?\n|\Z)", re.S)
+
+
 def fm_block(text: str) -> str | None:
     """The frontmatter block between the fences, or None if there is none."""
-    if not text.startswith("---\n"):
-        return None
-    end = text.find("\n---", 3)
-    return None if end == -1 else text[4 : end + 1]
+    m = _FENCED.match(text)
+    return None if m is None else (m.group(1) or "")
+
+
+def fm_keys(text: str) -> list[str]:
+    """Top-level keys of the frontmatter block in disk order, duplicates kept,
+    so a caller can assert a key appears once."""
+    block = fm_block(text) or ""
+    return re.findall(r"^([^\s:#][^:\r\n]*):", block, re.M)
 
 
 @dataclass
@@ -85,15 +93,12 @@ async def first_sync_shapes(
     vault, cdp, api_sync, shapes: dict[str, str], tag: str
 ) -> FirstSyncResult:
     prefix = f"{tag}-{uuid.uuid4().hex[:12]}"
-    await cdp.evaluate(SET_BLOCKED.format("true"))
+    await cdp.set_sync_blocked(True)
     # Record every file the plugin CREATES. A drift-copy cannot be found by
     # scanning disk afterwards: the copy is stamped as synced but never pushed,
     # so the next manifest reconcile reads it as server-deleted and TRASHES it
     # ("Reconcile: server-deleted -> trashed"), within a second.
-    await cdp.evaluate(
-        "window.__fmCreates = [];"
-        "window.__fmCreatesRef = app.vault.on('create', f => window.__fmCreates.push(f.path)); true"
-    )
+    await cdp.arm_create_spy()
 
     written: dict[str, str] = {}
     for name, fm in shapes.items():
@@ -120,7 +125,7 @@ async def first_sync_shapes(
     started = time.monotonic()
     landed = 0
     while time.monotonic() < started + CONVERGE_BOUND_S:
-        await cdp.evaluate(SET_BLOCKED.format("false"))
+        await cdp.set_sync_blocked(False)
         await cdp.trigger_full_sync()
         landed = sum(
             1
@@ -140,14 +145,8 @@ async def first_sync_shapes(
     # waited on.
     await await_quiescent(cdp, api_sync)
 
-    created = await cdp.evaluate(
-        "JSON.stringify(window.__fmCreates); app.vault.offref(window.__fmCreatesRef);"
-        "JSON.stringify(window.__fmCreates)"
-    )
     copies = sorted(
-        p
-        for p in json.loads(created or "[]")
-        if p.startswith(prefix) and "(conflict" in p
+        p for p in await cdp.disarm_create_spy() if p.startswith(prefix) and "(conflict" in p
     )
     rewritten = {}
     server = {}

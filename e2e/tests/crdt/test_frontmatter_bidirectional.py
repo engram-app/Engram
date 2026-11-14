@@ -49,50 +49,6 @@ MS = CRDT_TIMEOUT * 1_000
 SETTLE_SECONDS = 15
 
 
-def _note_id(api_sync, path: str) -> str:
-    note = api_sync.wait_for_note(path, timeout=CRDT_TIMEOUT)
-    inner = note.get("note", note) if isinstance(note, dict) else {}
-    nid = inner.get("id") or inner.get("note_id") or inner.get("uuid")
-    assert nid, f"no note id in GET /notes/{path}: {note}"
-    return str(nid)
-
-
-async def _open_in_obsidian(cdp, path: str) -> None:
-    """Live-bind the note in Obsidian's editor (same incantation as
-    test_live_bound_both_ends). Binding is what routes edits through the CM
-    plugin instead of the disk-save path, and it is the reported trigger."""
-    opened = await cdp.evaluate(
-        """
-        (async () => {
-          const f = app.vault.getAbstractFileByPath(%r);
-          if (!f) return "no-file";
-          await app.workspace.getLeaf(false).openFile(f);
-          return app.workspace.activeEditor?.file?.path ?? "no-active";
-        })()
-        """
-        % path,
-        await_promise=True,
-    )
-    assert opened == path, f"failed to live-bind {path} in Obsidian: {opened!r}"
-
-
-async def _close_all_in_obsidian(cdp) -> None:
-    """Detach every markdown leaf — the user's "close the file".
-
-    This is the transition that releases the live binding. `detach()` is what
-    Obsidian's own close button calls, so it fires the same teardown (and the
-    same final save) the reported repro goes through."""
-    left = await cdp.evaluate(
-        """
-        (async () => {
-          app.workspace.getLeavesOfType("markdown").forEach((l) => l.detach());
-          return app.workspace.getLeavesOfType("markdown").length;
-        })()
-        """,
-        await_promise=True,
-    )
-    assert left == 0, f"markdown leaves still open after detach: {left!r}"
-
 
 async def _type_into_open_editor(cdp, path: str, text: str) -> None:
     """Set the OPEN editor's buffer, which is what typing produces.
@@ -129,7 +85,7 @@ async def test_obsidian_frontmatter_reaches_web_when_note_is_closed(
     this fails, frontmatter sync is broken everywhere and not just live."""
     path = "E2E/Crdt/FmClosed.md"
     write_note(vault_a, path, "---\nstatus: draft\n---\n\nbody v1\n")
-    note_id = _note_id(api_sync, path)
+    note_id = api_sync.wait_for_note_id(path)
 
     await web.open_note(note_id, sync_vault_id)
     await expect(web.property_value_locator("status")).to_have_text(
@@ -156,8 +112,8 @@ async def test_obsidian_frontmatter_reaches_web_when_note_is_open(
     """
     path = "E2E/Crdt/FmOpen.md"
     write_note(vault_a, path, "---\nstatus: draft\n---\n\nbody v1\n")
-    note_id = _note_id(api_sync, path)
-    await _open_in_obsidian(cdp_a, path)
+    note_id = api_sync.wait_for_note_id(path)
+    await cdp_a.open_in_editor(path)
 
     await web.open_note(note_id, sync_vault_id)
     await expect(web.property_value_locator("status")).to_have_text(
@@ -187,9 +143,9 @@ async def test_web_property_reaches_obsidian_with_note_open(
     await cdp_b.trigger_full_sync()
     wait_for_content(vault_b, path, "base line", timeout=CRDT_TIMEOUT)
 
-    await _open_in_obsidian(cdp_b, path)
+    await cdp_b.open_in_editor(path)
 
-    note_id = _note_id(api_sync, path)
+    note_id = api_sync.wait_for_note_id(path)
     await web.open_note(note_id, sync_vault_id)
     await web.set_property("status", "published")
 
@@ -221,7 +177,7 @@ async def test_unparseable_frontmatter_does_not_delete_existing_keys(
     """
     path = "E2E/Crdt/FmBadYaml.md"
     write_note(vault_a, path, "---\nkeep: me\nalso: here\n---\n\nbody v1\n")
-    note_id = _note_id(api_sync, path)
+    note_id = api_sync.wait_for_note_id(path)
 
     await web.open_note(note_id, sync_vault_id)
     await expect(web.property_value_locator("keep")).to_have_text("me", timeout=MS)
@@ -278,8 +234,8 @@ async def test_typed_frontmatter_survives_close_and_reopen(
     """
     path = "E2E/Crdt/FmCloseReopen.md"
     write_note(vault_a, path, "---\nkeep: me\n---\n\nbody v1\n")
-    note_id = _note_id(api_sync, path)
-    await _open_in_obsidian(cdp_a, path)
+    note_id = api_sync.wait_for_note_id(path)
+    await cdp_a.open_in_editor(path)
 
     await web.open_note(note_id, sync_vault_id)
     await expect(web.property_value_locator("keep")).to_have_text("me", timeout=MS)
@@ -296,7 +252,7 @@ async def test_typed_frontmatter_survives_close_and_reopen(
         "published", timeout=MS
     )
 
-    await _close_all_in_obsidian(cdp_a)
+    await cdp_a.close_all_editors()
 
     # Assert while CLOSED. This is the reported state, and it is the strict one:
     # reopening first runs attach() -> enroll -> room rejoin, and any update
@@ -316,7 +272,7 @@ async def test_typed_frontmatter_survives_close_and_reopen(
 
     # Reopening must not resurrect the problem either, and the server should
     # still agree -- so this was never a delete the user made.
-    await _open_in_obsidian(cdp_a, path)
+    await cdp_a.open_in_editor(path)
     final = read_note(vault_a, path)
     assert "keep:" in final and "status:" in final, (
         f"frontmatter vanished on reopen; file is now:\n{final!r}"

@@ -6,6 +6,16 @@ defmodule Engram.Sync do
   alias Engram.{Attachments, Notes}
 
   @doc """
+  The highest seq this feed can serve for `vault`. Lower than the vault's
+  `change_seq` whenever the vault's last bump was a folder write (folder rows
+  are not in the feed), so a client cursor that reached it has seen every row
+  the feed holds. Run inside `Repo.with_tenant/2`.
+  """
+  @spec feed_head(map(), map()) :: non_neg_integer()
+  def feed_head(user, vault),
+    do: max(Notes.feed_head_seq(user, vault), Attachments.feed_head_seq(user, vault))
+
+  @doc """
   One seq-ordered page merging the notes + attachments change feeds for a vault.
 
   `seq` is a vault-global sequence (both `Notes` and `Attachments` upserts draw

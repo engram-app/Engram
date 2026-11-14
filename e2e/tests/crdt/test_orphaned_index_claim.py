@@ -168,19 +168,7 @@ async def test_an_orphaned_claim_re_creates_the_note_under_the_same_id(
     #    escape is a HANDSHAKE, which means the note must be enrolled. Opening it
     #    in the editor live-binds the doc and does exactly that. (In the prod
     #    case the same STEP1 came from `reEnrollUnsent` on reconnect.)
-    opened = await cdp_a.evaluate(
-        """
-        (async () => {
-          const f = app.vault.getAbstractFileByPath(%r);
-          if (!f) return "no-file";
-          await app.workspace.getLeaf(false).openFile(f);
-          return app.workspace.activeEditor?.file?.path ?? "no-active";
-        })()
-        """
-        % path,
-        await_promise=True,
-    )
-    assert opened == path, f"failed to live-bind the note in Obsidian: {opened!r}"
+    await cdp_a.open_in_editor(path)
 
     # 4. The note comes back, under the SAME id. A fresh mint would also make the
     #    note reappear, which is why this asserts the id and not just presence:

@@ -33,7 +33,7 @@ defmodule Engram.Notes.CrdtPersistence do
   # observable symptom if that ever stops holding.
 
   import Ecto.Query
-  alias Engram.{Accounts, Crypto, Repo}
+  alias Engram.{Accounts, Crypto, Native, Repo}
   alias Engram.Logger.Metadata
 
   alias Engram.Notes.{
@@ -66,7 +66,13 @@ defmodule Engram.Notes.CrdtPersistence do
     :dek_version,
     :content_hash,
     :crdt_state_ciphertext,
-    :crdt_state_nonce
+    :crdt_state_nonce,
+    # The path (decrypted with its folder) says whether this is a markdown doc
+    # for the room-open heal below.
+    :path_ciphertext,
+    :path_nonce,
+    :folder_ciphertext,
+    :folder_nonce
   ]
 
   @impl true
@@ -183,7 +189,10 @@ defmodule Engram.Notes.CrdtPersistence do
             # `notes.content` is a DERIVED projection maintained by the
             # checkpoint materializer.
 
-            :ok = CrdtBridge.normalize_doc(doc)
+            markdown? = markdown_doc?(note, user)
+            if markdown?, do: :ok = CrdtBridge.normalize_doc(doc)
+            # The room's update path heals CRs live updates insert (update_v1/4).
+            if in_room?(), do: Process.put(:crdt_markdown, markdown?)
 
             if in_room?(),
               do: Process.put(:crdt_clean, applied == [] and projects?(doc, note, user))
@@ -219,7 +228,23 @@ defmodule Engram.Notes.CrdtPersistence do
     # Any doc change after bind ends the read-only close skip (`unbind/3`),
     # even one whose append raises before it is counted.
     Process.put(:crdt_clean, false)
-    append_update(state, update, name, doc)
+    state = append_update(state, update, name, doc)
+    heal_inserted_cr(update, doc)
+    state
+  end
+
+  # The room is the ONE actor that removes CRs already in a markdown doc (see
+  # `Engram.Notes.LineEndings`). An old plugin seeds a CRLF disk file as raw
+  # `\r` inserts while the room is open, and the room may stay open for hours,
+  # so the open-time heal alone is not enough. The check is O(update) (the
+  # NIF reads what the update inserted), so a keystroke never scans the body.
+  # The heal is its own transaction: its update comes back through here to be
+  # appended and broadcast, and inserts no CR, so it stops there.
+  defp heal_inserted_cr(update, doc) do
+    if Process.get(:crdt_markdown, false) and Native.yjs_inserts_cr(update) == {:ok, true},
+      do: :ok = CrdtBridge.heal_line_endings(doc)
+
+    :ok
   end
 
   # A row this big is a whole body inserted through the room (genesis
@@ -405,6 +430,15 @@ defmodule Engram.Notes.CrdtPersistence do
 
   # Whether the bound doc projects the row's stored content (so a checkpoint
   # of it would change nothing). A key error answers no: checkpoint as before.
+  # A `.canvas`/`.base` doc stays byte-exact. A path that cannot be read is
+  # treated as markdown: the heal is what bind has always run.
+  defp markdown_doc?(note, user) do
+    case Crypto.maybe_decrypt_note_fields(note, user) do
+      {:ok, %Note{path: path}} when is_binary(path) -> CrdtBridge.markdown_path?(path)
+      _ -> true
+    end
+  end
+
   defp projects?(doc, %Note{content_hash: hash}, user) do
     case Crypto.dek_content_hash_key(user) do
       {:ok, key} -> Crypto.hmac_content_hash(key, CrdtBridge.text_of(doc)) == hash

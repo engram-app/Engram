@@ -46,25 +46,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from helpers.backend_rpc import backend_rpc
+from helpers.backend_rpc import LOAD_DOC_EXPR, backend_rpc, vault_user_expr
 
 # ONE logical Elixir line: `bin/engram rpc` takes the expression as a single
 # argv, so a one-liner cannot be reshaped by newline handling in the release
 # wrapper (same constraint room_probe.py documents).
 _PROBE = (
-    '{{:ok, vb}} = Ecto.UUID.dump("{vault_id}"); '
-    "{{:ok, vr}} = Ecto.Adapters.SQL.query(Engram.Repo, "
-    '"select user_id::text from vaults where id=$1", [vb]); '
-    "u = Engram.Accounts.get_user!(hd(hd(vr.rows))); "
+    "{vault_user}"
     "{{:ok, nr}} = Ecto.Adapters.SQL.query(Engram.Repo, "
     '"select id::text from notes where vault_id=$1 and deleted_at is null", [vb]); '
     "ids = List.flatten(nr.rows); "
-    "{{:ok, notes}} = Engram.Repo.with_tenant(u.id, fn -> "
-    "Enum.map(ids, &Engram.Repo.get(Engram.Notes.Note, &1)) end); "
-    "pairs = Enum.map(notes, fn n -> "
-    "{{:ok, st}} = Engram.Crypto.decrypt_crdt_state(n, u); "
-    "c = if st do {{:ok, d}} = Engram.Notes.CrdtBridge.doc_from_state(st); "
-    ":binary.first(Yex.encode_state_vector!(d)) else 0 end; "
+    # `crdt_state_ciphertext` is VIRTUAL (it lives in note_bodies since R8):
+    # `Repo.get` leaves it nil, which read every note as zero clients.
+    "{load_doc}"
+    "{{:ok, docs}} = Engram.Repo.with_tenant(u.id, fn -> "
+    "import Ecto.Query; from(x in Engram.Notes.Note, where: x.id in ^ids) "
+    "|> Engram.Notes.NoteBody.select_note() |> Engram.Repo.all() "
+    "|> Enum.map(&{{&1, load_doc.(&1, u)}}) end); "
+    "pairs = Enum.map(docs, fn {{n, d}} -> "
+    "c = :binary.first(Yex.encode_state_vector!(d)); "
     "p = case Engram.Crypto.maybe_decrypt_note_fields(n, u) do "
     "{{:ok, %{{path: pp}}}} when is_binary(pp) -> pp; "
     '_ -> "<undecryptable>" end; '
@@ -102,7 +102,11 @@ def read_lineages(vault_id: str, path_prefix: str = "") -> Lineages:
 
     Raises if the probe misfires.
     """
-    out = backend_rpc(_PROBE.format(vault_id=vault_id, path_prefix=path_prefix))
+    out = backend_rpc(
+        _PROBE.format(
+            vault_user=vault_user_expr(vault_id), load_doc=LOAD_DOC_EXPR, path_prefix=path_prefix
+        )
+    )
     lines = out.strip().splitlines()
     # Print WHICH notes are multi-client, so a failure names the offending
     # paths instead of only a count — the count alone cost a debugging cycle.
