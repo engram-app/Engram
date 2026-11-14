@@ -22,10 +22,17 @@ defmodule Engram.Crypto.HMAC do
   # other than a user PK, and we want that to fail loudly rather than silently
   # hash the wrong value.
   @spec hash_user_id(String.t()) :: String.t()
-  def hash_user_id(user_id) when is_binary(user_id) do
+  def hash_user_id(user_id) when is_binary(user_id), do: hash_id(user_id)
+
+  @doc """
+  Stable hex HMAC of any row id (a note id, say), same key and digest as
+  `hash_user_id/1`, so a log line can name a row without leaking it.
+  """
+  @spec hash_id(String.t()) :: String.t()
+  def hash_id(id) when is_binary(id) do
     key = Application.fetch_env!(:engram, :hmac_key_user_id)
 
-    :crypto.mac(:hmac, :sha256, key, user_id)
+    :crypto.mac(:hmac, :sha256, key, id)
     |> Base.encode16(case: :lower)
   end
 end
