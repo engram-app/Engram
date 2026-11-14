@@ -48,9 +48,13 @@ WHERE s.relname = 'note_links';
 
 Loop it with a shell `while true; ... psql -AtF, -f sample.sql >> samples.csv; sleep 60; done`, stopping when `ledger_done` is set. Divide deltas of `wal_bytes`, `wal_fpi`, `wal_records` by rows backfilled (delta of `null_rows`), and count checkpoints from `ckpts`.
 
-## Method: density simulation (read-only, no backfill needed)
+## Method: density simulation (no backfill needed)
 
 Predicts FPI/row for any density from the staging data. Validated against both runs within 0.02 FPI/row.
+
+Read-only on table data, but it creates a TEMP table, so run it on the primary (staging), not a replica.
+
+It models 8 of the 10 `note_links` indexes: the `target_attachment_id` and `qualified` partial indexes are omitted (both ~5 pages, so they barely move the result).
 
 1. Number rows in the backfill's walk order (PK).
 2. Map each row to a pseudo leaf page per index: rank in that index's key order x (index pages / rows).
@@ -62,8 +66,11 @@ Pick R = rows per checkpoint interval at prod density:
 
 Density matching is scale-invariant for both clustered indexes and random (HMAC-keyed) indexes, so the staging result transfers.
 
+Set `N` to the staging row count (`select count(*) from note_links`). Keep the comment off the `\set` line: psql takes everything after the name as the value, so a trailing `-- comment` ends up inside `:N`.
+
 ```sql
-\set N 60179   -- staging row count
+-- N = staging row count
+\set N 60179
 create temp table r as
 select row_number() over (order by id) as wi,
  (ctid::text::point)[0]::bigint as hp,
@@ -91,9 +98,10 @@ The literal page counts (763, 689, ...) are each index's leaf pages on staging; 
 Results: R=474 gives 0.64 FPI/row, R=1,200 gives 0.465, R=15,000 gives 0.195.
 
 ## Pacing (`Engram.Backfill.PacedChain`)
-- A hop runs up to `max_rows` (checked per 200-id window, so the effective minimum is 200 rows per hop) or 30 s, at `writes_per_s`, with a 250 ms pause between 200-id windows. The next hop is scheduled 45 s out (Gap B values in `backfill_note_link_qualified.ex`).
+- A hop runs up to `max_rows` (checked per 200-id window, so the effective minimum is 200 rows per hop) or 30 s, at `writes_per_s`. The 250 ms pause between windows is a minimum wait folded into the throttle wait (`Throttle.wait_ms/5` sleeps `max(pause, deficit)`), not added on top. The next hop is scheduled 45 s out (Gap B values in `backfill_note_link_qualified.ex`).
 - Default 3,000 rows at 150/s gives ~2,770 rows/min.
 - **A `max_rows` below 200 does nothing.** Throttle with `writes_per_s`.
+- Hop formula: **rows/hop = min(max_rows, writes_per_s x 30 s, rounded up to a 200-id window)**; **cycle = hop time + 45 s** (`schedule_in`) + queue latency. At a low `writes_per_s` the 30 s budget, not `max_rows`, ends the hop.
 
 ## Prod disk: rate, not total
 - RDS retains a bounded amount of WAL: `TransactionLogsDiskUsage` stayed flat at 2.35-2.55 GB while prod generated 0.8-1.2 GB/h of WAL. Generated WAL is archived and recycled, not held.
@@ -103,7 +111,9 @@ Results: R=474 gives 0.64 FPI/row, R=1,200 gives 0.465, R=15,000 gives 0.195.
 ## Projection for Gap B
 - ~4.4 KB/row at ~1.9M prod rows (row count is an estimate, not measured).
 - Default pace: 0.72 GB/h. If prod is half as clustered as staging: 1.24 GB/h.
-- Recommended: `writes_per_s=50` (~103k rows/h, ~0.48 GB/h).
+- Recommended: `writes_per_s=50`. A hop stops at the 30 s budget (checked per 200-id window), so ~1,500-1,800 rows per hop and a ~81 s cycle (30 s + 45 s + queue latency): **~80k rows/h**, ~24 h for 1.9M rows.
+  - Density: ~0.35% of prod rows per checkpoint, i.e. staging R ~212. FPI/row ~0.75 there, **extrapolated** past the lowest measured point (R=474, 0.64); not simulated or measured at R=212.
+  - So ~4.85 KB/row (1,240 B + 4.8 KB x 0.75), **~0.39 GB/h modeled, ~0.67 GB/h pessimistic** (2x FPI).
 
 ## Failed Approaches / Dead Ends
 - Measuring WAL/row on staging at the default pace and multiplying by prod rows: 2.2 KB/row understates prod by ~2x because staging shares FPIs across a dense checkpoint window.
