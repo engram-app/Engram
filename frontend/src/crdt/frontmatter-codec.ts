@@ -111,13 +111,24 @@ export function parseFrontmatter(
 	return { order, values };
 }
 
+/**
+ * The key order with each key once, at its FIRST position. Concurrent lifts of
+ * one fence each append to `frontmatter_order` and the CRDT keeps both, so every
+ * reader of the order goes through this (the backend's
+ * `Frontmatter.unique_order/1` does the same; the Obsidian plugin only once
+ * Engram-obsidian#697 ships).
+ */
+export function uniqueKeys(order: readonly string[]): string[] {
+	return [...new Set(order)];
+}
+
 export function emitFrontmatter(
 	order: string[],
 	values: Record<string, string>,
 	raws: Record<string, string> = {},
 ): string {
 	const has = (m: Record<string, string>, k: string) => Object.hasOwn(m, k);
-	const present = order.filter((k) => has(raws, k) || has(values, k));
+	const present = uniqueKeys(order).filter((k) => has(raws, k) || has(values, k));
 	if (present.length === 0) {
 		return "";
 	}

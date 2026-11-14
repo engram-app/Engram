@@ -353,7 +353,12 @@ defmodule Engram.Backfill.IdWindows do
           keyword()
         ) :: :done | {:more, keyword()}
   def heal_pass(name, schema, step, opts) do
-    walk = Agent.get(@cursors, &Map.get(&1, name, %{from: nil, dirty: false, passes: 0}))
+    {walk, gen} =
+      Agent.get(
+        @cursors,
+        &{Map.get(&1, name, %{from: nil, dirty: false, passes: 0}), gen(&1, name)}
+      )
+
     walk = %{walk | passes: walk.passes + 1}
     max_fixed = Keyword.get(opts, :max_fixed, :infinity)
 
@@ -398,19 +403,34 @@ defmodule Engram.Backfill.IdWindows do
         hit_budget: pass.stop == :budget
       })
 
-    case pass.stop do
-      nil ->
-        Agent.update(@cursors, &Map.delete(&1, name))
-        if dirty, do: {:more, rows: pass.fixed}, else: :done
+    # A `reset_walk/1` (a reopen) that landed during this pass bumped the
+    # walk's generation: the work it announced may sit behind our cursor, so
+    # neither save the cursor nor report a clean walk; the next pass starts over.
+    saved =
+      Agent.get_and_update(@cursors, fn cursors ->
+        cond do
+          gen(cursors, name) != gen -> {false, cursors}
+          pass.stop == nil -> {true, Map.delete(cursors, name)}
+          true -> {true, Map.put(cursors, name, %{walk | from: pass.at, dirty: dirty})}
+        end
+      end)
 
-      stop ->
-        walk = %{walk | from: pass.at, dirty: dirty}
-        Agent.update(@cursors, &Map.put(&1, name, walk))
-        spanning(name, walk.passes)
-        more = [rows: pass.fixed]
-        if stop == :budget, do: {:more, more ++ [hit_budget: true]}, else: {:more, more}
+    more = [rows: pass.fixed]
+
+    cond do
+      not saved -> {:more, more}
+      pass.stop == nil -> if dirty, do: {:more, more}, else: :done
+      true -> stopped(name, walk.passes, pass.stop, more)
     end
   end
+
+  defp stopped(name, passes, stop, more) do
+    spanning(name, passes)
+    if stop == :budget, do: {:more, more ++ [hit_budget: true]}, else: {:more, more}
+  end
+
+  # The walk's reset generation: bumped by every `reset_walk/1`.
+  defp gen(cursors, name), do: Map.get(cursors, {:gen, name}, 0)
 
   defp spanning(name, passes) when passes > @span_warn_passes do
     :telemetry.execute([:engram, :id_windows, :walk_spanning], %{passes: passes}, %{walk: name})
@@ -423,9 +443,17 @@ defmodule Engram.Backfill.IdWindows do
 
   defp spanning(_name, _passes), do: :ok
 
-  @doc "Drops the cursor of the walk `name`: its next `heal_pass/4` starts over."
+  @doc """
+  Drops the cursor of the walk `name`: its next `heal_pass/4` starts over. A
+  pass already running when this lands does not save its cursor or report
+  `:done` (its generation moved).
+  """
   @spec reset_walk(String.t()) :: :ok
-  def reset_walk(name), do: Agent.update(@cursors, &Map.delete(&1, name))
+  def reset_walk(name),
+    do:
+      Agent.update(@cursors, fn c ->
+        c |> Map.delete(name) |> Map.put({:gen, name}, gen(c, name) + 1)
+      end)
 
   @doc false
   # Drops every walk cursor (tests; `Engram.DataMigrations.reset_cache/0`).

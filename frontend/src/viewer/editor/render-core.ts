@@ -227,6 +227,7 @@ function rescan(
 		(x) => {
 			// Past the edit, and the old scan was neutral here too: everything after
 			// is the same text scanned from the same state, so the old tokens hold.
+			// Strictly past: decorations of deleted text collapse onto the edit's end.
 			if (x > span[1] && spanned(old, x) === null) {
 				end = x;
 				return true;
@@ -440,8 +441,15 @@ function mapInner(tr: Transaction, key: string): string {
 	return `${key.slice(0, at)}@${tr.changes.mapPos(Number(key.slice(at + 1)), 1)}`;
 }
 
-function lineEndPast(tr: Transaction, at: number): number {
-	return Math.min(tr.state.doc.lineAt(at).to + 1, tr.state.doc.length);
+/**
+ * Tree renderers own line decorations, so their span runs past the END of the
+ * line holding `at`: that line is rebuilt whichever unit owns its line
+ * decoration, the unit starting there (an indented code block below an Enter)
+ * or an outer one (rails of a list item whose quote starts mid-line). Stopping
+ * AT `at`, or at its line start, dropped one of the two.
+ */
+function lineEndPast(state: EditorState, at: number): number {
+	return Math.min(state.doc.lineAt(at).to + 1, state.doc.length);
 }
 
 function resync(tr: Transaction, before: Tree, tree: Tree, hi: number): number {
@@ -451,18 +459,13 @@ function resync(tr: Transaction, before: Tree, tree: Tree, hi: number): number {
 		const now = unitStarting(tree, at);
 		const was = unitStarting(before, back.mapPos(at, 1));
 		const wasTo = was ? tr.changes.mapPos(was.to, 1) : -1;
-		// Stop past the END of the line holding `at`, so that line is rebuilt
-		// whichever unit owns its line decoration: the unit starting there (an
-		// indented code block below an Enter) or an outer one (rails of a list
-		// item whose quote starts mid-line). Stopping AT `at`, or at its line
-		// start, dropped one of the two.
 		if (now && was && now.name === was.name && now.to === wasTo) {
-			return lineEndPast(tr, at);
+			return at;
 		}
 		const inner = innerUnit(tree, at);
 		const oldInner = innerUnit(before, back.mapPos(at, 1));
 		if (inner && oldInner && inner === mapInner(tr, oldInner)) {
-			return lineEndPast(tr, at);
+			return at;
 		}
 		const end = Math.max(now?.to ?? at, wasTo, at + 1);
 		if (end >= tree.length) {
@@ -557,7 +560,16 @@ function update(value: CoreState, tr: Transaction): CoreState {
 	tr.changes.iterChangedRanges((_fa, _ta, fromB, toB) => {
 		edits.push([fromB, toB]);
 	});
+	// tSpans end where the old and new trees agree again. Text renderers stop
+	// there: the text and its code-ness are unchanged from that point, so their
+	// resync rule holds and a long fence opening there is not walked (spans are
+	// closed and the rule is strictly past, hence the -1). Tree renderers own
+	// line decorations, so they also take the line holding it.
 	const tSpans = treeMoved ? treeSpans(tr, value.treeLen, tree) : [];
+	const textTreeSpans = tSpans.map(([a, b]): Span => [a, b < tree.length ? Math.max(a, b - 1) : b]);
+	const lineSpans = mergeSpans(
+		tSpans.map(([a, b]): Span => [a, Math.max(b, Math.min(lineEndPast(state, b), tree.length))]),
+	);
 	const oldSel = tr.startState.selection.map(tr.changes);
 	const layers = new Map<Renderer, Layer>();
 	const tree$: [TreeRenderer, Layer][] = [];
@@ -582,7 +594,7 @@ function update(value: CoreState, tr: Transaction): CoreState {
 			layer.decos = Decoration.set(decos, true);
 		}
 		let floor = 0;
-		for (const span of mergeSpans([...edits, ...(r.usesTree ? tSpans : [])])) {
+		for (const span of mergeSpans([...edits, ...(r.usesTree ? textTreeSpans : [])])) {
 			if (span[1] < floor || kept(state, r, old, span)) {
 				continue;
 			}
@@ -598,7 +610,7 @@ function update(value: CoreState, tr: Transaction): CoreState {
 			);
 		}
 	}
-	renderTree(state, tree, tree$, tSpans);
+	renderTree(state, tree, tree$, lineSpans);
 	return { layers, treeLen: tree.length };
 }
 

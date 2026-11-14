@@ -212,6 +212,22 @@ SQL is not analyzed; treat as `:high` when uncertain.
 We evaluated those. Squawk + the two gates added in this file already cover
 every destructive change. Adding more tools is Tier 2 work; do not preempt.
 
+## Rebasing a PR whose migration sorts before main's newest
+
+`priv/repo/list_new_migrations.sh` counts a migration as new only when its
+timestamp is newer than the newest one on `origin/main`. Rebase a PR whose
+unmerged migration was numbered before a migration that has since landed on
+main, and the `migration gates` job fails with "migration drops detected but
+no migrations newer than base ref": its drop grep matches a `DROP COLUMN` in
+the migration's `down` direction, then finds no new file to check.
+`mix engram.migration_drops` still extracts nothing from the file, so this is
+not a real drop.
+
+Fix: renumber the unmerged migration (file name, and any test that loads it
+by name) to sort after main's newest. It is safe because no environment has
+run it yet. Never weaken the gate. Seen on Engram#2579 (20261111150000 behind
+main's 20261113100000, renumbered to 20261113150000).
+
 ## Where migration tooling lives
 
 - Squawk config: `.squawk.toml`

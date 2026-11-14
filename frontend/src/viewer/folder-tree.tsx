@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
 import { notify } from "@/lib/notify";
 import {
@@ -229,25 +230,18 @@ export default function FolderTree() {
 		return () => registerCollapseAll(null);
 	}, [registerCollapseAll, tree]);
 
-	// Register the scroll container with BOTH the virtualizer (scrollRef) and
-	// headless-tree, whose getContainerProps supplies the empty-space drop handler
-	// (drops not on a row resolve to the vault root). Depends only on the stable
-	// `tree` instance — avoids ref churn from the new-object-every-render props.
-	const containerProps = tree.getContainerProps(t("Files"));
-	const setContainerEl = useCallback(
-		(el: HTMLDivElement | null) => {
-			scrollRef.current = el;
-			tree.registerElement(el);
-		},
-		[tree],
-	);
-
+	// The tree element (headless-tree's container: role, label, keys, DnD
+	// geometry) is the <nav> inside the ScrollArea; the virtualizer scrolls the
+	// ScrollArea's viewport (scrollRef). The root DnD handlers move up to the
+	// ScrollArea root so the whole area stays a drop zone however short the
+	// tree is, and are called from there, not twice.
+	const { onDragOver, onDrop, ...navProps } = tree.getContainerProps(t("Files"));
 	// getContainerProps is typed Record<string, any>; name the two handlers we
 	// chain so the calls below are checked rather than asserted.
 	const containerDrag: {
 		onDragOver?: (ev: React.DragEvent) => void;
 		onDrop?: (ev: React.DragEvent) => void;
-	} = containerProps;
+	} = { onDragOver, onDrop };
 
 	const [rootDragOver, setRootDragOver] = useState(false);
 	// OS files: a file can only land in a FOLDER, so any row aims at its folder and
@@ -737,13 +731,13 @@ export default function FolderTree() {
 
 	return (
 		<>
-			{/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: drag-and-drop drop zone; native HTML5 DnD has no keyboard equivalent, keyboard users move folders via the action menu */}
-			<nav
-				{...containerProps}
-				ref={setContainerEl}
+			<ScrollArea
+				viewportRef={scrollRef}
+				// The rows are the tab stops; the viewport scrolls to the focused one.
+				viewportFocusable={false}
 				onContextMenu={(e) => {
 					// Empty space only — rows stopPropagation, but a right-click can
-					// also land on the container's padding or below the last row.
+					// also land on the padding or below the last row.
 					e.preventDefault();
 					setDialog({ kind: "context", itemId: ROOT_ID, position: { x: e.clientX, y: e.clientY } });
 				}}
@@ -752,50 +746,49 @@ export default function FolderTree() {
 				onDrop={onContainerDrop}
 				data-testid="folder-tree-root"
 				data-file-drop
-				// px-2 insets the rows from the sidebar edges — rows are w-full, so
-				// without it the hover/selection chip runs edge to edge.
-				className={`relative min-h-0 flex-1 overflow-auto ${listContainer} ${
+				className={`min-h-0 flex-1 ${
 					rootDragOver || fileFolder === "" ? "bg-primary/10 ring-1 ring-ring ring-inset" : ""
 				}`}
 			>
-				{/* minHeight ensures blank, droppable space below the rows even for a
-            short tree, so there's always a place to drop "to root". */}
-				<FileDropTargetContext.Provider value={fileDropTarget}>
-					<div
-						style={{ height: virtualizer.getTotalSize(), minHeight: "100%", position: "relative" }}
-					>
-						{isEmpty ? (
-							<p className="px-1 py-0.5 text-muted-foreground text-xs">{t("No notes yet.")}</p>
-						) : null}
-						{/* One outline around the folder a dragged file would land in: its row
-					    through its last descendant. Rows are fixed-height slots, so the
-					    box is plain arithmetic. */}
-						{fileRegion ? (
-							<div
-								aria-hidden
-								data-testid="file-drop-region"
-								className="pointer-events-none absolute inset-x-0 rounded bg-primary/10 ring-1 ring-ring"
-								style={{
-									top: fileRegion.start * TREE_SLOT_HEIGHT,
-									height: (fileRegion.end - fileRegion.start) * TREE_SLOT_HEIGHT + TREE_ROW_HEIGHT,
-								}}
-							/>
-						) : null}
-						{virtualizer.getVirtualItems().map((v) => (
-							<TreeRowVirtualized
-								key={items[v.index]?.getId() ?? v.index}
-								virtualItem={v}
-								items={items}
-								activeId={selectedNoteId}
-								menuOpenId={menuOpenId}
-								multiSelect={multiSelect}
-								onContextMenu={handleContextMenu}
-								onLongPress={handleLongPress}
-							/>
-						))}
-					</div>
-				</FileDropTargetContext.Provider>
-			</nav>
+				{/* px-2 insets the rows from the sidebar edges: rows are w-full, so
+            without it the hover/selection chip runs edge to edge. */}
+				<nav {...navProps} ref={tree.registerElement} className={`relative ${listContainer}`}>
+					<FileDropTargetContext.Provider value={fileDropTarget}>
+						<div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+							{isEmpty ? (
+								<p className="px-1 py-0.5 text-muted-foreground text-xs">{t("No notes yet.")}</p>
+							) : null}
+							{/* One outline around the folder a dragged file would land in: its row
+						    through its last descendant. Rows are fixed-height slots, so the
+						    box is plain arithmetic. */}
+							{fileRegion ? (
+								<div
+									aria-hidden
+									data-testid="file-drop-region"
+									className="pointer-events-none absolute inset-x-0 rounded bg-primary/10 ring-1 ring-ring"
+									style={{
+										top: fileRegion.start * TREE_SLOT_HEIGHT,
+										height:
+											(fileRegion.end - fileRegion.start) * TREE_SLOT_HEIGHT + TREE_ROW_HEIGHT,
+									}}
+								/>
+							) : null}
+							{virtualizer.getVirtualItems().map((v) => (
+								<TreeRowVirtualized
+									key={items[v.index]?.getId() ?? v.index}
+									virtualItem={v}
+									items={items}
+									activeId={selectedNoteId}
+									menuOpenId={menuOpenId}
+									multiSelect={multiSelect}
+									onContextMenu={handleContextMenu}
+									onLongPress={handleLongPress}
+								/>
+							))}
+						</div>
+					</FileDropTargetContext.Provider>
+				</nav>
+			</ScrollArea>
 
 			{dialog.kind === "delete" && (
 				<DeleteConfirm

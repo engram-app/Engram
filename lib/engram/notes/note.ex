@@ -86,6 +86,9 @@ defmodule Engram.Notes.Note do
     field :keyword_version, :integer
     field :embed_model, :string
     field :key_alias_version, :integer
+    # `Engram.Notes.Helpers.meta_version/0` the stored title, tags and links
+    # were last checked under (`Engram.DataMigrations.NoteMeta`). NULL = never.
+    field :meta_version, :integer
     # Hash of the note-level Qdrant payload last written to this note's
     # points; see `Engram.Indexing.commit_index/2`. NULL = unknown, refresh.
     field :payload_hash, :binary

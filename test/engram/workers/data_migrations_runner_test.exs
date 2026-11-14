@@ -284,6 +284,8 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     Engram.Cache.clear_local(:rebuild)
     Repo.query!("DELETE FROM rebuild_ledger")
     Engram.Rebuild.set_budget(1_000_000)
+    # NoteMeta ships off until staging validates it.
+    Engram.ServiceConfig.put_override(:note_meta_backfill, true)
     # PersonOriginBackfill is disabled (no ledger row) without PostHog reads.
     posthog = [:posthog_key, :posthog_erasure_api_key, :posthog_project_id]
     prior = Map.new(posthog, &{&1, Application.fetch_env(:engram, &1)})
@@ -364,6 +366,10 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     Engram.DataMigrations.EffectiveDates
   ]
 
+  # Rule (2026-11-11): these ship OFF and are switched on by their override
+  # after the deploy is validated on staging. Every other one ships on.
+  @ships_off [Engram.DataMigrations.NoteMeta]
+
   test "every data migration newer than the kill-switch rule has a working kill switch" do
     alias Engram.ServiceConfig.Overrides
 
@@ -386,11 +392,19 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
       # A key missing here silently falls back to env: no runtime switch.
       assert key in Overrides.keys(), "#{inspect(mod)}: add #{key} to ServiceConfig.Overrides"
 
-      assert mod.enabled?(), "#{inspect(mod)}: default on"
+      # Default on, except a migration named in @ships_off (off until staging
+      # validates it); the override must switch it both ways either way.
+      ships_off? = mod in @ships_off
+
+      assert mod.enabled?() == not ships_off?,
+             "#{inspect(mod)}: default #{if ships_off?, do: "off", else: "on"}"
+
       assert :ok = Overrides.put(key, false, by: "test")
       refute mod.enabled?(), "#{inspect(mod)}: the override must switch it off"
+      assert :ok = Overrides.put(key, true, by: "test")
+      assert mod.enabled?(), "#{inspect(mod)}: the override must switch it on"
       assert :ok = Overrides.delete(key, by: "test")
-      assert mod.enabled?()
+      assert mod.enabled?() == not ships_off?
     end
   end
 

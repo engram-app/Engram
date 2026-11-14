@@ -167,11 +167,16 @@ defmodule Engram.DataMigrations do
     )
   end
 
-  @doc "Drops this node's cached `done?` for `name` at `version` (a peer's reopen)."
+  @doc """
+  Drops this node's cached `done?` for `name` at `version` (a reopen, here or
+  on a peer), and its id-window walk of that name: a reopen means work exists
+  again, so a walk already past it must start over rather than close the
+  ledger clean.
+  """
   @spec forget(String.t(), pos_integer()) :: :ok
   def forget(name, version) do
     _ = :persistent_term.erase({__MODULE__, name, version})
-    :ok
+    Engram.Backfill.IdWindows.reset_walk(name)
   end
 
   @doc """

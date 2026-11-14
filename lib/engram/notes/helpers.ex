@@ -137,6 +137,16 @@ defmodule Engram.Notes.Helpers do
   defp scrub_broadcast_tag(tag) when is_binary(tag), do: scrub_utf8(tag, :broadcast)
   defp scrub_broadcast_tag(tag), do: tag
 
+  # Bump when a rule below (meta.rs), or link extraction (`Engram.Links.Parser`),
+  # changes what an UNCHANGED note derives: `Engram.DataMigrations.NoteMeta`
+  # then re-checks every note's stored title, tags and links once.
+  # v1: the shared frontmatter fence rule (#2564).
+  @meta_version 1
+
+  @doc "The title/tags/links derivation rules' version, stamped as `notes.meta_version`."
+  # No @spec: dialyzer's :underspecs flags `pos_integer()` against the literal.
+  def meta_version, do: @meta_version
+
   @doc """
   Extracts the note title from content (frontmatter > h1 heading outside
   code > filename). The rules run in Rust: native/engram_native/src/meta.rs.

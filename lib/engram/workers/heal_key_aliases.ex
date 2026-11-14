@@ -46,7 +46,7 @@ defmodule Engram.Workers.HealKeyAliases do
   }
 
   alias Engram.Repo
-  alias Engram.Workers.{EmbedNote, RebuildStaleNote}
+  alias Engram.Workers.RebuildStaleNote
 
   @batch 200
 
@@ -165,10 +165,7 @@ defmodule Engram.Workers.HealKeyAliases do
       Repo.update_all(cas(note), set: Map.to_list(okf))
     end)
 
-    # The lowest priority, as the reconcile sweep queues an upgrade: never
-    # ahead of the v5 pass's jobs (priority 0 would jump all of them).
-    args = %{note_id: note.id, user_id: note.user_id, upgrade: true, key_aliases: true}
-    {:ok, _} = Oban.insert(RebuildStaleNote.new(args, priority: EmbedNote.backfill_priority()))
+    RebuildStaleNote.enqueue_reread(note.id, note.user_id)
   end
 
   defp stamp(note) do

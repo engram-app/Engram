@@ -18,6 +18,18 @@ import { type Placed, placed, settle } from "./render-test-utils";
 // equal a fresh build of the same document. The edit shapes are the ones that
 // change structure far from the edit: fence and `%%`/`$$` delimiters typed or
 // broken, HTML blocks made and unmade, list markers, indentation, joins.
+//
+// Known upstream divergences, not ours (the stale tree is what every renderer
+// reads, so they fail the same with this core reverted to #2564's):
+// - @lezer/markdown 1.7.2: deleting the first char of an indented code block
+//   at doc start ("    code\n    more" -> "   code\n    more", or "\tcode1" ->
+//   "code1") reparses to a stale CodeBlock where a fresh parse gives a
+//   Paragraph. Reproduces on the bare parser with TreeFragment.applyChanges,
+//   no CodeMirror involved. A later reparse elsewhere silently corrects that
+//   tree OUTSIDE the edited range, so the code-line decorations drawn from the
+//   stale tree outlive it.
+// - Seeds 2034 (step 3, `{from: 0, to: 1}` on "\tcode1\n\tcode2\n...") and
+//   5970 (step 5, the same edit): both this bug, both past the 160 run here.
 
 const embeds = attachmentEmbeds({ resolve: (t) => `img/${t}`, load: () => Promise.resolve("x") });
 const fields: [string, StateField<DecorationSet>][] = [

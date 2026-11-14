@@ -43,11 +43,14 @@ defmodule Engram.Notes.CrdtBridge do
   Current frontmatter order list and JSON-encoded values map of a doc.
 
   Returns `{[], %{}}` for a fresh doc where neither the `@order_name` Y.Array
-  nor the `@frontmatter_name` Y.Map have ever been written to.
+  nor the `@frontmatter_name` Y.Map have ever been written to. The order holds
+  each key once (`Frontmatter.unique_order/1`).
   """
   @spec frontmatter_of(Yex.Doc.t()) :: {[String.t()], %{String.t() => String.t()}}
   def frontmatter_of(%Yex.Doc{} = doc) do
-    order = doc |> Yex.Doc.get_array(@order_name) |> Yex.Array.to_list()
+    order =
+      doc |> Yex.Doc.get_array(@order_name) |> Yex.Array.to_list() |> Frontmatter.unique_order()
+
     values = doc |> Yex.Doc.get_map(@frontmatter_name) |> Yex.Map.to_map()
     {order, values}
   end
@@ -346,7 +349,8 @@ defmodule Engram.Notes.CrdtBridge do
               end
             end)
 
-            to_append = Enum.reject(new_keys, fn k -> k in existing_order end)
+            to_append =
+              new_keys |> Frontmatter.unique_order() |> Enum.reject(&(&1 in existing_order))
 
             if to_append != [] do
               Yex.Array.insert_list(arr, length(existing_order), to_append)

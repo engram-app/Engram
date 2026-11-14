@@ -205,6 +205,16 @@ defmodule Engram.Links do
   """
   @spec replace_links_basenames(map(), map(), binary(), [map()]) :: [binary()]
   def replace_links_basenames(user, vault, source_note_id, parsed) do
+    {_changed?, basenames} = sync_links(user, vault, source_note_id, parsed)
+    basenames
+  end
+
+  @doc """
+  `replace_links_basenames/4`, also saying whether the stored edges changed
+  (false: they already matched `parsed` and nothing was written).
+  """
+  @spec sync_links(map(), map(), binary(), [map()]) :: {boolean(), [binary()]}
+  def sync_links(user, vault, source_note_id, parsed) do
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, filter_key} = Crypto.dek_filter_key(user)
 
@@ -249,7 +259,9 @@ defmodule Engram.Links do
               l.vault_id == ^vault.id
         )
 
-      if stored_edges(links_query, dek) != Enum.sort(edges) do
+      changed? = stored_edges(links_query, dek) != Enum.sort(edges)
+
+      if changed? do
         Repo.delete_all(links_query, skip_tenant_check: true)
 
         # Chunked, not one statement: the wire protocol caps a query at 65535
@@ -269,7 +281,7 @@ defmodule Engram.Links do
         |> Enum.each(&Repo.insert_all(NoteLink, &1, skip_tenant_check: true))
       end
 
-      for {_pos, _type, hmac, _key, _t, _a, _n, _v} <- edges, uniq: true, do: hmac
+      {changed?, for({_pos, _type, hmac, _key, _t, _a, _n, _v} <- edges, uniq: true, do: hmac)}
     end)
   end
 

@@ -62,6 +62,26 @@ defmodule Engram.Notes.CrdtBridgeTest do
     end
   end
 
+  # Concurrent lifts of one fence each append to `frontmatter_order` and the
+  # CRDT keeps both. Every reader sees each key once, at its FIRST position.
+  describe "frontmatter_order holding a key twice" do
+    setup do
+      doc = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\ntags: a\n---\nbody\n")
+      arr = Yex.Doc.get_array(doc, "frontmatter_order")
+      Yex.Array.insert_list(arr, 2, ["title"])
+      %{doc: doc}
+    end
+
+    test "frontmatter_of lists the key once, at its first position", %{doc: doc} do
+      assert {["title", "tags"], _values} = CrdtBridge.frontmatter_of(doc)
+    end
+
+    test "the projected note holds the key once", %{doc: doc} do
+      assert CrdtBridge.project_doc(doc) == "---\ntitle: Hi\ntags: a\n---\nbody\n"
+    end
+  end
+
   describe "text_of vs body_of" do
     test "text_of returns the full projected note; body_of returns body only" do
       doc = CrdtBridge.new_doc()

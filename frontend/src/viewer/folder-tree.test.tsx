@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AttachmentSummary, Folder } from "../api/queries";
 import { FolderTreeProvider, useFolderTreeState } from "../layout/folder-tree-context";
 import FolderTree from "./folder-tree";
+import { TREE_SLOT_HEIGHT } from "./tree/row-metrics";
 import { synthesizeFolders } from "./tree/synthesize-folders";
 
 // The HT-driven FolderTree's UX is the COMPOSITION of already-tested
@@ -898,4 +899,37 @@ describe("FolderTree file drops on the container", () => {
 		fireEvent.drop(tree, { dataTransfer: { types: ["text/plain"], files: [] } });
 		expect(uploadFilesMock).not.toHaveBeenCalled();
 	});
+});
+
+// The tree scrolls inside the shared ScrollArea. The virtualizer must read the
+// Radix VIEWPORT (the element that scrolls), not the root, or rows past the
+// first screen never render.
+it("renders the rows it scrolls to inside the ScrollArea viewport", async () => {
+	mock.folders = [];
+	mock.notes = Array.from({ length: 300 }, (_, i) => ({
+		...DEFAULT_ROOT_NOTE,
+		id: `n${i}`,
+		path: `n${String(i).padStart(3, "0")}.md`,
+		title: `n${String(i).padStart(3, "0")}`,
+	}));
+	renderTree();
+	await screen.findByRole("treeitem", { name: "n000" });
+	expect(screen.queryByRole("treeitem", { name: "n290" })).toBeNull();
+	const viewport = document.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]');
+	expect(viewport).not.toBeNull();
+	expect(viewport?.querySelector('[role="tree"]')).not.toBeNull();
+	if (viewport) {
+		viewport.scrollTop = 290 * TREE_SLOT_HEIGHT;
+		fireEvent.scroll(viewport);
+	}
+	expect(await screen.findByRole("treeitem", { name: "n290" })).toBeInTheDocument();
+});
+
+// The rows are the tab stops (headless-tree roves focus among them), so the
+// scroll viewport around them must not add an unnamed one before the tree.
+it("adds no tab stop of its own around the tree", async () => {
+	renderTree();
+	await screen.findByRole("treeitem", { name: "a" });
+	const viewport = document.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]');
+	expect(viewport?.tabIndex).toBe(-1);
 });

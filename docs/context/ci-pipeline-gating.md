@@ -96,12 +96,41 @@ not in branch protection. The ruleset says "`ci` must pass"; the `ci` job
 internally decides a flaky e2e is a `::warning::` while a red unit-test is
 `::error::`. So the de-gate was a workflow edit, never a ruleset edit.
 
-`ci`'s `needs`: `[fingerprint, version-check, unit-tests, lint, frontend-lint,
-e2e-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, migration-gates,
-static-checks]`. It exits non-zero if a **deterministic** need failed, if
-`fingerprint` itself did not succeed (every gate skipped, nothing verified), or
-if `e2e-target-suite` is set (a targeted `[e2e: ...]` run is never mergeable).
-`e2e-*` failures become warnings on every ref, main included.
+`ci`'s `needs` (verified 2026-11-11, verify.yml `ci:` ~line 4868): `[fingerprint,
+prebuild-ci-image, version-check, unit-tests, lint, frontend-lint, e2e-lint,
+storage-database, migration-gates, static-checks]`. It exits non-zero if a
+**deterministic** need failed, if `fingerprint` itself did not succeed (every
+gate skipped, nothing verified), or if `e2e-target-suite` is set (a targeted
+`[e2e: ...]` run is never mergeable).
+
+**`ci` does NOT wait for the e2e suites.** `e2e-clerk`, `e2e-crdt` and
+`e2e-browser` are not in its `needs`, and main's ruleset requires only `lint`,
+`ci` and `unit-tests`. So `ci` can be green, and the PR mergeable, while an e2e
+suite is still running or has not started. Evidence: PR #2580, run 43133017758:
+`ci` 01:25:37Z to 01:25:54Z, `e2e-browser` started 01:28:49Z (e2e-clerk ended
+01:33:19Z). Before merging, read the e2e checks themselves (or `record-pass`),
+not just `ci`.
+
+## Main re-runs no tests after a merge (fingerprint skip)
+
+A squash-merge has the same tree as the PR head, and the fingerprint store is
+content-addressed, so main's `verify` run after a merge **skips every test
+job** whose tree already passed on the PR: `frontend lint+types+unit`
+(`skip-frontend-lint`, the `if:` at verify.yml ~line 4444), `unit-tests`,
+`lint`, migration gates and the e2e suites. Only fingerprint, a few cheap
+checks and the deploy/publish jobs run (rationale: the `IS_MAIN` comment near
+verify.yml lines 480-490). Verified on main runs for f5da04262, 92cfaa6be,
+c0874308c, 5d4881b63 and 1c496267a (run 43135948547: fingerprint, static
+checks, e2e harness lint, prebuild-mix, `ci`, `record-pass` and the
+image/deploy jobs; every test job skipped).
+
+Consequence: only the 06:00 UTC nightly (`schedule`, a full run) re-runs
+everything. A load- or timing-dependent test that passed once on the PR is not
+run again until that nightly, which is how a #2564 timing bug (an
+`attachment-embed.test.ts` assertion made before the mount parse covered the
+code) reached main green and only failed on the next PR that touched the
+frontend. A test that can fail by timing must be made deterministic, not
+trusted from one pass.
 
 A **skipped** required check counts as passing to GitHub rulesets, which is why
 a workflow-only or cache-skipped PR shows `ci: skipped` yet is mergeable.
