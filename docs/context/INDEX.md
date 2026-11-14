@@ -8,6 +8,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 **Architecture & Decisions**
 - Changing chunking, tokenizing or what the keyword leg encodes (version stamps, the reconcile sweep, why "run X per vault after deploy" is a defect) (also: why quoted-phrase pairs were dropped, the query-time phrase check, the disk-peak trap of the in-place rewrite) → `docs/context/index-version-self-heal.md`
 - Adding a backfill that must reach existing rows (`Engram.DataMigration`, completion ledger, `any_row?`, `:done` semantics, why not an operator command) → `docs/context/data-migrations-ledger.md`
+- Sizing a DataMigration backfill's WAL/disk cost for prod, or a staging WAL measurement that looks cheap (staging touches a big share of a small table per checkpoint, so full-page images are shared; match density, not rows/min) → `docs/context/backfill-wal-projection.md`
 - Backend component map, key patterns (RLS, adapters, NIFs, caches), data flow, deployment modes → `docs/context/backend-architecture.md`
 - Writing or reviewing a migration long form (squawk locally, `# safety_assured:`, PG18 patterns, baseline regen wipe, self-host preflight, migration tooling locations, IdWindows sweeps) → `docs/context/migrations-playbook.md`
 - `migration gates` fails after a rebase with "drops detected but no migrations newer than base ref" (the PR's unmerged migration sorts before main's newest; renumber it, never weaken the gate) → `docs/context/migrations-playbook.md`
