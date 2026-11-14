@@ -10,6 +10,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Adding a backfill that must reach existing rows (`Engram.DataMigration`, completion ledger, `any_row?`, `:done` semantics, why not an operator command) → `docs/context/data-migrations-ledger.md`
 - Backend component map, key patterns (RLS, adapters, NIFs, caches), data flow, deployment modes → `docs/context/backend-architecture.md`
 - Writing or reviewing a migration long form (squawk locally, `# safety_assured:`, PG18 patterns, baseline regen wipe, self-host preflight, migration tooling locations, IdWindows sweeps) → `docs/context/migrations-playbook.md`
+- `migration gates` fails after a rebase with "drops detected but no migrations newer than base ref" (the PR's unmerged migration sorts before main's newest; renumber it, never weaken the gate) → `docs/context/migrations-playbook.md`
 - Adding a log line: levels, log categories, `with_category`, Loki vs CloudWatch sinks, LogQL field names, runtime debug toggle → `docs/context/logging-conventions.md`
 - Elixir decision audit, library deps, infra checklist (partially superseded — read inline corrections) → `docs/context/elixir-architecture-decisions.md`
 - RLS policy set (12 tenant tables, `api_keys_discovery`, `maintenance_all`), DB roles, `with_tenant`/`cross_tenant`/`maintenance()`/`skip_tenant_check` semantics → `docs/context/database-schema-rls.md`
