@@ -18,9 +18,13 @@ defmodule Mix.Tasks.Engram.MigrationDrops do
   A column or table **rename** counts as dropping the old name, because the
   previous release (still running mid-deploy) reads it. Only the migration's
   up direction counts: `def down` bodies are ignored, so the reversal of an
-  additive migration is not mistaken for a drop. A raw `execute("... DROP
-  COLUMN|TABLE ...")` cannot be analyzed; it is reported as `rawsql` so the CI
-  gate can ask for Ecto's `remove`/`drop` or a `# safety_assured:` reason.
+  additive migration is not mistaken for a drop. Raw SQL counts wherever its
+  string literal sits (`execute/1`, or a list handed to a helper such as
+  `LockTimeoutRetry.with_lock_timeout/2`); `@moduledoc`/`@doc` prose does
+  not. A string that is exactly one `ALTER TABLE <t> DROP COLUMN <c>` or
+  `DROP TABLE <t>` maps to its identifiers. Any other string naming a
+  `DROP COLUMN|TABLE` cannot be analyzed; it is reported as `rawsql` so the
+  CI gate can ask for Ecto's `remove`/`drop` or a `# safety_assured:` reason.
 
   File-level magic comment escape:
 
@@ -31,6 +35,19 @@ defmodule Mix.Tasks.Engram.MigrationDrops do
   """
 
   use Mix.Task
+
+  # One whole statement naming one unqualified identifier (optionally quoted).
+  @ident ~S{"?([A-Za-z_][A-Za-z0-9_]*)"?}
+  @tail ~S{(?:\s+(?:CASCADE|RESTRICT))?\s*;?\s*$}
+  @drop_column Regex.compile!(
+                 ~S{^\s*ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?} <>
+                   @ident <> ~S{\s+DROP\s+(?:COLUMN\s+)?(?:IF\s+EXISTS\s+)?} <> @ident <> @tail,
+                 "i"
+               )
+  @drop_table Regex.compile!(
+                ~S{^\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?} <> @ident <> @tail,
+                "i"
+              )
 
   @doc false
   def run(paths) do
@@ -47,7 +64,7 @@ defmodule Mix.Tasks.Engram.MigrationDrops do
   and `:tables` (list of table_name strings) dropped by the migration at
   `path`. If the file carries a top-level `# safety_assured: ...` comment,
   returns empty lists. `raw_sql: true` is added only when an up-direction
-  `execute/1` string holds a `DROP COLUMN` or `DROP TABLE`.
+  string holds a `DROP COLUMN` or `DROP TABLE` it cannot map to identifiers.
   """
   def extract(path) do
     source = File.read!(path)
@@ -77,11 +94,19 @@ defmodule Mix.Tasks.Engram.MigrationDrops do
 
   defp do_extract(ast) do
     # Only the up direction counts: a `def down` that removes what `up` added
-    # is the ordinary reversal of an additive migration, not a drop.
+    # is the ordinary reversal of an additive migration, not a drop. That
+    # includes its body moved into a helper (`def down, do: run_down(repo())`).
+    # Doc attributes are prose: a moduledoc explaining a drop is not one.
     ast =
       Macro.prewalk(ast, fn
-        {:def, _, [{:down, _, _} | _]} -> nil
-        node -> node
+        {kind, _, [{name, _, _} | _]} = node when kind in [:def, :defp] and is_atom(name) ->
+          if down_fun?(name), do: nil, else: node
+
+        {:@, _, [{attr, _, _}]} when attr in [:moduledoc, :doc] ->
+          nil
+
+        node ->
+          node
       end)
 
     # Design note: this walks the AST twice on :alter subtrees by design.
@@ -107,7 +132,12 @@ defmodule Mix.Tasks.Engram.MigrationDrops do
         {node, visit(node, acc)}
       end)
 
-    result = %{columns: Enum.reverse(acc.columns), tables: Enum.reverse(acc.tables)}
+    # A string inside an alter block is visited by both walks: count it once.
+    result = %{
+      columns: acc.columns |> Enum.reverse() |> Enum.uniq(),
+      tables: acc.tables |> Enum.reverse() |> Enum.uniq()
+    }
+
     if acc.raw_sql, do: Map.put(result, :raw_sql, true), else: result
   end
 
@@ -157,11 +187,28 @@ defmodule Mix.Tasks.Engram.MigrationDrops do
     %{acc | tables: [table_name | acc.tables]}
   end
 
-  # `execute("ALTER TABLE .. DROP COLUMN ..")`: a literal string we cannot map to
-  # identifiers, so flag it instead of silently passing.
-  defp visit({:execute, _, [sql | _]}, acc) when is_binary(sql) do
-    if Regex.match?(~r/\bdrop\s+(column|table)\b/i, sql), do: %{acc | raw_sql: true}, else: acc
+  # Any up-direction string literal: `execute("...")` or a statement list
+  # handed to a helper. One single-target drop maps to its identifiers;
+  # anything else naming a drop is flagged rather than silently passed.
+  defp visit(sql, acc) when is_binary(sql) do
+    cond do
+      match = Regex.run(@drop_column, sql, capture: :all_but_first) ->
+        [table, col] = match
+        %{acc | columns: [{table, col} | acc.columns]}
+
+      match = Regex.run(@drop_table, sql, capture: :all_but_first) ->
+        %{acc | tables: [hd(match) | acc.tables]}
+
+      Regex.match?(~r/\bdrop\s+(column|table)\b/i, sql) ->
+        %{acc | raw_sql: true}
+
+      true ->
+        acc
+    end
   end
 
   defp visit(_node, acc), do: acc
+
+  # `down`, or a helper it delegates to (`run_down`, `do_down`).
+  defp down_fun?(name), do: name == :down or String.ends_with?(Atom.to_string(name), "_down")
 end

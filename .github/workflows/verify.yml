@@ -4160,7 +4160,11 @@ jobs:
             # without it, surviving `from u in User, where: u.legacy_flag`
             # references would slip past the gate.
             set +e
-            hits=$(grep -RnE "(:${esc}\b|\"${esc}\"|\.${esc}\b)" lib/)
+            # The end is "not an identifier char", not `\b`: `\b` matches
+            # between `d` and `?`, so a column `qualified` hit the function
+            # `Links.qualified?/1`. `name?`/`name!` are other identifiers.
+            end_='([^?!A-Za-z0-9_]|$)'
+            hits=$(grep -RnE "(:${esc}${end_}|\"${esc}\"|\.${esc}${end_})" lib/)
             grep_status=$?
             set -e
             if [ "$grep_status" -gt 1 ]; then

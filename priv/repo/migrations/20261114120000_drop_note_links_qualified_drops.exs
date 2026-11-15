@@ -1,16 +1,11 @@
-# The migration-gates reference check greps lib/ for the bare name, and
-# `Engram.Links.qualified?/1` (the rewriter's path rule, kept) matches it.
-# Checked by hand: no lib/ code reads or writes note_links.qualified (NoteLink
-# has no such field; no raw SQL on note_links names it).
-# safety_assured: "qualified?/1 is a function, not this column; note_links.qualified has no lib/ reference"
-
-# Shared helper; see the file for why it is not in lib/.
+# Shared helpers; see each file for why they are not in lib/.
 Code.require_file("lock_timeout_retry.exs", __DIR__)
+Code.require_file("bounded_index_build.exs", __DIR__)
 
 defmodule Engram.Repo.Migrations.DropNoteLinksQualifiedDrops do
   use Ecto.Migration
 
-  alias Engram.Repo.Migrations.LockTimeoutRetry
+  alias Engram.Repo.Migrations.{BoundedIndexBuild, LockTimeoutRetry}
 
   @disable_ddl_transaction true
   @disable_migration_lock true
@@ -33,7 +28,9 @@ defmodule Engram.Repo.Migrations.DropNoteLinksQualifiedDrops do
   transaction fails the statement fast instead of queueing every link read.
 
   `down` restores the empty nullable column and its partial index (empty: no
-  row is `qualified`), as the expand left them before its backfill.
+  row is `qualified`), as the expand left them before its backfill. The
+  index goes through BoundedIndexBuild like the expand's, so a build that
+  times out never leaves an INVALID index behind for IF NOT EXISTS to skip.
   """
 
   def up do
@@ -45,9 +42,17 @@ defmodule Engram.Repo.Migrations.DropNoteLinksQualifiedDrops do
 
   def down do
     LockTimeoutRetry.with_lock_timeout(repo(), [
-      "ALTER TABLE note_links ADD COLUMN IF NOT EXISTS qualified boolean",
-      "CREATE INDEX CONCURRENTLY IF NOT EXISTS note_links_qualified " <>
-        "ON note_links (user_id, vault_id, target_basename_hmac) WHERE qualified"
+      "ALTER TABLE note_links ADD COLUMN IF NOT EXISTS qualified boolean"
     ])
+
+    BoundedIndexBuild.build!(
+      repo(),
+      [
+        {"note_links_qualified",
+         "ON note_links (user_id, vault_id, target_basename_hmac) WHERE qualified"}
+      ],
+      lock_key: 20_261_114_120_000,
+      label: "drop_note_links_qualified_down"
+    )
   end
 end
