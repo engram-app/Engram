@@ -236,7 +236,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
 
     with {:ok, user} <- load_user(args["user_id"]),
          {:ok, vault} <- load_vault(user, args["vault_id"]) do
-      by_hmac = Enum.group_by(entries, &Base.decode64!(&1["old_basename_hmac"]))
+      by_hmac = entries |> decoded_entries() |> Enum.group_by(& &1.basename_hmac)
       hmacs = Map.keys(by_hmac)
       ids = Rewriter.source_note_ids(user, vault, hmacs, cursor, batch_size)
       linked = Rewriter.linked_basenames(user, vault, ids, hmacs)
@@ -312,14 +312,10 @@ defmodule Engram.Workers.RewriteNoteLinks do
   defp folder_targets(user, vault, entries) do
     {moves, lost} =
       entries
-      |> Enum.group_by(&kind_from(&1["target_kind"]))
+      |> Enum.group_by(& &1.kind)
       |> Enum.flat_map(fn {kind, group} ->
-        hmacs = Enum.map(group, &Base.decode64!(&1["old_path_hmac"]))
-        paths = Rewriter.tombstone_old_paths(user, vault, kind, hmacs)
-
-        group
-        |> Enum.zip(hmacs)
-        |> Enum.map(fn {e, h} -> {kind, e["target_id"], Map.get(paths, h)} end)
+        paths = Rewriter.tombstone_old_paths(user, vault, kind, Enum.map(group, & &1.path_hmac))
+        Enum.map(group, &{kind, &1.id, Map.get(paths, &1.path_hmac)})
       end)
       |> Enum.split_with(fn {_kind, _id, path} -> is_binary(path) end)
 
@@ -328,6 +324,34 @@ defmodule Engram.Workers.RewriteNoteLinks do
     count_failed(:old_path_unrecoverable, length(lost))
     count_failed(:target_gone, length(gone))
     targets
+  end
+
+  # Folder entries with both HMACs decoded. Entries are server-built, so a
+  # malformed one is a bug: it is logged (ids only) and counted, and skipped,
+  # never allowed to fail the page and, after retries, discard the chain.
+  defp decoded_entries(entries) do
+    Enum.flat_map(entries, fn e ->
+      with {:ok, path_hmac} <- Base.decode64(e["old_path_hmac"] || ""),
+           {:ok, basename_hmac} <- Base.decode64(e["old_basename_hmac"] || "") do
+        [
+          %{
+            kind: kind_from(e["target_kind"]),
+            id: e["target_id"],
+            path_hmac: path_hmac,
+            basename_hmac: basename_hmac
+          }
+        ]
+      else
+        :error ->
+          Logger.warning(
+            "link rewrite skipped a malformed folder entry",
+            Metadata.with_category(:warning, :sync, target_id: e["target_id"])
+          )
+
+          count_failed(telemetry_failure_reason(:invalid_hmac_base64), 1)
+          []
+      end
+    end)
   end
 
   defp count_failed(_reason, 0), do: :ok
