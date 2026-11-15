@@ -104,6 +104,28 @@ defmodule Engram.ObanQueueConfigTest do
     assert configured_queue_limit(:crdt_backfill) == 1
   end
 
+  # Link extraction is what makes a just-written link resolve, and it waited
+  # behind other `indexing` work (prod, 7d to 2026-11-15: queue wait p50
+  # 2.7 s, p99 5-16 s). It outranks the lane's other workers rather than
+  # taking a queue of its own: the worker pool (16) already equals the lanes
+  # that can hold a connection across CPU work, so a new lane would overrun
+  # it. Rename rewrites have their own `link_rewrite` lane (limit 1).
+  test "link extraction outranks the other indexing work, on the same lane" do
+    # Unset is the column default, 0.
+    priority = &(Ecto.Changeset.get_field(&1.new(%{}), :priority) || 0)
+
+    assert worker_queue(Engram.Workers.ExtractNoteLinks) == :indexing
+    assert priority.(Engram.Workers.ExtractNoteLinks) == 0
+
+    others = for mod <- ObanWorkers.all(), worker_queue(mod) == :indexing, do: mod
+    others = others -- [Engram.Workers.ExtractNoteLinks]
+    assert Enum.sort(others) == [Engram.Workers.DeleteNoteIndex, Engram.Workers.RebindNoteLinks]
+    for mod <- others, do: assert(priority.(mod) > 0, "#{inspect(mod)} must yield to extraction")
+
+    assert worker_queue(Engram.Workers.RewriteNoteLinks) == :link_rewrite
+    assert configured_queue_limit(:link_rewrite) == 1
+  end
+
   # Tripwire against unbounded embed concurrency. The 2026-07-03 OOM crash-loop
   # was NOT caused by embed concurrency itself — it was the Lingua language
   # detector loading ~945 MB of full-accuracy models off-heap during indexing
