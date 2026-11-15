@@ -206,4 +206,122 @@ defmodule Engram.Workers.RewriteNoteLinksFolderTest do
     assert :ok = perform_job(RewriteNoteLinks, repair.args)
     assert authoritative!(user, late.id) == "see [[archive/n1]]"
   end
+
+  test "two moved notes sharing a basename: each link keeps its note, one write", ctx do
+    %{user: user, vault: vault} = ctx
+
+    for p <- ["docs/a/x.md", "docs/b/x.md"],
+        do:
+          {:ok, _} = Notes.upsert_note(user, vault, %{"path" => p, "content" => p}, actor: "api")
+
+    refs = seed_source!(user, vault, "Refs.md", "[[a/x]] [[b/x]] [[x]]")
+    before = writes(user, refs)
+
+    {:ok, _} = Engram.Folders.rename(user, vault, "docs", "archive")
+    drain!()
+
+    # The bare [[x]] collides, so it is qualified toward its pre-move winner:
+    # the shortest path, then lexicographic, `docs/a/x`.
+    assert authoritative!(user, refs.id) == "[[archive/a/x]] [[archive/b/x]] [[archive/a/x]]"
+    assert writes(user, refs) - before == 1
+  end
+
+  test "a moved note gone by run time is counted; the others still rewrite", ctx do
+    %{user: user, vault: vault} = ctx
+    seed_folder!(user, vault, "docs", 3)
+    index = seed_source!(user, vault, "Index.md", links("docs", 3))
+    {:ok, _} = Engram.Folders.rename(user, vault, "docs", "archive")
+    :ok = Notes.delete_note(user, vault, "archive/n2.md")
+
+    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :links, :rewrite, :failed]])
+    on_exit(fn -> :telemetry.detach(ref) end)
+    drain!()
+
+    assert authoritative!(user, index.id) == "[[archive/n1]] [[docs/n2]] [[archive/n3]]"
+
+    assert_received {[:engram, :links, :rewrite, :failed], ^ref, %{count: 1},
+                     %{reason: :target_gone}}
+  end
+
+  test "a note embedding N moved attachments is written once, by one chain", ctx do
+    %{user: user, vault: vault} = ctx
+    n = 20
+
+    # Real uploads (AAD-bound rows): the fixture writes legacy v1 rows.
+    for i <- 1..n do
+      {:ok, _} =
+        Engram.Attachments.upsert_attachment(user, vault, %{
+          "path" => "media/img#{i}.png",
+          "content_base64" => Base.encode64("img#{i}"),
+          "mime_type" => "image/png"
+        })
+    end
+
+    embeds = fn prefix -> Enum.map_join(1..n, " ", &"![[#{prefix}/img#{&1}.png]]") end
+    gallery = seed_source!(user, vault, "Gallery.md", embeds.("media"))
+    before = writes(user, gallery)
+
+    {:ok, %{attachments: ^n}} = Engram.Folders.rename(user, vault, "media", "assets")
+
+    assert [chain] = all_enqueued(worker: RewriteNoteLinks)
+    assert length(chain.args["targets"]) == n
+    assert Enum.all?(chain.args["targets"], &(&1["target_kind"] == "attachment"))
+
+    drain!()
+    assert authoritative!(user, gallery.id) == embeds.("assets")
+    assert writes(user, gallery) - before == 1
+  end
+
+  test "folder chains run behind single renames; successors and sweeps keep it", ctx do
+    %{user: user, vault: vault} = ctx
+    seed_folder!(user, vault, "docs", 2)
+    for i <- 1..3, do: seed_source!(user, vault, "S#{i}.md", links("docs", 2))
+
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "#"}, actor: "api")
+
+    {:ok, _} = Engram.Folders.rename(user, vault, "docs", "archive")
+    {:ok, _} = Notes.rename_note(user, vault, "Old.md", "Fresh.md")
+
+    jobs = all_enqueued(worker: RewriteNoteLinks)
+    assert [folder] = Enum.filter(jobs, &Map.has_key?(&1.args, "targets"))
+    assert [single] = Enum.reject(jobs, &Map.has_key?(&1.args, "targets"))
+    assert folder.priority == RewriteNoteLinks.folder_priority()
+    assert folder.priority > single.priority
+
+    Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.RewriteNoteLinks"))
+    assert :ok = perform_job(RewriteNoteLinks, Map.put(folder.args, "batch_size", 2))
+    assert [successor] = all_enqueued(worker: RewriteNoteLinks)
+    assert successor.priority == RewriteNoteLinks.folder_priority()
+
+    Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.RewriteNoteLinks"))
+    assert :ok = perform_job(RewriteNoteLinks, successor.args)
+    assert [sweep] = all_enqueued(worker: RewriteNoteLinks)
+    assert sweep.args["sweep"] == true
+    assert sweep.priority == RewriteNoteLinks.folder_priority()
+  end
+
+  test "a page builds its targets in a constant number of queries", ctx do
+    %{user: user} = ctx
+
+    count = fn n ->
+      vault = insert(:vault, user: user)
+      seed_folder!(user, vault, "docs", n)
+      seed_source!(user, vault, "Index.md", links("docs", n))
+      {:ok, _} = Engram.Folders.rename(user, vault, "docs", "archive")
+      [job] = all_enqueued(worker: RewriteNoteLinks, args: %{"vault_id" => vault.id})
+
+      {_, queries} =
+        Engram.QueryRecorder.record(fn -> perform_job(RewriteNoteLinks, job.args) end)
+
+      length(queries)
+    end
+
+    # Warm the key caches first; then 5x the targets adds no query (the old
+    # per-target build was ~6 tenant transactions each).
+    _ = count.(2)
+    small = count.(2)
+    big = count.(10)
+    assert big - small <= 2, "#{big} queries for 10 targets vs #{small} for 2"
+  end
 end
