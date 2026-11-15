@@ -82,8 +82,11 @@ defmodule Engram.EmbedCeiling do
   @spec available(Ecto.UUID.t(), non_neg_integer()) :: non_neg_integer()
   def available(user_id, ceiling) do
     case ceiling - UsageMeters.day_used(user_id) do
-      left when left >= 0 -> if left < min(floor(), ceiling), do: 0, else: left
-      _over -> 0
+      left when is_integer(left) and left >= 0 ->
+        if left < min(floor(), ceiling), do: 0, else: left
+
+      _over ->
+        0
     end
   end
 
