@@ -57,7 +57,6 @@ defmodule Engram.Native do
   @inline_max 16_384
 
   @doc "Input bytes up to which a sized NIF runs on the calling scheduler."
-  @spec inline_max() :: pos_integer()
   def inline_max, do: @inline_max
 
   # Every NIF with an inline and a dirty variant: `{name, inline_nif,

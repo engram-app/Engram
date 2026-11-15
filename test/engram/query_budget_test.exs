@@ -137,17 +137,18 @@ defmodule Engram.QueryBudgetTest do
     "GET sync/manifest" => 6,
     "GET notes/*path" => 6,
     # The plugin's push: rotation lock, begin, enter, note row, crdt tail, seq
-    # bump, UPDATE, revision touch, outbox INSERT + pg_notify, commit, plus
-    # the response's note_links read.
-    "POST notes update" => 13,
+    # bump, UPDATE, revision touch, outbox INSERT + pg_notify, commit. The
+    # response's links are parsed from its content: no note_links read.
+    "POST notes update" => 12,
     # Rotation lock, begin, enter, path lookup, notes cap (usage_meters),
     # path-collision probe, seq bump, INSERT, the inserted row's re-read,
     # usage_meters increment, the NoteCommitted outbox INSERT + its pg_notify
     # (R6, -2: was the EmbedNote and ExtractNoteLinks unique check + insert,
-    # 4), the vault_populated probe, the response's links read, the folder row
-    # lookup (`Folders.Rows.ensure/4`: one indexed probe by path hash when the
-    # folder is not the root), commit.
-    "POST notes create" => 17,
+    # 4), the vault_populated probe, the folder row lookup
+    # (`Folders.Rows.ensure/4`: one indexed probe by path hash when the folder
+    # is not the root), commit. The response's links are parsed from its
+    # content: no note_links read.
+    "POST notes create" => 16,
     # The read, the write and the response's note_links read are three short
     # tenant transactions, not one (+6: two more begin/enter/commit), so the
     # merge and encryption hold no pool connection and the links read runs
