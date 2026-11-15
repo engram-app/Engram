@@ -8,7 +8,9 @@ defmodule Engram.Native.LinkExtractTest do
   # hand cases plus 8,000 fuzzed strings built from link syntax, percent
   # escapes (valid and not) and Unicode whitespace. The inputs
   # avoid code syntax (backticks, tildes, 4-space or tab indents), because
-  # code-range detection is the one intended change, tested below.
+  # code-range detection is the one intended change, tested below. Since
+  # meta_version 2, a wiki target drops one trailing `\` (Obsidian's rule,
+  # `[[Gamma\|G]]`): the 7 golden links that ended in `\` were re-derived.
   @golden "test/support/fixtures/links_golden.json"
           |> File.read!()
           |> Jason.decode!(keys: :atoms)

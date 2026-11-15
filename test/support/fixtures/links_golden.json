@@ -24329,19 +24329,7 @@
   },
   {
     "input": ">[[\\]]([.md'%2][!",
-    "out": [
-      {
-        "alias": null,
-        "position": 1,
-        "form": "wiki",
-        "target": "\\",
-        "target_start": 3,
-        "target_len": 1,
-        "anchor": null,
-        "target_raw": "\\",
-        "link_type": "wikilink"
-      }
-    ]
+    "out": []
   },
   {
     "input": "\\<#%FF>%.md <a b.md>%e2%80%a8 %C2%A0![[ b c #ſ:)%20\t<<\t<",
@@ -89901,11 +89889,11 @@
         "alias": null,
         "position": 27,
         "form": "wiki",
-        "target": "---\n\\",
+        "target": "---",
         "target_start": 29,
-        "target_len": 5,
+        "target_len": 3,
         "anchor": null,
-        "target_raw": "---\n\\",
+        "target_raw": "---",
         "link_type": "wikilink"
       }
     ]
@@ -93128,11 +93116,11 @@
         "alias": null,
         "position": 11,
         "form": "wiki",
-        "target": "%80'%FF\n //\\",
+        "target": "%80'%FF\n //",
         "target_start": 13,
-        "target_len": 13,
+        "target_len": 12,
         "anchor": null,
-        "target_raw": "%80'%FF\n //\\",
+        "target_raw": "%80'%FF\n //",
         "link_type": "wikilink"
       },
       {
@@ -120479,17 +120467,6 @@
     "out": [
       {
         "alias": null,
-        "position": 21,
-        "form": "wiki",
-        "target": "\\",
-        "target_start": 23,
-        "target_len": 1,
-        "anchor": null,
-        "target_raw": "\\",
-        "link_type": "wikilink"
-      },
-      {
-        "alias": null,
         "position": 27,
         "form": "wiki",
         "target": "a",
@@ -133313,17 +133290,6 @@
     "input": "https:[[\\]]amailto:\t<a b.md>[l](a.md)%FF#)x/y",
     "out": [
       {
-        "alias": null,
-        "position": 6,
-        "form": "wiki",
-        "target": "\\",
-        "target_start": 8,
-        "target_len": 1,
-        "anchor": null,
-        "target_raw": "\\",
-        "link_type": "wikilink"
-      },
-      {
         "alias": "l",
         "position": 28,
         "form": "markdown",
@@ -139368,11 +139334,11 @@
         "alias": null,
         "position": 17,
         "form": "wiki",
-        "target": "%2>\\",
+        "target": "%2>",
         "target_start": 19,
-        "target_len": 4,
+        "target_len": 3,
         "anchor": null,
-        "target_raw": "%2>\\",
+        "target_raw": "%2>",
         "link_type": "wikilink"
       }
     ]
@@ -140128,11 +140094,11 @@
         "alias": null,
         "position": 32,
         "form": "wiki",
-        "target": ") \\",
+        "target": ")",
         "target_start": 35,
-        "target_len": 5,
+        "target_len": 1,
         "anchor": null,
-        "target_raw": ") \\",
+        "target_raw": ")",
         "link_type": "embed"
       },
       {

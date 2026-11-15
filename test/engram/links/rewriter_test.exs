@@ -492,6 +492,69 @@ defmodule Engram.Links.RewriterTest do
       assert Enum.all?(links, &(&1.target_note_id == renamed.id))
     end
 
+    # A table cell escapes an alias pipe: `[[Gamma\|G]]` (Obsidian's own
+    # help vault writes it). The rename must splice only `Gamma` and keep
+    # `\|G` byte for byte, or the cell splits or the alias is lost.
+    test "a table-escaped alias keeps its \\| and the table survives", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, renamed} =
+        Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
+
+      content = "| a | b |\n|---|---|\n| [[Gamma\\|G]] | ![[Gamma#H\\|200]] |\n"
+
+      {:ok, source} =
+        Notes.upsert_note(user, vault, %{"path" => "Table.md", "content" => content},
+          actor: "api"
+        )
+
+      :ok = Links.replace_links(user, vault, source.id, Parser.extract(content))
+
+      {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Gamma.md")
+      assert {:ok, :rewritten} = Rewriter.rewrite_source_note(user, vault, source.id, target)
+
+      {:ok, text} = Notes.authoritative_content(user, raw_note!(user, source.id))
+      assert text == "| a | b |\n|---|---|\n| [[Fresh\\|G]] | ![[Fresh#H\\|200]] |\n"
+
+      links = Links.links_for_note(user, source.id)
+      assert Enum.map(links, &{&1.target_text, &1.alias}) == [{"Fresh", "G"}, {"Fresh", "200"}]
+      assert Enum.all?(links, &(&1.target_note_id == renamed.id))
+
+      assert {:ok, :noop} = Rewriter.rewrite_source_note(user, vault, source.id, target)
+    end
+
+    # Block ids and nested headings: only the target is spliced, the anchor
+    # (everything after the first `#`) survives byte for byte.
+    test "block ids and nested heading anchors survive a target rename", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, renamed} =
+        Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
+
+      content = "[[Old#^blk1]] [[Old#H#Sub]] | [[Old#^blk1\\|b]] |"
+
+      {:ok, source} =
+        Notes.upsert_note(user, vault, %{"path" => "Anchors.md", "content" => content},
+          actor: "api"
+        )
+
+      :ok = Links.replace_links(user, vault, source.id, Parser.extract(content))
+
+      {:ok, target} = Rewriter.build_target(user, vault, :note, renamed.id, "Old.md")
+      assert {:ok, :rewritten} = Rewriter.rewrite_source_note(user, vault, source.id, target)
+
+      {:ok, text} = Notes.authoritative_content(user, raw_note!(user, source.id))
+      assert text == "[[Fresh#^blk1]] [[Fresh#H#Sub]] | [[Fresh#^blk1\\|b]] |"
+
+      assert Enum.map(Links.links_for_note(user, source.id), &{&1.target_path, &1.anchor}) == [
+               {"Fresh.md", "^blk1"},
+               {"Fresh.md", "H#Sub"},
+               {"Fresh.md", "^blk1"}
+             ]
+    end
+
     test "second run is a no-op (idempotent)", %{user: user, vault: vault} do
       {:ok, renamed} =
         Notes.upsert_note(user, vault, %{"path" => "Fresh.md", "content" => "# t"}, actor: "api")
