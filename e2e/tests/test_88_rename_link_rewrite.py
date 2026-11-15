@@ -287,3 +287,48 @@ async def test_folder_rename_rewrites_qualified_links_only(
     )
     wait_for_exact_content(vault_a, outside, expected)
     wait_for_exact_content(vault_b, outside, expected)
+
+
+@pytest.mark.asyncio
+async def test_rest_rename_same_basename_collision_rewrites_only_moved_note(
+    vault_a, vault_b, cdp_a, cdp_b, api_sync
+):
+    """Same basename in two folders: only the renamed note's links change.
+
+    Embed (`![[..md]]`) and plain forms of BOTH `dirA/Name` and `dirB/Name`
+    are in one referrer; renaming dirA's note must rewrite dirA's links and
+    leave every dirB link byte-identical (ExUnit twin:
+    RewriterRoundtripTest "same-basename collision in another folder").
+    """
+    suffix = uuid.uuid4().hex[:12]
+    name = f"Dup88-{suffix}"
+    fresh_name = f"DupFresh88-{suffix}"
+    dir_a, dir_b = f"E2E/DupA88-{suffix}", f"E2E/DupB88-{suffix}"
+    target = f"{dir_a}/{name}.md"
+    sibling = f"{dir_b}/{name}.md"
+    referrer = f"E2E/Referrer88c-{suffix}.md"
+
+    referrer_body = (
+        f"Embed ![[{dir_a}/{name}.md]] and plain [[{dir_a}/{name}]].\n"
+        f"Other embed ![[{dir_b}/{name}.md]] and plain [[{dir_b}/{name}]].\n"
+    )
+
+    write_note(vault_a, target, "# A\n\nDup A body 88.")
+    write_note(vault_a, sibling, "# B\n\nDup B body 88.")
+    write_note(vault_a, referrer, referrer_body)
+    target_note = api_sync.wait_for_note(target)
+    api_sync.wait_for_note(sibling)
+    api_sync.wait_for_note(referrer)
+    wait_for_delivery(vault_b, referrer, api_sync)
+    _wait_for_backlink(api_sync, target_note["id"], referrer)
+
+    status = api_sync.rename_note(target, f"{dir_a}/{fresh_name}.md")
+    assert status == 200, f"REST rename should succeed, got {status}"
+
+    expected = (
+        f"Embed ![[{dir_a}/{fresh_name}.md]] and plain [[{dir_a}/{fresh_name}]].\n"
+        f"Other embed ![[{dir_b}/{name}.md]] and plain [[{dir_b}/{name}]].\n"
+    )
+    wait_for_exact_content(vault_a, referrer, expected)
+    wait_for_exact_content(vault_b, referrer, expected)
+    _wait_server_content_equals(api_sync, referrer, expected)

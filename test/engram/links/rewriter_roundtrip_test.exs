@@ -134,6 +134,53 @@ defmodule Engram.Links.RewriterRoundtripTest do
     assert Enum.any?(edges_after, &(&1.target_text == "Other.md"))
   end
 
+  # Same basename in two folders: the rewrite must follow the MOVED note's
+  # links by resolution, not by basename. Every form (embed, alias, heading,
+  # `.md` / `.canvas` extension kept, markdown syntax) in both folders; only
+  # the renamed note's occurrences change.
+  describe "same-basename collision in another folder" do
+    test "embed, alias, heading and .md forms rewrite for the moved note only", ctx do
+      content =
+        "![[a/Guide.md]] [[a/Guide]] [[a/Guide|G]] [[a/Guide#H]] [x](a/Guide.md)\n" <>
+          "![[b/Guide.md]] [[b/Guide]] [[b/Guide|G]] [[b/Guide#H]] [x](b/Guide.md)\n"
+
+      assert collide_and_rename!(ctx, ".md", content) ==
+               "![[a/Manual.md]] [[a/Manual]] [[a/Manual|G]] [[a/Manual#H]] [x](a/Manual.md)\n" <>
+                 "![[b/Guide.md]] [[b/Guide]] [[b/Guide|G]] [[b/Guide#H]] [x](b/Guide.md)\n"
+    end
+
+    test ".canvas forms keep their extension and only the moved note's links rewrite", ctx do
+      content =
+        "![[a/Guide.canvas]] [[a/Guide.canvas|C]]\n![[b/Guide.canvas]] [[b/Guide.canvas|C]]\n"
+
+      assert collide_and_rename!(ctx, ".canvas", content) ==
+               "![[a/Manual.canvas]] [[a/Manual.canvas|C]]\n" <>
+                 "![[b/Guide.canvas]] [[b/Guide.canvas|C]]\n"
+    end
+  end
+
+  # a/Guide<ext> and b/Guide<ext>, `Src.md` with `content`, then a/Guide ->
+  # a/Manual and the rewrite. Returns Src.md's content afterwards.
+  defp collide_and_rename!(%{user: user, vault: vault}, ext, content) do
+    for dir <- ["a", "b"] do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "#{dir}/Guide#{ext}", "content" => "# t"},
+          actor: "api"
+        )
+    end
+
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{"path" => "Src.md", "content" => content}, actor: "api")
+
+    :ok = Links.replace_links(user, vault, source.id, Parser.extract(content))
+    {:ok, renamed} = Notes.rename_note(user, vault, "a/Guide#{ext}", "a/Manual#{ext}")
+    :ok = Rewriter.rewrite_for_note_rename(user, vault, renamed.id, "a/Guide#{ext}")
+
+    Oban.drain_queue(queue: :crdt_checkpoint)
+    {:ok, reread} = Notes.get_note(user, vault, "Src.md")
+    reread.content
+  end
+
   test "rewrite delta and a concurrent client update converge in both orders", %{
     user: user,
     vault: vault
