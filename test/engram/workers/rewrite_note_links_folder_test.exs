@@ -257,7 +257,13 @@ defmodule Engram.Workers.RewriteNoteLinksFolderTest do
         })
     end
 
-    embeds = fn prefix -> Enum.map_join(1..n, " ", &"![[#{prefix}/img#{&1}.png]]") end
+    # Every attachment link form: a path embed per image, plus a bare
+    # wikilink (a move keeps the basename, so it stays) and a markdown image.
+    embeds = fn prefix ->
+      Enum.map_join(1..n, " ", &"![[#{prefix}/img#{&1}.png]]") <>
+        " [[img1.png]] ![](#{prefix}/img2.png)"
+    end
+
     gallery = seed_source!(user, vault, "Gallery.md", embeds.("media"))
     before = writes(user, gallery)
 
@@ -323,5 +329,39 @@ defmodule Engram.Workers.RewriteNoteLinksFolderTest do
     small = count.(2)
     big = count.(10)
     assert big - small <= 2, "#{big} queries for 10 targets vs #{small} for 2"
+  end
+
+  test "a malformed folder entry is skipped and logged; the rest of the page rewrites", ctx do
+    %{user: user, vault: vault} = ctx
+    seed_folder!(user, vault, "docs", 2)
+    index = seed_source!(user, vault, "Index.md", links("docs", 2))
+    {:ok, _} = Engram.Folders.rename(user, vault, "docs", "archive")
+    [job] = all_enqueued(worker: RewriteNoteLinks)
+    Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.RewriteNoteLinks"))
+
+    bad = [
+      %{
+        "target_kind" => "note",
+        "target_id" => Ecto.UUID.generate(),
+        "old_path_hmac" => "not base64!",
+        "old_basename_hmac" => hd(job.args["targets"])["old_basename_hmac"]
+      },
+      %{
+        "target_kind" => "note",
+        "target_id" => Ecto.UUID.generate(),
+        "old_path_hmac" => hd(job.args["targets"])["old_path_hmac"],
+        "old_basename_hmac" => "not base64!"
+      }
+    ]
+
+    args = Map.update!(job.args, "targets", &(bad ++ &1))
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = perform_job(RewriteNoteLinks, args)
+      end)
+
+    assert log =~ "link rewrite skipped a malformed folder entry"
+    assert authoritative!(user, index.id) == links("archive", 2)
   end
 end
