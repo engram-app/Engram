@@ -18,8 +18,11 @@ defmodule Engram.Workers.ExtractNoteLinks do
   hence the generous `max_attempts`: a run that exhausts them leaves the
   edges stale until the note's next edit.
 
-  Leading-edge debounce: `new_debounced/1` schedules ~2s out and dedups per
-  note over `[:available, :scheduled]` ONLY. The job reads CURRENT content at
+  Leading-edge debounce: `new_debounced/3` schedules ~2s out and dedups per
+  note over `[:available, :scheduled]` ONLY. A write from an MCP tool or an
+  external REST caller (`now? = true`, see `Notes.commit_opts/2`) is a whole
+  note, not a burst of keystrokes, so its job is available at once; the same
+  unique still folds a second such write into a job not yet running. The job reads CURRENT content at
   run time, so edits landing inside the window are covered by the pending run;
   an edit during an `:executing` run inserts a fresh job (states deliberately
   exclude `:executing`/`:retryable`). No trailing `replace:` — first-edit
@@ -29,10 +32,10 @@ defmodule Engram.Workers.ExtractNoteLinks do
   Bulk callers (batch upsert) enqueue via `Oban.insert_all`, which ignores
   `unique` — duplicate jobs for one note converge (idempotent, serialized).
   Callers that want the debounce/coalescing guarantee MUST go through
-  `new_debounced/1` — the `unique` opt lives only there, not on the `use`
+  `new_debounced/3` — the `unique` opt lives only there, not on the `use`
   opts below, so a raw `new/1` call enqueues without dedup.
 
-  `unique` is set per-call in `new_debounced/1`, not in the `use` opts below:
+  `unique` is set per-call in `new_debounced/3`, not in the `use` opts below:
   Oban's compile-time linter (`Oban.Worker.__after_compile__/2`) unconditionally
   warns whenever a static `unique: [states: ...]` omits any of its `:incomplete`
   group (`suspended/available/scheduled/executing/retryable`) — which is exactly
@@ -156,7 +159,8 @@ defmodule Engram.Workers.ExtractNoteLinks do
   end
 
   @doc """
-  Leading-edge debounced job (~2s, `:link_extract_delay_seconds` app env key).
+  Leading-edge debounced job (~2s, `:link_extract_delay_seconds` app env key),
+  or available at once when `now?` (an agent or API write).
   """
   # `user_id` is REQUIRED and positional, not an option: `notes` is
   # RLS-scoped, the worker cannot discover the tenant from the note it is
@@ -171,11 +175,15 @@ defmodule Engram.Workers.ExtractNoteLinks do
   #
   # `unique: keys: [:note_id]` is unchanged on purpose — dedup must stay keyed
   # on the note alone, or the same note could collect one job per key shape.
-  @spec new_debounced(binary(), binary()) :: Ecto.Changeset.t()
-  def new_debounced(note_id, user_id) do
-    new(%{note_id: note_id, user_id: user_id},
-      schedule_in: extract_delay_seconds(),
-      unique: Engram.Jobs.unique({__MODULE__, :debounced})
+  @spec new_debounced(binary(), binary(), boolean()) :: Ecto.Changeset.t()
+  def new_debounced(note_id, user_id, now? \\ false) do
+    # `now?`: no `schedule_in` at all, so the job is inserted `available`
+    # rather than `scheduled` for a stager tick to promote.
+    delay = if now?, do: [], else: [schedule_in: extract_delay_seconds()]
+
+    new(
+      %{note_id: note_id, user_id: user_id},
+      [unique: Engram.Jobs.unique({__MODULE__, :debounced})] ++ delay
     )
   end
 

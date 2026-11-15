@@ -1487,7 +1487,7 @@ defmodule Engram.Notes do
         NoteCommitted.insert!(
           note_id,
           user.id,
-          embed_opts(%Note{}, write_opts) ++ [finalize?: false]
+          commit_opts(%Note{}, write_opts) ++ [finalize?: false]
         )
 
       # Test seam: a competing row can land here (a path or id race).
@@ -2422,7 +2422,7 @@ defmodule Engram.Notes do
         NoteCommitted.insert!(
           note.id,
           user.id,
-          embed_opts(note, opts) ++
+          commit_opts(note, opts) ++
             [finalize?: Revisions.finalize?(recording, prev_hash, note.content_hash)]
         )
       end
@@ -2430,14 +2430,27 @@ defmodule Engram.Notes do
     written
   end
 
+  # The write's origin, for the jobs its NoteCommitted dispatches.
+  #
   # #2294: an AI agent writes a whole note and searches for it seconds later,
   # so its writes skip most of the typing debounce (EmbedNote.new_debounced/3)
   # and rank as interactive even for a never-embedded note, which
   # `EmbedNote.priority_for/1` would otherwise file as backfill.
-  defp embed_opts(note, opts) do
-    if opts[:actor] == "mcp",
-      do: [embed_priority: 0, embed_settle: :agent],
-      else: [embed_priority: EmbedNote.priority_for(note)]
+  #
+  # `links_now?`: an MCP tool or an external REST caller (`require_base:`,
+  # `EngramWeb.WriteActor.requires_base?/1`) writes whole notes, not bursts
+  # of keystrokes, so its link extraction runs at once instead of after the
+  # typing delay (`ExtractNoteLinks.new_debounced/3`): its backlinks follow
+  # the write within the queue latency.
+  defp commit_opts(note, opts) do
+    links_now? = opts[:actor] == "mcp" or opts[:require_base] == true
+
+    embed =
+      if opts[:actor] == "mcp",
+        do: [embed_priority: 0, embed_settle: :agent],
+        else: [embed_priority: EmbedNote.priority_for(note)]
+
+    [links_now?: links_now?] ++ embed
   end
 
   # Phase 0 stale-base gate: a writer that declares the content_hash it READ
@@ -2721,7 +2734,7 @@ defmodule Engram.Notes do
               NoteCommitted.insert!(
                 prior.id,
                 user.id,
-                embed_opts(prior, write_opts) ++
+                commit_opts(prior, write_opts) ++
                   [
                     finalize?:
                       Revisions.finalize?(recording, prior.content_hash, crdt.content_hash)

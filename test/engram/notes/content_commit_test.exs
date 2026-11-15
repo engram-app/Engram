@@ -105,6 +105,55 @@ defmodule Engram.Notes.ContentCommitTest do
     end
   end
 
+  # {state, ms until it runs} of the note's one link-extraction job.
+  defp link_job(note_id) do
+    [job] = all_enqueued(worker: ExtractNoteLinks, args: %{note_id: note_id})
+    {job.state, DateTime.diff(job.scheduled_at, DateTime.utc_now(), :millisecond)}
+  end
+
+  defp put(u, v, path, text, opts),
+    do: Notes.upsert_note(u, v, %{"path" => path, "content" => text}, opts)
+
+  # Agents and API callers write whole notes, so their links are extracted at
+  # once; typing (CRDT checkpoints) and plugin pushes keep the 2 s delay that
+  # folds a burst of edits into one run.
+  test "an MCP or API write extracts links at once; a checkpoint or push waits",
+       %{user: u, vault: v} do
+    {:ok, typed} = put(u, v, "c.md", "before", actor: "api")
+    drop_jobs()
+    checkpoint_text(u, v, typed.id, "after")
+
+    {:ok, mcp} = put(u, v, "m.md", "[[x]]", actor: "mcp")
+    {:ok, api} = put(u, v, "a.md", "[[x]]", actor: "api:key", require_base: true)
+    {:ok, push} = put(u, v, "p.md", "[[x]]", actor: "api:key")
+    run_dispatchers()
+
+    for note <- [mcp, api] do
+      assert {"available", ms} = link_job(note.id)
+      assert ms <= 0
+    end
+
+    for note <- [typed, push] do
+      assert {"scheduled", ms} = link_job(note.id)
+      assert ms > 1_000
+    end
+  end
+
+  test "two back-to-back MCP edits leave one link job, which reads the final text",
+       %{user: u, vault: v} do
+    {:ok, _} = put(u, v, "First.md", "f", actor: "api")
+    {:ok, _} = put(u, v, "Second.md", "s", actor: "api")
+    {:ok, note} = put(u, v, "e.md", "[[First]]", actor: "mcp")
+    {:ok, _} = put(u, v, "e.md", "[[Second]]", actor: "mcp")
+    run_dispatchers()
+
+    assert [job] = all_enqueued(worker: ExtractNoteLinks, args: %{note_id: note.id})
+    assert :ok = perform_job(ExtractNoteLinks, job.args)
+
+    assert [%{target_text: "Second", target_path: "Second.md"}] =
+             Engram.Links.links_for_note(u, note.id)
+  end
+
   # The dispatcher is the only durable carrier of the three jobs, so a failed
   # insert must fail the job (Oban retries it; uniqueness keeps that safe).
   # Every checkpoint passes through :events now; without a priority an

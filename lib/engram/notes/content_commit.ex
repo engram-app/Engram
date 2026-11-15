@@ -14,6 +14,9 @@ defmodule Engram.Notes.ContentCommit do
   `:embed_settle` is passed to `EmbedNote.new_debounced/3` as `settle:`
   (`:agent` for an MCP write; absent means the default settle).
 
+  `:links_now?` (an MCP or external REST write) schedules the link extraction
+  with no typing delay (`ExtractNoteLinks.new_debounced/3`).
+
   Returns the first failed insert, if any (Enqueue logs it); the dispatcher
   job fails on it so Oban retries.
 
@@ -32,8 +35,11 @@ defmodule Engram.Notes.ContentCommit do
         settle: Keyword.get(opts, :embed_settle)
       ),
       # #648 lever 1: cheap edge extraction must not ride the embed debounce
-      # (30s) or the embed budget gate; ~2s leading edge.
-      Enqueue.enqueue(ExtractNoteLinks.new_debounced(note_id, user_id), "extract_note_links"),
+      # (30s) or the embed budget gate; ~2s leading edge, none for an agent.
+      Enqueue.enqueue(
+        ExtractNoteLinks.new_debounced(note_id, user_id, Keyword.get(opts, :links_now?, false)),
+        "extract_note_links"
+      ),
       # #1710: move any version copy this write's transaction left behind.
       if(Keyword.fetch!(opts, :finalize?),
         do: Enqueue.enqueue(FinalizeRevision.job(note_id, user_id), "finalize_revision"),
