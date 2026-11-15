@@ -5,6 +5,8 @@ _Last verified: 2026-11-14_
 ## Status
 Working. Measured on staging 2026-11-14 for the Gap B `note_links.qualified` backfill (`Engram.Workers.BackfillNoteLinkQualified`, PR 2592). The prod figures below are projections, not measurements.
 
+That backfill was later dropped before any release shipped it: the column, its index and the worker are gone, and S5 derives "qualified" from the stored keys (`Links.qualified_links_query/4`; see "Pruned (2026-11-14, Gap B)" in `data-migrations-ledger.md`). The method here is general and still holds; the file paths and `note_link_qualified` names below are history (recover them from git at 2a370f05a).
+
 ## What This Is
 How to size a `DataMigration` backfill's WAL and disk cost for prod from a staging run, and why a naive staging rows/min measurement undercounts badly.
 

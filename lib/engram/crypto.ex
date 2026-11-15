@@ -257,8 +257,7 @@ defmodule Engram.Crypto do
   The owner's DEK for a backfill walk, or what to do with their rows when it
   does not load: `{:ok, dek}`, else `{key_outcome/1, key_reason/1}`. A user
   mid DEK rotation is `{:later, :rotation_in_progress}`: the walk leaves the
-  rows and a later walk retries them. Shared by `BackfillNoteNames` and
-  `BackfillNoteLinkQualified`.
+  rows and a later walk retries them. Used by `BackfillNoteNames`.
   """
   @spec walk_dek(User.t() | nil) :: {:ok, binary()} | {:park | :later, atom()}
   def walk_dek(user) do

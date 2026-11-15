@@ -165,7 +165,7 @@ defmodule Mix.Tasks.Engram.MigrationDropsTest do
       defmodule M do
         use Ecto.Migration
         def up do
-          execute("ALTER TABLE notes DROP COLUMN legacy")
+          execute("ALTER TABLE notes DROP COLUMN legacy, DROP COLUMN other")
         end
         def down, do: :ok
       end
@@ -269,5 +269,126 @@ defmodule Mix.Tasks.Engram.MigrationDropsTest do
       """)
 
     assert MigrationDrops.extract(path) == %{columns: [], tables: []}
+  end
+
+  # Raw SQL a migration hands to a helper (LockTimeoutRetry) instead of
+  # execute/1: the gate must still see the drop, or nothing checks it.
+  test "parses a raw single-column drop passed to a helper", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "020.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def up do
+          LockTimeoutRetry.with_lock_timeout(repo(), [
+            "DROP INDEX CONCURRENTLY IF EXISTS note_links_qualified",
+            "ALTER TABLE note_links DROP COLUMN IF EXISTS qualified"
+          ])
+        end
+        def down do
+          LockTimeoutRetry.with_lock_timeout(repo(), [
+            "ALTER TABLE note_links DROP COLUMN IF EXISTS other_col"
+          ])
+        end
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [{"note_links", "qualified"}], tables: []}
+  end
+
+  test "parses raw single drops in execute/1", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "021.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def up do
+          execute("ALTER TABLE ONLY \\"notes\\" DROP COLUMN legacy CASCADE;")
+          execute("DROP TABLE IF EXISTS legacy_audit")
+        end
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{
+             columns: [{"notes", "legacy"}],
+             tables: ["legacy_audit"]
+           }
+  end
+
+  test "a drop named in @moduledoc prose is not a drop", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "022.exs", """
+      defmodule M do
+        use Ecto.Migration
+        @moduledoc "Later, ALTER TABLE notes DROP COLUMN legacy; DROP TABLE x."
+        def up, do: :ok
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [], tables: []}
+  end
+
+  test "ignores drops in a down helper (`def down, do: run_down(repo())`)", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "023.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def up, do: run_up(repo())
+        def down, do: run_down(repo())
+        def run_up(repo), do: repo.query!("ALTER TABLE notes ADD COLUMN x int")
+        def run_down(repo) do
+          LockTimeoutRetry.with_lock_timeout(repo, ["ALTER TABLE notes DROP COLUMN IF EXISTS x"])
+        end
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [], tables: []}
+  end
+
+  # A `_down` name is not a down helper: only what `down` reaches counts.
+  test "a drop in a helper up calls is a drop, whatever its name", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "024.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def up do
+          shut_down()
+          wind_down(repo())
+        end
+        def down, do: run_down(repo())
+        defp shut_down, do: execute("DROP TABLE a")
+        defp wind_down(r), do: r.query!("ALTER TABLE a DROP COLUMN b")
+        def run_down(r), do: r.query!("ALTER TABLE a DROP COLUMN c")
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [{"a", "b"}], tables: ["a"]}
+  end
+
+  test "a helper both directions call still counts", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "025.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def up, do: run_down(repo())
+        def down, do: run_down(repo())
+        def run_down(r), do: r.query!("ALTER TABLE a DROP COLUMN c")
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [{"a", "c"}], tables: []}
+  end
+
+  test "execute/2 in change counts only its up statement", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "026.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def change do
+          execute("ALTER TABLE a ADD COLUMN b int", "ALTER TABLE a DROP COLUMN b")
+          execute("ALTER TABLE a DROP COLUMN c", "ALTER TABLE a ADD COLUMN c int")
+        end
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [{"a", "c"}], tables: []}
   end
 end

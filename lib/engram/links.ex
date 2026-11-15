@@ -79,8 +79,8 @@ defmodule Engram.Links do
   @backlink_read_fields [:link_keys_stamp, :target_key_hmac | @edge_read_fields]
   @backlinks_limit 200
 
-  # Rows per `insert_all` statement. See replace_links/4: 18 binds per row
-  # against the protocol's 65535 cap leaves room for 3640, so 2000 is a
+  # Rows per `insert_all` statement. See replace_links/4: 17 binds per row
+  # against the protocol's 65535 cap leaves room for 3855, so 2000 is a
   # deliberate half-margin — a new optional column must not silently re-arm
   # the overflow.
   @insert_chunk Batch.insert_rows()
@@ -169,41 +169,62 @@ defmodule Engram.Links do
   True when a link names its target by path (`[[Folder/Note]]`, `[[../Note]]`,
   `[x](Folder/Note.md)`) rather than by name alone (`[[Note]]`). `target` is
   the parser's DECODED target (`Engram.Links.Parser`), so alias, heading and
-  percent-encoding never count. The one source of truth for
-  `note_links.qualified` and the path half of the rename rewrite's form rule
-  (`Engram.Links.Rewriter`).
+  percent-encoding never count. The path half of the rename rewrite's form
+  rule (`Engram.Links.Rewriter`); `qualified_links_query/4` is the same rule
+  read from stored rows.
 
   NOT a rewrite gate on its own: the rewriter also rewrites a BARE link when
   the moved note's basename collides with another live row (`collision?`),
   because shortest-path resolution could hand it to the sibling after the
-  move. So S5's folder-rename gate is "EXISTS qualified link in the vault OR
-  a moved note/attachment basename has more than one live row" (O(1) folder
-  rename plan S4.6/S5, Engram#2523).
+  move. So S5's folder-rename gate is, per moved basename, "a link
+  `qualified_links_query/4` returns OR the basename has more than one live
+  row" (O(1) folder rename plan S5, Engram#2523).
   """
   @spec qualified?(String.t()) :: boolean()
   def qualified?(target), do: String.contains?(target, "/")
 
   @doc """
-  The plaintext target of a stored link row (`id`, `dek_version`,
-  `target_text_ciphertext`, `target_text_nonce`) under its owner's `dek`, or
-  nil when it does not decrypt (logged).
+  The `target_key_hmac`s of the bare spellings of basename `key` (a
+  `basename_key/1` result): `key`, `key.md` and `key.canvas`. A link's
+  target is bare (`qualified?/1` false) exactly when its key is one of these:
+  a bare target lowercases to its basename, and `basename_key/1` strips only
+  a note extension; any `/` makes the key differ.
   """
-  @spec decrypt_target(map(), binary()) :: String.t() | nil
-  def decrypt_target(row, dek),
-    do:
-      decrypt_field(
-        row.target_text_ciphertext,
-        row.target_text_nonce,
-        dek,
-        row.dek_version,
-        :note_links,
-        :target_text,
-        row.id
-      )
+  @spec bare_target_keys(binary(), String.t()) :: [binary()]
+  def bare_target_keys(filter_key, key),
+    do: Enum.map(bare_spellings(key), &target_key_hmac(filter_key, &1))
 
-  @doc "Writer level of `note_links.qualified` (S4.6), for `Engram.Cluster.Readiness`."
-  @spec qualified_writer_level() :: 1
-  def qualified_writer_level, do: 1
+  defp bare_spellings(key), do: [key | Enum.map(@note_exts, &(key <> &1))]
+
+  @doc """
+  The `note_links` rows in `vault_id` to basename `basename_hmac` that are,
+  or may be, path-qualified: S5's folder-rename gate arm 1 (Engram#2523).
+  `bare_hmacs` is `bare_target_keys/2` of the basename.
+
+  Derived from the stored keys, not a stored flag: a row is bare only when
+  its key is current AND one of `bare_hmacs`. A NULL key (not computed) or a
+  stale stamp (the `LinkResolutionKeys` ledger reopened, a Unicode bump) is
+  not trusted, so the row counts as qualified and S5 queues its rewrite
+  rather than skip it. One descent of `note_links_basename_idx`, the rest
+  row filters on that basename's links (`QualifiedLinksPlanTest`).
+
+  A query for the caller to select, page or wrap in EXISTS, inside its own
+  `Repo.with_tenant/2` (`note_links` carries FORCE RLS).
+  """
+  @spec qualified_links_query(Ecto.UUID.t(), Ecto.UUID.t(), binary(), [binary()]) ::
+          Ecto.Query.t()
+  def qualified_links_query(user_id, vault_id, basename_hmac, bare_hmacs) do
+    from(l in NoteLink,
+      where:
+        l.user_id == ^user_id and l.vault_id == ^vault_id and
+          l.target_basename_hmac == ^basename_hmac and
+          (fragment(
+             "(? = ANY(?)) IS NOT TRUE",
+             l.target_key_hmac,
+             type(^bare_hmacs, {:array, :binary})
+           ) or keys_stale(l.link_keys_stamp, l.target_text_nonce))
+    )
+  end
 
   defp keys_current?(stamp, nonce),
     do: is_binary(stamp) and is_binary(nonce) and stamp == nonce <> @link_keys_version
@@ -289,7 +310,7 @@ defmodule Engram.Links do
       edges =
         Enum.map(with_hmacs, fn {p, hmac} ->
           {p.position, p.link_type, hmac, target_key_hmac(filter_key, p.target), p.target,
-           p.alias, p.anchor, Crypto.row_version_aad_bound(), qualified?(p.target)}
+           p.alias, p.anchor, Crypto.row_version_aad_bound()}
         end)
 
       links_query =
@@ -305,14 +326,14 @@ defmodule Engram.Links do
         Repo.delete_all(links_query, skip_tenant_check: true)
 
         # Chunked, not one statement: the wire protocol caps a query at 65535
-        # bind parameters, and a NoteLink row binds up to 18 of them (14 base +
+        # bind parameters, and a NoteLink row binds up to 17 of them (13 base +
         # the optional alias/anchor envelopes). One MOC-style note with a few
         # thousand wikilinks therefore overflows the limit, and Postgrex
         # answers that by KILLING the connection ("can not handle N
         # parameters"), not by returning a query error — so a single oversized
         # note costs a pooled connection and takes the whole extraction down
         # with it. Observed on a real vault at 145792 params (8576 links).
-        # @insert_chunk keeps the worst case at 36k.
+        # @insert_chunk keeps the worst case at 34k.
         now = DateTime.utc_now()
 
         edges
@@ -321,8 +342,7 @@ defmodule Engram.Links do
         |> Enum.each(&Repo.insert_all(NoteLink, &1, skip_tenant_check: true))
       end
 
-      {changed?,
-       for({_pos, _type, hmac, _key, _t, _a, _n, _v, _q} <- edges, uniq: true, do: hmac)}
+      {changed?, for({_pos, _type, hmac, _key, _t, _a, _n, _v} <- edges, uniq: true, do: hmac)}
     end)
   end
 
@@ -389,18 +409,14 @@ defmodule Engram.Links do
         decrypt.(l.target_text_ciphertext, l.target_text_nonce, :target_text),
         decrypt.(l.alias_ciphertext, l.alias_nonce, :alias),
         decrypt.(l.anchor_ciphertext, l.anchor_nonce, :anchor),
-        l.dek_version,
-        # NULL (written by 0.84.0 or earlier) compares unequal: the next
-        # extraction rewrites the row with its `qualified` set.
-        l.qualified
+        l.dek_version
       }
     end)
     |> Enum.sort()
   end
 
   defp link_row(edge, user, vault, source_note_id, dek, now) do
-    {position, link_type, hmac, key_hmac, target, alias_text, anchor_text, dek_version, qualified} =
-      edge
+    {position, link_type, hmac, key_hmac, target, alias_text, anchor_text, dek_version} = edge
 
     id = Engram.Notes.mint_id()
 
@@ -422,7 +438,6 @@ defmodule Engram.Links do
       link_type: link_type,
       position: position,
       dek_version: dek_version,
-      qualified: qualified,
       inserted_at: now
     }
     |> put_optional_envelope(:alias, alias_text, dek, id)
@@ -1658,8 +1673,7 @@ defmodule Engram.Links do
   defp tag_used(false, keys), do: {:keyed, keys}
 
   defp target_spellings(path) do
-    key = basename_key(path)
-    bare = [key | Enum.map(@note_exts, &(key <> &1))]
+    bare = path |> basename_key() |> bare_spellings()
 
     # The full path and every shorter tail of it that still has a folder
     # (`a/b/note.md` -> `a/b/note.md`, `b/note.md`), each with and without a
