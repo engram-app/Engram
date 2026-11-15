@@ -134,6 +134,197 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
     end
   end
 
+  describe "nested folder moves and chains" do
+    defp forms(prefix, name) do
+      "path [[#{prefix}/#{name}]] alias [[#{prefix}/#{name}|G]] heading [[#{prefix}/#{name}#H]] " <>
+        "embed ![[#{prefix}/#{name}.md]] md [x](#{prefix}/#{name}.md) bare [[#{name}]]"
+    end
+
+    test "a nested folder renamed inside a folder that is then moved: every form follows",
+         %{user: user, vault: vault} do
+      {:ok, guide} =
+        Notes.upsert_note(user, vault, %{"path" => "docs/sub/Guide.md", "content" => "# g"},
+          actor: "api"
+        )
+
+      refs = seed_source!(user, vault, "Refs.md", forms("docs/sub", "Guide"))
+
+      {:ok, %{notes: 1}} = Folders.rename(user, vault, "docs/sub", "docs/deep")
+      drain_link_jobs!()
+      assert authoritative!(user, refs.id) == forms("docs/deep", "Guide")
+
+      {:ok, %{notes: 1}} = Folders.rename(user, vault, "docs", "archive")
+      drain_link_jobs!()
+      assert authoritative!(user, refs.id) == forms("archive/deep", "Guide")
+
+      # Every edge still resolves to the one moved note.
+      targets = for l <- Links.links_for_note(user, refs.id), do: l.target_note_id
+      assert length(targets) == 6
+      assert Enum.all?(targets, &(&1 == guide.id))
+    end
+
+    test "a note rename then its folder's move: the new name carries to the new folder",
+         %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "docs/sub/Guide.md", "content" => "# g"},
+          actor: "api"
+        )
+
+      refs = seed_source!(user, vault, "Refs.md", forms("docs/sub", "Guide"))
+
+      {:ok, _} = Notes.rename_note(user, vault, "docs/sub/Guide.md", "docs/sub/Manual.md")
+      drain_link_jobs!()
+      # The bare link follows a basename change; folder-qualified ones keep their folder.
+      assert authoritative!(user, refs.id) == forms("docs/sub", "Manual")
+
+      {:ok, %{notes: 1}} = Folders.rename(user, vault, "docs", "archive")
+      drain_link_jobs!()
+      # The folder move leaves the bare link alone.
+      assert authoritative!(user, refs.id) == forms("archive/sub", "Manual")
+    end
+  end
+
+  describe "stale link keys" do
+    # `link_keys_stamp` NULL or from another Unicode/nonce version means the
+    # row's stored key is not trusted. A folder rename must still rewrite and
+    # re-stamp such a row, never skip it. The rewrite assertions alone would
+    # also pass if stale rows were ignored by key (the walk finds edges by
+    # target_note_id); only `stale_count() == 0` (the re-stamp) is sensitive.
+    test "rows with a NULL or old stamp are rewritten and re-stamped", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "docs/Guide.md", "content" => "# g"},
+          actor: "api"
+        )
+
+      null_src = seed_source!(user, vault, "Null.md", "see [[docs/Guide]]")
+      old_src = seed_source!(user, vault, "Old.md", "see [[docs/Guide]]")
+      cur_src = seed_source!(user, vault, "Cur.md", "see [[docs/Guide]]")
+
+      Repo.query!(
+        "UPDATE note_links SET link_keys_stamp = NULL, target_key_hmac = NULL WHERE source_note_id = $1",
+        [Ecto.UUID.dump!(null_src.id)]
+      )
+
+      Repo.query!(
+        "UPDATE note_links SET link_keys_stamp = '\\x00'::bytea WHERE source_note_id = $1",
+        [Ecto.UUID.dump!(old_src.id)]
+      )
+
+      assert stale_count() == 2
+
+      {:ok, %{notes: 1}} = Folders.rename(user, vault, "docs", "archive")
+      drain_link_jobs!()
+
+      for s <- [null_src, old_src, cur_src] do
+        assert authoritative!(user, s.id) == "see [[archive/Guide]]"
+      end
+
+      # The rewrite re-extracted each source: every row is current again.
+      assert stale_count() == 0
+    end
+
+    defp stale_count do
+      version = Links.link_keys_version()
+
+      %{rows: [[n]]} =
+        Repo.query!(
+          "SELECT count(*) FROM note_links WHERE link_keys_stamp IS DISTINCT FROM (target_text_nonce || $1::bytea)",
+          [version]
+        )
+
+      n
+    end
+  end
+
+  describe "late-indexed linker" do
+    test "linker written, target renamed before ExtractNoteLinks runs: the sweep rewrites it",
+         %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"}, actor: "api")
+
+      # The linker exists, its note_links edge does not (index job not run).
+      {:ok, linker} =
+        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"},
+          actor: "api"
+        )
+
+      {:ok, renamed} = Notes.rename_note(user, vault, "Old.md", "Fresh.md")
+      assert [rename_job] = all_enqueued(worker: RewriteNoteLinks)
+
+      # The rename's walk finds no edge and schedules its ~60s sweep.
+      assert :ok = perform_job(RewriteNoteLinks, rename_job.args)
+      Repo.delete(rename_job)
+      assert [sweep] = all_enqueued(worker: RewriteNoteLinks)
+      assert sweep.args["sweep"] == true
+      assert authoritative!(user, linker.id) == "see [[Old]]"
+
+      # The index job lands the edge. Its bind-time repair must defer to the
+      # pending sweep (unique), not rewrite or enqueue a second job.
+      assert :ok =
+               perform_job(Engram.Workers.ExtractNoteLinks, %{
+                 "user_id" => user.id,
+                 "note_id" => linker.id
+               })
+
+      assert [_edge] = Links.links_for_note(user, linker.id)
+      assert authoritative!(user, linker.id) == "see [[Old]]"
+      assert [^sweep] = all_enqueued(worker: RewriteNoteLinks)
+      # Relative to the job's own insert time, not the test's wall clock;
+      # the worker's @sweep_delay_seconds is 60.
+      assert DateTime.diff(sweep.scheduled_at, sweep.inserted_at) in 55..65
+
+      # Drive the sweep itself, no sleeping.
+      assert :ok = perform_job(RewriteNoteLinks, sweep.args)
+      assert authoritative!(user, linker.id) == "see [[Fresh]]"
+      assert [%{target_note_id: id}] = Links.links_for_note(user, linker.id)
+      assert id == renamed.id
+    end
+  end
+
+  describe "folder rename cost (pre-S5)" do
+    # PINS TODAY'S O(N) BEHAVIOR. A folder rename of N notes touches 2N note
+    # rows (N moved + N old-path tombstones) and enqueues N RewriteNoteLinks
+    # jobs. S5 (O(1) folder rename, Engram#2523) must change these
+    # assertions: update them in that PR, do not loosen them here.
+    test "touched rows, tombstones and rewrite jobs grow linearly with N", %{
+      user: user,
+      vault: vault
+    } do
+      for n <- [2, 5] do
+        folder = "cost#{n}"
+
+        for i <- 1..n do
+          {:ok, _} =
+            Notes.upsert_note(user, vault, %{"path" => "#{folder}/N#{i}.md", "content" => "n"},
+              actor: "api"
+            )
+        end
+
+        Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.RewriteNoteLinks"))
+        assert {:ok, ^n} = Notes.rename_folder(user, vault, folder, folder <> "x")
+
+        # Every row the op wrote shares its one seq.
+        rows =
+          Repo.all(
+            from(r in Engram.Notes.Note,
+              where: r.vault_id == ^vault.id,
+              select: {r.seq, r.deleted_at}
+            ),
+            skip_tenant_check: true
+          )
+
+        op_seq = rows |> Enum.map(&elem(&1, 0)) |> Enum.max()
+        touched = Enum.filter(rows, &(elem(&1, 0) == op_seq))
+        assert length(touched) == 2 * n
+        assert Enum.count(touched, &(elem(&1, 1) != nil)) == n
+        assert length(all_enqueued(worker: RewriteNoteLinks)) == n
+      end
+    end
+  end
+
   test "rewrites every source note and chains by cursor", %{user: user, vault: vault} do
     {_old_id, renamed} = seed_rename!(user, vault)
     sources = for i <- 1..3, do: seed_source!(user, vault, "S#{i}.md", "see [[Old]] #{i}")
