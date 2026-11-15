@@ -1,5 +1,12 @@
+Code.require_file("lock_timeout_retry.exs", __DIR__)
+
 defmodule Engram.Repo.Migrations.AddEmbedDayToUsageMetersExpand do
   use Ecto.Migration
+
+  alias Engram.Repo.Migrations.LockTimeoutRetry
+
+  @disable_ddl_transaction true
+  @disable_migration_lock true
 
   @moduledoc """
   phase/expand. State for the per-user daily embed token ceiling
@@ -11,23 +18,24 @@ defmodule Engram.Repo.Migrations.AddEmbedDayToUsageMetersExpand do
   before this migration starts the day at zero, which is also what a new day
   does. No backfill. `usage_meters` has no RLS (one row per user, keyed on
   `user_id`), so there is no tenant trap here.
+
+  `usage_meters` is written on every embed pass, so the brief ACCESS
+  EXCLUSIVE lock goes through `LockTimeoutRetry`: a 5 s lock_timeout, the
+  statement retried on 55P03, so a busy table cannot crash boot. Both
+  statements are rerun-safe (`IF NOT EXISTS`).
   """
 
   def up do
-    # Fail fast instead of queueing ACCESS EXCLUSIVE behind a long transaction,
-    # as `20261021150000_add_embed_bucket_to_usage_meters_expand.exs` does.
-    execute "SET LOCAL lock_timeout = '5s'"
-
-    alter table(:usage_meters) do
-      add :embed_day, :date
-      add :embed_day_tokens, :bigint
-    end
+    LockTimeoutRetry.with_lock_timeout(repo(), [
+      "ALTER TABLE usage_meters ADD COLUMN IF NOT EXISTS embed_day date",
+      "ALTER TABLE usage_meters ADD COLUMN IF NOT EXISTS embed_day_tokens bigint"
+    ])
   end
 
   def down do
     alter table(:usage_meters) do
-      remove :embed_day
-      remove :embed_day_tokens
+      remove_if_exists :embed_day_tokens, :bigint
+      remove_if_exists :embed_day, :date
     end
   end
 end
