@@ -183,7 +183,7 @@ defmodule Engram.SearchHybridTest do
 
     test "under the ceiling, hybrid still embeds the query",
          %{bypass: bypass, user: user, vault: vault} do
-      {:ok, _} = Engram.UsageMeters.day_take(user.id, 19_999_999, 20_000_000)
+      {:ok, _} = Engram.UsageMeters.day_take(user.id, 19_000_000, 20_000_000)
 
       Engram.MockEmbedder
       |> expect(:embed_texts, fn ["paddle_api_key"], _opts -> {:ok, [[0.1, 0.2, 0.3]]} end)

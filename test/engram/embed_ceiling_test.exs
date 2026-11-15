@@ -33,12 +33,33 @@ defmodule Engram.EmbedCeilingTest do
   end
 
   describe "over?/1" do
-    test "true only once today's spend reaches the ceiling" do
+    test "true once less than one chunk (`floor/0`) is left today" do
       user = paid_user()
-      {:ok, _} = UsageMeters.day_take(user.id, 19_999_999, 20_000_000)
+      {:ok, _} = UsageMeters.day_take(user.id, 20_000_000 - EmbedCeiling.floor(), 20_000_000)
       refute EmbedCeiling.over?(user)
+      assert EmbedCeiling.available(user.id, 20_000_000) == EmbedCeiling.floor()
       {:ok, _} = UsageMeters.day_take(user.id, 1, 20_000_000)
       assert EmbedCeiling.over?(user)
+    end
+  end
+
+  # Unlimited is one rule: the -1 bucket override every staging account has.
+  describe "exemptions" do
+    test "a -1 embed bucket override lifts the ceiling; without it the user is capped" do
+      capped = paid_user()
+      exempt = paid_user()
+      insert(:user_limit_override, user: exempt, key: "embed_token_bucket", value: %{"v" => -1})
+      Engram.Billing.OverrideCache.evict(exempt.id)
+
+      assert EmbedCeiling.tokens(capped) == 20_000_000
+      assert EmbedCeiling.tokens(exempt) == nil
+
+      for user <- [capped, exempt] do
+        {:ok, _} = UsageMeters.day_take(user.id, 20_000_000, 20_000_000)
+      end
+
+      assert EmbedCeiling.over?(capped)
+      refute EmbedCeiling.over?(exempt)
     end
   end
 

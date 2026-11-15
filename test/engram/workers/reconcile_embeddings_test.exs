@@ -704,6 +704,44 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: EmbedNote)
     end
 
+    # The daily embed ceiling (`Engram.EmbedCeiling`): a paid user's park
+    # waits while today's ceiling is spent, and the sweep's backstop wake
+    # re-embeds it once the UTC day turns. Red if the sweep (or its wake)
+    # frees a paid park regardless of the ceiling, and red if a parked note
+    # never comes back.
+    test "a ceiling park is re-embedded after the UTC day turns, not before" do
+      # The steady-state sweep (no version term): `notes_reconcile_due_v2`.
+      :ok = DataMigrations.mark_done(IndexVersions.name(), 1)
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+
+      note =
+        note_for(user,
+          content_hash: "abc123",
+          embed_hash: "abc123",
+          dense_indexed_hash: nil,
+          embed_retry_after: EmbedNote.parked_until_edited(),
+          embed_budget_parked: true,
+          embed_budget_parked_at: DateTime.utc_now(),
+          embed_budget_need: 10
+        )
+
+      insert_chunk!(note)
+      {:ok, _} = Engram.UsageMeters.day_take(user.id, 20_000_000, 20_000_000)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      assert Engram.Fixtures.raw_note!(note.id).embed_budget_parked == true
+
+      Repo.update_all(from(m in Engram.UsageMeters.Meter, where: m.user_id == ^user.id),
+        set: [embed_day: Date.add(Date.utc_today(), -1)]
+      )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      assert Engram.Fixtures.raw_note!(note.id).embed_budget_parked == nil
+    end
+
     test "skips notes where embed_hash matches content_hash" do
       user = insert(:user)
 

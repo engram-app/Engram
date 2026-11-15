@@ -1730,9 +1730,10 @@ defmodule Engram.Workers.EmbedNoteTest do
   # The default daily embed ceiling (`embed_tokens_per_day`).
   @ceiling 20_000_000
 
-  defp spend_today(user_id),
-    do: {:ok, _} = Engram.UsageMeters.day_take(user_id, @ceiling, @ceiling)
+  defp spend_today(user_id, tokens \\ @ceiling),
+    do: {:ok, _} = Engram.UsageMeters.day_take(user_id, tokens, @ceiling)
 
+  # Events emitted by THIS process only: other async suites index notes too.
   defp attach_events(events) do
     handler = "embed-ceiling-#{System.unique_integer()}"
     test_pid = self()
@@ -1740,7 +1741,7 @@ defmodule Engram.Workers.EmbedNoteTest do
     :telemetry.attach_many(
       handler,
       events,
-      fn event, _, _, _ -> send(test_pid, {:event, event}) end,
+      fn event, _, _, _ -> if self() == test_pid, do: send(test_pid, {:event, event}) end,
       nil
     )
 
@@ -1757,12 +1758,28 @@ defmodule Engram.Workers.EmbedNoteTest do
     assert indexed.dense_indexed_hash == indexed.content_hash
   end
 
-  defp resumes_tomorrow?(note, user_id),
-    do:
-      DateTime.compare(
-        Engram.Fixtures.raw_note!(note.id).embed_retry_after,
-        Engram.EmbedCeiling.resume_at(user_id)
-      ) == :eq
+  # What a windowed sweep does to a paid user's park: hands it back.
+  defp hand_back(note) do
+    Repo.update_all(
+      from(n in Note, where: n.id == ^note.id),
+      [set: [embed_budget_parked: nil, embed_retry_after: nil]],
+      skip_tenant_check: true
+    )
+  end
+
+  defp assert_parked_until_tomorrow(note, user_id) do
+    parked = Engram.Fixtures.raw_note!(note.id)
+    assert is_nil(parked.dense_indexed_hash)
+    # The Free queue's park: the sweep's due index skips it.
+    assert parked.embed_budget_parked == true
+    assert parked.embed_retry_after == EmbedNote.parked_until_edited()
+
+    assert_enqueued(
+      worker: Engram.Workers.WakeBudgetParked,
+      args: %{"user_id" => user_id},
+      scheduled_at: {Engram.EmbedCeiling.resume_at(user_id), delta: 1}
+    )
+  end
 
   describe "perform/1: daily embed ceiling (Engram.EmbedCeiling)" do
     setup %{user: user} = ctx do
@@ -1773,7 +1790,7 @@ defmodule Engram.Workers.EmbedNoteTest do
 
     # Fails without the ceiling: a paid user had no limit, so the pass called
     # Voyage (no Mox expectation here, so that call fails the test).
-    test "a paid user over the ceiling indexes keyword-only, parks until the next UTC day",
+    test "a paid user over the ceiling indexes keyword-only and parks until the next UTC day",
          %{bypass: bypass, user: user, note: note} do
       spend_today(user.id)
       stub_qdrant(bypass)
@@ -1786,20 +1803,28 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       indexed = Engram.Fixtures.raw_note!(note.id)
       assert indexed.embed_hash == indexed.content_hash
-      assert is_nil(indexed.dense_indexed_hash)
 
       assert Repo.exists?(from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id),
                skip_tenant_check: true
              )
 
-      # A clock, not the Free queue (the sweep clears that for paid users).
-      assert resumes_tomorrow?(note, user.id)
-      assert is_nil(indexed.embed_budget_parked)
+      assert_parked_until_tomorrow(note, user.id)
       assert Engram.UsageMeters.day_used(user.id) == @ceiling
 
       assert_received {:event, [:engram, :embed, :ceiling_parked]}
       assert_received {:event, [:engram, :abuse, :embed_ceiling_hit]}
       assert log =~ "daily embed ceiling reached"
+    end
+
+    # Fails if the reservation refused correctly but never counted (and would
+    # double count if `add_embed_tokens` still ran beside it).
+    test "a paid pass under the ceiling counts its tokens against today, once",
+         %{bypass: bypass, user: user, note: note} do
+      embeds_densely(bypass, note)
+
+      used = Engram.UsageMeters.day_used(user.id)
+      assert used > 0
+      assert Engram.UsageMeters.lifetime_embed_tokens(user.id) == used
     end
 
     test "the ceiling log fires once per user-day; every park is counted",
@@ -1822,20 +1847,44 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert length(String.split(log, "daily embed ceiling reached")) == 2
     end
 
-    test "a parked note still over the ceiling stays parked without a pass, then re-embeds densely the next UTC day",
+    # Red with the ceiling arm of `budget_blocks?/2` deleted: the handed-back
+    # note runs a whole pass (a committed `[:engram, :indexing, :chunks]`).
+    test "a parked note handed back while the day is spent parks again without a pass",
          %{bypass: bypass, user: user, note: note} do
       spend_today(user.id)
       stub_qdrant(bypass)
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      hand_back(note)
 
-      # The sweep hands it back (cooldown cleared) while still over: the dense
-      # backfill parks it again on the clock, no Voyage.
-      Repo.update_all(from(n in Note, where: n.id == ^note.id), [set: [embed_retry_after: nil]],
-        skip_tenant_check: true
-      )
-
+      attach_events([[:engram, :indexing, :chunks]])
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
-      assert resumes_tomorrow?(note, user.id)
+
+      refute_received {:event, [:engram, :indexing, :chunks]}
+      assert_parked_until_tomorrow(note, user.id)
+    end
+
+    # Red when only an exactly-spent day blocks: less than one chunk left
+    # could embed nothing, so the pass would run, be refused and re-park.
+    test "less than one chunk of tokens left counts as spent: no pass",
+         %{bypass: bypass, user: user, note: note} do
+      spend_today(user.id)
+      stub_qdrant(bypass)
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      hand_back(note)
+      :ok = Engram.UsageMeters.release_embed_tokens(user.id, Engram.EmbedCeiling.floor() - 1)
+
+      attach_events([[:engram, :indexing, :chunks]])
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      refute_received {:event, [:engram, :indexing, :chunks]}
+      assert Engram.Fixtures.raw_note!(note.id).embed_budget_parked == true
+    end
+
+    test "the next UTC day re-embeds the parked note densely",
+         %{bypass: bypass, user: user, note: note} do
+      spend_today(user.id)
+      stub_qdrant(bypass)
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
       # The day turns: today's counter belongs to yesterday.
       Repo.update_all(from(m in Engram.UsageMeters.Meter, where: m.user_id == ^user.id),
@@ -1852,7 +1901,23 @@ defmodule Engram.Workers.EmbedNoteTest do
       embeds_densely(bypass, note)
     end
 
-    test "a -1 override (our staging accounts) is never capped",
+    # Unlimited is one rule: every staging account carries this override.
+    test "a -1 embed bucket override is never capped and never counted",
+         %{bypass: bypass, user: user, note: note} do
+      insert(:user_limit_override, user: user, key: "embed_token_bucket", value: %{"v" => -1})
+      embeds_densely(bypass, note)
+      assert Engram.UsageMeters.day_used(user.id) == 0
+      assert Engram.UsageMeters.lifetime_embed_tokens(user.id) > 0
+    end
+
+    test "a -1 embed bucket override embeds even with today's ceiling spent",
+         %{bypass: bypass, user: user, note: note} do
+      insert(:user_limit_override, user: user, key: "embed_token_bucket", value: %{"v" => -1})
+      spend_today(user.id)
+      embeds_densely(bypass, note)
+    end
+
+    test "a -1 embed_tokens_per_day override is never capped",
          %{bypass: bypass, user: user, note: note} do
       insert(:user_limit_override, user: user, key: "embed_tokens_per_day", value: %{"v" => -1})
       spend_today(user.id)
