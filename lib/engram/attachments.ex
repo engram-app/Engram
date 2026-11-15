@@ -1408,18 +1408,14 @@ defmodule Engram.Attachments do
     |> Enum.each(&Repo.insert_all(Attachment, &1))
 
     # #648/#1231: rewrite referring notes' ![[...]]/[[...]] targets. In this
-    # transaction, so the jobs roll back with the moves.
+    # transaction, so the jobs roll back with the moves. One chain for the
+    # whole move (#2523 S5), grouped by linking note: a note embedding N moved
+    # attachments is written once, not N times.
     moved
     |> Enum.map(fn {item, _seq, _cols, att} ->
-      Engram.Workers.RewriteNoteLinks.new_for(
-        user.id,
-        vault.id,
-        :attachment,
-        att.id,
-        Base.encode64(item.old_hmac),
-        Base.encode64(item.old_basename_hmac)
-      )
+      {:attachment, att.id, Base.encode64(item.old_hmac), Base.encode64(item.old_basename_hmac)}
     end)
+    |> then(&Engram.Workers.RewriteNoteLinks.new_for_folder(user.id, vault.id, &1))
     |> Engram.Jobs.insert_chunked()
 
     Enum.map(moved, fn {item, _seq, _cols, att} -> {item, att} end)

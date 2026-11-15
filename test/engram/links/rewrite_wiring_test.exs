@@ -307,8 +307,8 @@ defmodule Engram.Links.RewriteWiringTest do
 
       kinds =
         all_enqueued(worker: RewriteNoteLinks)
-        # A folder chain (`"targets"`) rewrites toward notes.
-        |> Enum.map(&(&1.args["target_kind"] || (&1.args["targets"] && "note")))
+        # One folder chain per kind of moved row, each entry naming its kind.
+        |> Enum.flat_map(fn j -> Enum.map(j.args["targets"], & &1["target_kind"]) end)
         |> Enum.sort()
 
       assert kinds == ["attachment", "note"]

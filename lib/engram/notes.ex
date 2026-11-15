@@ -8313,10 +8313,10 @@ defmodule Engram.Notes do
     moves
     |> Enum.filter(fn {_n, old, new, _f, _h} -> old != new end)
     |> Enum.map(fn {note, old, _new, _folder, old_hmac} ->
-      {note.id, old_hmac, Base.encode64(Links.basename_hmac(user, Links.basename_key(old)))}
+      {:note, note.id, old_hmac,
+       Base.encode64(Links.basename_hmac(user, Links.basename_key(old)))}
     end)
-    |> Enum.chunk_every(RewriteNoteLinks.max_folder_targets())
-    |> Enum.map(&RewriteNoteLinks.new_for_folder(user.id, vault.id, &1))
+    |> then(&RewriteNoteLinks.new_for_folder(user.id, vault.id, &1))
     |> Enqueue.enqueue_all("rewrite_note_links")
   end
 

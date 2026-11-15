@@ -53,15 +53,21 @@ defmodule Engram.Workers.RewriteNoteLinks do
   sweep's second walks planning zero edits (rewrite failed=0, sweeps no-op).
 
   Folder chains (#2523 S5): a folder rename used to queue one chain per
-  moved note, so a note path-linking N moved notes was rewritten N times
-  (staging, 1k moved notes: 1,000 version bumps on one index note in 8 min,
-  1.13 GB of WAL). `new_for_folder/3` queues one chain whose args carry
-  every moved note as a `"targets"` entry (the per-note args' three ids/HMACs,
-  up to `max_folder_targets/0` per chain). Each page takes the next linking
-  notes of ANY moved basename (keyset on `source_note_id`), builds only the
-  targets that page's notes name, and rewrites each linking note ONCE with
-  every edit: one Y-update, one link rebuild. A target that cannot be built
-  (gone, old path unrecoverable) is skipped and counted; the rest proceed.
+  moved note (and per moved attachment), so a note linking N moved rows was
+  rewritten N times (staging, 1k moved notes: 1,000 version bumps on one
+  index note in 8 min, 1.13 GB of WAL). `new_for_folder/3` queues one chain
+  per kind of moved row (the note cascade, the attachment bulk move), whose
+  args carry every moved row as a `"targets"` entry (the per-note args' ids
+  and HMACs plus `target_kind`, up to `max_folder_targets/0` per chain). Each
+  page takes the next linking notes of ANY moved basename (keyset on
+  `source_note_id`), builds only the targets that page's notes name, in a
+  constant number of queries (one tombstone read per kind, then
+  `Rewriter.build_folder_targets/3`), and rewrites each linking note ONCE
+  with every edit: one Y-update, one link rebuild. A note linking moved
+  notes AND moved attachments is written once per chain (twice). A target
+  that cannot be built (gone, old path unrecoverable) is skipped and
+  counted; the rest proceed. Folder chains run at `folder_priority/0`,
+  behind single renames and repairs.
 
   Queue `:link_rewrite` (limit 1 per node, worker and single-node only), off
   `:indexing`: a big move waited out other tenants' extraction there. Kill
@@ -92,6 +98,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
   alias Engram.Crypto.RotationGate
   alias Engram.Links.Rewriter
   alias Engram.Logger.Metadata
+  alias Engram.Notes.Keys
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vaults
@@ -108,6 +115,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
   # Long, so a paused backlog wakes rarely; short enough that "back on"
   # resumes within minutes (RefreshKeywordVectors' kill switch, copied).
   @paused_snooze 300
+  @folder_priority 1
 
   # The tagged error atoms the rewrite pipeline actually produces
   # (rewrite_source_note/attempt/persist + this worker's own path recovery).
@@ -128,27 +136,48 @@ defmodule Engram.Workers.RewriteNoteLinks do
   @spec enabled?() :: boolean()
   def enabled?, do: Engram.ServiceConfig.get(:link_rewrite, true) != false
 
-  @doc "Moved notes per folder chain; a bigger move queues one chain per chunk."
+  @doc "Moved rows per folder chain; a bigger move queues one chain per chunk."
   @spec max_folder_targets() :: pos_integer()
   def max_folder_targets, do: @max_folder_targets
 
   @doc """
-  One chain for a folder rename's moved notes. `targets` are
-  `{target_id, old_path_hmac_b64, old_basename_hmac_b64}`, at most
-  `max_folder_targets/0` (T3.2: ids and HMACs only).
+  Folder chains run behind single renames and repairs (priority 0) on the
+  one `link_rewrite` slot, so a big move never holds another tenant's
+  single rename behind every chunk's first page. Successors and sweeps keep it.
   """
-  @spec new_for_folder(binary(), binary(), [{binary(), String.t(), String.t()}]) ::
-          Ecto.Changeset.t()
-  def new_for_folder(user_id, vault_id, targets) when length(targets) <= @max_folder_targets do
-    new(%{
-      "user_id" => user_id,
-      "vault_id" => vault_id,
-      "cursor" => @start_cursor,
-      "targets" =>
-        Enum.map(targets, fn {id, path_hmac, basename_hmac} ->
-          %{"target_id" => id, "old_path_hmac" => path_hmac, "old_basename_hmac" => basename_hmac}
-        end)
-    })
+  @spec folder_priority() :: pos_integer()
+  def folder_priority, do: @folder_priority
+
+  @doc """
+  The folder-move chains for `moves`, one per `max_folder_targets/0` chunk.
+  `moves` are `{kind, target_id, old_path_hmac_b64, old_basename_hmac_b64}`,
+  notes or attachments (T3.2: ids and HMACs only).
+  """
+  @spec new_for_folder(binary(), binary(), [
+          {:note | :attachment, binary(), String.t(), String.t()}
+        ]) :: [Ecto.Changeset.t()]
+  def new_for_folder(user_id, vault_id, moves) do
+    moves
+    |> Enum.chunk_every(@max_folder_targets)
+    |> Enum.map(fn chunk ->
+      new(
+        %{
+          "user_id" => user_id,
+          "vault_id" => vault_id,
+          "cursor" => @start_cursor,
+          "targets" =>
+            Enum.map(chunk, fn {kind, id, path_hmac, basename_hmac} ->
+              %{
+                "target_kind" => Atom.to_string(kind),
+                "target_id" => id,
+                "old_path_hmac" => path_hmac,
+                "old_basename_hmac" => basename_hmac
+              }
+            end)
+        },
+        priority: @folder_priority
+      )
+    end)
   end
 
   @doc """
@@ -226,8 +255,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
         |> Enum.map(&elem(&1, 1))
         |> Enum.uniq()
         |> Enum.flat_map(&Map.fetch!(by_hmac, &1))
-        |> Enum.flat_map(&folder_target(user, vault, &1))
-        |> pre_move_siblings()
+        |> then(&folder_targets(user, vault, &1))
         |> Enum.group_by(& &1.old_basename_hmac)
 
       wanted = Enum.group_by(linked, &elem(&1, 0), &elem(&1, 1))
@@ -274,7 +302,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
     if length(ids) == batch_size do
       args
       |> Map.put("cursor", List.last(ids))
-      |> new()
+      |> new(priority: priority(args))
       |> Oban.insert()
       |> case do
         {:ok, _job} -> :ok
@@ -285,35 +313,41 @@ defmodule Engram.Workers.RewriteNoteLinks do
     end
   end
 
-  # One folder entry to a rewrite target, or nothing: a target that is gone
-  # or whose old path cannot be recovered is counted and skipped, so it never
-  # stops the rest of the folder's rewrite (the per-note chain discards).
-  defp folder_target(user, vault, entry) do
-    with {:ok, path_hmac} <- decode_b64(entry["old_path_hmac"]),
-         {:ok, old_path} <- recover_old_path(user, vault, :note, path_hmac, entry),
-         {:ok, target} <- Rewriter.build_target(user, vault, :note, entry["target_id"], old_path) do
-      [target]
-    else
-      {_, reason} ->
-        :telemetry.execute([:engram, :links, :rewrite, :failed], %{count: 1}, %{
-          reason: telemetry_failure_reason(reason)
-        })
+  # A page's folder entries to rewrite targets, in a constant number of
+  # queries: one tombstone read per kind for the old paths, then
+  # `Rewriter.build_folder_targets/3`. An entry whose old path cannot be
+  # recovered, or whose row is gone, is counted and skipped, so it never stops
+  # the rest of the folder's rewrite (the per-note chain discards instead).
+  defp folder_targets(user, vault, entries) do
+    {moves, lost} =
+      entries
+      |> Enum.group_by(&kind_from(&1["target_kind"]))
+      |> Enum.flat_map(fn {kind, group} ->
+        hmacs = Enum.map(group, &Base.decode64!(&1["old_path_hmac"]))
+        paths = tombstone_old_paths(user, vault, kind, hmacs)
 
-        []
-    end
+        group
+        |> Enum.zip(hmacs)
+        |> Enum.map(fn {e, h} -> {kind, e["target_id"], Map.get(paths, h)} end)
+      end)
+      |> Enum.split_with(fn {_kind, _id, path} -> is_binary(path) end)
+
+    {targets, gone} =
+      Rewriter.build_folder_targets(
+        user,
+        vault,
+        Enum.map(moves, fn {kind, id, path} -> %{kind: kind, id: id, old_path: path} end)
+      )
+
+    count_failed(:old_path_unrecoverable, length(lost))
+    count_failed(:target_gone, length(gone))
+    targets
   end
 
-  # Each target's candidate snapshot holds its moved siblings at their NEW
-  # paths, but before the move they sat at their old ones. Put them back, so
-  # an occurrence resolves to the one sibling it named before the move.
-  defp pre_move_siblings(targets) do
-    old = Map.new(targets, &{&1.id, &1.old_path})
-    back = fn list -> Enum.map(list, fn {id, path} -> {id, Map.get(old, id, path)} end) end
+  defp count_failed(_reason, 0), do: :ok
 
-    Enum.map(targets, fn t ->
-      Map.update!(t, :pre_rename_candidates, &%{&1 | notes: back.(&1.notes)})
-    end)
-  end
+  defp count_failed(reason, n),
+    do: :telemetry.execute([:engram, :links, :rewrite, :failed], %{count: n}, %{reason: reason})
 
   # Chain terminated. A plain run schedules one delayed sweep to catch any
   # edge that indexed in after this walk started (see moduledoc). A sweep
@@ -324,13 +358,16 @@ defmodule Engram.Workers.RewriteNoteLinks do
     args
     |> Map.put("cursor", @start_cursor)
     |> Map.put("sweep", true)
-    |> new(schedule_in: @sweep_delay_seconds)
+    |> new(schedule_in: @sweep_delay_seconds, priority: priority(args))
     |> Oban.insert()
     |> case do
       {:ok, _job} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp priority(%{"targets" => _}), do: @folder_priority
+  defp priority(_args), do: 0
 
   defp kind_from("attachment"), do: :attachment
   defp kind_from(_), do: :note
@@ -368,53 +405,73 @@ defmodule Engram.Workers.RewriteNoteLinks do
   # The rename tombstone at the OLD path carries the plaintext we must not
   # put in args: decrypt it. Newest tombstone wins (repeated renames
   # through the same path).
-  defp tombstone_old_path(user, vault, :note, old_path_hmac) do
-    # Tenant-scoped: `notes` carries FORCE ROW LEVEL SECURITY, so unscoped this
-    # returns nil and old-path recovery silently fails — the rename's link
-    # rewrite then has nothing to rewrite toward, with no error. `user.id` is
-    # in scope; it is already in the WHERE clause below.
+  defp tombstone_old_path(user, vault, kind, old_path_hmac) do
+    case tombstone_old_paths(user, vault, kind, [old_path_hmac]) do
+      %{^old_path_hmac => path} -> {:ok, path}
+      _ -> {:discard, :old_path_unrecoverable}
+    end
+  end
+
+  # `%{old_path_hmac => plaintext old path}` for every hmac with a readable
+  # tombstone, one query. Decrypted paths map back by their own hmac, so the
+  # newest tombstone per path wins (rows come newest first).
+  defp tombstone_old_paths(user, vault, kind, hmacs) do
+    # Tenant-scoped: `notes` and `attachments` carry FORCE ROW LEVEL
+    # SECURITY, so unscoped this returns nothing and old-path recovery
+    # silently fails: the rename's link rewrite then has nothing to rewrite
+    # toward, with no error. `user.id` is already in the WHERE clause.
     #
     # Only the READ is scoped. The decrypt below derives the user's DEK and
     # stays OUTSIDE the scope for the reason given on `Links.resolve_target/4`:
     # a KMS provider round trip inside the scope would hold row locks for the
     # provider's latency.
-    {:ok, tombstone} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.one(
-          from(n in Note,
-            where:
-              n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
-                not is_nil(n.deleted_at),
-            # notes_path_tomb (vault_id, path_id, seq): a backward probe.
-            where: ^Engram.Notes.Keys.eq(:path, old_path_hmac),
-            order_by: [desc: n.seq],
-            limit: 1,
-            # The path only: never the body.
-            select: struct(n, ^Note.path_fields())
-          )
-        )
-      end)
+    {:ok, rows} =
+      Repo.with_tenant(user.id, fn -> Repo.all(tombstones_query(user, vault, kind, hmacs)) end)
 
-    decrypt_tombstone_path(tombstone, user, &Crypto.maybe_decrypt_note_fields/2)
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+
+    decrypt =
+      if kind == :note,
+        do: &Crypto.maybe_decrypt_note_fields/2,
+        else: &Crypto.maybe_decrypt_attachment_fields/2
+
+    Enum.reduce(rows, %{}, fn row, acc ->
+      case decrypt.(row, user) do
+        {:ok, %{path: path}} when is_binary(path) ->
+          Map.put_new(acc, Crypto.hmac_field(filter_key, path), path)
+
+        _ ->
+          acc
+      end
+    end)
   end
 
-  defp tombstone_old_path(user, vault, :attachment, old_path_hmac) do
-    # Tenant-scoped for the same reason as the `:note` clause above;
-    # `attachments` is also FORCE ROW LEVEL SECURITY.
-    {:ok, tombstone} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.one(
-          from(a in Attachment,
-            where:
-              a.user_id == ^user.id and a.vault_id == ^vault.id and
-                a.path_hmac == ^old_path_hmac and not is_nil(a.deleted_at),
-            order_by: [desc: a.seq],
-            limit: 1
-          )
-        )
-      end)
+  defp tombstones_query(user, vault, :note, hmacs) do
+    ids? = Keys.ids?()
+    path_col = Keys.col(:path, ids?)
 
-    decrypt_tombstone_path(tombstone, user, &Crypto.maybe_decrypt_attachment_fields/2)
+    from(n in Note,
+      where:
+        n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
+          not is_nil(n.deleted_at),
+      # notes_path_tomb (vault_id, path_id, seq): a backward probe per path,
+      # newest row only (DISTINCT ON the path key, seq descending).
+      where: ^Keys.in_any(:path, hmacs, ids?),
+      distinct: [asc: field(n, ^path_col)],
+      order_by: [desc: n.seq],
+      # The path only: never the body.
+      select: struct(n, ^Note.path_fields())
+    )
+  end
+
+  defp tombstones_query(user, vault, :attachment, hmacs) do
+    from(a in Attachment,
+      where:
+        a.user_id == ^user.id and a.vault_id == ^vault.id and
+          a.path_hmac in ^hmacs and not is_nil(a.deleted_at),
+      distinct: [asc: a.path_hmac],
+      order_by: [desc: a.seq]
+    )
   end
 
   # Old-path recovery, two sources in order:
@@ -452,15 +509,6 @@ defmodule Engram.Workers.RewriteNoteLinks do
   end
 
   defp args_old_path(_user, _args), do: {:discard, :old_path_unrecoverable}
-
-  defp decrypt_tombstone_path(nil, _user, _decrypt), do: {:discard, :old_path_unrecoverable}
-
-  defp decrypt_tombstone_path(row, user, decrypt) do
-    case decrypt.(row, user) do
-      {:ok, decrypted} when is_binary(decrypted.path) -> {:ok, decrypted.path}
-      _ -> {:discard, :old_path_unrecoverable}
-    end
-  end
 
   # `{source_id, target_or_targets}` pairs: each linking note is written once.
   defp rewrite_each(user, vault, pairs) do

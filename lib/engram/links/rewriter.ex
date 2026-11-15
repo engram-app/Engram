@@ -117,8 +117,12 @@ defmodule Engram.Links.Rewriter do
 
   defp plan_target(user, vault, occurrences, target) do
     # Indexed once per source note and target, so each occurrence resolves
-    # in O(1) rather than re-sorting every same-basename candidate.
-    candidates = user |> pre_rename_candidates(vault, target) |> Links.index_candidate_sets()
+    # in O(1) rather than re-sorting every same-basename candidate; a folder
+    # target arrives indexed once per page (`build_folder_targets/3`).
+    candidates =
+      Map.get_lazy(target, :candidate_index, fn ->
+        user |> pre_rename_candidates(vault, target) |> Links.index_candidate_sets()
+      end)
 
     occurrences
     |> Enum.filter(fn occ ->
@@ -242,50 +246,109 @@ defmodule Engram.Links.Rewriter do
   # `{:discard, :target_gone}`. Oban then threw the rewrite away as a
   # legitimate terminal state, so every inbound `[[wikilink]]` kept pointing at
   # the old path permanently, with no error logged and no retry to heal it.
-  defp current_path(user, vault, :note, id) do
-    row =
-      Repo.with_tenant!(user.id, fn ->
-        Repo.one(
-          from(n in Note,
-            where:
-              n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
-                n.kind == "note" and is_nil(n.deleted_at),
-            # The path only: never the body.
-            select: struct(n, ^Note.path_fields())
-          )
-        )
-      end)
-
-    with %Note{} = note <- row,
-         {:ok, %{path: path}} when is_binary(path) <- Crypto.maybe_decrypt_note_fields(note, user) do
-      {:ok, path}
-    else
+  defp current_path(user, vault, kind, id) do
+    case current_paths(user, vault, kind, [id]) do
+      %{^id => path} -> {:ok, path}
       _ -> {:error, :target_gone}
     end
+  end
+
+  # `%{id => current decrypted path}` for the live rows among `ids`, one query.
+  # A row that is gone or fails to decrypt is absent (`:target_gone`).
+  defp current_paths(_user, _vault, _kind, []), do: %{}
+
+  defp current_paths(user, vault, :note, ids) do
+    user
+    |> scoped_rows(
+      from(n in Note,
+        where:
+          n.id in ^ids and n.user_id == ^user.id and n.vault_id == ^vault.id and
+            n.kind == "note" and is_nil(n.deleted_at),
+        # The path only: never the body.
+        select: struct(n, ^Note.path_fields())
+      )
+    )
+    |> decrypted_paths(user, &Crypto.maybe_decrypt_note_fields/2)
   end
 
   # Scoped for the same reason as the `:note` clause above, and with the same
   # read-inside / decrypt-outside split; `attachments` is also FORCE ROW LEVEL
   # SECURITY.
-  defp current_path(user, vault, :attachment, id) do
-    row =
-      Repo.with_tenant!(user.id, fn ->
-        Repo.one(
-          from(a in Attachment,
-            where:
-              a.id == ^id and a.user_id == ^user.id and a.vault_id == ^vault.id and
-                is_nil(a.deleted_at)
-          )
-        )
+  defp current_paths(user, vault, :attachment, ids) do
+    user
+    |> scoped_rows(
+      from(a in Attachment,
+        where:
+          a.id in ^ids and a.user_id == ^user.id and a.vault_id == ^vault.id and
+            is_nil(a.deleted_at)
+      )
+    )
+    |> decrypted_paths(user, &Crypto.maybe_decrypt_attachment_fields/2)
+  end
+
+  defp scoped_rows(user, query), do: Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
+
+  defp decrypted_paths(rows, user, decrypt) do
+    for row <- rows,
+        {:ok, %{path: path}} when is_binary(path) <- [decrypt.(row, user)],
+        into: %{},
+        do: {row.id, path}
+  end
+
+  @doc """
+  `build_target/5` for a page of a folder move's targets in a constant
+  number of queries: one current-path read per kind, then one candidate
+  read per table for every basename (`Links.pre_move_candidate_sets/3`).
+  `moves` are `%{kind:, id:, old_path:}`. Returns `{targets, gone}`; `gone`
+  are the ids with no live row (deleted, or renamed and deleted).
+
+  A target renamed to another basename after the move (rare) builds alone,
+  since its `collision?` reads the NEW basename.
+  """
+  @spec build_folder_targets(map(), map(), [map()]) :: {[map()], [binary()]}
+  def build_folder_targets(user, vault, moves) do
+    current =
+      moves
+      |> Enum.group_by(& &1.kind, & &1.id)
+      |> Enum.reduce(%{}, fn {kind, ids}, acc ->
+        Map.merge(acc, current_paths(user, vault, kind, ids))
       end)
 
-    with %Attachment{} = att <- row,
-         {:ok, %{path: path}} when is_binary(path) <-
-           Crypto.maybe_decrypt_attachment_fields(att, user) do
-      {:ok, path}
-    else
-      _ -> {:error, :target_gone}
-    end
+    {live, gone} = Enum.split_with(moves, &Map.has_key?(current, &1.id))
+
+    {same, renamed} =
+      Enum.split_with(live, fn m ->
+        Links.basename_key(m.old_path) == Links.basename_key(current[m.id])
+      end)
+
+    sets = Links.pre_move_candidate_sets(user, vault, same)
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+
+    batched =
+      Enum.map(same, fn m ->
+        hmac = Crypto.hmac_field(filter_key, Links.basename_key(m.old_path))
+        %{live: live_count, candidates: index} = Map.fetch!(sets, hmac)
+
+        %{
+          kind: m.kind,
+          id: m.id,
+          old_path: m.old_path,
+          new_path: current[m.id],
+          old_basename_hmac: hmac,
+          collision?: live_count > 1,
+          candidate_index: index
+        }
+      end)
+
+    alone =
+      Enum.flat_map(renamed, fn m ->
+        case build_target(user, vault, m.kind, m.id, m.old_path) do
+          {:ok, t} -> [t]
+          {:error, :target_gone} -> []
+        end
+      end)
+
+    {batched ++ alone, Enum.map(gone, & &1.id)}
   end
 
   @doc """
