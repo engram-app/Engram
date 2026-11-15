@@ -342,4 +342,53 @@ defmodule Mix.Tasks.Engram.MigrationDropsTest do
 
     assert MigrationDrops.extract(path) == %{columns: [], tables: []}
   end
+
+  # A `_down` name is not a down helper: only what `down` reaches counts.
+  test "a drop in a helper up calls is a drop, whatever its name", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "024.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def up do
+          shut_down()
+          wind_down(repo())
+        end
+        def down, do: run_down(repo())
+        defp shut_down, do: execute("DROP TABLE a")
+        defp wind_down(r), do: r.query!("ALTER TABLE a DROP COLUMN b")
+        def run_down(r), do: r.query!("ALTER TABLE a DROP COLUMN c")
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [{"a", "b"}], tables: ["a"]}
+  end
+
+  test "a helper both directions call still counts", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "025.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def up, do: run_down(repo())
+        def down, do: run_down(repo())
+        def run_down(r), do: r.query!("ALTER TABLE a DROP COLUMN c")
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [{"a", "c"}], tables: []}
+  end
+
+  test "execute/2 in change counts only its up statement", %{tmp: tmp} do
+    path =
+      write_migration(tmp, "026.exs", """
+      defmodule M do
+        use Ecto.Migration
+        def change do
+          execute("ALTER TABLE a ADD COLUMN b int", "ALTER TABLE a DROP COLUMN b")
+          execute("ALTER TABLE a DROP COLUMN c", "ALTER TABLE a ADD COLUMN c int")
+        end
+      end
+      """)
+
+    assert MigrationDrops.extract(path) == %{columns: [{"a", "c"}], tables: []}
+  end
 end
