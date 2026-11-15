@@ -95,12 +95,19 @@ defmodule Mix.Tasks.Engram.MigrationDrops do
   defp do_extract(ast) do
     # Only the up direction counts: a `def down` that removes what `up` added
     # is the ordinary reversal of an additive migration, not a drop. That
-    # includes its body moved into a helper (`def down, do: run_down(repo())`).
-    # Doc attributes are prose: a moduledoc explaining a drop is not one.
+    # includes a helper only `down` reaches (`def down, do: run_down(repo())`);
+    # one `up` or `change` also reaches still counts, whatever its name.
+    # `execute(up, down)` counts only its up statement. Doc attributes are
+    # prose: a moduledoc explaining a drop is not one.
+    down_only = down_only(ast)
+
     ast =
       Macro.prewalk(ast, fn
-        {kind, _, [{name, _, _} | _]} = node when kind in [:def, :defp] and is_atom(name) ->
-          if down_fun?(name), do: nil, else: node
+        {kind, _, [head | _]} = node when kind in [:def, :defp] ->
+          if def_name(head) in down_only, do: nil, else: node
+
+        {:execute, meta, [up, down]} when is_binary(down) ->
+          {:execute, meta, [up]}
 
         {:@, _, [{attr, _, _}]} when attr in [:moduledoc, :doc] ->
           nil
@@ -209,6 +216,40 @@ defmodule Mix.Tasks.Engram.MigrationDrops do
 
   defp visit(_node, acc), do: acc
 
-  # `down`, or a helper it delegates to (`run_down`, `do_down`).
-  defp down_fun?(name), do: name == :down or String.ends_with?(Atom.to_string(name), "_down")
+  # `down` plus the local functions it reaches that `up`/`change` do not.
+  defp down_only(ast) do
+    {_, bodies} =
+      Macro.prewalk(ast, %{}, fn
+        {kind, _, [head | body]} = node, acc when kind in [:def, :defp] ->
+          {node, Map.update(acc, def_name(head), [body], &[body | &1])}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    calls = fn name ->
+      {_, found} =
+        Macro.prewalk(Map.get(bodies, name, []), MapSet.new(), fn
+          {fun, _, args} = n, set when is_atom(fun) and is_list(args) ->
+            {n, if(Map.has_key?(bodies, fun), do: MapSet.put(set, fun), else: set)}
+
+          n, set ->
+            {n, set}
+        end)
+
+      found
+    end
+
+    reach = fn roots -> reach(MapSet.new(roots), MapSet.new(roots), calls) end
+    MapSet.difference(reach.([:down]), reach.([:up, :change]))
+  end
+
+  defp reach(seen, frontier, calls) do
+    next = frontier |> Enum.flat_map(&calls.(&1)) |> MapSet.new() |> MapSet.difference(seen)
+    if MapSet.size(next) == 0, do: seen, else: reach(MapSet.union(seen, next), next, calls)
+  end
+
+  defp def_name({:when, _, [head | _]}), do: def_name(head)
+  defp def_name({name, _, _}) when is_atom(name), do: name
+  defp def_name(_), do: nil
 end

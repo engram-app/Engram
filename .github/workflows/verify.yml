@@ -4152,10 +4152,11 @@ jobs:
             # char; `foo[bar` would crash grep with 'Unmatched ['.
             esc=$(printf '%s' "$name" | sed 's/[][\\.*+?(){}|^$]/\\&/g')
 
-            # Match three Elixir reference forms:
+            # Match four Elixir reference forms:
             #   :name           — atom literal
             #   "name"          — string literal
             #   .name           — dot-access on a query binding (`u.field`)
+            #   name:           — map or keyword key (`%{field: x}`)
             # The dot-access form is the most common Ecto.Query pattern;
             # without it, surviving `from u in User, where: u.legacy_flag`
             # references would slip past the gate.
@@ -4163,8 +4164,11 @@ jobs:
             # The end is "not an identifier char", not `\b`: `\b` matches
             # between `d` and `?`, so a column `qualified` hit the function
             # `Links.qualified?/1`. `name?`/`name!` are other identifiers.
+            # `name:` is a map or keyword key (`%{name: x}`, `insert_all`
+            # rows); `::` is a typespec, and `path-name:` is prose, not a key.
             end_='([^?!A-Za-z0-9_]|$)'
-            hits=$(grep -RnE "(:${esc}${end_}|\"${esc}\"|\.${esc}${end_})" lib/)
+            key="(^|[^A-Za-z0-9_?!:.-])${esc}:([^:]|$)"
+            hits=$(grep -RnE "(:${esc}${end_}|\"${esc}\"|\.${esc}${end_}|${key})" lib/)
             grep_status=$?
             set -e
             if [ "$grep_status" -gt 1 ]; then
