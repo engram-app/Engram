@@ -112,7 +112,6 @@ defmodule Engram.Links.QualifiedLinksPlanTest do
       refute plan =~ "Seq Scan", "#{mode} plan:\n#{plan}"
       refute plan =~ "note_links_vault_id_index", "#{mode} plan:\n#{plan}"
       refute plan =~ "note_links_user_id_vault_id_source_note_id_index", "#{mode} plan:\n#{plan}"
-      IO.puts("plan-proof qualified_links #{mode} buffers=#{QueryPlan.buffers(plan)}")
       # A few index pages plus the 40 rows' heap pages (one source note, so
       # one or two), never the vault's 3,040 links.
       assert QueryPlan.buffers(plan) <= 12, "#{mode}:\n#{plan}"
@@ -151,11 +150,10 @@ defmodule Engram.Links.QualifiedLinksPlanTest do
       refute plan =~ "Seq Scan", "#{mode} plan:\n#{plan}"
       refute plan =~ "notes_user_vault_live", "#{mode} plan:\n#{plan}"
       refute plan =~ "note_links_vault_id_index", "#{mode} plan:\n#{plan}"
-      IO.puts("plan-proof qualified_links hot #{mode} buffers=#{QueryPlan.buffers(plan)}")
-      # Measured 20 here (the rows sit on a few heap pages; staging's
-      # scattered rows read 368). 3x margin: a scan of the vault's 3,628
-      # links reads several times this.
-      assert QueryPlan.buffers(plan) <= 60, "#{mode}:\n#{plan}"
+      # Secondary guard; the plan-shape refutes above are the real ones.
+      # Measured 20 locally (staging's scattered rows read 368); 40 leaves
+      # 2x margin and still sits below a scan of the vault's 3,628 links.
+      assert QueryPlan.buffers(plan) <= 40, "#{mode}:\n#{plan}"
     end
   end
 end

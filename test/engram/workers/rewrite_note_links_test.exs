@@ -135,9 +135,6 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
   end
 
   describe "nested folder moves and chains" do
-    @forms "path [[docs/sub/Guide]] alias [[docs/sub/Guide|G]] heading [[docs/sub/Guide#H]] " <>
-             "embed ![[docs/sub/Guide.md]] md [x](docs/sub/Guide.md) bare [[Guide]]"
-
     defp forms(prefix, name) do
       "path [[#{prefix}/#{name}]] alias [[#{prefix}/#{name}|G]] heading [[#{prefix}/#{name}#H]] " <>
         "embed ![[#{prefix}/#{name}.md]] md [x](#{prefix}/#{name}.md) bare [[#{name}]]"
@@ -150,7 +147,7 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
           actor: "api"
         )
 
-      refs = seed_source!(user, vault, "Refs.md", @forms)
+      refs = seed_source!(user, vault, "Refs.md", forms("docs/sub", "Guide"))
 
       {:ok, %{notes: 1}} = Folders.rename(user, vault, "docs/sub", "docs/deep")
       drain_link_jobs!()
@@ -173,7 +170,7 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
           actor: "api"
         )
 
-      refs = seed_source!(user, vault, "Refs.md", @forms)
+      refs = seed_source!(user, vault, "Refs.md", forms("docs/sub", "Guide"))
 
       {:ok, _} = Notes.rename_note(user, vault, "docs/sub/Guide.md", "docs/sub/Manual.md")
       drain_link_jobs!()
@@ -187,10 +184,12 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
     end
   end
 
-  describe "stale link keys (S5 gate arm 2)" do
+  describe "stale link keys" do
     # `link_keys_stamp` NULL or from another Unicode/nonce version means the
     # row's stored key is not trusted. A folder rename must still rewrite and
-    # re-stamp such a row, never skip it.
+    # re-stamp such a row, never skip it. The rewrite assertions alone would
+    # also pass if stale rows were ignored by key (the walk finds edges by
+    # target_note_id); only `stale_count() == 0` (the re-stamp) is sensitive.
     test "rows with a NULL or old stamp are rewritten and re-stamped", %{
       user: user,
       vault: vault
@@ -273,7 +272,9 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
       assert [_edge] = Links.links_for_note(user, linker.id)
       assert authoritative!(user, linker.id) == "see [[Old]]"
       assert [^sweep] = all_enqueued(worker: RewriteNoteLinks)
-      assert DateTime.diff(sweep.scheduled_at, DateTime.utc_now()) in 50..65
+      # Relative to the job's own insert time, not the test's wall clock;
+      # the worker's @sweep_delay_seconds is 60.
+      assert DateTime.diff(sweep.scheduled_at, sweep.inserted_at) in 55..65
 
       # Drive the sweep itself, no sleeping.
       assert :ok = perform_job(RewriteNoteLinks, sweep.args)
