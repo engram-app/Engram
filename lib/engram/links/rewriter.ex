@@ -83,22 +83,42 @@ defmodule Engram.Links.Rewriter do
   prefix — pass `full_text` itself for plaintext-only callers). Returned
   `rel_start`/`len` are byte offsets into `body`. Idempotent: occurrences
   already carrying the new text plan no edit.
-  """
-  @spec plan_edits(map(), map(), String.t(), String.t(), map()) :: [map()]
-  def plan_edits(user, vault, full_text, body, target) do
-    body_start = byte_size(full_text) - byte_size(body)
-    old_key = Links.basename_key(target.old_path)
 
-    occurrences =
+  `targets` is one target or a list (a folder rename's moved notes): the
+  note is parsed once and every target's edits come back as one plan, so
+  the caller writes the note once however many moved notes it links.
+  """
+  @spec plan_edits(map(), map(), String.t(), String.t(), map() | [map()]) :: [map()]
+  def plan_edits(user, vault, full_text, body, targets) do
+    body_start = byte_size(full_text) - byte_size(body)
+
+    by_key =
       full_text
       |> Parser.extract_all()
-      |> Enum.filter(&(Links.basename_key(&1.target) == old_key))
+      |> Enum.group_by(&Links.basename_key(&1.target))
 
-    # Indexed once per source note, so each occurrence resolves in O(1)
-    # rather than re-sorting every same-basename candidate.
-    candidates =
-      if occurrences != [],
-        do: user |> pre_rename_candidates(vault, target) |> Links.index_candidate_sets()
+    targets
+    |> List.wrap()
+    |> Enum.flat_map(
+      &plan_target(user, vault, Map.get(by_key, Links.basename_key(&1.old_path), []), &1)
+    )
+    # Each target answers "did this occurrence resolve to ME before the
+    # move" from its own candidate snapshot, so two moved notes sharing a
+    # basename could both claim one occurrence; overlapping splices would
+    # corrupt the note. First claim wins, as the per-note chains' order did.
+    |> Enum.uniq_by(& &1.rel_start)
+    |> Enum.map(&Map.update!(&1, :rel_start, fn start -> start - body_start end))
+    # Occurrence sits before the body (frontmatter) — the parser already
+    # excludes frontmatter, so this is belt-and-suspenders only.
+    |> Enum.reject(&(&1.rel_start < 0))
+  end
+
+  defp plan_target(_user, _vault, [], _target), do: []
+
+  defp plan_target(user, vault, occurrences, target) do
+    # Indexed once per source note and target, so each occurrence resolves
+    # in O(1) rather than re-sorting every same-basename candidate.
+    candidates = user |> pre_rename_candidates(vault, target) |> Links.index_candidate_sets()
 
     occurrences
     |> Enum.filter(fn occ ->
@@ -106,18 +126,20 @@ defmodule Engram.Links.Rewriter do
     end)
     |> Enum.flat_map(fn occ ->
       replacement = replacement_target(occ, target)
-      rel = occ.target_start - body_start
 
-      cond do
-        # Already the new text — idempotent no-op. Compared against the RAW
-        # span (not the decoded target) because that is what gets spliced:
-        # for a markdown occurrence both sides are percent-encoded here.
-        occ.target_raw == replacement -> []
-        # Occurrence sits before the body (frontmatter) — the parser already
-        # excludes frontmatter, so this is belt-and-suspenders only.
-        rel < 0 -> []
-        true -> [%{rel_start: rel, len: occ.target_len, old: occ.target_raw, new: replacement}]
-      end
+      # Already the new text — idempotent no-op. Compared against the RAW
+      # span (not the decoded target) because that is what gets spliced:
+      # for a markdown occurrence both sides are percent-encoded here.
+      if occ.target_raw == replacement,
+        do: [],
+        else: [
+          %{
+            rel_start: occ.target_start,
+            len: occ.target_len,
+            old: occ.target_raw,
+            new: replacement
+          }
+        ]
     end)
   end
 
@@ -268,11 +290,22 @@ defmodule Engram.Links.Rewriter do
 
   @doc """
   Distinct source-note ids with an edge whose `target_basename_hmac`
-  matches the renamed row's OLD basename. Keyed on the hmac (indexed),
-  which a rename never rewrites, so this set is stable.
+  matches the renamed row's OLD basename (or any of a folder rename's OLD
+  basenames, given a list). Keyed on the hmac (indexed), which a rename
+  never rewrites, so this set is stable.
+
+  Cost per page: one `= ANY` descent of `note_links_basename_idx` per
+  basename, then a sort of every matching edge past `cursor` for the
+  `DISTINCT ... ORDER BY source_note_id LIMIT`. So a page reads the
+  remaining edges to its basenames, not just `limit` rows.
   """
-  @spec source_note_ids(map(), map(), binary(), binary(), pos_integer()) :: [binary()]
-  def source_note_ids(user, vault, old_basename_hmac, cursor, limit) do
+  # ponytail: the sort is O(edges to the moved basenames past the cursor) per
+  # page; #2523 S5 item 5 (source_note_id on the basename index) bounds it.
+  @spec source_note_ids(map(), map(), binary() | [binary()], binary(), pos_integer()) ::
+          [binary()]
+  def source_note_ids(user, vault, old_basename_hmacs, cursor, limit) do
+    hmacs = List.wrap(old_basename_hmacs)
+
     # Scoped here rather than at the two call sites (`walk/4` and
     # `Workers.RewriteNoteLinks.run/1`) so both are covered by one guard.
     # `note_links` carries FORCE ROW LEVEL SECURITY; unscoped this returned
@@ -283,12 +316,34 @@ defmodule Engram.Links.Rewriter do
         from(l in Engram.Links.NoteLink,
           where:
             l.user_id == ^user.id and l.vault_id == ^vault.id and
-              l.target_basename_hmac == ^old_basename_hmac and
+              l.target_basename_hmac in ^hmacs and
               l.source_note_id > ^cursor,
           distinct: true,
           select: l.source_note_id,
           order_by: [asc: l.source_note_id],
           limit: ^limit
+        )
+      )
+    end)
+  end
+
+  @doc """
+  `{source_note_id, target_basename_hmac}` pairs among `source_ids` (one
+  `source_note_ids/5` page) for the basenames in `hmacs`: which moved notes
+  each linking note may name. One probe of the source-id index per page.
+  """
+  @spec linked_basenames(map(), map(), [binary()], [binary()]) :: [{binary(), binary()}]
+  def linked_basenames(_user, _vault, [], _hmacs), do: []
+
+  def linked_basenames(user, vault, source_ids, hmacs) do
+    Repo.with_tenant!(user.id, fn ->
+      Repo.all(
+        from(l in Engram.Links.NoteLink,
+          where:
+            l.user_id == ^user.id and l.vault_id == ^vault.id and
+              l.source_note_id in ^source_ids and l.target_basename_hmac in ^hmacs,
+          distinct: true,
+          select: {l.source_note_id, l.target_basename_hmac}
         )
       )
     end)
@@ -324,8 +379,9 @@ defmodule Engram.Links.Rewriter do
   end
 
   @doc """
-  Rewrite one source note. Loads the canonical doc (snapshot + tail),
-  plans edits, authors them as ONE Y-text transaction, and persists the
+  Rewrite one source note toward one target or a list of them (a folder
+  rename's moved notes). Loads the canonical doc (snapshot + tail),
+  plans every target's edits, authors them as ONE Y-text transaction, and persists the
   delta through the client-update path (live room when one exists, direct
   `CrdtPersistence.update_v1/4` append otherwise). Bounded optimistic
   retry when the tail head advances under a roomless append.
@@ -333,7 +389,7 @@ defmodule Engram.Links.Rewriter do
   `opts[:before_persist]` — test seam, a 0-arity fun run between edit
   authoring and the roomless head re-check.
   """
-  @spec rewrite_source_note(map(), map(), binary(), map(), keyword()) ::
+  @spec rewrite_source_note(map(), map(), binary(), map() | [map()], keyword()) ::
           {:ok, :rewritten | :noop | :skipped} | {:error, term()}
   def rewrite_source_note(user, vault, source_note_id, target, opts \\ []) do
     before_persist = Keyword.get(opts, :before_persist, fn -> :ok end)

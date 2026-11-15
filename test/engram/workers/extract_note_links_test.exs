@@ -306,7 +306,7 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       assert [_only] = all_enqueued(worker: RewriteNoteLinks)
     end
 
-    test "many danglers: one oban_jobs lookup, newest evidence per hmac wins",
+    test "many danglers: one oban_jobs lookup per evidence shape, newest per hmac wins",
          %{user: user, vault: vault} do
       {:ok, _} =
         Notes.upsert_note(user, vault, %{"path" => "OldA.md", "content" => "# a"}, actor: "api")
@@ -351,7 +351,9 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
           &(&1 =~ "oban_jobs" and &1 =~ "->> 'old_basename_hmac'")
         )
 
-      assert length(lookups) == 1
+      # One lookup per evidence shape (per-note rows, folder chains), never
+      # one per dangler.
+      assert length(lookups) == 2
 
       repairs = all_enqueued(worker: RewriteNoteLinks)
       assert Enum.sort(Enum.map(repairs, & &1.args["target_id"])) == Enum.sort([a2.id, b2.id])

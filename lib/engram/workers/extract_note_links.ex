@@ -246,23 +246,61 @@ defmodule Engram.Workers.ExtractNoteLinks do
   defp recent_rename_job_args(hmacs_b64, user_id, vault_id) do
     cutoff = DateTime.add(DateTime.utc_now(), -@repair_window_seconds, :second)
 
-    Repo.all(
-      from(j in Oban.Job,
-        where: j.worker == "Engram.Workers.RewriteNoteLinks",
-        where: j.inserted_at > ^cutoff,
-        where:
-          fragment(
-            "? ->> 'old_basename_hmac' = ANY(?)",
-            j.args,
-            type(^hmacs_b64, {:array, :string})
-          ),
-        where: fragment("? ->> 'user_id' = ?", j.args, ^to_string(user_id)),
-        where: fragment("? ->> 'vault_id' = ?", j.args, ^to_string(vault_id)),
-        distinct: fragment("? ->> 'old_basename_hmac'", j.args),
-        order_by: [desc: j.inserted_at],
-        select: j.args
+    note_rows =
+      Repo.all(
+        from(j in Oban.Job,
+          where: j.worker == "Engram.Workers.RewriteNoteLinks",
+          where: j.inserted_at > ^cutoff,
+          where:
+            fragment(
+              "? ->> 'old_basename_hmac' = ANY(?)",
+              j.args,
+              type(^hmacs_b64, {:array, :string})
+            ),
+          where: fragment("? ->> 'user_id' = ?", j.args, ^to_string(user_id)),
+          where: fragment("? ->> 'vault_id' = ?", j.args, ^to_string(vault_id)),
+          distinct: fragment("? ->> 'old_basename_hmac'", j.args),
+          order_by: [desc: j.inserted_at],
+          select: j.args
+        )
       )
+
+    (note_rows ++ folder_rename_job_args(hmacs_b64, user_id, vault_id, cutoff))
+    |> Enum.uniq_by(& &1["old_basename_hmac"])
+  end
+
+  # A folder rename queues ONE chain whose args list every moved note under
+  # "targets" (`RewriteNoteLinks.new_for_folder/3`). The matched entries come
+  # back as the per-note args the repair re-enqueues, so the repair rewrites
+  # toward that one note. Chain heads only (cursor at the start: the first
+  # page and its sweep), as every successor repeats the same targets. The
+  # containment on args uses `oban_jobs_args_index` (GIN), so only this
+  # vault's recent folder chains are expanded.
+  defp folder_rename_job_args(hmacs_b64, user_id, vault_id, cutoff) do
+    head = %{
+      "user_id" => to_string(user_id),
+      "vault_id" => to_string(vault_id),
+      "cursor" => @start_cursor
+    }
+
+    from(j in Oban.Job,
+      join: t in fragment("jsonb_array_elements(? -> 'targets')", j.args),
+      on: true,
+      where: j.worker == "Engram.Workers.RewriteNoteLinks",
+      where: j.inserted_at > ^cutoff,
+      where: fragment("? @> ?", j.args, type(^head, :map)),
+      where:
+        fragment(
+          "? ->> 'old_basename_hmac' = ANY(?)",
+          t.value,
+          type(^hmacs_b64, {:array, :string})
+        ),
+      distinct: fragment("? ->> 'old_basename_hmac'", t.value),
+      order_by: [desc: j.inserted_at],
+      select: t.value
     )
+    |> Repo.all()
+    |> Enum.map(&Map.merge(Map.put(head, "target_kind", "note"), &1))
   end
 
   defp enqueue_repair(args) do

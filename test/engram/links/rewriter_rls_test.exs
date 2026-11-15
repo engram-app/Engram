@@ -142,5 +142,15 @@ defmodule Engram.Links.RewriterRlsTest do
 
       assert source.id in ids
     end
+
+    # The folder chain's per-page probe: which moved basenames each page's
+    # linking notes name. Filtered, the page would rewrite nothing.
+    test "linked_basenames/4 sees the page's edges",
+         %{user: user, vault: vault, source: source, old_basename_hmac: hmac} do
+      assert {:returned, [{source_id, ^hmac}]} =
+               as_prod_role(fn -> Rewriter.linked_basenames(user, vault, [source.id], [hmac]) end)
+
+      assert source_id == source.id
+    end
   end
 end

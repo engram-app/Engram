@@ -285,11 +285,11 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
   end
 
   describe "folder rename cost (pre-S5)" do
-    # PINS TODAY'S O(N) BEHAVIOR. A folder rename of N notes touches 2N note
-    # rows (N moved + N old-path tombstones) and enqueues N RewriteNoteLinks
-    # jobs. S5 (O(1) folder rename, Engram#2523) must change these
-    # assertions: update them in that PR, do not loosen them here.
-    test "touched rows, tombstones and rewrite jobs grow linearly with N", %{
+    # PINS TODAY'S COST. A folder rename of N notes touches 2N note rows
+    # (N moved + N old-path tombstones) and, since S5's rewrite fan-out fix
+    # (Engram#2523), enqueues ONE RewriteNoteLinks chain naming all N. The
+    # row half is still O(N); the O(1) folder rename must change it.
+    test "touched rows and tombstones grow linearly with N; rewrites are one chain", %{
       user: user,
       vault: vault
     } do
@@ -320,7 +320,8 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
         touched = Enum.filter(rows, &(elem(&1, 0) == op_seq))
         assert length(touched) == 2 * n
         assert Enum.count(touched, &(elem(&1, 1) != nil)) == n
-        assert length(all_enqueued(worker: RewriteNoteLinks)) == n
+        assert [chain] = all_enqueued(worker: RewriteNoteLinks)
+        assert length(chain.args["targets"]) == n
       end
     end
   end
@@ -467,7 +468,7 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
       |> RewriteNoteLinks.new()
       |> Oban.insert()
 
-    result = Oban.drain_queue(queue: :indexing, with_recursion: true)
+    result = Oban.drain_queue(queue: :link_rewrite, with_recursion: true)
     assert result.failure == 0, "chain must not raise/fail: #{inspect(result)}"
 
     for {s, i} <- Enum.with_index(sources, 1) do

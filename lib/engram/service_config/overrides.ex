@@ -93,7 +93,10 @@ defmodule Engram.ServiceConfig.Overrides do
     note_meta_backfill: :boolean,
     # The daily embed token ceiling's kill switch (`Engram.EmbedCeiling`),
     # default on; off is the uncapped behaviour from before it.
-    embed_daily_ceiling: :boolean
+    embed_daily_ceiling: :boolean,
+    # Rename link rewrites (`RewriteNoteLinks.enabled?/0`), default on: off,
+    # queued rewrites snooze, none is dropped.
+    link_rewrite: :boolean
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})

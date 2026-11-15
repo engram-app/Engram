@@ -10,7 +10,8 @@ defmodule Engram.Workers.RewriteNoteLinks do
   resurrect-rename (`Notes.genesis_resurrect`, the same rename arriving for a
   TOMBSTONED row) — both gated by `Notes.crdt_rename_rewrites?/1` so only
   non-Obsidian origins enqueue, and the folder-rename
-  cascade (`Notes.do_rename_folder`, one job per moved note). The gating
+  cascade (`Notes.do_rename_folder`, ONE chain per folder rename, see
+  "Folder chains" below). The gating
   rule across all five: plugin/Obsidian-origin renames never enqueue —
   Obsidian's "Automatically update internal links" rewrites those itself,
   preserving the exactly-one-rewriter invariant.
@@ -51,6 +52,22 @@ defmodule Engram.Workers.RewriteNoteLinks do
   [:engram, :links, :repair_enqueued] absorbing the late-edge cases and the
   sweep's second walks planning zero edits (rewrite failed=0, sweeps no-op).
 
+  Folder chains (#2523 S5): a folder rename used to queue one chain per
+  moved note, so a note path-linking N moved notes was rewritten N times
+  (staging, 1k moved notes: 1,000 version bumps on one index note in 8 min,
+  1.13 GB of WAL). `new_for_folder/3` queues one chain whose args carry
+  every moved note as a `"targets"` entry (the per-note args' three ids/HMACs,
+  up to `max_folder_targets/0` per chain). Each page takes the next linking
+  notes of ANY moved basename (keyset on `source_note_id`), builds only the
+  targets that page's notes name, and rewrites each linking note ONCE with
+  every edit: one Y-update, one link rebuild. A target that cannot be built
+  (gone, old path unrecoverable) is skipped and counted; the rest proceed.
+
+  Queue `:link_rewrite` (limit 1 per node, worker and single-node only), off
+  `:indexing`: a big move waited out other tenants' extraction there. Kill
+  switch `:link_rewrite` (`enabled?/0`, a runtime ServiceConfig override):
+  off, every job snoozes before any read, nothing is dropped.
+
   Args carry ids + base64 HMACs only (T3.2/H3 — plaintext in
   `oban_jobs.args` JSONB defeats at-rest encryption). The old plaintext
   path is recovered at run time from one of two sources: the rename
@@ -65,7 +82,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
   # loop after one batch — see git history for the removed note-links backfill. Idempotence
   # comes from the rewrite itself: already-rewritten occurrences plan no
   # edits, so a duplicate job converges as a no-op pass.
-  use Oban.Worker, queue: :indexing, max_attempts: 3
+  use Oban.Worker, queue: :link_rewrite, max_attempts: 3
 
   import Ecto.Query
 
@@ -84,6 +101,13 @@ defmodule Engram.Workers.RewriteNoteLinks do
   @default_batch_size 100
   @start_cursor "00000000-0000-0000-0000-000000000000"
   @sweep_delay_seconds 60
+  # Bounds one chain's args (~130 B a target, copied to every successor) and
+  # the targets one page may build. A move past it queues one chain per
+  # chunk, so a note linking more moved notes than this is written once a chunk.
+  @max_folder_targets 1_000
+  # Long, so a paused backlog wakes rarely; short enough that "back on"
+  # resumes within minutes (RefreshKeywordVectors' kill switch, copied).
+  @paused_snooze 300
 
   # The tagged error atoms the rewrite pipeline actually produces
   # (rewrite_source_note/attempt/persist + this worker's own path recovery).
@@ -99,6 +123,33 @@ defmodule Engram.Workers.RewriteNoteLinks do
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
+
+  @doc "False while the `:link_rewrite` kill switch is off."
+  @spec enabled?() :: boolean()
+  def enabled?, do: Engram.ServiceConfig.get(:link_rewrite, true) != false
+
+  @doc "Moved notes per folder chain; a bigger move queues one chain per chunk."
+  @spec max_folder_targets() :: pos_integer()
+  def max_folder_targets, do: @max_folder_targets
+
+  @doc """
+  One chain for a folder rename's moved notes. `targets` are
+  `{target_id, old_path_hmac_b64, old_basename_hmac_b64}`, at most
+  `max_folder_targets/0` (T3.2: ids and HMACs only).
+  """
+  @spec new_for_folder(binary(), binary(), [{binary(), String.t(), String.t()}]) ::
+          Ecto.Changeset.t()
+  def new_for_folder(user_id, vault_id, targets) when length(targets) <= @max_folder_targets do
+    new(%{
+      "user_id" => user_id,
+      "vault_id" => vault_id,
+      "cursor" => @start_cursor,
+      "targets" =>
+        Enum.map(targets, fn {id, path_hmac, basename_hmac} ->
+          %{"target_id" => id, "old_path_hmac" => path_hmac, "old_basename_hmac" => basename_hmac}
+        end)
+    })
+  end
 
   @doc """
   Build a rewrite job. `old_path_hmac_b64`/`old_basename_hmac_b64` are
@@ -150,10 +201,45 @@ defmodule Engram.Workers.RewriteNoteLinks do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
-    case RotationGate.check(args["user_id"]) do
-      {:error, :rotation_in_progress} -> {:snooze, 60}
-      {:error, :user_not_found} -> {:discard, :user_deleted}
-      :ok -> run(args)
+    with :ok <- if(enabled?(), do: :ok, else: {:snooze, @paused_snooze}) do
+      case RotationGate.check(args["user_id"]) do
+        {:error, :rotation_in_progress} -> {:snooze, 60}
+        {:error, :user_not_found} -> {:discard, :user_deleted}
+        :ok -> run(args)
+      end
+    end
+  end
+
+  defp run(%{"targets" => entries} = args) do
+    cursor = args["cursor"] || @start_cursor
+    batch_size = args["batch_size"] || @default_batch_size
+
+    with {:ok, user} <- load_user(args["user_id"]),
+         {:ok, vault} <- load_vault(user, args["vault_id"]) do
+      by_hmac = Enum.group_by(entries, &Base.decode64!(&1["old_basename_hmac"]))
+      hmacs = Map.keys(by_hmac)
+      ids = Rewriter.source_note_ids(user, vault, hmacs, cursor, batch_size)
+      linked = Rewriter.linked_basenames(user, vault, ids, hmacs)
+
+      targets =
+        linked
+        |> Enum.map(&elem(&1, 1))
+        |> Enum.uniq()
+        |> Enum.flat_map(&Map.fetch!(by_hmac, &1))
+        |> Enum.flat_map(&folder_target(user, vault, &1))
+        |> pre_move_siblings()
+        |> Enum.group_by(& &1.old_basename_hmac)
+
+      wanted = Enum.group_by(linked, &elem(&1, 0), &elem(&1, 1))
+
+      ids
+      |> Enum.map(fn id ->
+        {id, wanted |> Map.get(id, []) |> Enum.flat_map(&Map.get(targets, &1, []))}
+      end)
+      |> Enum.reject(fn {_id, ts} -> ts == [] end)
+      |> then(&rewrite_each(user, vault, &1))
+
+      continue(args, ids, batch_size)
     end
   end
 
@@ -178,21 +264,55 @@ defmodule Engram.Workers.RewriteNoteLinks do
          {:ok, old_path} <- recover_old_path(user, vault, kind, old_path_hmac, args),
          {:ok, target} <- build_target(user, vault, kind, target_id, old_path) do
       ids = Rewriter.source_note_ids(user, vault, old_basename_hmac, cursor, batch_size)
-      rewrite_each(user, vault, ids, target)
-
-      if length(ids) == batch_size do
-        args
-        |> Map.put("cursor", List.last(ids))
-        |> new()
-        |> Oban.insert()
-        |> case do
-          {:ok, _job} -> :ok
-          {:error, reason} -> {:error, reason}
-        end
-      else
-        maybe_enqueue_sweep(args)
-      end
+      rewrite_each(user, vault, Enum.map(ids, &{&1, target}))
+      continue(args, ids, batch_size)
     end
+  end
+
+  # A full page re-enqueues the chain at its last id; a short one ends it.
+  defp continue(args, ids, batch_size) do
+    if length(ids) == batch_size do
+      args
+      |> Map.put("cursor", List.last(ids))
+      |> new()
+      |> Oban.insert()
+      |> case do
+        {:ok, _job} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      maybe_enqueue_sweep(args)
+    end
+  end
+
+  # One folder entry to a rewrite target, or nothing: a target that is gone
+  # or whose old path cannot be recovered is counted and skipped, so it never
+  # stops the rest of the folder's rewrite (the per-note chain discards).
+  defp folder_target(user, vault, entry) do
+    with {:ok, path_hmac} <- decode_b64(entry["old_path_hmac"]),
+         {:ok, old_path} <- recover_old_path(user, vault, :note, path_hmac, entry),
+         {:ok, target} <- Rewriter.build_target(user, vault, :note, entry["target_id"], old_path) do
+      [target]
+    else
+      {_, reason} ->
+        :telemetry.execute([:engram, :links, :rewrite, :failed], %{count: 1}, %{
+          reason: telemetry_failure_reason(reason)
+        })
+
+        []
+    end
+  end
+
+  # Each target's candidate snapshot holds its moved siblings at their NEW
+  # paths, but before the move they sat at their old ones. Put them back, so
+  # an occurrence resolves to the one sibling it named before the move.
+  defp pre_move_siblings(targets) do
+    old = Map.new(targets, &{&1.id, &1.old_path})
+    back = fn list -> Enum.map(list, fn {id, path} -> {id, Map.get(old, id, path)} end) end
+
+    Enum.map(targets, fn t ->
+      Map.update!(t, :pre_rename_candidates, &%{&1 | notes: back.(&1.notes)})
+    end)
   end
 
   # Chain terminated. A plain run schedules one delayed sweep to catch any
@@ -342,8 +462,9 @@ defmodule Engram.Workers.RewriteNoteLinks do
     end
   end
 
-  defp rewrite_each(user, vault, ids, target) do
-    Enum.each(ids, fn source_id ->
+  # `{source_id, target_or_targets}` pairs: each linking note is written once.
+  defp rewrite_each(user, vault, pairs) do
+    Enum.each(pairs, fn {source_id, target} ->
       result =
         try do
           Rewriter.rewrite_source_note(user, vault, source_id, target)
@@ -362,7 +483,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
             "link rewrite failed for source note",
             Metadata.with_category(:warning, :sync,
               note_id: source_id,
-              target_id: target.id,
+              target_id: if(is_map(target), do: target.id),
               # Full error_kind detail (exception module etc.) — logs are
               # not cardinality-bound the way the metric label below is.
               reason: inspect(Engram.Telemetry.error_kind(reason))

@@ -126,7 +126,7 @@ defmodule Engram.NotesFanoutBoundsTest do
                      1_000
     end
 
-    test "enqueues the link-rewrite jobs in one bulk insert, one per note; no index job",
+    test "enqueues ONE link-rewrite chain naming every moved note; no index job",
          ctx do
       %{user: user, vault: vault} = ctx
       notes = seed(user, vault, "Docs")
@@ -138,8 +138,8 @@ defmodule Engram.NotesFanoutBoundsTest do
       # Per-note inserts would be @n.
       assert inserts <= 1
 
-      rewrites = all_enqueued(worker: RewriteNoteLinks)
-      assert rewrites |> Enum.map(& &1.args["target_id"]) |> Enum.sort() == ids
+      assert [chain] = all_enqueued(worker: RewriteNoteLinks)
+      assert chain.args["targets"] |> Enum.map(& &1["target_id"]) |> Enum.sort() == ids
       # R3a: a move makes no Qdrant write.
       assert all_enqueued(worker: RepathNoteIndex) == []
     end
