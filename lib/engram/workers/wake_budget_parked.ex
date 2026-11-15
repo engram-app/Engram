@@ -29,7 +29,11 @@ defmodule Engram.Workers.WakeBudgetParked do
   Paid users park on the same queue against the daily embed ceiling
   (`Engram.EmbedCeiling`): the wake spends what today has left, and what
   does not fit waits for the next UTC day at `EmbedCeiling.resume_at/2`
-  (midnight plus a per-user offset over six hours), never a refill clock.
+  (midnight plus a per-user offset over six hours), never a refill clock. A
+  user capped yesterday has 0 to spend until that offset
+  (`EmbedCeiling.wake_budget/3`), so the sweep's 00:02 backstop wakes none
+  of them early. A Free user who upgrades wakes their old parks under the
+  ceiling, oldest first, rather than all at once as before.
 
   On `events`, the queue for follow-ups a user's action triggers. A rolling
   deploy's old node lacks the worker and fails the job; Oban retries it onto
@@ -253,7 +257,7 @@ defmodule Engram.Workers.WakeBudgetParked do
   defp spendable(user) do
     case budget(user) do
       {:bucket, cap} -> UsageMeters.bucket_available(user.id, cap)
-      {:ceiling, ceiling} -> EmbedCeiling.available(user.id, ceiling)
+      {:ceiling, ceiling} -> EmbedCeiling.wake_budget(user.id, ceiling)
       :unmetered -> :unmetered
     end
   end

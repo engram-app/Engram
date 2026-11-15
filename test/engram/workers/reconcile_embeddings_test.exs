@@ -733,10 +733,25 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
       assert Engram.Fixtures.raw_note!(note.id).embed_budget_parked == true
 
+      # The day turns: yesterday's counter was spent.
       Repo.update_all(from(m in Engram.UsageMeters.Meter, where: m.user_id == ^user.id),
         set: [embed_day: Date.add(Date.utc_today(), -1)]
       )
 
+      # Just before this user's resume time the backstop (the 00:02 sweep)
+      # wakes nothing: red when the wake spends the fresh 20M at once.
+      resume =
+        Engram.EmbedCeiling.resume_at(
+          user.id,
+          DateTime.new!(Date.utc_today(), ~T[00:00:00], "Etc/UTC") |> DateTime.add(-1)
+        )
+
+      Engram.ServiceConfig.put_override(:embed_ceiling_now, DateTime.add(resume, -1))
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      assert Engram.Fixtures.raw_note!(note.id).embed_budget_parked == true
+
+      Engram.ServiceConfig.put_override(:embed_ceiling_now, DateTime.add(resume, 60))
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
       assert Engram.Fixtures.raw_note!(note.id).embed_budget_parked == nil

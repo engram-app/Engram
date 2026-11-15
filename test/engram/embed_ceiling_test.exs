@@ -71,7 +71,39 @@ defmodule Engram.EmbedCeilingTest do
 
       assert DateTime.to_date(at) == ~D[2027-03-11]
       assert at.hour < 6
-      assert at == EmbedCeiling.resume_at(id, ~U[2027-03-10 00:00:00Z])
+      # Before today's resume time, today's; from it on, tomorrow's.
+      assert EmbedCeiling.resume_at(id, DateTime.add(at, -1)) == at
+      assert EmbedCeiling.resume_at(id, at) == DateTime.add(at, 1, :day)
+    end
+  end
+
+  describe "wake_budget/3" do
+    setup do
+      user = paid_user()
+      today = Date.utc_today()
+
+      before =
+        EmbedCeiling.resume_at(
+          user.id,
+          DateTime.new!(today, ~T[00:00:00], "Etc/UTC") |> DateTime.add(-1)
+        )
+
+      %{user: user, resume: before}
+    end
+
+    test "a user capped yesterday gets 0 until their resume time, then the new day",
+         %{user: user, resume: resume} do
+      yesterday = DateTime.add(resume, -1, :day)
+      {:ok, _} = UsageMeters.day_take(user.id, 20_000_000, 20_000_000, now: yesterday)
+
+      assert EmbedCeiling.wake_budget(user.id, 20_000_000, DateTime.add(resume, -1)) == 0
+      assert EmbedCeiling.wake_budget(user.id, 20_000_000, resume) == 20_000_000
+    end
+
+    test "a user not capped yesterday wakes at once, at midnight", %{user: user, resume: resume} do
+      midnight = DateTime.new!(DateTime.to_date(resume), ~T[00:00:00], "Etc/UTC")
+      {:ok, _} = UsageMeters.day_take(user.id, 1_000, 20_000_000, now: DateTime.add(midnight, -1))
+      assert EmbedCeiling.wake_budget(user.id, 20_000_000, midnight) == 20_000_000
     end
   end
 

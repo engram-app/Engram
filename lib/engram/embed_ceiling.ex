@@ -16,7 +16,10 @@ defmodule Engram.EmbedCeiling do
     * the user's wake (`Engram.Workers.WakeBudgetParked`) is scheduled at the
       next 00:00 UTC plus a fixed per-user offset spread over six hours
       (`resume_at/2`), and wakes what fits the new day oldest first, in pages
-      of 500 a minute apart, at backfill priority.
+      of 500 a minute apart, at backfill priority. The sweep's backstop wake
+      (every 3 h, the first at 00:02) sees 0 for a user capped yesterday
+      until that user's offset (`wake_budget/3`), so it does not undo the
+      spread.
 
   Who it binds: users whose `embed_token_bucket` is nil (paid). "Unlimited"
   means unlimited in one place: a `-1` (or self-host `:unlimited`) embed
@@ -80,14 +83,49 @@ defmodule Engram.EmbedCeiling do
 
   @doc "Tokens left today under `ceiling`; 0 once fewer than `floor/0` are."
   @spec available(Ecto.UUID.t(), non_neg_integer()) :: non_neg_integer()
-  def available(user_id, ceiling) do
-    case ceiling - UsageMeters.day_used(user_id) do
+  def available(user_id, ceiling), do: left(ceiling, UsageMeters.day_used(user_id))
+
+  defp left(ceiling, used) do
+    case ceiling - used do
       left when is_integer(left) and left >= 0 ->
         if left < min(floor(), ceiling), do: 0, else: left
 
       _over ->
         0
     end
+  end
+
+  @doc """
+  What a wake (`Engram.Workers.WakeBudgetParked`) may spend for this user
+  now. A user the ceiling capped yesterday gets 0 until their resume time
+  today (`resume_at/2`), so the sweep's backstop wake just after midnight
+  does not wake every capped user at once; their scheduled wake does it at
+  their offset. Everyone else gets `available/2`: a user who upgraded from
+  Free wakes their old parks at once, under the ceiling. One `usage_meters`
+  primary-key read; the time check is pure.
+  """
+  @spec wake_budget(Ecto.UUID.t(), non_neg_integer(), DateTime.t()) :: non_neg_integer()
+  def wake_budget(user_id, ceiling, now \\ now()) do
+    today = DateTime.to_date(now)
+
+    case UsageMeters.day_spend(user_id) do
+      {%Date{} = day, tokens} when is_integer(tokens) ->
+        cond do
+          Date.compare(day, today) != :lt -> left(ceiling, tokens)
+          capped_before_resume?(day, tokens, ceiling, user_id, now) -> 0
+          true -> left(ceiling, 0)
+        end
+
+      _ ->
+        left(ceiling, 0)
+    end
+  end
+
+  defp capped_before_resume?(day, tokens, ceiling, user_id, now) do
+    today = DateTime.to_date(now)
+
+    Date.compare(day, Date.add(today, -1)) == :eq and left(ceiling, tokens) == 0 and
+      DateTime.compare(now, resume_on(today, user_id)) == :lt
   end
 
   @doc """
@@ -103,14 +141,25 @@ defmodule Engram.EmbedCeiling do
   end
 
   @doc """
-  When a user's ceiling-parked notes wake: the next 00:00 UTC plus a fixed
-  per-user offset under six hours, so users do not all resume at once.
+  When a user's ceiling-parked notes wake: the first `00:00 UTC + a fixed
+  per-user offset under six hours` after `now`, so users do not all resume
+  at once.
   """
   @spec resume_at(Ecto.UUID.t(), DateTime.t()) :: DateTime.t()
-  def resume_at(user_id, now \\ DateTime.utc_now()) do
-    midnight = DateTime.new!(Date.add(DateTime.to_date(now), 1), ~T[00:00:00], "Etc/UTC")
-    DateTime.add(midnight, :erlang.phash2(user_id, @resume_spread_seconds), :second)
+  def resume_at(user_id, now \\ now()) do
+    today = resume_on(DateTime.to_date(now), user_id)
+    if DateTime.compare(now, today) == :lt, do: today, else: DateTime.add(today, 1, :day)
   end
+
+  defp resume_on(%Date{} = date, user_id) do
+    date
+    |> DateTime.new!(~T[00:00:00], "Etc/UTC")
+    |> DateTime.add(:erlang.phash2(user_id, @resume_spread_seconds), :second)
+  end
+
+  # The wake clock. `:embed_ceiling_now` is a test seam (a per-process
+  # `ServiceConfig.put_override/2`); unset everywhere else.
+  defp now, do: ServiceConfig.get(:embed_ceiling_now) || DateTime.utc_now()
 
   @doc """
   A pass parked on the ceiling. Always counts the park

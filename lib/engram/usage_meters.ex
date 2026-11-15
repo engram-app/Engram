@@ -188,13 +188,28 @@ defmodule Engram.UsageMeters do
   def day_used(user_id, opts \\ []) when is_binary(user_id) do
     today = opts |> utc_now() |> DateTime.to_date()
 
-    Repo.one(
-      from(m in Meter,
-        where: m.user_id == ^user_id and m.embed_day >= ^today,
-        select: m.embed_day_tokens
-      ),
-      skip_tenant_check: true
-    ) || 0
+    case day_spend(user_id) do
+      {%Date{} = day, tokens} when is_integer(tokens) ->
+        if Date.compare(day, today) == :lt, do: 0, else: tokens
+
+      _ ->
+        0
+    end
+  end
+
+  @doc "The stored `{day, tokens}` of the user's ceiling counter, `{nil, 0}` with no row."
+  @spec day_spend(Ecto.UUID.t()) :: {Date.t() | nil, non_neg_integer()}
+  def day_spend(user_id) when is_binary(user_id) do
+    case Repo.one(
+           from(m in Meter,
+             where: m.user_id == ^user_id,
+             select: {m.embed_day, m.embed_day_tokens}
+           ),
+           skip_tenant_check: true
+         ) do
+      {day, tokens} -> {day, tokens || 0}
+      nil -> {nil, 0}
+    end
   end
 
   @doc """
