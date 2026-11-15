@@ -163,6 +163,26 @@ defmodule Engram.MCP.HandlersLinksTest do
     assert text =~ "New.md"
   end
 
+  # get_notes parses the returned text; `links_payload/3` reads the stored
+  # rows by id. On a converged note every list, attachments included, matches.
+  test "read-time links list attachments exactly as the stored rows do", %{user: u, a: a} do
+    for p <- ["img/pic.png", "doc.pdf"], do: Engram.Fixtures.insert_attachment!(u, a, %{path: p})
+
+    seed(u, a, [
+      {"Other.md", "# o"},
+      {"Source.md", "![[pic.png]] [[doc.pdf]] | ![[pic.png\\|200]] | [[Other]] ![[nope.png]]"}
+    ])
+
+    {:ok, note} = Notes.get_note(u, a, "Source.md")
+    {stored, _} = Handlers.links_payload(u, note)
+
+    assert {:ok, _, %{"notes" => [s]}} = get(u, a, %{"paths" => ["Source.md"]})
+    assert stored["attachments"] == ["img/pic.png", "doc.pdf"]
+
+    for key <- ~w(outgoing attachments unresolved links_truncated),
+        do: assert(s[key] == stored[key], key)
+  end
+
   # A section's text is part of the note: its outgoing links stay the note's.
   test "a section read keeps the whole note's outgoing links", %{user: u, a: a} do
     seed(u, a, [{"X.md", "x"}, {"Y.md", "y"}, {"Source.md", "## A\n[[X]]\n\n## B\n[[Y]]\n"}])
