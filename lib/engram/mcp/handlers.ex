@@ -2489,16 +2489,16 @@ defmodule Engram.MCP.Handlers do
   # been more" without an unbounded COUNT. `distinct_sources: true` is
   # required here because one source note can carry several edges to the
   # same target, so a raw edge count would over-report truncation.
-  # `outgoing`/`unresolved` come from one note's own edges (links_for_note/2,
-  # never DB-limited), so their true length is always known and the cap is
-  # applied here, after dedup, with an exact overage.
+  # `outgoing`/`attachments`/`unresolved` come from one note's own edges
+  # (links_for_note/2, never DB-limited), so their true length is always
+  # known and the cap is applied here, after dedup, with an exact overage.
   #
   # `@doc false` and public (not `defp`) only so a test can pass a small
   # `limit` directly instead of manufacturing `Links.backlinks_limit/0` + 1
   # real notes.
   @doc false
   @spec links_payload(map(), map(), pos_integer()) ::
-          {map(), {boolean(), non_neg_integer(), non_neg_integer()}}
+          {map(), {boolean(), non_neg_integer(), non_neg_integer(), non_neg_integer()}}
   def links_payload(user, note, limit \\ Engram.Links.backlinks_limit()),
     do: user |> links_payloads([note.id], limit) |> Map.fetch!(note.id)
 
@@ -2525,12 +2525,12 @@ defmodule Engram.MCP.Handlers do
     backlinks =
       raw_backlinks |> Enum.map(& &1.source_path) |> Enum.reject(&is_nil/1) |> Enum.take(limit)
 
-    {targets, outgoing_extra} =
-      outgoing_edges
-      |> Enum.map(& &1.target_path)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
-      |> cap(limit)
+    # Notes and attachments apart: get_notes reads a note path, never an
+    # attachment path, so mixing them would invite a failing call.
+    {targets, outgoing_extra} = resolved_paths(outgoing_edges, :target_note_id, limit)
+
+    {attachments, attachments_extra} =
+      resolved_paths(outgoing_edges, :target_attachment_id, limit)
 
     {unresolved, unresolved_extra} =
       outgoing_edges
@@ -2542,11 +2542,24 @@ defmodule Engram.MCP.Handlers do
     links = %{
       "backlinks" => backlinks,
       "outgoing" => targets,
+      "attachments" => attachments,
       "unresolved" => unresolved,
-      "links_truncated" => backlinks_more? or outgoing_extra > 0 or unresolved_extra > 0
+      "links_truncated" =>
+        backlinks_more? or outgoing_extra > 0 or attachments_extra > 0 or unresolved_extra > 0
     }
 
-    {links, {backlinks_more?, outgoing_extra, unresolved_extra}}
+    {links, {backlinks_more?, outgoing_extra, attachments_extra, unresolved_extra}}
+  end
+
+  # Deduped `target_path`s of the edges resolved to a note (`:target_note_id`)
+  # or an attachment (`:target_attachment_id`), capped.
+  defp resolved_paths(edges, id_key, limit) do
+    edges
+    |> Enum.filter(&Map.get(&1, id_key))
+    |> Enum.map(& &1.target_path)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> cap(limit)
   end
 
   # Slices a deduped list to `limit`, returning {sliced, extra} where `extra`
@@ -2559,12 +2572,16 @@ defmodule Engram.MCP.Handlers do
   # Public + `@doc false` alongside `links_payload/3`, so a test can render
   # the text for a `links_payload/3` call made with a small injected limit.
   @doc false
-  @spec format_links(map(), {boolean(), non_neg_integer(), non_neg_integer()}) :: String.t()
-  def format_links(links, {backlinks_more?, outgoing_extra, unresolved_extra}) do
+  @spec format_links(
+          map(),
+          {boolean(), non_neg_integer(), non_neg_integer(), non_neg_integer()}
+        ) :: String.t()
+  def format_links(links, {backlinks_more?, outgoing_extra, attachments_extra, unresolved_extra}) do
     Enum.join(
       [
         "Backlinks: " <> suffixed(links["backlinks"], backlinks_more?),
         "Links to: " <> suffixed(links["outgoing"], outgoing_extra),
+        "Attachments: " <> suffixed(links["attachments"], attachments_extra),
         "Unresolved: " <> suffixed(links["unresolved"], unresolved_extra)
       ],
       "\n"
@@ -2573,7 +2590,8 @@ defmodule Engram.MCP.Handlers do
 
   # `more` is `true` when the count past the cap is unknown (backlinks, from
   # the limit+1 probe), a positive integer when it is known exactly
-  # (outgoing/unresolved), or `false`/`0` when the list was not truncated.
+  # (outgoing/attachments/unresolved), or `false`/`0` when the list was not
+  # truncated.
   defp suffixed(items, true), do: list_or_none(items) <> ", and more"
 
   defp suffixed(items, more) when is_integer(more) and more > 0,

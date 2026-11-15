@@ -938,8 +938,8 @@ defmodule Engram.MCP.Tools do
           "of search results without N round-trips. Missing paths are reported inline. " <>
           "To save tokens on long notes, pass outline: true for the heading list only, or " <>
           "section with one path to read just that heading's section. Pass include_links: " <>
-          "true to also get, per note, the notes linking to it, the notes it links to, and " <>
-          "its links that point at no existing note.",
+          "true to also get, per note, the notes linking to it, the notes and attachments " <>
+          "it links to, and its links that point at no existing note or attachment.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -965,7 +965,7 @@ defmodule Engram.MCP.Tools do
             "type" => "boolean",
             "default" => false,
             "description" =>
-              "true adds backlinks, outgoing and unresolved link lists to each found note"
+              "true adds backlinks, outgoing, attachments and unresolved link lists to each found note"
           }
         },
         "required" => ["paths"]
@@ -1023,15 +1023,23 @@ defmodule Engram.MCP.Tools do
                   "items" => %{"type" => "string"},
                   "description" => "Paths of notes this one links to (include_links)"
                 },
+                "attachments" => %{
+                  "type" => "array",
+                  "items" => %{"type" => "string"},
+                  "description" =>
+                    "Paths of attachments this one links to or embeds (include_links). " <>
+                      "Not readable with get_notes"
+                },
                 "unresolved" => %{
                   "type" => "array",
                   "items" => %{"type" => "string"},
-                  "description" => "Link targets that match no note (include_links)"
+                  "description" => "Link targets that match no note or attachment (include_links)"
                 },
                 "links_truncated" => %{
                   "type" => "boolean",
                   "description" =>
-                    "true if backlinks, outgoing, or unresolved was cut off at the cap (include_links)"
+                    "true if backlinks, outgoing, attachments, or unresolved was cut off at " <>
+                      "the cap (include_links)"
                 }
               },
               "required" => ["path", "found"]

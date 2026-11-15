@@ -221,7 +221,8 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
                  link_type: "embed",
                  target_note_id: nil,
                  target_attachment_id: att.id,
-                 target_path: nil,
+                 # An attachment hit carries its path too (MCP "attachments").
+                 target_path: "img.png",
                  dangling: false
                },
                %{
@@ -692,10 +693,10 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
                  "include_links" => true
                })
 
-      Map.take(n, ["backlinks", "outgoing", "unresolved", "links_truncated"])
+      Map.take(n, ["backlinks", "outgoing", "attachments", "unresolved", "links_truncated"])
     end
 
-    test "attachment links are hidden; repeated targets are listed once", %{
+    test "attachment links are listed apart; repeated targets are listed once", %{
       user: user,
       vault: vault
     } do
@@ -708,6 +709,7 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
       assert mcp_links(user, vault, "Source.md") == %{
                "backlinks" => [],
                "outgoing" => ["Note.md"],
+               "attachments" => ["pic.png"],
                "unresolved" => ["Ghost"],
                "links_truncated" => false
              }

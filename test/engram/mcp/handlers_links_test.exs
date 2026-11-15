@@ -91,6 +91,56 @@ defmodule Engram.MCP.HandlersLinksTest do
     assert missing == %{"path" => "Nope.md", "found" => false}
   end
 
+  # An edge resolved to an attachment was in neither "outgoing" (note paths)
+  # nor "unresolved" (it is not dangling): it vanished. It gets its own list,
+  # because get_notes cannot read an attachment path.
+  test "attachment links are listed under attachments, not outgoing", %{user: u, a: a} do
+    Engram.Fixtures.insert_attachment!(u, a, %{path: "img/pic.png"})
+
+    seed(u, a, [
+      {"Other.md", "# o"},
+      {"Source.md",
+       "[[pic.png]] ![[pic.png]] | ![[pic.png\\|200]] | [[Other]] ![[nope.png]] [[Ghost]]"}
+    ])
+
+    assert {:ok, text, %{"notes" => [s]}} = get(u, a, %{"paths" => ["Source.md"]})
+    assert s["outgoing"] == ["Other.md"]
+    assert s["attachments"] == ["img/pic.png"]
+    # A dangling attachment link stays unresolved.
+    assert s["unresolved"] == ["nope.png", "Ghost"]
+    assert s["links_truncated"] == false
+    assert text =~ "Links to: Other.md"
+    assert text =~ "Attachments: img/pic.png"
+  end
+
+  test "attachments past the cap are truncated with an exact count", %{user: u, a: a} do
+    for p <- ["a.png", "b.png", "c.png"], do: Engram.Fixtures.insert_attachment!(u, a, %{path: p})
+    seed(u, a, [{"Source.md", "![[a.png]] ![[b.png]] ![[c.png]]"}])
+    {:ok, note} = Notes.get_note(u, a, "Source.md")
+
+    {links, truncation} = Handlers.links_payload(u, note, 2)
+    assert links["attachments"] == ["a.png", "b.png"]
+    assert links["links_truncated"] == true
+    assert Handlers.format_links(links, truncation) =~ "Attachments: a.png, b.png, and 1 more"
+  end
+
+  # Pins current behavior. An anchor never decides resolution: a link to a
+  # heading or block the target lacks still resolves to the note and is not
+  # flagged, as in Obsidian (the file resolves; only navigation misses).
+  test "anchors never affect resolution, even to a heading that does not exist",
+       %{user: u, a: a} do
+    seed(u, a, [
+      {"Other.md", "# Real\n\ntext ^blk"},
+      {"Source.md",
+       "[[Other#Nope]] [[Other#^gone]] [[Other#Real#Sub]] | [[Other#Nope\\|x]] | [[Other#^blk\\|b]] |"}
+    ])
+
+    assert {:ok, _, %{"notes" => [s]}} = get(u, a, %{"paths" => ["Source.md"]})
+    assert s["outgoing"] == ["Other.md"]
+    assert s["unresolved"] == []
+    assert s["links_truncated"] == false
+  end
+
   # Review Focus 4
   test "links never cross vaults", %{user: u, a: a, b: b} do
     seed(u, a, [{"Target.md", "# T"}])
