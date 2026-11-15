@@ -31,6 +31,25 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
     assert tid == target.id
   end
 
+  # `[[Gamma\|G]]` is how a table cell writes an aliased link. It stored
+  # `Gamma\`, which resolved to nothing (MCP listed it as unresolved).
+  test "a table-escaped alias resolves to its note", %{user: user, vault: vault} do
+    {:ok, gamma} =
+      Notes.upsert_note(user, vault, %{"path" => "Gamma.md", "content" => "# g"}, actor: "api")
+
+    content = "| a | b |\n|---|---|\n| [[Gamma\\|G]] | x |\n"
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => "T.md", "content" => content}, actor: "api")
+
+    assert :ok = perform_job(ExtractNoteLinks, %{note_id: note.id})
+
+    assert [%{target_text: "Gamma", alias: "G", target_note_id: id, dangling: false}] =
+             Links.links_for_note(user, note.id)
+
+    assert id == gamma.id
+  end
+
   test "a note emptied to \"\" clears its stale edges (:no_chunks class)",
        %{user: user, vault: vault} do
     {:ok, note} =

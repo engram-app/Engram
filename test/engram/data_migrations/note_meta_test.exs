@@ -9,6 +9,7 @@ defmodule Engram.DataMigrations.NoteMetaTest do
   alias Engram.Crypto.Envelope
   alias Engram.DataMigrations.NoteMeta
   alias Engram.Fixtures
+  alias Engram.Links
   alias Engram.Links.NoteLink
   alias Engram.Notes
   alias Engram.Notes.{Helpers, Note}
@@ -128,6 +129,29 @@ defmodule Engram.DataMigrations.NoteMetaTest do
         do: assert(Map.get(after_, f) == Map.get(before, f), "#{f} moved")
 
     refute_enqueued(worker: RebuildStaleNote)
+  end
+
+  # v2: `[[Gamma\|G]]`, the table-cell form of an aliased link, targets
+  # Gamma (it stored `Gamma\`, dangling). A note checked under v1 must be
+  # re-derived without anyone editing it.
+  test "a note checked under v1 is re-derived at v2 and gains the table-alias edge", ctx do
+    assert Helpers.meta_version() == 2
+    assert NoteMeta.name() == "note_meta:2"
+
+    gamma = upsert!(ctx, "Gamma.md", "# Gamma\n")
+    note = upsert!(ctx, "t.md", "| a | b |\n|---|---|\n| [[Gamma\\|G]] | x |\n")
+
+    Repo.update_all(
+      from(n in Note, where: n.id in ^[note.id, gamma.id]),
+      [set: [meta_version: 1]],
+      skip_tenant_check: true
+    )
+
+    assert :done = run_until_done()
+    assert decrypted(note, ctx.user).meta_version == 2
+
+    assert [%{target_text: "Gamma", alias: "G", target_path: "Gamma.md", dangling: false}] =
+             Links.links_for_note(ctx.user, note.id)
   end
 
   test "a note already stamped with the current rules is not read again", ctx do

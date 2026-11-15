@@ -104,7 +104,7 @@
             "x-validate": null
           },
           "target_path": {
-            "description": "Resolved note path.",
+            "description": "Resolved note or attachment path.",
             "nullable": true,
             "type": "string",
             "x-struct": null,

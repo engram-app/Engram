@@ -141,7 +141,9 @@ defmodule Engram.Notes.Helpers do
   # changes what an UNCHANGED note derives: `Engram.DataMigrations.NoteMeta`
   # then re-checks every note's stored title, tags and links once.
   # v1: the shared frontmatter fence rule (#2564).
-  @meta_version 1
+  # v2: a wikilink target drops one trailing `\`, so the table form
+  #     `[[Gamma\|G]]` links to Gamma, as in Obsidian.
+  @meta_version 2
 
   @doc "The title/tags/links derivation rules' version, stamped as `notes.meta_version`."
   # No @spec: dialyzer's :underspecs flags `pos_integer()` against the literal.

@@ -88,7 +88,11 @@ defmodule EngramWeb.Schemas.NoteLink do
       },
       target_note_id: %Schema{type: :string, format: :uuid, nullable: true},
       target_attachment_id: %Schema{type: :string, format: :uuid, nullable: true},
-      target_path: %Schema{type: :string, nullable: true, description: "Resolved note path."},
+      target_path: %Schema{
+        type: :string,
+        nullable: true,
+        description: "Resolved note or attachment path."
+      },
       alias: %Schema{
         type: :string,
         nullable: true,

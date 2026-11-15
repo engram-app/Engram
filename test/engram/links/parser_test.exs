@@ -95,6 +95,49 @@ defmodule Engram.Links.ParserTest do
     end
   end
 
+  # Obsidian drops ONE trailing `\` from a wikilink target (worker.js,
+  # 1.12.7): a table cell writes `[[Gamma\|G]]` so the `|` does not end the
+  # cell. The span stops before the `\`, so a rename splice keeps it.
+  describe "escaped pipe (table alias)" do
+    test "a table-escaped alias targets the note, with its alias" do
+      content = "| a | b |\n|---|---|\n| [[Gamma\\|G]] | x |\n"
+      assert [occ] = Parser.extract(content)
+      assert {occ.target, occ.target_raw, occ.alias, occ.anchor} == {"Gamma", "Gamma", "G", nil}
+      assert binary_part(content, occ.target_start, occ.target_len) == "Gamma"
+    end
+
+    test "heading, embed size, no alias, and outside a table" do
+      assert [%{target: "Gamma", anchor: "H", alias: "G"}] = Parser.extract("[[Gamma#H\\|G]]")
+
+      assert [%{target: "pic.png", alias: "200", link_type: "embed"}] =
+               Parser.extract("![[pic.png\\|200]]")
+
+      assert [%{target: "a", alias: nil}] = Parser.extract("[[a\\]]")
+      assert [%{target: "Gamma", alias: "G"}] = Parser.extract("prose [[Gamma\\|G]] prose")
+    end
+
+    test "block ids and nested headings: target, then everything after the first #" do
+      for {content, anchor} <- [
+            {"[[A#^blk]]", "^blk"},
+            {"[[A#^blk\\|b]]", "^blk"},
+            {"[[A#H\\|b]]", "H"},
+            {"[[A#Heading#Sub]]", "Heading#Sub"},
+            {"[[A#Heading#Sub\\|b]]", "Heading#Sub"}
+          ] do
+        assert [occ] = Parser.extract(content), content
+        assert {occ.target, occ.anchor} == {"A", anchor}, content
+        assert binary_part(content, occ.target_start, occ.target_len) == "A", content
+      end
+    end
+
+    test "only one backslash goes; a backslash alone is no link; code is untouched" do
+      assert [%{target: "a\\", alias: "b"}] = Parser.extract("[[a\\\\|b]]")
+      assert [%{target: "a\\b"}] = Parser.extract("[[a\\b]]")
+      assert Parser.extract("[[\\|b]]") == []
+      assert Parser.extract("```\n| [[Gamma\\|G]] |\n```\n") == []
+    end
+  end
+
   # #1302 — Obsidian writes these instead of wikilinks when
   # "Settings -> Files & Links -> Use [[Wikilinks]]" is OFF. `link_type`
   # stays wikilink/embed (it means "is this an embed", and resolution

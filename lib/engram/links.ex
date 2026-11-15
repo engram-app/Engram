@@ -989,7 +989,9 @@ defmodule Engram.Links do
         {hits, candidates} = resolve_edges(user, vault_edges, vault_texts, dek)
 
         {Map.merge(resolved, Map.new(Enum.zip(Enum.map(vault_edges, & &1.id), hits))),
-         Map.merge(paths, candidate_paths(candidates.notes))}
+         paths
+         |> Map.merge(candidate_paths(candidates.notes))
+         |> Map.merge(candidate_paths(candidates.attachments))}
       end)
 
     note_paths =
@@ -1017,7 +1019,10 @@ defmodule Engram.Links do
       target_text: text,
       target_note_id: target_note_id,
       target_attachment_id: target_attachment_id,
-      target_path: target_note_id && Map.get(note_paths, target_note_id),
+      # `note_paths` holds attachment ids too (uuidv7, disjoint from note
+      # ids). An attachment hit always comes from the candidate set, so its
+      # path is there; only note hits need the by-id fallback above.
+      target_path: Map.get(note_paths, target_note_id || target_attachment_id),
       alias:
         decrypt_field(
           edge.alias_ciphertext,

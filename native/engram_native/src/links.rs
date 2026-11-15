@@ -414,6 +414,12 @@ fn wiki_link(s: &str, (pos, kind, inner_start, inner_len, _, _): Raw) -> Option<
         Some((b, a)) => (b, clean(a)),
         None => (inner, None),
     };
+    // Obsidian drops ONE trailing `\` from the target half, everywhere: a
+    // table cell must write `[[Gamma\|G]]` so the `|` does not end the cell
+    // (worker.js wikilink splitter, 1.12.7). The span then stops before the
+    // `\`, so a rename splices `Gamma` and keeps `\|G` byte for byte.
+    let body = body.trim_end();
+    let body = body.strip_suffix('\\').unwrap_or(body);
     let (target_raw, anchor) = match body.split_once('#') {
         Some((t, a)) => (t, clean(a).map(Cow::Borrowed)),
         None => (body, None),
@@ -615,6 +621,73 @@ mod tests {
         );
     }
 
+    // Obsidian drops one trailing `\` from the target half (worker.js
+    // wikilink splitter, 1.12.7), so `[[Gamma\|G]]` in a table cell links
+    // to Gamma. The span must stop before the `\` so a rename keeps it.
+    #[test]
+    fn escaped_pipe_drops_one_backslash() {
+        let one = |s: &str| {
+            let mut got = Vec::new();
+            extract(s, usize::MAX, |l| {
+                got.push((
+                    l.4.to_string(),
+                    l.5.map(str::to_string),
+                    l.6.map(|a| a.to_string()),
+                    s[l.2..l.2 + l.3].to_string(),
+                ))
+            });
+            got
+        };
+        let link = |t: &str, a: Option<&str>, h: Option<&str>, raw: &str| {
+            vec![(
+                t.to_string(),
+                a.map(str::to_string),
+                h.map(str::to_string),
+                raw.to_string(),
+            )]
+        };
+        assert_eq!(
+            one("[[Gamma\\|G]]"),
+            link("Gamma", Some("G"), None, "Gamma")
+        );
+        assert_eq!(
+            one("| [[Gamma\\|G]] | x |\n|---|---|\n"),
+            link("Gamma", Some("G"), None, "Gamma")
+        );
+        assert_eq!(
+            one("| a | b |\n|---|---|\n| [[Gamma\\|G]] | x |\n"),
+            link("Gamma", Some("G"), None, "Gamma")
+        );
+        assert_eq!(
+            one("[[Gamma#H\\|G]]"),
+            link("Gamma", Some("G"), Some("H"), "Gamma")
+        );
+        assert_eq!(
+            one("[[Gamma#^blk\\|G]]"),
+            link("Gamma", Some("G"), Some("^blk"), "Gamma")
+        );
+        // Nested headings: everything after the first `#` is the anchor.
+        assert_eq!(
+            one("[[Gamma#H#Sub\\|G]]"),
+            link("Gamma", Some("G"), Some("H#Sub"), "Gamma")
+        );
+        // Only ONE backslash goes, like Obsidian.
+        assert_eq!(one("[[a\\\\|b]]"), link("a\\", Some("b"), None, "a\\"));
+        // No alias: a trailing `\` still goes.
+        assert_eq!(one("[[a\\]]"), link("a", None, None, "a"));
+        assert_eq!(
+            one("![[pic.png\\|200]]"),
+            link("pic.png", Some("200"), None, "pic.png")
+        );
+        // A `\` that is all the target leaves no link.
+        assert_eq!(one("[[\\|b]]"), vec![]);
+        // Untouched: no backslash, a backslash mid-target, code.
+        assert_eq!(one("[[a|b]]"), link("a", Some("b"), None, "a"));
+        assert_eq!(one("[[a\\b]]"), link("a\\b", None, None, "a\\b"));
+        assert_eq!(one("```\n| [[Gamma\\|G]] |\n```\n"), vec![]);
+        assert_eq!(one("`[[Gamma\\|G]]`"), vec![]);
+    }
+
     #[test]
     fn markdown_one_paren_level() {
         assert_eq!(matches("[l](My (f).md)"), vec![(0, 2, 1, 1, 4, 9)]);
@@ -662,6 +735,8 @@ mod tests {
             "`",
             "``",
             "[[a]]",
+            "\\|",
+            "[[a\\|b]]",
             "[l](b.md)",
             "<!--",
             "-->",
