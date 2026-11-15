@@ -63,6 +63,7 @@ defmodule Engram.Links.Rewriter do
     CrdtRoom,
     CrdtUpdateLog,
     Enqueue,
+    Keys,
     Note,
     NoteBody
   }
@@ -296,17 +297,89 @@ defmodule Engram.Links.Rewriter do
   end
 
   @doc """
+  `%{old_path_hmac => plaintext old path}` for every hmac with a readable
+  rename tombstone, one query (the worker recovers old paths from these; the
+  plaintext never rides job args). Decrypted paths map back by their own
+  hmac; the newest tombstone per path wins.
+  """
+  @spec tombstone_old_paths(map(), map(), :note | :attachment, [binary()]) :: %{
+          binary() => String.t()
+        }
+  def tombstone_old_paths(user, vault, kind, hmacs) do
+    # Tenant-scoped: `notes` and `attachments` carry FORCE ROW LEVEL
+    # SECURITY, so unscoped this returns nothing and old-path recovery
+    # silently fails: the rename's link rewrite then has nothing to rewrite
+    # toward, with no error. `user.id` is already in the WHERE clause.
+    #
+    # Only the READ is scoped. The decrypt below derives the user's DEK and
+    # stays OUTSIDE the scope for the reason given on `Links.resolve_target/4`:
+    # a KMS provider round trip inside the scope would hold row locks for the
+    # provider's latency.
+    {:ok, rows} =
+      Repo.with_tenant(user.id, fn -> Repo.all(tombstones_query(user, vault, kind, hmacs)) end)
+
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+
+    decrypt =
+      if kind == :note,
+        do: &Crypto.maybe_decrypt_note_fields/2,
+        else: &Crypto.maybe_decrypt_attachment_fields/2
+
+    Enum.reduce(rows, %{}, fn row, acc ->
+      case decrypt.(row, user) do
+        {:ok, %{path: path}} when is_binary(path) ->
+          Map.put_new(acc, Crypto.hmac_field(filter_key, path), path)
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  defp tombstones_query(user, vault, :note, hmacs) do
+    ids? = Keys.ids?()
+    path_col = Keys.col(:path, ids?)
+
+    from(n in Note,
+      where:
+        n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
+          not is_nil(n.deleted_at),
+      # notes_path_tomb (vault_id, path_id, seq): a backward probe per path,
+      # newest row only (DISTINCT ON the path key, seq descending).
+      where: ^Keys.in_any(:path, hmacs, ids?),
+      distinct: [asc: field(n, ^path_col)],
+      order_by: [desc: n.seq],
+      # The path only: never the body.
+      select: struct(n, ^Note.path_fields())
+    )
+  end
+
+  defp tombstones_query(user, vault, :attachment, hmacs) do
+    from(a in Attachment,
+      where:
+        a.user_id == ^user.id and a.vault_id == ^vault.id and
+          a.path_hmac in ^hmacs and not is_nil(a.deleted_at),
+      distinct: [asc: a.path_hmac],
+      order_by: [desc: a.seq]
+    )
+  end
+
+  @doc """
   `build_target/5` for a page of a folder move's targets in a constant
   number of queries: one current-path read per kind, then one candidate
   read per table for every basename (`Links.pre_move_candidate_sets/3`).
-  `moves` are `%{kind:, id:, old_path:}`. Returns `{targets, gone}`; `gone`
+  `moves` are `{kind, id, old_path}`. Returns `{targets, gone}`; `gone`
   are the ids with no live row (deleted, or renamed and deleted).
 
   A target renamed to another basename after the move (rare) builds alone,
   since its `collision?` reads the NEW basename.
   """
-  @spec build_folder_targets(map(), map(), [map()]) :: {[map()], [binary()]}
+  @spec build_folder_targets(map(), map(), [{:note | :attachment, binary(), String.t()}]) ::
+          {[map()], [binary()]}
   def build_folder_targets(user, vault, moves) do
+    moves =
+      Enum.map(moves, fn {kind, id, old_path} -> %{kind: kind, id: id, old_path: old_path} end)
+
     current =
       moves
       |> Enum.group_by(& &1.kind, & &1.id)

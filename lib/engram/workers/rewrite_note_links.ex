@@ -90,16 +90,11 @@ defmodule Engram.Workers.RewriteNoteLinks do
   # edits, so a duplicate job converges as a no-op pass.
   use Oban.Worker, queue: :link_rewrite, max_attempts: 3
 
-  import Ecto.Query
-
-  alias Engram.Attachments.Attachment
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.RotationGate
   alias Engram.Links.Rewriter
   alias Engram.Logger.Metadata
-  alias Engram.Notes.Keys
-  alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vaults
 
@@ -320,7 +315,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
       |> Enum.group_by(&kind_from(&1["target_kind"]))
       |> Enum.flat_map(fn {kind, group} ->
         hmacs = Enum.map(group, &Base.decode64!(&1["old_path_hmac"]))
-        paths = tombstone_old_paths(user, vault, kind, hmacs)
+        paths = Rewriter.tombstone_old_paths(user, vault, kind, hmacs)
 
         group
         |> Enum.zip(hmacs)
@@ -328,12 +323,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
       end)
       |> Enum.split_with(fn {_kind, _id, path} -> is_binary(path) end)
 
-    {targets, gone} =
-      Rewriter.build_folder_targets(
-        user,
-        vault,
-        Enum.map(moves, fn {kind, id, path} -> %{kind: kind, id: id, old_path: path} end)
-      )
+    {targets, gone} = Rewriter.build_folder_targets(user, vault, moves)
 
     count_failed(:old_path_unrecoverable, length(lost))
     count_failed(:target_gone, length(gone))
@@ -402,72 +392,10 @@ defmodule Engram.Workers.RewriteNoteLinks do
   # put in args: decrypt it. Newest tombstone wins (repeated renames
   # through the same path).
   defp tombstone_old_path(user, vault, kind, old_path_hmac) do
-    case tombstone_old_paths(user, vault, kind, [old_path_hmac]) do
+    case Rewriter.tombstone_old_paths(user, vault, kind, [old_path_hmac]) do
       %{^old_path_hmac => path} -> {:ok, path}
       _ -> {:discard, :old_path_unrecoverable}
     end
-  end
-
-  # `%{old_path_hmac => plaintext old path}` for every hmac with a readable
-  # tombstone, one query. Decrypted paths map back by their own hmac, so the
-  # newest tombstone per path wins (rows come newest first).
-  defp tombstone_old_paths(user, vault, kind, hmacs) do
-    # Tenant-scoped: `notes` and `attachments` carry FORCE ROW LEVEL
-    # SECURITY, so unscoped this returns nothing and old-path recovery
-    # silently fails: the rename's link rewrite then has nothing to rewrite
-    # toward, with no error. `user.id` is already in the WHERE clause.
-    #
-    # Only the READ is scoped. The decrypt below derives the user's DEK and
-    # stays OUTSIDE the scope for the reason given on `Links.resolve_target/4`:
-    # a KMS provider round trip inside the scope would hold row locks for the
-    # provider's latency.
-    {:ok, rows} =
-      Repo.with_tenant(user.id, fn -> Repo.all(tombstones_query(user, vault, kind, hmacs)) end)
-
-    {:ok, filter_key} = Crypto.dek_filter_key(user)
-
-    decrypt =
-      if kind == :note,
-        do: &Crypto.maybe_decrypt_note_fields/2,
-        else: &Crypto.maybe_decrypt_attachment_fields/2
-
-    Enum.reduce(rows, %{}, fn row, acc ->
-      case decrypt.(row, user) do
-        {:ok, %{path: path}} when is_binary(path) ->
-          Map.put_new(acc, Crypto.hmac_field(filter_key, path), path)
-
-        _ ->
-          acc
-      end
-    end)
-  end
-
-  defp tombstones_query(user, vault, :note, hmacs) do
-    ids? = Keys.ids?()
-    path_col = Keys.col(:path, ids?)
-
-    from(n in Note,
-      where:
-        n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
-          not is_nil(n.deleted_at),
-      # notes_path_tomb (vault_id, path_id, seq): a backward probe per path,
-      # newest row only (DISTINCT ON the path key, seq descending).
-      where: ^Keys.in_any(:path, hmacs, ids?),
-      distinct: [asc: field(n, ^path_col)],
-      order_by: [desc: n.seq],
-      # The path only: never the body.
-      select: struct(n, ^Note.path_fields())
-    )
-  end
-
-  defp tombstones_query(user, vault, :attachment, hmacs) do
-    from(a in Attachment,
-      where:
-        a.user_id == ^user.id and a.vault_id == ^vault.id and
-          a.path_hmac in ^hmacs and not is_nil(a.deleted_at),
-      distinct: [asc: a.path_hmac],
-      order_by: [desc: a.seq]
-    )
   end
 
   # Old-path recovery, two sources in order:
