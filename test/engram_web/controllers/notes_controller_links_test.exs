@@ -39,6 +39,65 @@ defmodule EngramWeb.NotesControllerLinksTest do
       assert link["target_note_id"] == target.id
       assert link["dangling"] == false
     end
+
+    # The response parses the content it returns, so links do not wait for
+    # the extraction job (never run here).
+    test "returns the links of the returned content before extraction", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, target} =
+        Engram.Notes.upsert_note(user, vault, %{path: "B.md", content: "# B", mtime: 1_000.0},
+          actor: "api"
+        )
+
+      {:ok, source} =
+        Engram.Notes.upsert_note(user, vault, %{path: "S.md", content: "[[B]]", mtime: 1_000.0},
+          actor: "api"
+        )
+
+      body = conn |> get(~p"/api/notes/by-id/#{source.id}") |> json_response(200)
+
+      assert [%{"target_text" => "B", "dangling" => false} = link] = body["links"]
+      assert link["target_note_id"] == target.id
+    end
+  end
+
+  # The write holds the vault's seq row lock until it commits, so the
+  # response's link parse must run after the commit, never inside it.
+  describe "POST /api/notes — links" do
+    setup do
+      me = self()
+      id = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        id,
+        [:engram, :nif, :call, :stop],
+        fn _, _, %{nif: nif}, _ ->
+          if nif == :link_extract and self() == me,
+            do: send(me, {:link_parse, Engram.Repo.in_transaction?()})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+    end
+
+    test "parses the response's links after the write commits", %{conn: conn} do
+      # Control: the probe sees a parse that does run inside a transaction.
+      Engram.Repo.transaction(fn -> Engram.Links.Parser.extract("[[x]]") end)
+      assert_received {:link_parse, true}
+
+      body =
+        conn
+        |> post("/api/notes", %{path: "W.md", content: "see [[Elsewhere]]", mtime: 1.0})
+        |> json_response(200)
+
+      assert [%{"target_text" => "Elsewhere", "dangling" => true}] = body["note"]["links"]
+      assert_received {:link_parse, false}
+      refute_received {:link_parse, true}
+    end
   end
 
   describe "backlinks existence probe (#2169)" do

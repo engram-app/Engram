@@ -399,17 +399,22 @@ defmodule Engram.MCP.Handlers do
         gate = ParseGate.call_opts()
         links? = args["include_links"] == true
 
+        # Where outgoing links come from (`link_source/2`): the returned text
+        # when it is the whole note, the stored rows when it is a section (its
+        # text is part of the note) or an outline (no text kept).
+        links = links? && if(outline? or is_binary(section), do: :stored, else: :text)
+
         if is_binary(section) do
           # Section reads take one path, so fetching it up front is fine.
           with {:ok, [{path, note}]} <-
                  narrow_to_section([{hd(paths), fetch.(hd(paths))}], section, gate),
-               do: render_notes(user, [{path, fn -> note end}], outline?, links?, gate)
+               do: render_notes(user, [{path, fn -> note end}], outline?, links, gate)
         else
           render_notes(
             user,
             get_notes_entries(user, vault, paths, outline?, fetch),
             outline?,
-            links?,
+            links,
             gate
           )
         end
@@ -2419,8 +2424,9 @@ defmodule Engram.MCP.Handlers do
 
   # `entries` is [{path, fetch_fn}]. Each note is fetched, budgeted and
   # rendered before the next, so at most the kept content plus one note is
-  # alive. Links are read afterwards for every rendered note in one batch.
-  defp render_notes(user, entries, outline?, links?, gate) do
+  # alive (a whole-note read's link source holds the same content binary,
+  # not a copy). Links are read afterwards for every rendered note in one batch.
+  defp render_notes(user, entries, outline?, links, gate) do
     {rendered, _spent} =
       Enum.map_reduce(entries, 0, fn {path, fetch}, spent ->
         case fetch.() do
@@ -2436,7 +2442,7 @@ defmodule Engram.MCP.Handlers do
 
             if spent == 0 or spent + size <= @get_notes_budget do
               {text, payload} = render_note(note, outline?, gate)
-              {{text, payload, note.id}, spent + size}
+              {{text, payload, link_source(note, links)}, spent + size}
             else
               {text, payload} = over_budget(path)
               {{text, payload, nil}, spent}
@@ -2444,24 +2450,35 @@ defmodule Engram.MCP.Handlers do
         end
       end)
 
-    rendered = if links?, do: with_links(user, rendered), else: rendered
+    rendered = if links, do: with_links(user, rendered), else: rendered
 
     {:ok, Enum.map_join(rendered, "\n\n---\n\n", &elem(&1, 0)),
      %{"notes" => Enum.map(rendered, &elem(&1, 1))}}
   end
 
+  # What the links read gets for a rendered note. A whole-note read hands
+  # over the text it returns, so outgoing links are parsed from exactly that
+  # text (`Links.links_for_notes/2`), not from rows the extract job may not
+  # have rewritten yet. A section or an outline reads the stored rows by id.
+  # `false` (no links) is never read.
+  defp link_source(note, :text), do: Map.take(note, [:id, :vault_id, :content])
+  defp link_source(note, _stored_or_none), do: note.id
+
   defp with_links(user, rendered) do
-    payloads = links_payloads(user, for({_t, _p, id} <- rendered, id, do: id))
+    payloads = links_payloads(user, for({_t, _p, src} <- rendered, src, do: src))
 
     Enum.map(rendered, fn
       {text, payload, nil} ->
         {text, payload, nil}
 
-      {text, payload, id} ->
-        {links, truncation} = Map.fetch!(payloads, id)
-        {text <> "\n\n" <> format_links(links, truncation), Map.merge(payload, links), id}
+      {text, payload, src} ->
+        {links, truncation} = Map.fetch!(payloads, link_id(src))
+        {text <> "\n\n" <> format_links(links, truncation), Map.merge(payload, links), src}
     end)
   end
+
+  defp link_id(%{id: id}), do: id
+  defp link_id(id), do: id
 
   defp over_budget(path) do
     msg =
@@ -2503,16 +2520,18 @@ defmodule Engram.MCP.Handlers do
     do: user |> links_payloads([note.id], limit) |> Map.fetch!(note.id)
 
   # `links_payload/3` for every note in one batch: two `Links` reads in all,
-  # not two per note.
-  defp links_payloads(user, note_ids, limit \\ Engram.Links.backlinks_limit())
+  # not two per note. `sources` are ids or `link_source/2` maps.
+  defp links_payloads(user, sources, limit \\ Engram.Links.backlinks_limit())
 
   defp links_payloads(_user, [], _limit), do: %{}
 
-  defp links_payloads(user, note_ids, limit) do
+  defp links_payloads(user, sources, limit) do
+    note_ids = Enum.map(sources, &link_id/1)
+
     backlinks =
       Engram.Links.backlinks_for_notes(user, note_ids, limit: limit + 1, distinct_sources: true)
 
-    outgoing = Engram.Links.links_for_notes(user, note_ids)
+    outgoing = Engram.Links.links_for_notes(user, sources)
 
     Map.new(note_ids, fn id ->
       {id, links_entry(Map.fetch!(backlinks, id), Map.fetch!(outgoing, id), limit)}

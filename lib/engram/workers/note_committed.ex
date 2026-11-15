@@ -42,6 +42,10 @@ defmodule Engram.Workers.NoteCommitted do
     args =
       if opts[:embed_settle], do: Map.put(args, :embed_settle, opts[:embed_settle]), else: args
 
+    # An agent or API write (`Notes.commit_opts/2`): extract links at once.
+    # The previous release ignores the key and waits the typing delay.
+    args = if opts[:links_now?], do: Map.put(args, :links_now, true), else: args
+
     # At the embed's own rank: every content checkpoint passes through this
     # queue, so an interactive edit must not wait FIFO behind a first-sync
     # flood's dispatchers (EmbedNote.priority_for/1).
@@ -80,7 +84,8 @@ defmodule Engram.Workers.NoteCommitted do
     ContentCommit.enqueue_jobs(note_id, user_id,
       embed_priority: args["embed_priority"],
       finalize?: args["finalize"],
-      embed_settle: settle(args["embed_settle"])
+      embed_settle: settle(args["embed_settle"]),
+      links_now?: args["links_now"] == true
     )
   end
 

@@ -71,16 +71,17 @@ defmodule EngramWeb.NotesController do
         require_base: EngramWeb.WriteActor.requires_base?(conn)
       ]
 
-      # One transaction: the write, its job inserts and the response's links
-      # read. Rendered inside it, sent after it commits.
+      # One transaction: the write and its job inserts. The response renders
+      # after the commit: its links are parsed from the returned content, CPU
+      # that must not run while the write holds the vault's seq row lock.
       result =
-        in_write_txn(user, fn user ->
-          case Notes.upsert_note(user, vault, params, opts) do
-            {:ok, note} -> {:ok, note_json(note, user)}
-            {:error, :version_conflict, server} -> {:conflict, note_json(server, user)}
-            other -> other
-          end
-        end)
+        case in_write_txn(user, &{&1, Notes.upsert_note(&1, vault, params, opts)}) do
+          # The DEK could not be provisioned: nothing was written.
+          {:error, _} = error -> error
+          {user, {:ok, note}} -> {:ok, note_json(note, user)}
+          {user, {:error, :version_conflict, server}} -> {:conflict, note_json(server, user)}
+          {_user, other} -> other
+        end
 
       case result do
         {:ok, body} ->
@@ -333,7 +334,11 @@ defmodule EngramWeb.NotesController do
     path = Enum.join(List.wrap(path_parts), "/")
 
     # One transaction for the note and its links. The DEK is warmed first: a
-    # DekCache miss unwraps through KMS, which must not run inside it.
+    # DekCache miss unwraps through KMS, which must not run inside it. The
+    # links parse runs inside it too: a read holds no lock, and the parse is
+    # capped (`Links.links_for_notes/2`, tens of ms at most). Rendering after
+    # the commit would cost a second transaction (+3 statements) on every
+    # read of a note that links anywhere.
     _ = Crypto.get_dek(user)
 
     result =
@@ -373,7 +378,10 @@ defmodule EngramWeb.NotesController do
           renamed: true,
           old_path: old_path,
           new_path: new_path,
-          note: note_json(note, user)
+          # The renamed row carries its checkpointed text, not the CRDT
+          # tail, so its links come from the stored rows (built from row +
+          # tail by ExtractNoteLinks) rather than from older text.
+          note: note_json(note, user, :stored_links)
         })
 
       {:error, :conflict} = error ->
@@ -794,7 +802,7 @@ defmodule EngramWeb.NotesController do
     end
   end
 
-  defp note_json(note, user) do
+  defp note_json(note, user, links_from \\ :content) do
     %{
       id: note.id,
       path: note.path,
@@ -817,8 +825,10 @@ defmodule EngramWeb.NotesController do
       parse_status: note.parse_status,
       parse_reason: note.parse_reason,
       # Task 9 — outgoing wikilink/embed edges, resolved. Frontend keys its
-      # resolution map off `target_text`.
-      links: Links.links_for_note(user, note.id)
+      # resolution map off `target_text`. Parsed from the content this
+      # response returns (stored rows when it carries none), so links and
+      # body never disagree.
+      links: Links.links_for_note(user, if(links_from == :content, do: note, else: note.id))
     }
     |> put_content(note.content)
   end
