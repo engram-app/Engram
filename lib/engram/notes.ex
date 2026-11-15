@@ -8293,7 +8293,7 @@ defmodule Engram.Notes do
 
   # The folder-rename cascade's link-rewrite: ONE chain for the whole move
   # (#2523 S5), grouped by linking note, so a note linking N moved notes is
-  # written once, not N times. Up to `RewriteNoteLinks.max_folder_targets/0`
+  # written once, not N times. Up to 1,000
   # moved notes a chain; past it, one chain per chunk.
   #
   # `moves` is `{note, old_path, new_path, new_folder, old_path_hmac_b64}`.

@@ -58,7 +58,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
   index note in 8 min, 1.13 GB of WAL). `new_for_folder/3` queues one chain
   per kind of moved row (the note cascade, the attachment bulk move), whose
   args carry every moved row as a `"targets"` entry (the per-note args' ids
-  and HMACs plus `target_kind`, up to `max_folder_targets/0` per chain). Each
+  and HMACs plus `target_kind`, up to 1,000 per chain). Each
   page takes the next linking notes of ANY moved basename (keyset on
   `source_note_id`), builds only the targets that page's notes name, in a
   constant number of queries (one tombstone read per kind, then
@@ -136,20 +136,16 @@ defmodule Engram.Workers.RewriteNoteLinks do
   @spec enabled?() :: boolean()
   def enabled?, do: Engram.ServiceConfig.get(:link_rewrite, true) != false
 
-  @doc "Moved rows per folder chain; a bigger move queues one chain per chunk."
-  @spec max_folder_targets() :: pos_integer()
-  def max_folder_targets, do: @max_folder_targets
-
   @doc """
   Folder chains run behind single renames and repairs (priority 0) on the
   one `link_rewrite` slot, so a big move never holds another tenant's
   single rename behind every chunk's first page. Successors and sweeps keep it.
   """
-  @spec folder_priority() :: pos_integer()
+  @spec folder_priority() :: 1
   def folder_priority, do: @folder_priority
 
   @doc """
-  The folder-move chains for `moves`, one per `max_folder_targets/0` chunk.
+  The folder-move chains for `moves`, one per 1,000-row chunk.
   `moves` are `{kind, target_id, old_path_hmac_b64, old_basename_hmac_b64}`,
   notes or attachments (T3.2: ids and HMACs only).
   """
