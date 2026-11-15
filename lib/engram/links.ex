@@ -46,7 +46,10 @@ defmodule Engram.Links do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Links.NoteLink
+  alias Engram.Links.Parser
   alias Engram.Logger.DecryptFailure
+  alias Engram.MCP.ParseGate
+  alias Engram.Native
   alias Engram.Notes.Keys
   alias Engram.Notes.Note
   alias Engram.Repo
@@ -78,6 +81,13 @@ defmodule Engram.Links do
   ]
   @backlink_read_fields [:link_keys_stamp, :target_key_hmac | @edge_read_fields]
   @backlinks_limit 200
+
+  # Read-time parse bounds (`links_for_notes/3`): notes per call (get_notes
+  # reads at most 20 paths), bytes per note, and the gate waits for notes
+  # too big to parse inline. Past any of them: the stored rows.
+  @read_parse_max_notes 20
+  @read_parse_max_bytes 1_048_576
+  @read_parse_gate [acquire_timeout: 1_000, parse_timeout: 2_000]
 
   # Rows per `insert_all` statement. See replace_links/4: 17 binds per row
   # against the protocol's 65535 cap leaves room for 3855, so 2000 is a
@@ -942,31 +952,155 @@ defmodule Engram.Links do
   end
 
   @doc """
-  Decrypted outgoing links for a note, in parser order.
+  Decrypted outgoing links for a note, in parser order. `note` is an id
+  (stored edges) or a note carrying its current text (read-time parse); see
+  `links_for_notes/3`.
   """
-  @spec links_for_note(map(), binary()) :: [map()]
-  def links_for_note(user, note_id),
-    do: user |> links_for_notes([note_id]) |> Map.fetch!(note_id)
+  @spec links_for_note(map(), binary() | map(), keyword()) :: [map()]
+  def links_for_note(user, note, opts \\ []),
+    do: user |> links_for_notes([note], opts) |> Map.fetch!(note_key(note))
 
   @doc """
-  `links_for_note/2` for many notes in one pass: `%{note_id => links}`, every
+  `links_for_note/3` for many notes in one pass: `%{note_id => links}`, every
   id present. The edges, their targets and the target paths each cost one
   query for the whole set, not one per note.
+
+  Each entry of `notes` is either a note id or a map with `:id`, `:vault_id`
+  and `:content`, the text the caller is about to return. An id reads the
+  stored `note_links` rows. A map has its links parsed from `content` with
+  the parser `ExtractNoteLinks` runs and resolved by the same rules, so a
+  read right after an edit sees the edit: the stored rows trail it by that
+  job (seconds; longer for live CRDT edits). Parsing the returned text, not
+  re-reading the note, keeps the links and the content from disagreeing.
+
+  The parse is bounded, and anything past a bound reads the stored rows
+  instead (never an error):
+
+    * more than #{@read_parse_max_notes} notes with text in one call: the
+      whole call reads stored rows;
+    * a note over #{div(@read_parse_max_bytes, 1024)} KB: that note does;
+    * notes over `Engram.Native.inline_max/0` parse in one
+      `Engram.MCP.ParseGate` run (bounded concurrency; `opts[:gate]` carries
+      the caller's deadline); busy, timeout or deadline: those notes do.
+
+  Backlinks (`backlinks_for_notes/3`) still come from stored rows only.
   """
-  @spec links_for_notes(map(), [binary()]) :: %{binary() => [map()]}
-  def links_for_notes(user, note_ids) do
+  @spec links_for_notes(map(), [binary() | map()], keyword()) :: %{binary() => [map()]}
+  def links_for_notes(user, notes, opts \\ []) do
     # Both outside the scope: see `resolve_target/4` above. `reload_for_dek/1`
     # reads `users`, which carries no RLS policy, so it does not need the
     # tenant. This is the hottest of the nine — `note_json/2` calls it on every
     # single-note response.
     user = reload_for_dek(user)
     {:ok, dek} = Crypto.get_dek(user)
-    note_ids = Enum.uniq(note_ids)
+    notes = Enum.uniq_by(notes, &note_key/1)
+    # Also outside: parse CPU (and a gate wait) must not hold a connection.
+    parsed = read_time_links(notes, dek, Keyword.get(opts, :gate, []))
+    ids = Enum.map(notes, &note_key/1)
 
-    Repo.with_tenant!(user.id, fn -> do_links_for_notes(user, note_ids, dek) end)
+    Repo.with_tenant!(user.id, fn -> do_links_for_notes(user, ids, parsed, dek) end)
   end
 
-  defp do_links_for_notes(user, note_ids, dek) do
+  defp note_key(%{id: id}), do: id
+  defp note_key(id) when is_binary(id), do: id
+
+  # `%{note_id => [link]}` for the notes whose links come from their text.
+  defp read_time_links(notes, dek, gate) do
+    texts =
+      for %{id: id, vault_id: vault_id, content: text} <- notes,
+          is_binary(text),
+          byte_size(text) <= @read_parse_max_bytes,
+          do: {id, vault_id, text}
+
+    if length(texts) > @read_parse_max_notes do
+      %{}
+    else
+      filter_key = Crypto.dek_filter_key_from_bytes(dek)
+
+      texts
+      |> parse_texts(gate)
+      |> Map.new(fn {id, vault_id, parsed} ->
+        {id, Enum.map(parsed, &parsed_link(&1, id, vault_id, filter_key))}
+      end)
+    end
+  end
+
+  # Small notes parse here (the NIF runs inline, under a millisecond); the
+  # rest share one gated run, so big ones never pile onto the dirty
+  # scheduler and a missed deadline falls back instead of waiting.
+  defp parse_texts(texts, gate) do
+    {inline, dirty} =
+      Enum.split_with(texts, fn {_, _, text} -> byte_size(text) <= Native.inline_max() end)
+
+    parse = fn batch ->
+      for {id, vault_id, text} <- batch, do: {id, vault_id, Parser.extract(text)}
+    end
+
+    bytes = dirty |> Enum.map(&byte_size(elem(&1, 2))) |> Enum.sum()
+
+    gated =
+      case dirty != [] && ParseGate.run(fn -> parse.(dirty) end, read_gate_opts(gate, bytes)) do
+        {:ok, result} -> result
+        _none_or_refused -> []
+      end
+
+    parse.(inline) ++ gated
+  end
+
+  defp read_gate_opts(gate, bytes),
+    do: @read_parse_gate |> Keyword.merge(gate) |> Keyword.put(:bytes, bytes)
+
+  # A parsed link in the shape `resolve_edges/3` and `render_link/3` read:
+  # the fields `sync_links/4` would store for it.
+  defp parsed_link(p, note_id, vault_id, filter_key) do
+    %{
+      key: {note_id, p.position},
+      source_note_id: note_id,
+      vault_id: vault_id,
+      target_basename_hmac: Crypto.hmac_field(filter_key, basename_key(p.target)),
+      text: p.target,
+      alias: p.alias,
+      anchor: p.anchor,
+      link_type: p.link_type
+    }
+  end
+
+  defp do_links_for_notes(user, note_ids, parsed, dek) do
+    links =
+      stored_links(user, Enum.reject(note_ids, &Map.has_key?(parsed, &1)), dek) ++
+        Enum.flat_map(note_ids, &Map.get(parsed, &1, []))
+
+    # `resolve_edges/3` takes one vault at a time.
+    {resolved, note_paths} =
+      links
+      |> Enum.group_by(& &1.vault_id)
+      |> Enum.reduce({%{}, %{}}, fn {_vault, vault_links}, {resolved, paths} ->
+        {hits, candidates} = resolve_edges(user, vault_links, dek)
+
+        {Map.merge(resolved, Map.new(Enum.zip(Enum.map(vault_links, & &1.key), hits))),
+         paths
+         |> Map.merge(candidate_paths(candidates.notes))
+         |> Map.merge(candidate_paths(candidates.attachments))}
+      end)
+
+    note_paths =
+      for({_key, {:note, id}} <- resolved, not Map.has_key?(note_paths, id), do: id)
+      |> Enum.uniq()
+      |> then(&Map.merge(note_paths, note_paths_by_id(user, &1, dek)))
+
+    by_note =
+      Enum.group_by(
+        links,
+        & &1.source_note_id,
+        &render_link(&1, Map.fetch!(resolved, &1.key), note_paths)
+      )
+
+    Map.new(note_ids, &{&1, Map.get(by_note, &1, [])})
+  end
+
+  defp stored_links(_user, [], _dek), do: []
+
+  defp stored_links(user, note_ids, dek) do
     edges =
       Repo.all(
         from(l in NoteLink,
@@ -977,73 +1111,40 @@ defmodule Engram.Links do
         skip_tenant_check: true
       )
 
-    texts = target_texts(edges, dek)
+    edges
+    |> Enum.zip(target_texts(edges, dek))
+    |> Enum.map(fn {edge, text} ->
+      decrypt = fn column, ct, nonce ->
+        decrypt_field(ct, nonce, dek, edge.dek_version, :note_links, column, edge.id)
+      end
 
-    # `resolve_edges/4` takes one vault at a time.
-    {resolved, note_paths} =
-      edges
-      |> Enum.zip(texts)
-      |> Enum.group_by(fn {edge, _text} -> edge.vault_id end)
-      |> Enum.reduce({%{}, %{}}, fn {_vault, pairs}, {resolved, paths} ->
-        {vault_edges, vault_texts} = Enum.unzip(pairs)
-        {hits, candidates} = resolve_edges(user, vault_edges, vault_texts, dek)
-
-        {Map.merge(resolved, Map.new(Enum.zip(Enum.map(vault_edges, & &1.id), hits))),
-         paths
-         |> Map.merge(candidate_paths(candidates.notes))
-         |> Map.merge(candidate_paths(candidates.attachments))}
-      end)
-
-    note_paths =
-      for({_edge, {:note, id}} <- resolved, not Map.has_key?(note_paths, id), do: id)
-      |> Enum.uniq()
-      |> then(&Map.merge(note_paths, note_paths_by_id(user, &1, dek)))
-
-    by_note =
-      edges
-      |> Enum.zip(texts)
-      |> Enum.group_by(
-        fn {edge, _text} -> edge.source_note_id end,
-        fn {edge, text} ->
-          render_link(edge, text, Map.fetch!(resolved, edge.id), note_paths, dek)
-        end
-      )
-
-    Map.new(note_ids, &{&1, Map.get(by_note, &1, [])})
+      %{
+        key: edge.id,
+        source_note_id: edge.source_note_id,
+        vault_id: edge.vault_id,
+        target_basename_hmac: edge.target_basename_hmac,
+        text: text,
+        alias: decrypt.(:alias, edge.alias_ciphertext, edge.alias_nonce),
+        anchor: decrypt.(:anchor, edge.anchor_ciphertext, edge.anchor_nonce),
+        link_type: edge.link_type
+      }
+    end)
   end
 
-  defp render_link(edge, text, resolution, note_paths, dek) do
+  defp render_link(link, resolution, note_paths) do
     {target_note_id, target_attachment_id} = target_ids(resolution)
 
     %{
-      target_text: text,
+      target_text: link.text,
       target_note_id: target_note_id,
       target_attachment_id: target_attachment_id,
       # `note_paths` holds attachment ids too (uuidv7, disjoint from note
       # ids). An attachment hit always comes from the candidate set, so its
       # path is there; only note hits need the by-id fallback above.
       target_path: Map.get(note_paths, target_note_id || target_attachment_id),
-      alias:
-        decrypt_field(
-          edge.alias_ciphertext,
-          edge.alias_nonce,
-          dek,
-          edge.dek_version,
-          :note_links,
-          :alias,
-          edge.id
-        ),
-      anchor:
-        decrypt_field(
-          edge.anchor_ciphertext,
-          edge.anchor_nonce,
-          dek,
-          edge.dek_version,
-          :note_links,
-          :anchor,
-          edge.id
-        ),
-      link_type: edge.link_type,
+      alias: link.alias,
+      anchor: link.anchor,
+      link_type: link.link_type,
       dangling: resolution == :dangling
     }
   end
@@ -1059,35 +1160,29 @@ defmodule Engram.Links do
   # shortest same-name rows (bare links), the rows whose lowercased path a
   # folder-qualified link names, and rows written before those keys existed.
   # Those rows go through the same `resolve_prefetched/3` rules as a full
-  # candidate set, so the answer is identical. Edges with the same target
-  # resolve once. All `edges` must share one vault.
-  defp resolve_edges(_user, [], _texts, _dek), do: {[], %{notes: %{}, attachments: %{}}}
+  # candidate set, so the answer is identical. Links with the same target
+  # resolve once. All `links` must share one vault.
+  defp resolve_edges(_user, [], _dek), do: {[], %{notes: %{}, attachments: %{}}}
 
-  defp resolve_edges(user, [first | _] = edges, texts, dek) do
-    targets =
-      for {edge, text} <- Enum.zip(edges, texts),
-          is_binary(text),
-          do: {edge.target_basename_hmac, text}
-
+  defp resolve_edges(user, [first | _] = links, dek) do
+    targets = for link <- links, is_binary(link.text), do: {link.target_basename_hmac, link.text}
     candidates = target_candidates(user, first.vault_id, targets, dek)
 
     {resolved, _memo} =
-      edges
-      |> Enum.zip(texts)
-      |> Enum.map_reduce(%{}, fn
+      Enum.map_reduce(links, %{}, fn
         # A target that will not decrypt has no name to resolve.
-        {_edge, nil}, memo ->
+        %{text: nil}, memo ->
           {:dangling, memo}
 
-        {edge, text}, memo ->
-          key = {edge.target_basename_hmac, text}
+        link, memo ->
+          key = {link.target_basename_hmac, link.text}
 
           case memo do
             %{^key => hit} ->
               {hit, memo}
 
             _ ->
-              hit = resolve_prefetched(candidates, edge.target_basename_hmac, text)
+              hit = resolve_prefetched(candidates, link.target_basename_hmac, link.text)
               {hit, Map.put(memo, key, hit)}
           end
       end)

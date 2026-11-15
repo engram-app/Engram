@@ -817,8 +817,10 @@ defmodule EngramWeb.NotesController do
       parse_status: note.parse_status,
       parse_reason: note.parse_reason,
       # Task 9 — outgoing wikilink/embed edges, resolved. Frontend keys its
-      # resolution map off `target_text`.
-      links: Links.links_for_note(user, note.id)
+      # resolution map off `target_text`. Parsed from the content this
+      # response returns (stored rows when it carries none), so links and
+      # body never disagree.
+      links: Links.links_for_note(user, note)
     }
     |> put_content(note.content)
   end

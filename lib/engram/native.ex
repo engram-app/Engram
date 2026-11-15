@@ -56,6 +56,10 @@ defmodule Engram.Native do
   # CPU scheduler, and a write must not queue behind a long keyword encode.
   @inline_max 16_384
 
+  @doc "Input bytes up to which a sized NIF runs on the calling scheduler."
+  @spec inline_max() :: pos_integer()
+  def inline_max, do: @inline_max
+
   # Every NIF with an inline and a dirty variant: `{name, inline_nif,
   # dirty_nif, arity}`. Rust exports both; `sized/3` picks one by size.
   # Spelled out (not built from `name`) so a grep for either NIF lands here.

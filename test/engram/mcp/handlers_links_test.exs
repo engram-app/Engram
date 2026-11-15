@@ -75,10 +75,11 @@ defmodule Engram.MCP.HandlersLinksTest do
     queries = link_reads.(fn -> send(self(), {:got, get(u, a, %{"paths" => paths})}) end)
     assert_received {:got, {:ok, _text, %{"notes" => [na, nb, nbig, missing]}}}
 
-    # 3, still independent of the note count: outgoing edges, the target keys
-    # incoming edges use (so backlinks only verify spellings a link uses,
-    # #2175 delta check), and the incoming edges themselves.
-    assert length(queries) == 3, "expected 3 link reads, got:\n#{Enum.join(queries, "\n")}"
+    # 2, still independent of the note count: the target keys incoming edges
+    # use (so backlinks only verify spellings a link uses, #2175 delta check),
+    # and the incoming edges themselves. Outgoing links are parsed from the
+    # returned text, so they read no `note_links` row.
+    assert length(queries) == 2, "expected 2 link reads, got:\n#{Enum.join(queries, "\n")}"
 
     assert Enum.sort(na["backlinks"]) == ["B.md", "Big.md"]
     assert na["outgoing"] == ["B.md"]
@@ -139,6 +140,38 @@ defmodule Engram.MCP.HandlersLinksTest do
     assert s["outgoing"] == ["Other.md"]
     assert s["unresolved"] == []
     assert s["links_truncated"] == false
+  end
+
+  # The user-feedback bug: right after an edit, outgoing links came from
+  # `note_links` rows the ExtractNoteLinks job had not rewritten yet (2-60 s).
+  # Here the job never runs, so the stored rows stay at the old text.
+  test "outgoing links follow an edit before the extract job runs", %{user: u, a: a} do
+    seed(u, a, [{"Old.md", "o"}, {"New.md", "n"}, {"Source.md", "see [[Old]]"}])
+
+    {:ok, _} =
+      Notes.upsert_note(
+        u,
+        a,
+        %{"path" => "Source.md", "content" => "see [[New]] [[Gone]]", "mtime" => 2.0},
+        actor: "api"
+      )
+
+    assert {:ok, text, %{"notes" => [s]}} = get(u, a, %{"paths" => ["Source.md"]})
+    assert s["content"] =~ "[[New]]"
+    assert s["outgoing"] == ["New.md"]
+    assert s["unresolved"] == ["Gone"]
+    assert text =~ "New.md"
+  end
+
+  # A section's text is part of the note: its outgoing links stay the note's.
+  test "a section read keeps the whole note's outgoing links", %{user: u, a: a} do
+    seed(u, a, [{"X.md", "x"}, {"Y.md", "y"}, {"Source.md", "## A\n[[X]]\n\n## B\n[[Y]]\n"}])
+
+    assert {:ok, _, %{"notes" => [s]}} =
+             get(u, a, %{"paths" => ["Source.md"], "section" => "A"})
+
+    refute s["content"] =~ "[[Y]]"
+    assert Enum.sort(s["outgoing"]) == ["X.md", "Y.md"]
   end
 
   # Review Focus 4

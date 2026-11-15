@@ -39,6 +39,29 @@ defmodule EngramWeb.NotesControllerLinksTest do
       assert link["target_note_id"] == target.id
       assert link["dangling"] == false
     end
+
+    # The response parses the content it returns, so links do not wait for
+    # the extraction job (never run here).
+    test "returns the links of the returned content before extraction", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, target} =
+        Engram.Notes.upsert_note(user, vault, %{path: "B.md", content: "# B", mtime: 1_000.0},
+          actor: "api"
+        )
+
+      {:ok, source} =
+        Engram.Notes.upsert_note(user, vault, %{path: "S.md", content: "[[B]]", mtime: 1_000.0},
+          actor: "api"
+        )
+
+      body = conn |> get(~p"/api/notes/by-id/#{source.id}") |> json_response(200)
+
+      assert [%{"target_text" => "B", "dangling" => false} = link] = body["links"]
+      assert link["target_note_id"] == target.id
+    end
   end
 
   describe "backlinks existence probe (#2169)" do
