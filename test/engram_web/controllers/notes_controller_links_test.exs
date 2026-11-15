@@ -64,6 +64,42 @@ defmodule EngramWeb.NotesControllerLinksTest do
     end
   end
 
+  # The write holds the vault's seq row lock until it commits, so the
+  # response's link parse must run after the commit, never inside it.
+  describe "POST /api/notes — links" do
+    setup do
+      me = self()
+      id = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        id,
+        [:engram, :nif, :call, :stop],
+        fn _, _, %{nif: nif}, _ ->
+          if nif == :link_extract and self() == me,
+            do: send(me, {:link_parse, Engram.Repo.in_transaction?()})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+    end
+
+    test "parses the response's links after the write commits", %{conn: conn} do
+      # Control: the probe sees a parse that does run inside a transaction.
+      Engram.Repo.transaction(fn -> Engram.Links.Parser.extract("[[x]]") end)
+      assert_received {:link_parse, true}
+
+      body =
+        conn
+        |> post("/api/notes", %{path: "W.md", content: "see [[Elsewhere]]", mtime: 1.0})
+        |> json_response(200)
+
+      assert [%{"target_text" => "Elsewhere", "dangling" => true}] = body["note"]["links"]
+      assert_received {:link_parse, false}
+      refute_received {:link_parse, true}
+    end
+  end
+
   describe "backlinks existence probe (#2169)" do
     test "answers existence without loading the note body", %{
       conn: conn,

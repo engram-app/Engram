@@ -48,8 +48,6 @@ defmodule Engram.Links do
   alias Engram.Links.NoteLink
   alias Engram.Links.Parser
   alias Engram.Logger.DecryptFailure
-  alias Engram.MCP.ParseGate
-  alias Engram.Native
   alias Engram.Notes.Keys
   alias Engram.Notes.Note
   alias Engram.Repo
@@ -82,12 +80,9 @@ defmodule Engram.Links do
   @backlink_read_fields [:link_keys_stamp, :target_key_hmac | @edge_read_fields]
   @backlinks_limit 200
 
-  # Read-time parse bounds (`links_for_notes/3`): notes per call (get_notes
-  # reads at most 20 paths), bytes per note, and the gate waits for notes
-  # too big to parse inline. Past any of them: the stored rows.
-  @read_parse_max_notes 20
-  @read_parse_max_bytes 1_048_576
-  @read_parse_gate [acquire_timeout: 1_000, parse_timeout: 2_000]
+  # Text `links_for_notes/2` parses per call (about 40-60 ms of link
+  # scanning at prod speed); notes past it read their stored rows.
+  @read_parse_budget 512 * 1024
 
   # Rows per `insert_all` statement. See replace_links/4: 17 binds per row
   # against the protocol's 65535 cap leaves room for 3855, so 2000 is a
@@ -954,14 +949,14 @@ defmodule Engram.Links do
   @doc """
   Decrypted outgoing links for a note, in parser order. `note` is an id
   (stored edges) or a note carrying its current text (read-time parse); see
-  `links_for_notes/3`.
+  `links_for_notes/2`.
   """
-  @spec links_for_note(map(), binary() | map(), keyword()) :: [map()]
-  def links_for_note(user, note, opts \\ []),
-    do: user |> links_for_notes([note], opts) |> Map.fetch!(note_key(note))
+  @spec links_for_note(map(), binary() | map()) :: [map()]
+  def links_for_note(user, note),
+    do: user |> links_for_notes([note]) |> Map.fetch!(note_key(note))
 
   @doc """
-  `links_for_note/3` for many notes in one pass: `%{note_id => links}`, every
+  `links_for_note/2` for many notes in one pass: `%{note_id => links}`, every
   id present. The edges, their targets and the target paths each cost one
   query for the whole set, not one per note.
 
@@ -973,20 +968,19 @@ defmodule Engram.Links do
   job (seconds; longer for live CRDT edits). Parsing the returned text, not
   re-reading the note, keeps the links and the content from disagreeing.
 
-  The parse is bounded, and anything past a bound reads the stored rows
-  instead (never an error):
-
-    * more than #{@read_parse_max_notes} notes with text in one call: the
-      whole call reads stored rows;
-    * a note over #{div(@read_parse_max_bytes, 1024)} KB: that note does;
-    * notes over `Engram.Native.inline_max/0` parse in one
-      `Engram.MCP.ParseGate` run (bounded concurrency; `opts[:gate]` carries
-      the caller's deadline); busy, timeout or deadline: those notes do.
+  The parse is bounded by bytes: at most #{div(@read_parse_budget, 1024)} KB
+  of text per call, taken note by note in order. A note that does not fit
+  in what is left reads its stored rows instead (never an error). The link
+  scanner is linear (75-121 ms per MB, docs/context/native-nifs.md), so a
+  call spends at most a few tens of ms parsing, wherever it runs: callers
+  may be inside a transaction (an MCP request, a REST read), and nothing
+  here waits on a lock or a gate. A call with nothing to resolve opens no
+  transaction.
 
   Backlinks (`backlinks_for_notes/3`) still come from stored rows only.
   """
-  @spec links_for_notes(map(), [binary() | map()], keyword()) :: %{binary() => [map()]}
-  def links_for_notes(user, notes, opts \\ []) do
+  @spec links_for_notes(map(), [binary() | map()]) :: %{binary() => [map()]}
+  def links_for_notes(user, notes) do
     # Both outside the scope: see `resolve_target/4` above. `reload_for_dek/1`
     # reads `users`, which carries no RLS policy, so it does not need the
     # tenant. This is the hottest of the nine — `note_json/2` calls it on every
@@ -994,61 +988,36 @@ defmodule Engram.Links do
     user = reload_for_dek(user)
     {:ok, dek} = Crypto.get_dek(user)
     notes = Enum.uniq_by(notes, &note_key/1)
-    # Also outside: parse CPU (and a gate wait) must not hold a connection.
-    parsed = read_time_links(notes, dek, Keyword.get(opts, :gate, []))
+    parsed = read_time_links(notes, dek)
     ids = Enum.map(notes, &note_key/1)
 
-    Repo.with_tenant!(user.id, fn -> do_links_for_notes(user, ids, parsed, dek) end)
+    # Every note parsed and none links anywhere: nothing to read.
+    if Enum.all?(ids, &(Map.get(parsed, &1) == [])),
+      do: Map.new(ids, &{&1, []}),
+      else: Repo.with_tenant!(user.id, fn -> do_links_for_notes(user, ids, parsed, dek) end)
   end
 
   defp note_key(%{id: id}), do: id
   defp note_key(id) when is_binary(id), do: id
 
-  # `%{note_id => [link]}` for the notes whose links come from their text.
-  defp read_time_links(notes, dek, gate) do
-    texts =
-      for %{id: id, vault_id: vault_id, content: text} <- notes,
-          is_binary(text),
-          byte_size(text) <= @read_parse_max_bytes,
-          do: {id, vault_id, text}
+  # `%{note_id => [link]}` for the notes whose links come from their text:
+  # in order, each while the call's byte budget still holds it.
+  defp read_time_links(notes, dek) do
+    filter_key = Crypto.dek_filter_key_from_bytes(dek)
 
-    if length(texts) > @read_parse_max_notes do
-      %{}
-    else
-      filter_key = Crypto.dek_filter_key_from_bytes(dek)
+    {parsed, _left} =
+      Enum.reduce(notes, {%{}, @read_parse_budget}, fn
+        %{id: id, vault_id: vault_id, content: text}, {acc, left}
+        when is_binary(text) and byte_size(text) <= left ->
+          links = text |> Parser.extract() |> Enum.map(&parsed_link(&1, id, vault_id, filter_key))
+          {Map.put(acc, id, links), left - byte_size(text)}
 
-      texts
-      |> parse_texts(gate)
-      |> Map.new(fn {id, vault_id, parsed} ->
-        {id, Enum.map(parsed, &parsed_link(&1, id, vault_id, filter_key))}
+        _id_or_over_budget, acc ->
+          acc
       end)
-    end
+
+    parsed
   end
-
-  # Small notes parse here (the NIF runs inline, under a millisecond); the
-  # rest share one gated run, so big ones never pile onto the dirty
-  # scheduler and a missed deadline falls back instead of waiting.
-  defp parse_texts(texts, gate) do
-    {inline, dirty} =
-      Enum.split_with(texts, fn {_, _, text} -> byte_size(text) <= Native.inline_max() end)
-
-    parse = fn batch ->
-      for {id, vault_id, text} <- batch, do: {id, vault_id, Parser.extract(text)}
-    end
-
-    bytes = dirty |> Enum.map(&byte_size(elem(&1, 2))) |> Enum.sum()
-
-    gated =
-      case dirty != [] && ParseGate.run(fn -> parse.(dirty) end, read_gate_opts(gate, bytes)) do
-        {:ok, result} -> result
-        _none_or_refused -> []
-      end
-
-    parse.(inline) ++ gated
-  end
-
-  defp read_gate_opts(gate, bytes),
-    do: @read_parse_gate |> Keyword.merge(gate) |> Keyword.put(:bytes, bytes)
 
   # A parsed link in the shape `resolve_edges/3` and `render_link/3` read:
   # the fields `sync_links/4` would store for it.

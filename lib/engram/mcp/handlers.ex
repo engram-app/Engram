@@ -2424,7 +2424,8 @@ defmodule Engram.MCP.Handlers do
 
   # `entries` is [{path, fetch_fn}]. Each note is fetched, budgeted and
   # rendered before the next, so at most the kept content plus one note is
-  # alive. Links are read afterwards for every rendered note in one batch.
+  # alive (a whole-note read's link source holds the same content binary,
+  # not a copy). Links are read afterwards for every rendered note in one batch.
   defp render_notes(user, entries, outline?, links, gate) do
     {rendered, _spent} =
       Enum.map_reduce(entries, 0, fn {path, fetch}, spent ->
@@ -2449,7 +2450,7 @@ defmodule Engram.MCP.Handlers do
         end
       end)
 
-    rendered = if links, do: with_links(user, rendered, gate), else: rendered
+    rendered = if links, do: with_links(user, rendered), else: rendered
 
     {:ok, Enum.map_join(rendered, "\n\n---\n\n", &elem(&1, 0)),
      %{"notes" => Enum.map(rendered, &elem(&1, 1))}}
@@ -2457,14 +2458,14 @@ defmodule Engram.MCP.Handlers do
 
   # What the links read gets for a rendered note. A whole-note read hands
   # over the text it returns, so outgoing links are parsed from exactly that
-  # text (`Links.links_for_notes/3`), not from rows the extract job may not
+  # text (`Links.links_for_notes/2`), not from rows the extract job may not
   # have rewritten yet. A section or an outline reads the stored rows by id.
   # `false` (no links) is never read.
   defp link_source(note, :text), do: Map.take(note, [:id, :vault_id, :content])
   defp link_source(note, _stored_or_none), do: note.id
 
-  defp with_links(user, rendered, gate) do
-    payloads = links_payloads(user, for({_t, _p, src} <- rendered, src, do: src), gate: gate)
+  defp with_links(user, rendered) do
+    payloads = links_payloads(user, for({_t, _p, src} <- rendered, src, do: src))
 
     Enum.map(rendered, fn
       {text, payload, nil} ->
@@ -2516,21 +2517,21 @@ defmodule Engram.MCP.Handlers do
   @spec links_payload(map(), map(), pos_integer()) ::
           {map(), {boolean(), non_neg_integer(), non_neg_integer(), non_neg_integer()}}
   def links_payload(user, note, limit \\ Engram.Links.backlinks_limit()),
-    do: user |> links_payloads([note.id], [], limit) |> Map.fetch!(note.id)
+    do: user |> links_payloads([note.id], limit) |> Map.fetch!(note.id)
 
   # `links_payload/3` for every note in one batch: two `Links` reads in all,
   # not two per note. `sources` are ids or `link_source/2` maps.
-  defp links_payloads(user, sources, opts, limit \\ Engram.Links.backlinks_limit())
+  defp links_payloads(user, sources, limit \\ Engram.Links.backlinks_limit())
 
-  defp links_payloads(_user, [], _opts, _limit), do: %{}
+  defp links_payloads(_user, [], _limit), do: %{}
 
-  defp links_payloads(user, sources, opts, limit) do
+  defp links_payloads(user, sources, limit) do
     note_ids = Enum.map(sources, &link_id/1)
 
     backlinks =
       Engram.Links.backlinks_for_notes(user, note_ids, limit: limit + 1, distinct_sources: true)
 
-    outgoing = Engram.Links.links_for_notes(user, sources, opts)
+    outgoing = Engram.Links.links_for_notes(user, sources)
 
     Map.new(note_ids, fn id ->
       {id, links_entry(Map.fetch!(backlinks, id), Map.fetch!(outgoing, id), limit)}

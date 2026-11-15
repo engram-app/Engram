@@ -1,5 +1,5 @@
 defmodule Engram.Links.ReadTimeLinksPlanTest do
-  # The read-time outgoing links (`Links.links_for_notes/3` given a note's
+  # The read-time outgoing links (`Links.links_for_notes/2` given a note's
   # text) as prod runs them: `engram_app`, FORCE RLS, the tenant set by the
   # read itself, 8 calls on one connection (past the 5 custom plans Postgres
   # tries before a named statement may go generic).
@@ -7,13 +7,14 @@ defmodule Engram.Links.ReadTimeLinksPlanTest do
   # The read-time path adds no SQL shape: it skips the `note_links` read and
   # sends the same candidate union and note-path read as the stored path. So
   # this pins (1) the answer under RLS on every call, (2) no `note_links`
-  # read, (3) the union never runs on a generic plan (it stays unnamed, see
+  # read, (3) the union is never a named statement, so never a generic plan (see
   # `target_candidates_plan_test.exs` and notes-generic-plan-mis-pick.md for
   # why its generic plan walks the vault), and (4) its custom plan, read as
   # `engram_app` with the tenant set, uses an index for every `notes` part.
   # Not async: ALTER TABLE and the role drop.
   use Engram.DataCase, async: false
 
+  import Ecto.Query
   import Engram.RlsCase
 
   alias Engram.Fixtures
@@ -56,6 +57,24 @@ defmodule Engram.Links.ReadTimeLinksPlanTest do
     %{user: user, note: note}
   end
 
+  defp prepared?(sql),
+    do: Repo.query!("SELECT 1 FROM pg_prepared_statements WHERE statement = $1", [sql]).rows != []
+
+  # The SQL of a user-wide notes count, run (named) on this connection.
+  defp named_sql(user) do
+    me = self()
+
+    {_, queries} =
+      Engram.QueryRecorder.record(fn ->
+        Repo.one(
+          from(n in Notes.Note, where: n.user_id == ^user.id, select: count()),
+          skip_tenant_check: true
+        )
+      end)
+
+    queries |> Enum.find(&(&1.pid == me and &1.sql =~ ~s(FROM "notes"))) |> Map.fetch!(:sql)
+  end
+
   test "as engram_app: right on every call, no note_links read, union never generic",
        %{user: user, note: note} do
     me = self()
@@ -80,13 +99,14 @@ defmodule Engram.Links.ReadTimeLinksPlanTest do
       |> List.last()
       |> Kernel.||(flunk("the read-time path sent no candidate union"))
 
-    %{rows: [[generic_runs]]} =
-      Repo.query!(
-        "SELECT coalesce(sum(generic_plans), 0)::int FROM pg_prepared_statements WHERE statement = $1",
-        [recorded.sql]
-      )
+    # Positive control, same connection: a named notes query is found by
+    # the lookup below. Without it, a lookup that could never match the
+    # recorded SQL would pass the refute.
+    named = named_sql(user)
+    assert prepared?(named), "the lookup cannot see a named statement:\n#{named}"
 
-    assert generic_runs == 0, "the union ran on a generic plan:\n#{recorded.sql}"
+    refute prepared?(recorded.sql),
+           "the union is a named prepared statement, so it can go generic:\n#{recorded.sql}"
 
     %{custom: custom} = QueryPlan.rls_plans(user.id, recorded.sql, recorded.params)
     refute custom =~ ~r/Seq Scan on notes/, "custom plan:\n#{custom}"

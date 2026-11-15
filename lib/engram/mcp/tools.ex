@@ -939,7 +939,9 @@ defmodule Engram.MCP.Tools do
           "To save tokens on long notes, pass outline: true for the heading list only, or " <>
           "section with one path to read just that heading's section. Pass include_links: " <>
           "true to also get, per note, the notes linking to it, the notes and attachments " <>
-          "it links to, and its links that point at no existing note or attachment.",
+          "it links to, and its links that point at no existing note or attachment. " <>
+          "Backlinks, and links on section or outline reads, trail an edit: typically " <>
+          "under 15 s after an MCP or API write, up to about a minute after a web or live edit.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{

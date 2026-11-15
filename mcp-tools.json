@@ -766,7 +766,7 @@
         "readOnlyHint": true,
         "title": "Read Notes"
       },
-      "description": "Retrieve the full content of multiple notes in one call (1-20 paths). Also reads a single note: pass one path. Use to inventory a folder (list_folder then get_notes) or to read a batch of search results without N round-trips. Missing paths are reported inline. To save tokens on long notes, pass outline: true for the heading list only, or section with one path to read just that heading's section. Pass include_links: true to also get, per note, the notes linking to it, the notes and attachments it links to, and its links that point at no existing note or attachment.",
+      "description": "Retrieve the full content of multiple notes in one call (1-20 paths). Also reads a single note: pass one path. Use to inventory a folder (list_folder then get_notes) or to read a batch of search results without N round-trips. Missing paths are reported inline. To save tokens on long notes, pass outline: true for the heading list only, or section with one path to read just that heading's section. Pass include_links: true to also get, per note, the notes linking to it, the notes and attachments it links to, and its links that point at no existing note or attachment. Backlinks, and links on section or outline reads, trail an edit: typically under 15 s after an MCP or API write, up to about a minute after a web or live edit.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

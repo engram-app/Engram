@@ -1,6 +1,6 @@
 defmodule Engram.Links.ReadTimeLinksTest do
   # Outgoing links of a note passed WITH its text are parsed from that text
-  # at read time (`Links.links_for_notes/3`), so get_notes and the web
+  # at read time (`Links.links_for_notes/2`), so get_notes and the web
   # single-note response see an edit before `ExtractNoteLinks` rewrites the
   # stored rows. The tests seed stored rows that DISAGREE with the text, so a
   # read that still used them fails; the parity test seeds converged ones.
@@ -108,47 +108,62 @@ defmodule Engram.Links.ReadTimeLinksTest do
     assert Links.links_for_note(u, note) == stored
   end
 
-  test "a tripped parse deadline falls back to the stored rows", %{user: u, vault: v} do
+  # `@read_parse_budget` in Engram.Links: text parsed per call.
+  @budget 512 * 1024
+
+  defp padded(text, size), do: text <> String.duplicate("x", size - byte_size(text))
+
+  test "a note over the per-call byte budget reads its stored rows", %{user: u, vault: v} do
     put!(u, v, "Old.md", "old")
     put!(u, v, "New.md", "new")
-    # Over the inline size, so the parse goes through Engram.MCP.ParseGate.
-    pad = String.duplicate("x", Engram.Native.inline_max() + 1)
-    note = stale_note!(u, v, "Source.md", "[[Old]]", "[[New]] " <> pad)
+    note = stale_note!(u, v, "Source.md", "[[Old]]", "[[New]]")
 
-    # Control: the gated parse itself works.
-    assert targets(Links.links_for_note(u, note)) == [{"New", "New.md", false}]
+    # Control at the budget: parsed.
+    at = %{note | content: padded("[[New]] ", @budget)}
+    assert targets(Links.links_for_note(u, at)) == [{"New", "New.md", false}]
+
+    over = %{note | content: padded("[[New]] ", @budget + 1)}
+    assert targets(Links.links_for_note(u, over)) == [{"Old", "Old.md", false}]
+  end
+
+  test "the budget is per call: a note past what is left reads its stored rows",
+       %{user: u, vault: v} do
+    put!(u, v, "Old.md", "old")
+    put!(u, v, "New.md", "new")
+
+    [a, b, c] =
+      for {path, size} <- [{"A.md", 300 * 1024}, {"B.md", 300 * 1024}, {"C.md", 8}],
+          do: stale_note!(u, v, path, "[[Old]]", padded("[[New]] ", size))
+
+    got = Links.links_for_notes(u, [a, b, c])
+
+    assert targets(got[a.id]) == [{"New", "New.md", false}]
+    assert targets(got[b.id]) == [{"Old", "Old.md", false}]
+    # A smaller note after it still fits.
+    assert targets(got[c.id]) == [{"New", "New.md", false}]
+  end
+
+  # Link parsing is linear and bounded by the byte budget, so it never queues
+  # on Engram.MCP.ParseGate (one slot in prod, shared with outline parses):
+  # with every gated run refused, a large note still parses its text.
+  test "a large note parses with the parse gate refusing everything", %{user: u, vault: v} do
+    put!(u, v, "Old.md", "old")
+    put!(u, v, "New.md", "new")
+    note = stale_note!(u, v, "Source.md", "[[Old]]", padded("[[New]] ", 64 * 1024))
 
     Process.put(:engram_parse_gate_opts, deadline: System.monotonic_time(:millisecond) - 1)
-    assert targets(Links.links_for_note(u, note)) == [{"Old", "Old.md", false}]
+    assert Engram.MCP.ParseGate.run(fn -> :ran end) == {:error, :deadline}
+
+    assert targets(Links.links_for_note(u, note)) == [{"New", "New.md", false}]
   end
 
-  test "a note over the per-note size falls back to the stored rows", %{user: u, vault: v} do
-    put!(u, v, "Old.md", "old")
-    note = put!(u, v, "Source.md", "x")
-    :ok = Links.replace_links(u, v, note.id, Parser.extract("[[Old]]"))
-    note = read!(u, v, "Source.md")
+  test "a note with nothing to resolve opens no transaction", %{user: u, vault: v} do
+    note = stale_note!(u, v, "Source.md", "[[Old]]", "no links")
+    me = self()
 
-    huge = %{note | content: "[[New]] " <> String.duplicate("x", 1_048_576)}
-    assert targets(Links.links_for_note(u, huge)) == [{"Old", "Old.md", false}]
-  end
-
-  test "a batch over the note cap falls back to the stored rows", %{user: u, vault: v} do
-    put!(u, v, "Old.md", "old")
-    put!(u, v, "New.md", "new")
-
-    notes =
-      for i <- 1..21 do
-        note = put!(u, v, "S#{i}.md", "[[New]]")
-        :ok = Links.replace_links(u, v, note.id, Parser.extract("[[Old]]"))
-        read!(u, v, "S#{i}.md")
-      end
-
-    over = Links.links_for_notes(u, notes)
-    assert Enum.all?(notes, &(targets(over[&1.id]) == [{"Old", "Old.md", false}]))
-
-    # Control at the cap: 20 notes parse their text.
-    at = Links.links_for_notes(u, Enum.take(notes, 20))
-    assert Enum.all?(Enum.take(notes, 20), &(targets(at[&1.id]) == [{"New", "New.md", false}]))
+    {links, queries} = Engram.QueryRecorder.record(fn -> Links.links_for_note(u, note) end)
+    assert links == []
+    assert Enum.filter(queries, &(&1.pid == me)) == []
   end
 
   test "a note with no text loaded reads the stored rows", %{user: u, vault: v} do
