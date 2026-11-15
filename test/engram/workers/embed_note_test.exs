@@ -1727,6 +1727,169 @@ defmodule Engram.Workers.EmbedNoteTest do
     end
   end
 
+  # The default daily embed ceiling (`embed_tokens_per_day`).
+  @ceiling 20_000_000
+
+  defp spend_today(user_id),
+    do: {:ok, _} = Engram.UsageMeters.day_take(user_id, @ceiling, @ceiling)
+
+  defp attach_events(events) do
+    handler = "embed-ceiling-#{System.unique_integer()}"
+    test_pid = self()
+
+    :telemetry.attach_many(
+      handler,
+      events,
+      fn event, _, _, _ -> send(test_pid, {:event, event}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  defp embeds_densely(bypass, note) do
+    Engram.MockEmbedder
+    |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+
+    stub_qdrant(bypass)
+    assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+    indexed = Engram.Fixtures.raw_note!(note.id)
+    assert indexed.dense_indexed_hash == indexed.content_hash
+  end
+
+  defp resumes_tomorrow?(note, user_id),
+    do:
+      DateTime.compare(
+        Engram.Fixtures.raw_note!(note.id).embed_retry_after,
+        Engram.EmbedCeiling.resume_at(user_id)
+      ) == :eq
+
+  describe "perform/1: daily embed ceiling (Engram.EmbedCeiling)" do
+    setup %{user: user} = ctx do
+      EngramWeb.RateLimiter.reset_buckets!()
+      unless ctx[:free], do: insert(:subscription, user: user, tier: "pro", status: "active")
+      :ok
+    end
+
+    # Fails without the ceiling: a paid user had no limit, so the pass called
+    # Voyage (no Mox expectation here, so that call fails the test).
+    test "a paid user over the ceiling indexes keyword-only, parks until the next UTC day",
+         %{bypass: bypass, user: user, note: note} do
+      spend_today(user.id)
+      stub_qdrant(bypass)
+      attach_events([[:engram, :embed, :ceiling_parked], [:engram, :abuse, :embed_ceiling_hit]])
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+        end)
+
+      indexed = Engram.Fixtures.raw_note!(note.id)
+      assert indexed.embed_hash == indexed.content_hash
+      assert is_nil(indexed.dense_indexed_hash)
+
+      assert Repo.exists?(from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id),
+               skip_tenant_check: true
+             )
+
+      # A clock, not the Free queue (the sweep clears that for paid users).
+      assert resumes_tomorrow?(note, user.id)
+      assert is_nil(indexed.embed_budget_parked)
+      assert Engram.UsageMeters.day_used(user.id) == @ceiling
+
+      assert_received {:event, [:engram, :embed, :ceiling_parked]}
+      assert_received {:event, [:engram, :abuse, :embed_ceiling_hit]}
+      assert log =~ "daily embed ceiling reached"
+    end
+
+    test "the ceiling log fires once per user-day; every park is counted",
+         %{bypass: bypass, user: user, vault: vault, note: note} do
+      spend_today(user.id)
+      stub_qdrant(bypass)
+      attach_events([[:engram, :embed, :ceiling_parked], [:engram, :abuse, :embed_ceiling_hit]])
+
+      other = Engram.Fixtures.insert_note!(user, vault, %{path: "Test/Other.md", content: "# O"})
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          for n <- [note, other], do: assert(:ok = perform_job(EmbedNote, %{note_id: n.id}))
+        end)
+
+      assert_received {:event, [:engram, :embed, :ceiling_parked]}
+      assert_received {:event, [:engram, :embed, :ceiling_parked]}
+      assert_received {:event, [:engram, :abuse, :embed_ceiling_hit]}
+      refute_received {:event, [:engram, :abuse, :embed_ceiling_hit]}
+      assert length(String.split(log, "daily embed ceiling reached")) == 2
+    end
+
+    test "a parked note still over the ceiling stays parked without a pass, then re-embeds densely the next UTC day",
+         %{bypass: bypass, user: user, note: note} do
+      spend_today(user.id)
+      stub_qdrant(bypass)
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      # The sweep hands it back (cooldown cleared) while still over: the dense
+      # backfill parks it again on the clock, no Voyage.
+      Repo.update_all(from(n in Note, where: n.id == ^note.id), [set: [embed_retry_after: nil]],
+        skip_tenant_check: true
+      )
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      assert resumes_tomorrow?(note, user.id)
+
+      # The day turns: today's counter belongs to yesterday.
+      Repo.update_all(from(m in Engram.UsageMeters.Meter, where: m.user_id == ^user.id),
+        set: [embed_day: Date.add(Date.utc_today(), -1)]
+      )
+
+      embeds_densely(bypass, note)
+    end
+
+    test "the kill switch off restores the uncapped behaviour",
+         %{bypass: bypass, user: user, note: note} do
+      Engram.ServiceConfig.put_override(:embed_daily_ceiling, false)
+      spend_today(user.id)
+      embeds_densely(bypass, note)
+    end
+
+    test "a -1 override (our staging accounts) is never capped",
+         %{bypass: bypass, user: user, note: note} do
+      insert(:user_limit_override, user: user, key: "embed_tokens_per_day", value: %{"v" => -1})
+      spend_today(user.id)
+      embeds_densely(bypass, note)
+    end
+
+    test "self-host (limits not enforced) is never capped",
+         %{bypass: bypass, user: user, note: note} do
+      prev = Application.get_env(:engram, :limits_enforced)
+      Application.put_env(:engram, :limits_enforced, false)
+      on_exit(fn -> Application.put_env(:engram, :limits_enforced, prev) end)
+
+      spend_today(user.id)
+      embeds_densely(bypass, note)
+    end
+
+    test "a ceiling raised mid-day lets the spent user embed again",
+         %{bypass: bypass, user: user, note: note} do
+      spend_today(user.id)
+
+      insert(:user_limit_override,
+        user: user,
+        key: "embed_tokens_per_day",
+        value: %{"v" => 2 * @ceiling}
+      )
+
+      embeds_densely(bypass, note)
+    end
+
+    @tag :free
+    test "a Free user is bounded by the bucket, not the ceiling",
+         %{bypass: bypass, user: user, note: note} do
+      spend_today(user.id)
+      embeds_densely(bypass, note)
+    end
+  end
+
   describe "perform/1 — a note with nothing to index" do
     # Review of #1835: blob stripping made an image-only note parse to zero
     # chunks. A zero-chunk pass left `dense_indexed_hash` nil and cleared the

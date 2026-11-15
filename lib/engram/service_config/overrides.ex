@@ -90,7 +90,10 @@ defmodule Engram.ServiceConfig.Overrides do
     inactivity_soft_delete: :boolean,
     inactivity_delete_grace_days: {:integer, 0..365},
     # The `NoteMeta` migration's kill switch (title/tags/links rule heal), default off.
-    note_meta_backfill: :boolean
+    note_meta_backfill: :boolean,
+    # The daily embed token ceiling's kill switch (`Engram.EmbedCeiling`),
+    # default on; off is the uncapped behaviour from before it.
+    embed_daily_ceiling: :boolean
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})
