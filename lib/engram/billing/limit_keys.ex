@@ -111,6 +111,18 @@ defmodule Engram.Billing.LimitKeys do
       type: :integer,
       defaults: %{free: 6_000_000, starter: nil, pro: nil}
     },
+    # The spend ceiling for a user whose `embed_token_bucket` is nil (paid):
+    # Voyage index tokens per UTC day (`Engram.EmbedCeiling`, about $2.40 list
+    # at 20M). Over it, embeds run keyword-only and park until the next UTC
+    # day, and search runs keyword-only; nothing is refused or lost. Free is
+    # bounded by its bucket (6M capacity, below this). Unlimited is one rule:
+    # a -1 `embed_token_bucket` override (every staging account) lifts this
+    # too, as does -1 here; the `embed_daily_ceiling` ServiceConfig switch
+    # turns it off for all.
+    embed_tokens_per_day: %{
+      type: :integer,
+      defaults: %{free: 20_000_000, starter: 20_000_000, pro: 20_000_000}
+    },
     # Free gets 2 so the tier can actually DEMONSTRATE sync — laptop + phone is
     # the floor for an Obsidian user, and a 1-device free tier can never show
     # the thing it is selling. The 3rd device is the upgrade trigger.

@@ -77,6 +77,16 @@ defmodule Engram.PromEx.Indexing do
       `ReconcileEmbeddings`). The event path is healthy while
       `sum(increase(...{missed="true"}[7d]))` stays near zero.
 
+    * The daily embed ceiling (`Engram.EmbedCeiling`), all untagged: polled
+      every 60 s on every node (aggregate with `max`, never `sum`),
+      `engram_prom_ex_indexing_embed_ceiling_max_user_tokens` (most tokens one
+      user spent today, UTC), `..._max_user_share` (that over the default
+      ceiling; alert at 0.5) and `..._users_over` (users at or over it); and
+      counters `engram_prom_ex_indexing_embed_ceiling_parked_total` (passes
+      parked keyword-only), `..._hits_total` (user-days that reached it) and
+      `..._keyword_searches_total` (searches run keyword-only). No per-user
+      series, by design.
+
   Cardinality contract: only `:outcome`/`:reason`/`:kind`/`:dense`/`:missed`
   (closed enums) and `:http_status` (an HTTP status). NEVER add note_id, user_id, or vault_id.
   """
@@ -101,29 +111,85 @@ defmodule Engram.PromEx.Indexing do
   @vector_cache_write_event [:engram, :vector_cache, :write]
   @vector_cache_skipped_event [:engram, :vector_cache, :skipped]
   @reconcile_found_event [:engram, :reconcile, :found]
+  @embed_ceiling_event [:engram, :embed_ceiling, :today]
+  @embed_ceiling_parked_event [:engram, :embed, :ceiling_parked]
+  @embed_ceiling_hit_event [:engram, :abuse, :embed_ceiling_hit]
+  @embed_ceiling_search_event [:engram, :embed, :ceiling_search]
 
   @impl true
   def polling_metrics(opts) do
     otp_app = Keyword.fetch!(opts, :otp_app)
     prefix = PromEx.metric_prefix(otp_app, :indexing)
 
-    Polling.build(
-      :engram_rebuild_ledger_polling_metrics,
-      Keyword.get(opts, :rebuild_ledger_poll_rate, :timer.seconds(60)),
-      {__MODULE__, :execute_rebuild_ledger, []},
-      [
-        last_value(prefix ++ [:rebuild, :ledger, :budget_tokens],
-          event_name: @rebuild_ledger_event,
-          measurement: :budget_tokens,
-          description: "v5 rebuild ledger budget: 1.15x the dry-run manifest's estimated tokens."
-        ),
-        last_value(prefix ++ [:rebuild, :ledger, :spent_tokens],
-          event_name: @rebuild_ledger_event,
-          measurement: :spent_tokens,
-          description: "Voyage tokens the v5 rebuild pass has debited to its ledger."
+    [
+      Polling.build(
+        :engram_rebuild_ledger_polling_metrics,
+        Keyword.get(opts, :rebuild_ledger_poll_rate, :timer.seconds(60)),
+        {__MODULE__, :execute_rebuild_ledger, []},
+        [
+          last_value(prefix ++ [:rebuild, :ledger, :budget_tokens],
+            event_name: @rebuild_ledger_event,
+            measurement: :budget_tokens,
+            description:
+              "v5 rebuild ledger budget: 1.15x the dry-run manifest's estimated tokens."
+          ),
+          last_value(prefix ++ [:rebuild, :ledger, :spent_tokens],
+            event_name: @rebuild_ledger_event,
+            measurement: :spent_tokens,
+            description: "Voyage tokens the v5 rebuild pass has debited to its ledger."
+          )
+        ]
+      ),
+      Polling.build(
+        :engram_embed_ceiling_polling_metrics,
+        Keyword.get(opts, :embed_ceiling_poll_rate, :timer.seconds(60)),
+        {__MODULE__, :execute_embed_ceiling, []},
+        [
+          last_value(prefix ++ [:embed_ceiling, :max_user_tokens],
+            event_name: @embed_ceiling_event,
+            measurement: :max_user_tokens,
+            description: "Most embed tokens any one user spent today (UTC), no user label."
+          ),
+          last_value(prefix ++ [:embed_ceiling, :max_user_share],
+            event_name: @embed_ceiling_event,
+            measurement: :max_user_share,
+            description:
+              "That maximum as a share of the default daily embed ceiling (1.0 = at it)."
+          ),
+          last_value(prefix ++ [:embed_ceiling, :users_over],
+            event_name: @embed_ceiling_event,
+            measurement: :users_over,
+            description: "Users at or over the default daily embed ceiling today (UTC)."
+          )
+        ]
+      )
+    ]
+  end
+
+  @doc false
+  # Today's ceiling numbers (`Engram.EmbedCeiling.stats/0`), one aggregate
+  # read per tick on every node (aggregate with `max`, never `sum`). Nothing
+  # while the ceiling is off or limits are not enforced. A failed read is
+  # skipped, as the ledger poll's is.
+  @spec execute_embed_ceiling() :: :ok
+  def execute_embed_ceiling do
+    case Engram.EmbedCeiling.stats() do
+      %{max: max, share: share, over: over} ->
+        :telemetry.execute(
+          @embed_ceiling_event,
+          %{max_user_tokens: max, max_user_share: share, users_over: over},
+          %{}
         )
-      ]
-    )
+
+      nil ->
+        :ok
+    end
+
+    :ok
+  rescue
+    e -> poll_skipped("embed ceiling", inspect(e.__struct__))
+  catch
+    kind, _ -> poll_skipped("embed ceiling", Atom.to_string(kind))
   end
 
   @doc false
@@ -146,13 +212,13 @@ defmodule Engram.PromEx.Indexing do
 
     :ok
   rescue
-    e -> ledger_skipped(inspect(e.__struct__))
+    e -> poll_skipped("rebuild ledger", inspect(e.__struct__))
   catch
-    kind, _ -> ledger_skipped(Atom.to_string(kind))
+    kind, _ -> poll_skipped("rebuild ledger", Atom.to_string(kind))
   end
 
-  defp ledger_skipped(why) do
-    Logger.warning("rebuild ledger poll skipped: #{why}")
+  defp poll_skipped(what, why) do
+    Logger.warning("#{what} poll skipped: #{why}")
     :ok
   end
 
@@ -167,6 +233,27 @@ defmodule Engram.PromEx.Indexing do
     Event.build(
       :engram_indexing_event_metrics,
       [
+        sum(
+          metric_prefix ++ [:embed_ceiling, :parked, :total],
+          event_name: @embed_ceiling_parked_event,
+          measurement: :count,
+          description:
+            "Embed passes that ran keyword-only and parked until the next UTC day " <>
+              "because the user reached the daily embed ceiling."
+        ),
+        sum(
+          metric_prefix ++ [:embed_ceiling, :hits, :total],
+          event_name: @embed_ceiling_hit_event,
+          measurement: :count,
+          description: "User-days that reached the daily embed ceiling (once per user per day)."
+        ),
+        sum(
+          metric_prefix ++ [:embed_ceiling, :keyword_searches, :total],
+          event_name: @embed_ceiling_search_event,
+          measurement: :count,
+          description:
+            "Searches run keyword-only because the user is over the daily embed ceiling."
+        ),
         sum(
           metric_prefix ++ [:reconcile_found, :total],
           event_name: @reconcile_found_event,

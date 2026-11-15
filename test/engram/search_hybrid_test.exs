@@ -133,6 +133,79 @@ defmodule Engram.SearchHybridTest do
     assert {:ok, []} = Search.search(user, vault, "x", mode: :vector)
   end
 
+  describe "the daily embed ceiling (Engram.EmbedCeiling)" do
+    setup %{user: user} do
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      :ok
+    end
+
+    defp expect_keyword_only(bypass, user, vault) do
+      point = hit_point(user, vault, "Ops", Ecto.UUID.generate(), 0.85, "paddle_api_key rotation")
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        assert Jason.decode!(body)["using"] == "keyword"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => [point]}}))
+      end)
+    end
+
+    # Fails without the ceiling: hybrid embedded the query (one embed_texts
+    # call, refused by the 0-call expectation) and sent a fused batch.
+    for mode <- [:hybrid, :vector] do
+      test "a #{mode} search over the ceiling runs keyword-only, with no query embed",
+           %{bypass: bypass, user: user, vault: vault} do
+        {:ok, _} = Engram.UsageMeters.day_take(user.id, 20_000_000, 20_000_000)
+        Mox.expect(Engram.MockEmbedder, :embed_texts, 0, fn _, _ -> {:ok, []} end)
+        expect_keyword_only(bypass, user, vault)
+
+        handler = "ceiling-search-#{System.unique_integer()}"
+        test_pid = self()
+
+        :telemetry.attach(
+          handler,
+          [:engram, :embed, :ceiling_search],
+          fn _, _, _, _ -> send(test_pid, :ceiling_search) end,
+          nil
+        )
+
+        on_exit(fn -> :telemetry.detach(handler) end)
+
+        assert {:ok, [hit]} =
+                 Search.search(user, vault, "paddle_api_key", mode: unquote(mode))
+
+        assert hit.text == "paddle_api_key rotation"
+        assert_received :ceiling_search
+      end
+    end
+
+    test "under the ceiling, hybrid still embeds the query",
+         %{bypass: bypass, user: user, vault: vault} do
+      {:ok, _} = Engram.UsageMeters.day_take(user.id, 19_000_000, 20_000_000)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn ["paddle_api_key"], _opts -> {:ok, [[0.1, 0.2, 0.3]]} end)
+
+      Bypass.expect_once(
+        bypass,
+        "POST",
+        "/collections/engram_notes/points/query/batch",
+        fn conn ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(QdrantStub.batch(conn, %{"result" => %{"points" => []}}))
+          )
+        end
+      )
+
+      assert {:ok, []} = Search.search(user, vault, "paddle_api_key", mode: :hybrid)
+    end
+  end
+
   test "mode: :keyword routes to a sparse-only query and returns results",
        %{bypass: bypass, user: user, vault: vault} do
     # Keyword mode must NOT call the embedder at all.

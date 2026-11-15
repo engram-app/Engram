@@ -44,6 +44,7 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
+  alias Engram.EmbedCeiling
   alias Engram.EmbedModels
   alias Engram.Indexing
   alias Engram.Jobs
@@ -420,6 +421,37 @@ defmodule Engram.Workers.EmbedNote do
   # A woken head note spends at most its `:budget_cap`. A refused or
   # partly-fitting pass keeps every dense vector the note already has
   # (`Indexing` re-plans only the new chunks).
+  #
+  # A user without a bucket (paid, a -1 override) under the daily ceiling
+  # (`Engram.EmbedCeiling`) reserves against today's counter instead: same
+  # atomic take-or-refuse, same partial fit, the same queue on a refusal, and
+  # a woken head note spends at most its `:budget_cap`.
+  defp budget_opts(user, opts, false, ceiling) when is_integer(ceiling) do
+    limit = Keyword.get(opts, :budget_cap)
+
+    [
+      reserve_tokens: fn tokens ->
+        (is_nil(limit) or tokens <= limit) and
+          match?({:ok, _}, UsageMeters.day_take(user.id, tokens, ceiling))
+      end,
+      budget_available: fn ->
+        left = EmbedCeiling.available(user.id, ceiling)
+        if limit, do: min(limit, left), else: left
+      end,
+      release_tokens: &UsageMeters.release_embed_tokens(user.id, &1)
+    ]
+  end
+
+  defp budget_opts(user, opts, maintenance?, _ceiling), do: budget_opts(user, opts, maintenance?)
+
+  # A pass's reservation: none for a budget-spent pass (it already knows),
+  # else `budget_opts/4`.
+  defp pass_budget(user, opts, ceiling) do
+    if opts[:budget_spent],
+      do: [reserve_tokens: fn _ -> false end, release_tokens: fn _ -> :ok end],
+      else: budget_opts(user, opts, Keyword.get(opts, :maintenance, false), ceiling)
+  end
+
   defp budget_opts(user, opts, false) do
     case Billing.effective_limit(user, :embed_token_bucket) do
       cap when is_integer(cap) and cap >= 0 ->
@@ -538,7 +570,10 @@ defmodule Engram.Workers.EmbedNote do
         queue_blocked?(note) or UsageMeters.bucket_available(user.id, cap) == 0
 
       cap when is_nil(cap) or cap == :unlimited or is_integer(cap) ->
-        false
+        case EmbedCeiling.tokens(user) do
+          nil -> false
+          ceiling -> EmbedCeiling.available(user.id, ceiling) == 0
+        end
 
       _malformed ->
         true
@@ -674,6 +709,8 @@ defmodule Engram.Workers.EmbedNote do
   # Tenant-scoped for the same filtered-UPDATE reason as `maybe_mark_poison/3`.
   # A note parked before the queue existed has no need recorded: the whole
   # note is the upper bound.
+  # A note over the daily ceiling parks on the same queue (its wake is the
+  # next UTC day, `WakeBudgetParked.schedule_park/3`), without a pass.
   defp park_over_budget(%Note{} = note, user) do
     need = park_need(note)
 
@@ -689,8 +726,18 @@ defmodule Engram.Workers.EmbedNote do
         WakeBudgetParked.schedule_park(user, need, note.embed_budget_next)
       end)
 
-    newly_parked(note, user)
+    report_park(note, user, EmbedCeiling.tokens(user), false)
   end
+
+  # One park's report. A ceiling park is counted every time and logged once
+  # per user-day (`EmbedCeiling.parked/2`). A bucket park is logged once, when
+  # the note joins the queue, and a budget-spent backfill stays quiet (one
+  # event per note of a former over-cap vault).
+  defp report_park(_note, user, ceiling, _spent?) when is_integer(ceiling),
+    do: EmbedCeiling.parked(user, ceiling)
+
+  defp report_park(_note, _user, nil, true = _spent?), do: :ok
+  defp report_park(note, user, nil, false), do: newly_parked(note, user)
 
   # The need a park records when the pass priced nothing: the one already
   # recorded, else the whole note (an upper bound).
@@ -861,10 +908,10 @@ defmodule Engram.Workers.EmbedNote do
             Indexing.delete_points_by_path_hmac(decrypted_note, old_path_hmac_b64)
           end
 
-        budget =
-          if opts[:budget_spent],
-            do: [reserve_tokens: fn _ -> false end, release_tokens: fn _ -> :ok end],
-            else: budget_opts(user, opts, Keyword.get(opts, :maintenance, false))
+        # The daily ceiling, or nil (`EmbedCeiling.tokens/1`): read once, so
+        # the reservation and the park report agree.
+        ceiling = EmbedCeiling.tokens(user)
+        budget = pass_budget(user, opts, ceiling)
 
         # `dense?` is what Indexing actually wrote. Do NOT re-check the
         # budget here: a second read can land a DIFFERENT answer, and
@@ -907,11 +954,10 @@ defmodule Engram.Workers.EmbedNote do
         parked? = Process.delete(@budget_parked_key) == true
 
         case result do
-          # Parked on the bucket (not a floor pass: that is sparse by design).
-          # A budget-spent backfill already knew, so it stays quiet (one event
-          # per note of a former over-cap vault).
+          # Parked on the bucket or the daily ceiling (not a floor pass: that
+          # is sparse by design), reported by `report_park/4`.
           {:ok, _count, _embedded_bytes, _dense?} ->
-            if parked? and !opts[:budget_spent], do: newly_parked(note, user), else: :ok
+            if parked?, do: report_park(note, user, ceiling, opts[:budget_spent] == true)
             {:ok, :stamp_cleared}
 
           # The v5 rebuild left `on` (halted, or switched off) after this job

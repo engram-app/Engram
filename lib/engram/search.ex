@@ -9,6 +9,7 @@ defmodule Engram.Search do
   """
 
   alias Engram.Billing
+  alias Engram.EmbedCeiling
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Helpers
@@ -592,7 +593,7 @@ defmodule Engram.Search do
     # owner's embed budget was spent has only the sparse leg, so a dense-only
     # default cannot find it. Hybrid reaches both, and already degrades to
     # keyword when the query embed fails.
-    mode = Keyword.get(opts, :mode, :hybrid)
+    mode = opts |> Keyword.get(:mode, :hybrid) |> ceiling_mode(user)
     limit = opts |> Keyword.get(:limit, 5) |> clamp_limit()
 
     # On the grouped path `limit` is the NOTE count, not the chunk count.
@@ -891,6 +892,21 @@ defmodule Engram.Search do
     do: v |> max(0.0) |> min(1.0) |> :erlang.float()
 
   defp clamp_diversity(_other, _default), do: 0.0
+
+  # A user over today's embed ceiling (`Engram.EmbedCeiling`) searches
+  # keyword-only: no query embed. Its own counter, not `search_degraded`
+  # (which means the embedder failed), and no log per search (the ceiling
+  # logs once per user-day).
+  defp ceiling_mode(mode, user) when mode in [:vector, :hybrid] do
+    if EmbedCeiling.over?(user) do
+      :telemetry.execute([:engram, :embed, :ceiling_search], %{count: 1}, %{})
+      :keyword
+    else
+      mode
+    end
+  end
+
+  defp ceiling_mode(mode, _user), do: mode
 
   # Vector leg: embed query → dense Qdrant search (existing behavior preserved).
   defp run_legs(:vector, _user, query, search_opts, profile) do

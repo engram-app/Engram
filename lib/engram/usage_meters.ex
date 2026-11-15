@@ -32,6 +32,8 @@ defmodule Engram.UsageMeters do
       field :notes_count, :integer, default: 0
       field :embed_bucket_tokens, :float
       field :embed_bucket_at, :utc_datetime_usec
+      field :embed_day, :date
+      field :embed_day_tokens, :integer
       field :last_active_at, :utc_datetime_usec
       field :updated_at, :utc_datetime_usec
     end
@@ -98,14 +100,144 @@ defmodule Engram.UsageMeters do
 
   def release_embed_tokens(user_id, count)
       when is_binary(user_id) and is_integer(count) and count > 0 do
+    today = Date.utc_today()
+
     {_, _} =
       Repo.update_all(
-        from(m in Meter, where: m.user_id == ^user_id),
-        [inc: [lifetime_embed_tokens: -count, embed_bucket_tokens: count]],
+        from(m in Meter,
+          where: m.user_id == ^user_id,
+          update: [
+            inc: [lifetime_embed_tokens: ^(-count), embed_bucket_tokens: ^count],
+            # Today's ceiling counter gets it back too, never below zero. A
+            # take from an earlier UTC day is not today's to give back.
+            set: [
+              embed_day_tokens:
+                fragment(
+                  "CASE WHEN ? = ? THEN GREATEST(? - ?, 0) ELSE ? END",
+                  m.embed_day,
+                  type(^today, :date),
+                  m.embed_day_tokens,
+                  type(^count, :integer),
+                  m.embed_day_tokens
+                )
+            ]
+          ]
+        ),
+        [],
         skip_tenant_check: true
       )
 
     :ok
+  end
+
+  # ── Daily embed ceiling (users without a bucket) ──────────────
+  #
+  # Tokens spent on one UTC day, in two `usage_meters` columns, for
+  # `Engram.EmbedCeiling`. One statement counts, rolls the day over and
+  # refuses past the ceiling; the conflict row lock serializes two nodes
+  # racing on one user, so they can never both spend the last tokens. The row
+  # persists, so a deploy or a node restart forgets nothing. O(1): one row.
+  #
+  # A node whose clock is behind (still on yesterday) never resets a day a
+  # peer already rolled: the stored day only moves forward and its count
+  # stands (`>=`).
+  #
+  # $1 user_id, $2 tokens, $3 today (UTC date), $4 ceiling, $5 now (uncast,
+  # as `@take_sql`'s `updated_at`).
+  @day_take_sql """
+  INSERT INTO usage_meters AS m
+    (user_id, lifetime_embed_tokens, embed_day, embed_day_tokens, updated_at)
+  VALUES ($1::uuid, $2::bigint, $3::date, $2::bigint, $5)
+  ON CONFLICT (user_id) DO UPDATE SET
+    lifetime_embed_tokens = m.lifetime_embed_tokens + $2::bigint,
+    embed_day_tokens =
+      (CASE WHEN m.embed_day >= $3::date THEN COALESCE(m.embed_day_tokens, 0) ELSE 0 END)
+      + $2::bigint,
+    embed_day = GREATEST(m.embed_day, $3::date),
+    updated_at = EXCLUDED.updated_at
+  WHERE (CASE WHEN m.embed_day >= $3::date THEN COALESCE(m.embed_day_tokens, 0) ELSE 0 END)
+    + $2::bigint <= $4::bigint
+  RETURNING embed_day_tokens
+  """
+
+  @doc """
+  Counts `tokens` against the user's UTC day, or refuses without counting
+  anything when that would pass `ceiling` (reaching it exactly is allowed).
+  A successful take also counts toward the lifetime meter, as
+  `add_embed_tokens/2` does. Returns today's total. `opts[:now]` is a test seam.
+  """
+  @spec day_take(Ecto.UUID.t(), pos_integer(), non_neg_integer(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, :ceiling}
+  def day_take(user_id, tokens, ceiling, opts \\ [])
+      when is_binary(user_id) and is_integer(tokens) and tokens > 0 and is_integer(ceiling) do
+    if tokens > ceiling do
+      {:error, :ceiling}
+    else
+      now = utc_now(opts)
+      args = [Ecto.UUID.dump!(user_id), tokens, DateTime.to_date(now), ceiling, now]
+
+      case Repo.query!(@day_take_sql, args) do
+        %{rows: [[used]]} -> {:ok, used}
+        %{rows: []} -> {:error, :ceiling}
+      end
+    end
+  end
+
+  @doc "Tokens the user spent on today's UTC day: 0 with no row or an older day."
+  @spec day_used(Ecto.UUID.t(), keyword()) :: non_neg_integer()
+  def day_used(user_id, opts \\ []) when is_binary(user_id) do
+    today = opts |> utc_now() |> DateTime.to_date()
+
+    case day_spend(user_id) do
+      {%Date{} = day, tokens} when is_integer(tokens) ->
+        if Date.compare(day, today) == :lt, do: 0, else: tokens
+
+      _ ->
+        0
+    end
+  end
+
+  @doc "The stored `{day, tokens}` of the user's ceiling counter, `{nil, 0}` with no row."
+  @spec day_spend(Ecto.UUID.t()) :: {Date.t() | nil, non_neg_integer()}
+  def day_spend(user_id) when is_binary(user_id) do
+    case Repo.one(
+           from(m in Meter,
+             where: m.user_id == ^user_id,
+             select: {m.embed_day, m.embed_day_tokens}
+           ),
+           skip_tenant_check: true
+         ) do
+      {day, tokens} -> {day, tokens || 0}
+      nil -> {nil, 0}
+    end
+  end
+
+  @doc """
+  Today's fleet view for the ceiling metrics: the most any one user spent
+  today and how many users reached `ceiling`. One aggregate, no user ids out.
+
+  ponytail: scans `usage_meters` (one row per user) once per poll, about
+  10 ms at 100k rows. Add an index on `embed_day` if the poll ever shows in
+  `pg_stat_statements`.
+  """
+  @spec day_stats(non_neg_integer(), keyword()) :: %{
+          max: non_neg_integer(),
+          over: non_neg_integer()
+        }
+  def day_stats(ceiling, opts \\ []) when is_integer(ceiling) do
+    today = opts |> utc_now() |> DateTime.to_date()
+
+    {max, over} =
+      Repo.one(
+        from(m in Meter,
+          where: m.embed_day == ^today,
+          select:
+            {max(m.embed_day_tokens), filter(count(m.user_id), m.embed_day_tokens >= ^ceiling)}
+        ),
+        skip_tenant_check: true
+      )
+
+    %{max: max || 0, over: over || 0}
   end
 
   # ── Refilling embed bucket (Free) ─────────────────────────────

@@ -23,8 +23,17 @@ defmodule Engram.Workers.WakeBudgetParked do
   never Oban's unique insert (its advisory lock would be held to the end of
   the park's transaction). Two parks racing past the UPDATE insert two jobs;
   the second wakes nothing and stops. Idempotent: a wake re-reads the bucket
-  and the parked notes, and an unmetered user (paid, self-host) wakes
-  everything and schedules nothing.
+  and the parked notes, and an unmetered user (self-host, a -1 override, the
+  daily ceiling off) wakes everything and schedules nothing.
+
+  Paid users park on the same queue against the daily embed ceiling
+  (`Engram.EmbedCeiling`): the wake spends what today has left, and what
+  does not fit waits for the next UTC day at `EmbedCeiling.resume_at/2`
+  (midnight plus a per-user offset over six hours), never a refill clock. A
+  user capped yesterday has 0 to spend until that offset
+  (`EmbedCeiling.wake_budget/3`), so the sweep's 00:02 backstop wakes none
+  of them early. A Free user who upgrades wakes their old parks under the
+  ceiling, oldest first, rather than all at once as before.
 
   On `events`, the queue for follow-ups a user's action triggers. A rolling
   deploy's old node lacks the worker and fails the job; Oban retries it onto
@@ -36,6 +45,7 @@ defmodule Engram.Workers.WakeBudgetParked do
 
   alias Engram.Billing
   alias Engram.DataMigrations.IndexVersions
+  alias Engram.EmbedCeiling
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.UsageMeters
@@ -68,9 +78,15 @@ defmodule Engram.Workers.WakeBudgetParked do
   """
   @spec schedule_park(map(), pos_integer() | nil, pos_integer() | nil) :: :ok
   def schedule_park(user, need, next) do
-    case capacity(user) do
-      nil -> :ok
-      cap -> schedule_for(user.id, min(need || 1, next || @unknown_next_chunk), cap)
+    case budget(user) do
+      {:bucket, cap} when cap > 0 ->
+        schedule_for(user.id, min(need || 1, next || @unknown_next_chunk), cap)
+
+      {:ceiling, _} ->
+        schedule(user.id, EmbedCeiling.resume_at(user.id))
+
+      _ ->
+        :ok
     end
   end
 
@@ -160,18 +176,23 @@ defmodule Engram.Workers.WakeBudgetParked do
   defp reschedule(user, left, [{_, _, head_next} | _] = waiting) do
     need = Enum.min([head_next || @unknown_next_chunk | Enum.map(waiting, &(elem(&1, 1) || 1))])
 
-    case capacity(user) do
-      nil ->
-        :ok
-
+    case budget(user) do
       # Nothing parked can ever fit (every need and the oldest's next chunk
-      # exceed the whole bucket, e.g. a tiny override): no clock to wait
-      # for. An edit (a new need) or a raised cap re-parks and reschedules.
-      cap when need > cap ->
+      # exceed the whole bucket or ceiling, e.g. a tiny override): no clock
+      # to wait for. An edit (a new need) or a raised cap re-parks and
+      # reschedules.
+      {_kind, cap} when need > cap ->
         :ok
 
-      cap ->
+      {:bucket, cap} when cap > 0 ->
         schedule_for(user.id, need, cap, left)
+
+      # What did not fit today waits for the next UTC day.
+      {:ceiling, _} ->
+        schedule(user.id, EmbedCeiling.resume_at(user.id))
+
+      _ ->
+        :ok
     end
   end
 
@@ -216,19 +237,28 @@ defmodule Engram.Workers.WakeBudgetParked do
     :ok
   end
 
-  # The bucket's capacity, or nil when unmetered (paid, self-host, a -1 override).
-  defp capacity(user) do
+  # What meters this user's embeds: Free's bucket, the daily ceiling
+  # (`Engram.EmbedCeiling`, paid), or nothing (self-host, a -1 override, the
+  # ceiling switched off).
+  defp budget(user) do
     case Billing.effective_limit(user, :embed_token_bucket) do
-      cap when is_integer(cap) and cap > 0 -> cap
-      _ -> nil
+      cap when is_integer(cap) and cap >= 0 ->
+        {:bucket, cap}
+
+      _ ->
+        case EmbedCeiling.tokens(user) do
+          nil -> :unmetered
+          ceiling -> {:ceiling, ceiling}
+        end
     end
   end
 
-  # What the bucket holds now, or `:unmetered`.
+  # What the bucket or today's ceiling holds now, or `:unmetered`.
   defp spendable(user) do
-    case Billing.effective_limit(user, :embed_token_bucket) do
-      cap when is_integer(cap) and cap >= 0 -> UsageMeters.bucket_available(user.id, cap)
-      _ -> :unmetered
+    case budget(user) do
+      {:bucket, cap} -> UsageMeters.bucket_available(user.id, cap)
+      {:ceiling, ceiling} -> EmbedCeiling.wake_budget(user.id, ceiling)
+      :unmetered -> :unmetered
     end
   end
 

@@ -232,6 +232,10 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # Converts an epoch number to a DateTime. Its one Logger call carries a
     # field name only; never touches content, path, title or a query.
     "lib/engram/file_time.ex",
+    # The daily embed ceiling: token counts per user id and a UTC day. Its one
+    # Logger call carries a user id, a reason label and the ceiling number;
+    # never touches content, a path, a title or a query.
+    "lib/engram/embed_ceiling.ex",
     # Pure function from conn assigns to an actor string ("api:<key id>" or
     # "sync"). No Logger call, never touches content, path, title or a query.
     "lib/engram_web/write_actor.ex",
