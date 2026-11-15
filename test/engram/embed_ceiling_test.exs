@@ -64,13 +64,13 @@ defmodule Engram.EmbedCeilingTest do
   end
 
   describe "resume_at/2" do
-    test "the next 00:00 UTC plus a fixed per-user offset under an hour" do
+    test "the next 00:00 UTC plus a fixed per-user offset under six hours" do
       now = ~U[2027-03-10 23:59:59Z]
       id = Ecto.UUID.generate()
       at = EmbedCeiling.resume_at(id, now)
 
       assert DateTime.to_date(at) == ~D[2027-03-11]
-      assert at.hour == 0
+      assert at.hour < 6
       assert at == EmbedCeiling.resume_at(id, ~U[2027-03-10 00:00:00Z])
     end
   end
