@@ -333,14 +333,21 @@ defmodule EngramWeb.NotesController do
     vault = conn.assigns.current_vault
     path = Enum.join(List.wrap(path_parts), "/")
 
-    # The note in one transaction; the response (its links parsed from the
-    # returned content) renders after it, holding no connection while it
-    # parses. The DEK is warmed first: a DekCache miss unwraps through KMS,
-    # which must not run inside the transaction.
+    # One transaction for the note and its links. The DEK is warmed first: a
+    # DekCache miss unwraps through KMS, which must not run inside it. The
+    # links parse runs inside it too: a read holds no lock, and the parse is
+    # capped (`Links.links_for_notes/2`, tens of ms at most). Rendering after
+    # the commit would cost a second transaction (+3 statements) on every
+    # read of a note that links anywhere.
     _ = Crypto.get_dek(user)
 
-    case Repo.with_tenant!(user.id, fn -> Notes.get_note(user, vault, path) end) do
-      {:ok, note} -> json(conn, note_json(note, user))
+    result =
+      Repo.with_tenant!(user.id, fn ->
+        with {:ok, note} <- Notes.get_note(user, vault, path), do: {:ok, note_json(note, user)}
+      end)
+
+    case result do
+      {:ok, body} -> json(conn, body)
       {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "not found"})
     end
   end
