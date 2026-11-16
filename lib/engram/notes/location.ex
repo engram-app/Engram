@@ -195,14 +195,14 @@ defmodule Engram.Notes.Location do
       Repo.with_tenant!(user.id, fn ->
         ids = Rows.ids_by_path(user, vault_id, split |> Enum.map(&elem(&1, 1)) |> Enum.uniq())
 
+        # One entry per PATH: case variants share a name key, not an entry.
         wanted =
           for {path, folder, name} <- split,
               fid = ids[folder],
               fid != nil,
-              into: %{},
-              do: {Name.ci_hmac(fk, name) <> Ecto.UUID.dump!(fid), {path, Name.hmac(fk, name)}}
+              do: {path, Name.ci_hmac(fk, name) <> Ecto.UUID.dump!(fid), Name.hmac(fk, name)}
 
-        if wanted == %{}, do: %{}, else: name_holders(vault_id, wanted)
+        if wanted == [], do: %{}, else: name_holders(vault_id, wanted)
       end)
     else
       _ -> %{}
@@ -210,8 +210,9 @@ defmodule Engram.Notes.Location do
   end
 
   defp folder_split(paths) do
+    # A root path (no folder part) is never shown by name: skipped.
     for path <- Enum.uniq(paths),
-        {[_ | _] = folders, [name]} = path |> String.split("/") |> Enum.split(-1),
+        {[_ | _] = folders, [name]} <- [path |> String.split("/") |> Enum.split(-1)],
         do: {path, Enum.join(folders, "/"), name}
   end
 
@@ -220,13 +221,14 @@ defmodule Engram.Notes.Location do
   # lowest id): a plain join or `= ANY(...)` plans as a vault read under
   # FORCE RLS (the RLS plan spec).
   defp name_holders(vault_id, wanted) do
-    {keys, exacts} = wanted |> Enum.map(fn {k, {_path, exact}} -> {k, exact} end) |> Enum.unzip()
+    paths = Enum.map(wanted, &elem(&1, 0))
 
     from(
       k in fragment(
-        "SELECT * FROM unnest(?::bytea[], ?::bytea[]) AS t(key, exact)",
-        ^keys,
-        ^exacts
+        "SELECT * FROM unnest(?::int4[], ?::bytea[], ?::bytea[]) AS t(i, key, exact)",
+        ^Enum.to_list(0..(length(wanted) - 1)),
+        ^Enum.map(wanted, &elem(&1, 1)),
+        ^Enum.map(wanted, &elem(&1, 2))
       ),
       as: :k,
       inner_lateral_join:
@@ -243,10 +245,10 @@ defmodule Engram.Notes.Location do
           )
         ),
       on: true,
-      select: {k.key, type(n.id, Ecto.UUID)}
+      select: {k.i, type(n.id, Ecto.UUID)}
     )
     |> Repo.all()
-    |> Map.new(fn {key, id} -> {elem(wanted[key], 0), id} end)
+    |> Map.new(fn {i, id} -> {Enum.at(paths, i), id} end)
   end
 
   # The stored path's row, or the row the path's folder row and name name

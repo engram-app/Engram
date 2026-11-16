@@ -265,6 +265,26 @@ defmodule Engram.Folders.MovedReadsTest do
     assert {:error, :recently_deleted} = Notes.genesis_crdt_note(u, v, gone.id, "Other/q.md")
   end
 
+  # Second delta check of #2610: the batch name check.
+  describe "batch name check" do
+    test "restores a root note in a moved vault", %{user: u, vault: v} do
+      op = Ecto.UUID.generate()
+      _ = put!(u, v, "root.md", "root")
+      :deleted = Notes.delete_note_reporting(u, v, "root.md", op_id: op)
+      _ = Folders.restore_op(u, v, op)
+      assert {:ok, %{content: "root"}} = Notes.get_note(u, v, "root.md")
+    end
+
+    test "two case-variant paths are both checked", %{user: u, vault: v} do
+      shown = put!(u, v, "A/Foo.md", "shown")
+      FolderRows.move_uncascaded!(u, folder_id(u, v, "A"), "C")
+      held = Notes.Location.named_ids_at(u, v.id, ["C/foo.md", "C/Foo.md"])
+      assert held == %{"C/Foo.md" => shown.id}
+      held = Notes.Location.named_ids_at(u, v.id, ["C/Foo.md", "C/foo.md"])
+      assert held == %{"C/Foo.md" => shown.id}
+    end
+  end
+
   # Another live note keyed or named where `id` is shown.
   defp live_at_name?(user, vault, id) do
     {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0, limit: 500)
