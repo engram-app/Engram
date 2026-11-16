@@ -478,6 +478,30 @@ export function handleFoldersBatch(
 	}
 }
 
+/** `folder_changed` (Engram#2523): one folder row moved, renamed or died. */
+export interface FolderChangedPayload {
+	folder_id: string;
+	parent_id: string | null;
+	name: string;
+	seq: number;
+	deleted?: boolean;
+	device_id?: string | null;
+}
+
+// From S5 a folder rename or move is ONE `folder_changed`, not one
+// note_changed per note under it, and every one of those notes changed path.
+// So the tree (the sidebar) and the notes' own caches (an open note's path)
+// are re-read; the payload names only the folder.
+export function handleFolderChanged(
+	_payload: FolderChangedPayload,
+	queryClient: QueryClient,
+	vaultId: string,
+): void {
+	invalidateVaultTree(queryClient, vaultId);
+	queryClient.invalidateQueries({ queryKey: ["note", vaultId] });
+	queryClient.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
+}
+
 export async function connectChannel({
 	userId,
 	vaultId,
@@ -547,6 +571,10 @@ export async function connectChannel({
 
 	channel.on("folders.batch", (payload: FoldersBatchPayload) => {
 		handleFoldersBatch(payload, queryClient, vaultId);
+	});
+
+	channel.on("folder_changed", (payload: FolderChangedPayload) => {
+		handleFolderChanged(payload, queryClient, vaultId);
 	});
 
 	channel

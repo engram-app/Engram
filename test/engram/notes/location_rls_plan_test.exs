@@ -228,6 +228,28 @@ defmodule Engram.Notes.LocationRlsPlanTest do
       # vault's size.
       assert QueryPlan.buffers(custom) <= @lookup_buffers + 12, custom
     end
+
+    # S5: a stored-path hit in a moved vault is checked for a moved chain
+    # (`WalkSql.moved_chain/0`, a walk UP the row's `parent_id`s), so a note
+    # whose folder moved without a cascade stops answering for its old path.
+    # That walk runs for the matched row only, on a folders id key.
+    test "a moved folder, a held path: the stale-holder check walks up on an id key",
+         ctx do
+      mark_moved!(ctx.user, ctx.vault)
+
+      plans =
+        plans(ctx.user, fn -> assert Notes.note_exists?(ctx.user, ctx.vault, "A/B/x.md") end)
+
+      refute_vault_scan!(plans)
+      assert [%{custom: custom}] = lookup_plans(plans)
+      assert custom =~ "notes_path_live", custom
+      # The walk up, one probe of the `(vault_id, id)` key per level.
+      assert custom =~ "folders_vault_id_id_key", custom
+      # Measured 30 (the name arm's walk and probe, the holder, and the walk
+      # up a two-level chain for the matched row and for the holder), flat
+      # in the vault's size.
+      assert QueryPlan.buffers(custom) <= @lookup_buffers + 26, custom
+    end
   end
 
   # The other S3 reads that add a statement or a column (the feed page's

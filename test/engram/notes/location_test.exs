@@ -137,13 +137,15 @@ defmodule Engram.Notes.LocationTest do
       assert found(u, v, "A/B/x.md") == nil
     end
 
-    test "a folder moved with no cascade: found at the new path, and at the stored one",
+    test "a folder moved with no cascade: found at the new path, not at the stored one",
          %{user: u, vault: v, note: note} do
       move_folder_row!(u, folder_id(u, v, "A/B"), "C")
 
       assert found(u, v, "A/C/x.md") == note.id
-      # Writers still cascade, so the stored path stays authoritative.
-      assert found(u, v, "A/B/x.md") == note.id
+      # S5: an uncascaded move is the real move, so the stored path is the
+      # OLD one and no longer answers for the note (S3 kept it, because its
+      # writers still cascaded).
+      assert found(u, v, "A/B/x.md") == nil
       # The note reads back at the path it was found at.
       assert {:ok, %{path: "A/C/x.md", folder: "A/C"}} = Notes.get_note(u, v, "A/C/x.md")
 

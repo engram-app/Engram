@@ -105,8 +105,15 @@ defmodule Engram.Notes.LocationPlanTest do
   # decides first: planning the arms on every unnamed lookup cost 7 ms as
   # `engram_app`); a moved one sends it and runs it. Run for real on the
   # statements the app sends, not inferred from the plan's shape.
+  # The name arm's walk, not the S5 stale-holder check (its own recursive
+  # CTE walks UP a matched row's chain, and runs only for such a row).
   defp walk_line(plan) do
-    plan |> String.split("\n") |> Enum.find(&(&1 =~ "Recursive Union")) || flunk(plan)
+    plan
+    |> String.split("\n")
+    |> Enum.filter(&(&1 =~ "Recursive Union"))
+    |> Enum.find(&(not (&1 =~ "never executed")))
+    |> Kernel.||(plan |> String.split("\n") |> Enum.find(&(&1 =~ "Recursive Union")))
+    |> Kernel.||(flunk(plan))
   end
 
   test "an unmoved vault never sends the folder walk; a moved one runs it", ctx do
