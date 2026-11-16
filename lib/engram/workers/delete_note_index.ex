@@ -85,10 +85,8 @@ defmodule Engram.Workers.DeleteNoteIndex do
         # #1610: the note was resurrected before this ran (id-keyed rename,
         # restore). Wiping its index now would leave a live note unsearchable.
         #
-        # ponytail: check-then-delete, no lock. A resurrect AND a completed
-        # EmbedNote landing between this check and the Qdrant delete still get
-        # wiped, with embed_hash stamped. Closing it means holding a row lock
-        # across a Qdrant call; do that only if this is ever seen in prod.
+        # This check is unlocked; `trashed_only: true` re-checks under the
+        # note's row lock before the chunk rows go (`Indexing.delete_note_index/2`).
         if live?(user_id, note_id), do: :ok, else: unlink_then_delete_index(note, meta)
 
       :error ->
@@ -127,7 +125,7 @@ defmodule Engram.Workers.DeleteNoteIndex do
     # snooze here like on every other Qdrant writer. An outage snoozes too:
     # three attempts with Oban's backoff burn in under a minute, and a
     # discarded job waits for OrphanSweep's daily re-enqueue.
-    case Indexing.delete_note_index(note) do
+    case Indexing.delete_note_index(note, trashed_only: true) do
       {:error, :qdrant_backpressure} ->
         Qdrant.backpressure_snooze(:refused)
 

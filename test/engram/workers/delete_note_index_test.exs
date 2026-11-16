@@ -167,4 +167,35 @@ defmodule Engram.Workers.DeleteNoteIndexTest do
     assert :ok = perform_job(DeleteNoteIndex, args(note))
     assert chunk_count(note) == 1
   end
+
+  # A restore can land after the job's unlocked "still trashed" check, while
+  # the Qdrant delete runs, and an embed can stamp the restored note before
+  # the chunk rows go. Deleting them then left a live note with no points,
+  # no chunk rows and `embed_hash` stamped: nothing ever re-indexed it. The
+  # chunk-row transaction re-checks under the note's row lock; a live note
+  # keeps its rows and is flagged for re-embed.
+  test "a restore during the Qdrant delete keeps the rows and re-indexes", %{
+    bypass: bypass,
+    note: note
+  } do
+    Bypass.expect(bypass, fn conn ->
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        [set: [deleted_at: nil, embed_hash: "stamped"]],
+        skip_tenant_check: true
+      )
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result":{"status":"completed"}}))
+    end)
+
+    assert :ok = perform_job(DeleteNoteIndex, args(note))
+    assert chunk_count(note) == 1
+
+    assert Repo.one(
+             from(n in Engram.Notes.Note, where: n.id == ^note.id, select: n.embed_hash),
+             skip_tenant_check: true
+           ) == nil
+  end
 end
