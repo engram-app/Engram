@@ -4733,6 +4733,8 @@ defmodule Engram.Notes do
     )
   end
 
+  @located_cap 32
+
   @doc false
   # Bulk `path -> note_id` for the claim-validation paths. ONE query for N
   # paths, because the naive shape is a genuine N+1: a 500-note folder cascade
@@ -4744,16 +4746,22 @@ defmodule Engram.Notes do
   defp note_ids_at(_user, _vault, []), do: %{}
 
   defp note_ids_at(user, vault, paths) do
-    # In a vault holding a folder moved without a cascade, the shown paths
-    # (`located_ids_at/3`): a stale key is no holder, a name match is.
-    if Location.named?(user.id, vault_id(vault)) do
+    # In a vault holding a folder moved without a cascade, the shown paths:
+    # a stale key is no holder (`here`), and for a few paths a name match is
+    # one (`located_ids_at/3`, one folder walk per path).
+    # ponytail: a name-only occupant is checked for up to @located_cap paths;
+    # a bigger batch (a cascade claim, a large restore) checks stored keys
+    # only. Bulk name checks need one walk per distinct folder, not per path.
+    named? = Location.named?(user.id, vault_id(vault))
+
+    if named? and length(paths) <= @located_cap do
       with {held, _named?} <- located_ids_at(user, vault, paths), do: held
     else
-      stored_ids_at(user, vault, paths)
+      stored_ids_at(user, vault, paths, named?)
     end
   end
 
-  defp stored_ids_at(user, vault, paths) do
+  defp stored_ids_at(user, vault, paths, named?) do
     case Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
         by_hmac = Map.new(paths, fn path -> {Crypto.hmac_field(filter_key, path), path} end)
@@ -4765,6 +4773,16 @@ defmodule Engram.Notes do
             where: ^Keys.in_any(:path, hmacs, ids?),
             select: {n.path_hmac, n.id}
           )
+
+        query =
+          if named?,
+            do:
+              where(
+                query,
+                [n],
+                is_nil(n.folder_ref_id) or not fragment(WalkSql.moved_chain(), n.folder_ref_id)
+              ),
+            else: query
 
         rows = Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
 
