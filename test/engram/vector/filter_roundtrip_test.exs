@@ -181,16 +181,30 @@ defmodule Engram.Vector.FilterRoundtripTest do
   end
 
   describe "retired indexes (R3b)" do
-    test "ensure_collection drops a retired index an existing collection has", %{col: col} do
-      {:ok, %{status: 200}} =
-        Req.put("#{qdrant_url()}/collections/#{col}/index?wait=true",
-          json: %{field_name: "p", field_schema: "keyword"}
-        )
+    test "ensure_collection drops retired indexes, nested keys too; a gone one is a 404, done",
+         %{col: col} do
+      for {field, schema} <- [{"p", "keyword"}, {"fa[].k", "keyword"}] do
+        {:ok, %{status: 200}} =
+          Req.put("#{qdrant_url()}/collections/#{col}/index?wait=true",
+            json: %{field_name: field, field_schema: schema}
+          )
+      end
 
       assert Map.has_key?(schema(col), "p")
+      assert Map.has_key?(schema(col), "fa[].k")
       assert :ok = Qdrant.ensure_collection(col, @dims)
       refute Map.has_key?(schema(col), "p")
+      refute Map.has_key?(schema(col), "fa[].k")
       assert Map.has_key?(schema(col), "n")
+
+      # A peer node dropped them first: the server answers 404, counted as
+      # done, nothing logged.
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok = Qdrant.drop_retired_indexes(col, MapSet.new(["p", "fa[].k"]))
+        end)
+
+      refute log =~ "qdrant_retired_index_drop_failed"
     end
   end
 

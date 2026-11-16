@@ -4072,9 +4072,5 @@ defmodule Engram.Indexing do
   defp payload_hash(payload),
     do: :crypto.hash(:sha256, :erlang.term_to_binary(payload, [:deterministic]))
 
-  # Encodes a Phase B HMAC binary as base64 for JSON-safe Qdrant payload.
-  # Returns nil for nil — leaves the field absent so legacy/un-backfilled
-  # rows don't poison filters with a fake hmac.
-
   defp detect_language(text), do: Engram.KeywordIndex.LangDetect.detect(text)
 end

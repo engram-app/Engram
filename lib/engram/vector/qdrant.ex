@@ -454,7 +454,9 @@ defmodule Engram.Vector.Qdrant do
   # and only fields the collection reports, so a collection without them gets
   # no request and a second boot sends none. Only the last drop waits, as
   # with the creates. A 404 (a peer node dropped it first) is done.
-  defp drop_retired_indexes(col, indexed) do
+  @doc false
+  # Public for the real-Qdrant test of that 404 (filter_roundtrip_test).
+  def drop_retired_indexes(col, indexed) do
     retired = Enum.filter(PayloadKeys.retired_index_fields(), &MapSet.member?(indexed, &1))
     last = length(retired) - 1
 

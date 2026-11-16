@@ -433,6 +433,21 @@ defmodule Engram.Vector.QdrantCollectionTest do
       refute_receive {:drop, _}
     end
 
+    test "a drop a peer node already made (404) is done, not logged", %{bypass: bypass} do
+      stub_indexes(bypass, "c1")
+      stub_drops(bypass, 404)
+
+      expect_existing(bypass, "c1", Map.merge(@desired, schema_for(~w(fa[].k), "keyword")))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok = Qdrant.ensure_collection("c1", 1024)
+        end)
+
+      assert_receive {:drop, "fa[].k"}
+      refute log =~ "qdrant_retired_index_drop_failed"
+    end
+
     test "a failed drop is logged and does not fail the boot", %{bypass: bypass} do
       stub_indexes(bypass, "c1")
       stub_drops(bypass, 500)
