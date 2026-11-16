@@ -234,27 +234,32 @@ defmodule Engram.Notes.Location do
   names are off or no row has a folder.
   """
   @spec chains([map()]) :: [map()] | nil
-  def chains(rows) do
-    with true <- on?(),
-         [_ | _] = rows <- Enum.filter(rows, &derivable?/1) do
-      rows
-      |> Enum.group_by(& &1.vault_id, & &1.folder_ref_id)
-      |> Enum.flat_map(fn {vault_id, ids} ->
-        Rows.chain_rows(vault_id, Enum.uniq(ids), moved_only: true)
-      end)
-    else
-      _ -> nil
+  def chains(rows), do: if(on?(), do: read_chains(rows))
+
+  # `chains/1` past the names gate (a caller that already read it).
+  defp read_chains(rows) do
+    case Enum.filter(rows, &derivable?/1) do
+      [] ->
+        nil
+
+      rows ->
+        rows
+        |> Enum.group_by(& &1.vault_id, & &1.folder_ref_id)
+        |> Enum.flat_map(fn {vault_id, ids} ->
+          Rows.chain_rows(vault_id, Enum.uniq(ids), moved_only: true)
+        end)
     end
   end
 
   @doc """
   The select extra a page query of `vault_id` carries so it needs no
   `chains/1` read while nothing in the vault moved (`moved?/1`): `%{}` with
-  names off.
+  names off (`names?`, read once per request by a caller that reads it
+  again).
   """
-  @spec moved_column(Ecto.UUID.t()) :: map()
-  def moved_column(vault_id) do
-    if on?(),
+  @spec moved_column(Ecto.UUID.t(), boolean()) :: map()
+  def moved_column(vault_id, names? \\ on?()) do
+    if names?,
       do: %{moved__: dynamic(fragment(WalkSql.moved(), type(^vault_id, Ecto.UUID)))},
       else: %{}
   end
@@ -337,16 +342,15 @@ defmodule Engram.Notes.Location do
   @doc """
   What a whole-vault listing (`/sync/manifest`, `/vault/tree`) reads, in
   its own tenant transaction, to serve its notes where their folder rows
-  put them, given its folder rows (read with `moved_column/1`, so they say
-  whether the vault holds a folder moved without a cascade; nil when names
-  are off): nil, reading nothing, unless names are on and such a folder
-  exists, which no vault has before S5. Then the vault's live notes'
-  location columns (one O(notes) read of small columns, no content) and
-  their moved chains.
+  put them, given rows it already read with `moved_column/2` (so they say
+  whether the vault holds a folder moved without a cascade, which no vault
+  does before S5; rows read without it, or none, say no): nil, reading
+  nothing, unless one does. Then the vault's live notes' location columns
+  (one O(notes) read of small columns, no content) and their moved chains.
   """
   @spec listing_moves(map(), map(), [map()] | nil) :: {[map()], [map()]} | nil
-  def listing_moves(user, vault, folder_rows) do
-    if on?() and moved?(folder_rows || []) do
+  def listing_moves(user, vault, probed_rows) do
+    if moved?(probed_rows || []) do
       rows =
         Repo.all(
           from(n in Engram.Notes.Note,
@@ -357,7 +361,7 @@ defmodule Engram.Notes.Location do
           )
         )
 
-      {rows, chains(rows)}
+      {rows, read_chains(rows)}
     end
   end
 

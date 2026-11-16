@@ -124,10 +124,36 @@ defmodule EngramWeb.FolderChainListingTest do
       m = manifest(conn)
       refute Map.has_key?(m, "folders")
       refute Enum.any?(m["notes"], &Map.has_key?(&1, "folder_id"))
+      refute Enum.any?(m["notes"], &Map.has_key?(&1, "name"))
 
       t = tree(conn)
       assert is_list(t["folder_tree"])
       assert Enum.all?(t["notes"], &Map.has_key?(&1, "folder_id"))
+    end
+
+    test "each listing reads in ONE read-only snapshot", %{conn: conn} do
+      # A rename committed between the notes read and a later read would
+      # mix two commits in one body. The sandbox cannot open a snapshot (every
+      # transaction is a savepoint), so this counts the requests for one.
+      me = self()
+      id = "snapshot-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        id,
+        [:engram, :repo, :tenant_snapshot],
+        fn _, _, _, _ -> if self() == me, do: send(me, :snapshot) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+
+      manifest(conn)
+      assert_received :snapshot
+      refute_received :snapshot
+
+      tree(conn)
+      assert_received :snapshot
+      refute_received :snapshot
     end
 
     test "flipping the name reads retires the tree's ETag", %{conn: conn} do

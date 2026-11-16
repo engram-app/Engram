@@ -221,25 +221,17 @@ defmodule Engram.Folders.Wire do
 
   @doc """
   The manifest's folder rows, read in the manifest's tenant transaction
-  (`Rows.live_rows/1`), or nil (no read) unless the wire or the S3 name
-  reads (`Engram.Notes.Location.on?/0`) are on. The read also answers
-  whether the vault holds a folder moved without a cascade
-  (`Location.moved_column/1`, for `Location.listing_moves/3`). Cost: one
-  O(folders) read here, then (wire on) O(folders) name decrypts plus an
-  O(notes) map lookup in `manifest/3`, next to the manifest's O(notes)
-  path decrypts.
+  (`Rows.live_rows/1`), or nil with the switch off (no read). Cost: one
+  O(folders) read here, then O(folders) name decrypts plus an O(notes) map
+  lookup in `manifest/3`, next to the manifest's O(notes) path decrypts.
   """
   @spec manifest_rows(map()) :: [map()] | nil
-  def manifest_rows(vault),
-    do:
-      if(enabled?() or Location.on?(),
-        do: Rows.live_rows(vault.id, Location.moved_column(vault.id))
-      )
+  def manifest_rows(vault), do: if(enabled?(), do: Rows.live_rows(vault.id))
 
   @doc """
   Adds the folder list and each note's `folder_id` and `name` to a rendered
-  manifest (`Location.place/3`) while the wire is on, given
-  `manifest_rows/1`'s result. Only the switch adds them, never the name
+  manifest (`Location.place/3`), given `manifest_rows/1`'s result (nil, the
+  switch off: the body unchanged). Only the switch adds them, never the name
   reads alone: the S4 plugin takes a manifest `folders` list as the wire
   being on, so `folder_ops` off must still mean no list. A note's folder is
   found by the path it is served at, not `notes.folder_ref_id`, so the
@@ -250,12 +242,8 @@ defmodule Engram.Folders.Wire do
   def manifest(body, nil, _dek), do: body
 
   def manifest(%{notes: notes} = body, rows, dek) do
-    if enabled?() do
-      {notes, folders} = Location.place(notes, rows, dek)
-      Map.merge(body, %{notes: notes, folders: folders})
-    else
-      body
-    end
+    {notes, folders} = Location.place(notes, rows, dek)
+    Map.merge(body, %{notes: notes, folders: folders})
   end
 
   @doc """

@@ -49,6 +49,8 @@ defmodule EngramWeb.VaultTreeController do
     # calling Crypto.get_dek/1 again) means a DEK failure doesn't also pay
     # for the note/folder/attachment queries it can't use.
     dek_result = Crypto.get_dek(user)
+    # Read once: the ETag and the payload's shape must agree.
+    names? = Location.on?()
 
     # One with_tenant block for every DB read this endpoint needs (was 5:
     # current_seq + notes + folder counts + folder markers + attachments,
@@ -61,7 +63,7 @@ defmodule EngramWeb.VaultTreeController do
     raw =
       Repo.with_tenant_snapshot!(user.id, fn ->
         seq = Vaults.raw_current_seq(vault.id)
-        etag = etag(user, vault, seq)
+        etag = etag(user, vault, seq, names?)
 
         cond do
           # Nothing in the tree moved since the client's copy: answer from
@@ -79,7 +81,7 @@ defmodule EngramWeb.VaultTreeController do
               folder_marker_rows: Notes.raw_folder_marker_rows(user, vault),
               attachment_rows: Attachments.raw_tree_rows(user, vault)
             }
-            |> with_folder_rows(user, vault)
+            |> with_folder_rows(user, vault, names?)
 
           true ->
             # No usable DEK: nothing decryptable exists to fetch (:no_dek) or
@@ -137,11 +139,11 @@ defmodule EngramWeb.VaultTreeController do
   # keep a tag unusable against another tree (two fresh vaults share seq 0);
   # the release version (and the name-reads switch) retires every tag when
   # the payload shape changes.
-  defp etag(user, vault, seq) do
+  defp etag(user, vault, seq, names?) do
     vsn = Application.spec(:engram, :vsn)
     # The name reads change the payload's shape (`folder_tree`, `folder_id`),
     # so flipping their switch retires every tag too.
-    names = if Location.on?(), do: "n", else: "p"
+    names = if names?, do: "n", else: "p"
     hash = :crypto.hash(:sha256, "#{user.id}:#{vault.id}:#{seq}:#{vsn}:#{names}")
     ~s(") <> Base.url_encode64(binary_part(hash, 0, 16), padding: false) <> ~s(")
   end
@@ -150,8 +152,8 @@ defmodule EngramWeb.VaultTreeController do
   # on, read with the moved-folder probe folded in, and the moved notes'
   # locations (nil unless a folder was moved without a cascade, never
   # before S5). Inside the tree's snapshot.
-  defp with_folder_rows(raw, user, vault) do
-    rows = if Location.on?(), do: Rows.live_rows(vault.id, Location.moved_column(vault.id))
+  defp with_folder_rows(raw, user, vault, names?) do
+    rows = if names?, do: Rows.live_rows(vault.id, Location.moved_column(vault.id, names?))
     Map.merge(raw, %{folder_rows: rows, moves: Location.listing_moves(user, vault, rows)})
   end
 
