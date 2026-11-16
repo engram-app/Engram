@@ -389,15 +389,21 @@ defmodule Engram.Workers.OrphanSweepTest do
   test "every authority read runs on the maintenance pool, not on Repo" do
     # The chunk reads live in Engram.Vector.PointIds; the guard follows them
     # there.
-    sweep = authority_bodies("lib/engram/workers/orphan_sweep.ex", :defp, [:live_user_ids])
+    sweep =
+      authority_bodies("lib/engram/workers/orphan_sweep.ex", :defp, [
+        :live_user_ids,
+        :trashed_page,
+        :stranded_index
+      ])
+
     shared = authority_bodies("lib/engram/vector/point_ids.ex", :def, [:chunk_page, :known])
 
-    assert Map.keys(sweep) == [:live_user_ids]
+    assert sweep |> Map.keys() |> Enum.sort() == [:live_user_ids, :stranded_index, :trashed_page]
 
     assert shared |> Map.keys() |> Enum.sort() == [:chunk_page, :known],
            "all three authority reads must still exist under these names"
 
-    assert sweep.live_user_ids =~ "maintenance_repo()"
+    for {name, body} <- sweep, do: assert(body =~ "maintenance_repo()", "#{name} pool")
     for {name, body} <- shared, do: assert(body =~ "Repo.maintenance()", "#{name} pool")
 
     for {name, body} <- Map.merge(sweep, shared) do

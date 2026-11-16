@@ -37,12 +37,16 @@ defmodule Engram.Workers.OrphanSweep do
   alias Engram.Indexing
   alias Engram.Logger.Metadata
   alias Engram.Maintenance.Cursor
+  alias Engram.Notes.Chunk
+  alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Storage
   alias Engram.Vector.FilterId
   alias Engram.Vector.PayloadKeys
   alias Engram.Vector.PointIds
+  alias Engram.Vaults.Vault
   alias Engram.Vector.Qdrant
+  alias Engram.Workers.DeleteNoteIndex
 
   require Logger
 
@@ -65,6 +69,9 @@ defmodule Engram.Workers.OrphanSweep do
   @max_candidates 50_000
   @points_cursor "orphan_sweep:points"
   @chunks_cursor "orphan_sweep:chunks"
+  @trashed_cursor "orphan_sweep:trashed"
+  # Trashed notes examined per run: one `notes_path_tomb` page.
+  @trashed_page 1000
   # Above this share of the scanned collection, the diff is telling us the
   # authority is wrong, not that the points are strays. See `runaway?/2`.
   @max_candidate_ratio 0.10
@@ -112,6 +119,7 @@ defmodule Engram.Workers.OrphanSweep do
     s3_deleted = sweep_s3(live_ids)
     points_deleted = sweep_point_orphans()
     notes_flagged = sweep_missing_points(force: Map.get(args, "force", false))
+    index_requeued = requeue_trashed_index()
     # Frontmatter keys no note uses any more: frees per-user cap space (ids
     # are never reused, see `FrontmatterKeys.reap_unused/1`).
     keys_reaped = Engram.Notes.FrontmatterKeys.reap_unused()
@@ -123,6 +131,7 @@ defmodule Engram.Workers.OrphanSweep do
         s3_prefixes_swept: s3_deleted,
         qdrant_points_swept: points_deleted,
         notes_flagged_for_reindex: notes_flagged,
+        trashed_index_requeued: index_requeued,
         frontmatter_keys_reaped: keys_reaped
       },
       %{}
@@ -137,6 +146,7 @@ defmodule Engram.Workers.OrphanSweep do
           s3_prefixes_swept: s3_deleted,
           qdrant_points_swept: points_deleted,
           notes_flagged_for_reindex: notes_flagged,
+          trashed_index_requeued: index_requeued,
           frontmatter_keys_reaped: keys_reaped
         }
       )
@@ -630,6 +640,112 @@ defmodule Engram.Workers.OrphanSweep do
 
     query |> maintenance_repo().all() |> MapSet.new(&user_key/1)
   end
+
+  # -- Trashed notes still indexed ------------------------------------------
+
+  # `DeleteNoteIndex` gives up after `max_attempts`. A trashed note whose job
+  # was discarded keeps its chunk rows and points, and the point pass keeps
+  # any point a chunk row names, so nothing else ever cleans them. Re-enqueue
+  # the job (unique per note) for trashed notes that still have chunk rows.
+  #
+  # Constant per run: one page along the partial index `notes_path_tomb`
+  # (`(vault_id, path_id, seq) WHERE deleted_at IS NOT NULL`) from a
+  # persisted cursor, then `idx_chunks_note` and vault primary-key lookups
+  # for that page only. A short page wraps. Notes in a soft-deleted vault
+  # are `CleanupVault`'s (the 30-day restore window), so they are skipped.
+  defp requeue_trashed_index do
+    page = trashed_page(Cursor.get(@trashed_cursor))
+
+    if length(page) < trashed_page_size() do
+      :ok = Cursor.reset(@trashed_cursor)
+    else
+      last = List.last(page)
+
+      :ok =
+        Cursor.put(@trashed_cursor, %{
+          "vault_id" => last.vault_id,
+          "path_id" => last.path_id,
+          "seq" => last.seq
+        })
+    end
+
+    page
+    |> stranded_index()
+    |> Enum.count(fn note ->
+      match?(
+        {:ok, %Oban.Job{conflict?: false}},
+        Oban.insert(DeleteNoteIndex.job(note, unique: true))
+      )
+    end)
+  end
+
+  # ponytail: a row whose path_id or seq is NULL never compares greater than
+  # the cursor, so it is skipped. path_id is derived from path_hmac by
+  # trigger and seq is NOT NULL, so only a note with no path_hmac (which
+  # `DeleteNoteIndex` cannot clean anyway) falls there.
+  defp trashed_page(cursor) do
+    repo = maintenance_repo()
+
+    Repo.cross_tenant(fn ->
+      Note
+      |> where([n], not is_nil(n.deleted_at))
+      |> after_trashed(cursor)
+      |> order_by([n], asc: n.vault_id, asc: n.path_id, asc: n.seq)
+      |> limit(^trashed_page_size())
+      |> select([n], map(n, [:id, :user_id, :vault_id, :path_id, :seq, :kind, :path_hmac]))
+      |> repo.all()
+    end)
+  end
+
+  defp after_trashed(query, nil), do: query
+
+  defp after_trashed(query, %{"vault_id" => v, "path_id" => p, "seq" => s}) do
+    where(
+      query,
+      [n],
+      fragment(
+        "(?, ?, ?) > (?, ?, ?)",
+        n.vault_id,
+        n.path_id,
+        n.seq,
+        type(^v, :binary_id),
+        type(^p, :binary_id),
+        ^s
+      )
+    )
+  end
+
+  defp stranded_index(page) do
+    notes = Enum.filter(page, &(&1.kind == "note" and is_binary(&1.path_hmac)))
+
+    case notes do
+      [] ->
+        []
+
+      notes ->
+        repo = maintenance_repo()
+        note_ids = Enum.map(notes, & &1.id)
+        vault_ids = notes |> Enum.map(& &1.vault_id) |> Enum.uniq()
+
+        {indexed, dead_vaults} =
+          Repo.cross_tenant(fn ->
+            {from(c in Chunk, where: c.note_id in ^note_ids, distinct: true, select: c.note_id)
+             |> repo.all()
+             |> MapSet.new(),
+             from(v in Vault,
+               where: v.id in ^vault_ids and not is_nil(v.deleted_at),
+               select: v.id
+             )
+             |> repo.all()
+             |> MapSet.new()}
+          end)
+
+        Enum.filter(notes, &(&1.id in indexed and &1.vault_id not in dead_vaults))
+    end
+  end
+
+  defp trashed_page_size,
+    do: Application.get_env(:engram, :orphan_sweep_trashed_page, @trashed_page)
 
   # -- Qdrant --------------------------------------------------------------
 

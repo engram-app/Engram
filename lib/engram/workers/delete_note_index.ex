@@ -20,6 +20,34 @@ defmodule Engram.Workers.DeleteNoteIndex do
   alias Engram.Repo
   alias Engram.Vector.Qdrant
 
+  # OrphanSweep's re-enqueue (`job(note, unique: true)`): one open job per
+  # note, while a completed or discarded one does not block it.
+  @unique [
+    keys: [:note_id],
+    period: :infinity,
+    states: [:available, :scheduled, :executing, :retryable]
+  ]
+
+  @doc """
+  The job for a trashed `note` (anything with `:id`, `:user_id`, `:vault_id`
+  and raw `:path_hmac` bytes). T3.2: `path_hmac` goes in base64, never the
+  plaintext path. `unique: true` dedupes against an open job for the note.
+  """
+  @spec job(map(), keyword()) :: Oban.Job.changeset()
+  def job(note, opts \\ []) do
+    opts = if Keyword.get(opts, :unique), do: [unique: @unique], else: []
+
+    new(
+      %{
+        note_id: note.id,
+        user_id: note.user_id,
+        vault_id: note.vault_id,
+        path_hmac: Base.encode64(note.path_hmac)
+      },
+      opts
+    )
+  end
+
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
 
