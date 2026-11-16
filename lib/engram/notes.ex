@@ -2114,13 +2114,15 @@ defmodule Engram.Notes do
     with {:ok, uuid} <- Ecto.UUID.cast(id),
          %{} = row <- classify_read(uuid) do
       {note, %{moved__: moved?}} = NoteBody.to_note(row, [:moved__])
+      # Names off (`Location.on?/0`, a cached gate) reads stored paths only.
+      moved? = moved? == true and Location.on?()
 
       case note do
         %Note{vault_id: vid, kind: "note", deleted_at: nil} = live when vid == vault.id ->
-          {:live, live, moved? == true}
+          {:live, live, moved?}
 
         %Note{vault_id: vid, kind: "note"} = tombstone when vid == vault.id ->
-          {:tombstone, tombstone, moved? == true}
+          {:tombstone, tombstone, moved?}
 
         %Note{} ->
           :taken
@@ -4815,8 +4817,6 @@ defmodule Engram.Notes do
   # vault the shown paths decide: a stale key is no holder (`moved_chain`),
   # and a note shown at a path by name alone is one
   # (`Location.named_ids_at/3`, two statements per batch).
-  defp ids_at(_user, _vault, []), do: {%{}, false}
-
   defp ids_at(user, vault, paths) do
     case Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
@@ -9096,7 +9096,7 @@ defmodule Engram.Notes do
         |> Repo.all()
         |> Enum.map(&NoteBody.to_note(&1, [:moved__]))
         |> then(fn rows ->
-          moved? = Enum.any?(rows, fn {_n, %{moved__: m}} -> m == true end)
+          moved? = Enum.any?(rows, fn {_n, %{moved__: m}} -> m == true end) and Location.on?()
           rows |> Enum.map(&elem(&1, 0)) |> restore_rows(user, vault, moved?)
         end)
         |> tap(&enqueue_restored_jobs(user, &1))

@@ -3,7 +3,9 @@ defmodule Engram.Folders.MovedReadsBudgetTest do
   # a cascade (every vault until the writer ships) the shown-path checks must
   # cost nothing. These counts are #2606's (8e37db921), measured on its lib:
   # the moved-vault probe rides an existing read instead of adding one.
-  use Engram.DataCase, async: true
+  # async: false: another test emptying a node cache mid-count would show
+  # up as a statement.
+  use Engram.DataCase, async: false
 
   alias Engram.{Crypto, Folders, Notes, QueryRecorder}
 
@@ -28,12 +30,7 @@ defmodule Engram.Folders.MovedReadsBudgetTest do
   defp statements(fun) do
     {_, queries} = QueryRecorder.record(fun)
     me = self()
-    # A ledger read is a node cache refill (another test's reopen or an
-    # expiry), not this call's cost.
-    for %{pid: ^me, sql: sql} <- queries,
-        sql not in ["begin", "commit"],
-        not String.contains?(sql, ~s(FROM "data_migrations")),
-        do: sql
+    for %{pid: ^me, sql: sql} <- queries, sql not in ["begin", "commit"], do: sql
   end
 
   defp count!(fun), do: fun |> statements() |> length()
