@@ -612,9 +612,9 @@ defmodule Engram.Workers.OrphanSweep do
     # this is the most destructive authority read in the file and the safety of
     # reading it on the app pool is a fact stored in another module. Its two
     # consumers diff against it and then delete: `sweep_qdrant/1` drops a whole
-    # user's vectors (behind `runaway?/2`, which a small deployment sits
-    # under), `sweep_s3/1` drops a whole user's attachment prefix with no
-    # guard at all. An empty result deletes every user's data in one tick.
+    # user's vectors, `sweep_s3/1` a whole user's attachment prefix, both
+    # behind `delete_departed/4`. An empty result would make every user look
+    # departed.
     # Adding `users` to `@tenant_tables` would make that real and no test here
     # would catch it, so the pool choice does not depend on that staying true.
     #
@@ -759,35 +759,35 @@ defmodule Engram.Workers.OrphanSweep do
   defp sweep_s3(live_ids) do
     case discover_s3_user_prefixes() do
       {:ok, s3_ids} ->
-        orphans = MapSet.difference(s3_ids, live_ids)
-
-        Enum.reduce(orphans, 0, fn user_id, acc ->
-          case Storage.adapter().delete_prefix("#{user_id}/") do
-            {:ok, _count} ->
-              Logger.debug(
-                "orphan_sweep deleted S3 prefix",
-                Metadata.with_category(:debug, :oban, user_id: user_id)
-              )
-
-              acc + 1
-
-            other ->
-              Logger.error(
-                "orphan_sweep S3 delete failed",
-                Metadata.with_category(:error, :oban,
-                  user_id: user_id,
-                  reason: Metadata.safe_reason(other)
-                )
-              )
-
-              acc
-          end
-        end)
+        delete_departed(:s3, s3_ids, live_ids, &delete_prefix/1)
 
       {:error, reason} ->
         Logger.error(
           "orphan_sweep S3 discovery failed",
           Metadata.with_category(:error, :oban, reason: Metadata.safe_reason(reason))
+        )
+
+        0
+    end
+  end
+
+  defp delete_prefix(user_id) do
+    case Storage.adapter().delete_prefix("#{user_id}/") do
+      {:ok, _count} ->
+        Logger.debug(
+          "orphan_sweep deleted S3 prefix",
+          Metadata.with_category(:debug, :oban, user_id: user_id)
+        )
+
+        1
+
+      other ->
+        Logger.error(
+          "orphan_sweep S3 delete failed",
+          Metadata.with_category(:error, :oban,
+            user_id: user_id,
+            reason: Metadata.safe_reason(other)
+          )
         )
 
         0

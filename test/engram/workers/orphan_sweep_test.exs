@@ -209,6 +209,19 @@ defmodule Engram.Workers.OrphanSweepTest do
     assert {:ok, "live data"} = Storage.adapter().get("#{live.id}/1/keep.bin")
   end
 
+  # The attachment-prefix pass diffs the same `users` read and drops a whole
+  # user's attachments, so it goes through the same guard.
+  test "S3 refuses when most attachment prefixes look departed", %{bypass: bypass} do
+    ghosts = for _ <- 1..3, do: Ecto.UUID.generate()
+    for g <- ghosts, do: Storage.adapter().put("#{g}/1/a.bin", "data")
+    stub_qdrant(bypass, [])
+
+    {_result, log} = with_log(fn -> perform_job(OrphanSweep, %{}) end)
+
+    for g <- ghosts, do: assert({:ok, "data"} = Storage.adapter().get("#{g}/1/a.bin"))
+    assert log =~ "orphan_sweep aborting s3"
+  end
+
   test "no-op when both stores are clean", %{bypass: bypass} do
     user = insert(:user)
     Storage.adapter().put("#{user.id}/1/keep.bin", "live")
