@@ -233,6 +233,21 @@ defmodule Engram.Notes.LocationRlsPlanTest do
     # (`WalkSql.moved_chain/0`, a walk UP the row's `parent_id`s), so a note
     # whose folder moved without a cascade stops answering for its old path.
     # That walk runs for the matched row only, on a folders id key.
+    # A claim or restore batch: one walk of the distinct folders and one
+    # probe set on `notes_name_key_live`, never a per-path walk or a scan.
+    test "a batch name check reads the name-key index", ctx do
+      mark_moved!(ctx.user, ctx.vault)
+      paths = for i <- 1..40, do: "A/B/n#{i}.md"
+
+      plans =
+        plans(ctx.user, fn -> Notes.Location.named_ids_at(ctx.user, ctx.vault.id, paths) end)
+
+      refute_vault_scan!(plans)
+      probe = for {sql, %{custom: c}} <- plans, sql =~ "name_key", do: c
+      assert [custom] = probe
+      assert custom =~ "notes_name_key_live", custom
+    end
+
     test "a moved folder, a held path: the stale-holder check walks up on an id key",
          ctx do
       mark_moved!(ctx.user, ctx.vault)

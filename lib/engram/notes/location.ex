@@ -215,25 +215,38 @@ defmodule Engram.Notes.Location do
         do: {path, Enum.join(folders, "/"), name}
   end
 
-  # `name_key` is trigger-kept and not on the schema, so it is read through
-  # a schemaless join of the row itself.
+  # `name_key` is trigger-kept and not on the schema, so the row is read
+  # schemaless. One `notes_name_key_live` probe per key (a LATERAL, LIMIT 1,
+  # lowest id): a plain join or `= ANY(...)` plans as a vault read under
+  # FORCE RLS (the RLS plan spec).
   defp name_holders(vault_id, wanted) do
-    from(n in "notes",
-      where:
-        n.vault_id == type(^vault_id, Ecto.UUID) and
-          n.name_key in type(^Map.keys(wanted), {:array, :binary}) and
-          is_nil(n.deleted_at) and n.kind == "note" and
-          fragment(WalkSql.moved_chain(), n.folder_ref_id),
-      select: {n.name_key, n.name_hmac, type(n.id, Ecto.UUID)}
+    {keys, exacts} = wanted |> Enum.map(fn {k, {_path, exact}} -> {k, exact} end) |> Enum.unzip()
+
+    from(
+      k in fragment(
+        "SELECT * FROM unnest(?::bytea[], ?::bytea[]) AS t(key, exact)",
+        ^keys,
+        ^exacts
+      ),
+      as: :k,
+      inner_lateral_join:
+        n in subquery(
+          from(n in "notes",
+            where:
+              n.vault_id == type(^vault_id, Ecto.UUID) and n.name_key == parent_as(:k).key and
+                not is_nil(n.name_key) and is_nil(n.deleted_at) and n.kind == "note" and
+                n.name_hmac == parent_as(:k).exact and
+                fragment(WalkSql.moved_chain(), n.folder_ref_id),
+            order_by: n.id,
+            limit: 1,
+            select: %{id: n.id}
+          )
+        ),
+      on: true,
+      select: {k.key, type(n.id, Ecto.UUID)}
     )
     |> Repo.all()
-    |> Enum.sort_by(&elem(&1, 2))
-    |> Enum.reduce(%{}, fn {key, exact, id}, acc ->
-      case wanted[key] do
-        {path, ^exact} -> Map.put_new(acc, path, id)
-        _ -> acc
-      end
-    end)
+    |> Map.new(fn {key, id} -> {elem(wanted[key], 0), id} end)
   end
 
   # The stored path's row, or the row the path's folder row and name name
