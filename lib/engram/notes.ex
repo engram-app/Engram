@@ -8291,40 +8291,32 @@ defmodule Engram.Notes do
     end)
   end
 
-  # The folder-rename cascade's link-rewrite jobs for every moved note, as
-  # one bulk insert instead of N single ones (#2169).
+  # The folder-rename cascade's link-rewrite: ONE chain for the whole move
+  # (#2523 S5), grouped by linking note, so a note linking N moved notes is
+  # written once, not N times. Up to 1,000
+  # moved notes a chain; past it, one chain per chunk.
   #
   # `moves` is `{note, old_path, new_path, new_folder, old_path_hmac_b64}`.
   # T3.2 - hmac-only args, never plaintext.
   #
   # No index job: a move makes no Qdrant write (R3a, a point holds no path).
   #
-  # Rewrite: RewriteNoteLinks has no `unique` (a cursor worker re-enqueues
-  # its own successor), so nothing to drop. #648/#1231 Phase 3 - a folder
-  # rename is N note renames (basename unchanged), so each moved note reuses
-  # the Phase 1 rewrite job verbatim: qualified [[old-folder/...]] occurrences
-  # get the new prefix; bare [[basename]] occurrences plan no edit
-  # (idempotence guard in Rewriter.plan_edits/5). Old-path recovery = the
-  # tombstone this cascade inserted in the same transaction. Origin safety is
-  # by construction: the plugin never calls the folder-rename REST surface,
-  # so every caller here is web/MCP and must rewrite. Gated on a real move:
-  # the idempotent same-folder branch reaches this with old == new.
-  #
-  # One job per folder rename was rejected: the rewrite job's cursor and
-  # target are per note.
+  # #648/#1231 Phase 3 - a folder rename is N note renames (basename
+  # unchanged): qualified [[old-folder/...]] occurrences get the new prefix;
+  # bare [[basename]] occurrences plan no edit (idempotence guard in
+  # Rewriter.plan_edits/5). Old-path recovery = the tombstone this cascade
+  # inserted in the same transaction. Origin safety is by construction: the
+  # plugin never calls the folder-rename REST surface, so every caller here
+  # is web/MCP and must rewrite. Gated on a real move: the idempotent
+  # same-folder branch reaches this with old == new.
   defp enqueue_rename_cascade_jobs(user, vault, moves) do
     moves
     |> Enum.filter(fn {_n, old, new, _f, _h} -> old != new end)
     |> Enum.map(fn {note, old, _new, _folder, old_hmac} ->
-      RewriteNoteLinks.new_for(
-        user.id,
-        vault.id,
-        :note,
-        note.id,
-        old_hmac,
-        Base.encode64(Links.basename_hmac(user, Links.basename_key(old)))
-      )
+      {:note, note.id, old_hmac,
+       Base.encode64(Links.basename_hmac(user, Links.basename_key(old)))}
     end)
+    |> then(&RewriteNoteLinks.new_for_folder(user.id, vault.id, &1))
     |> Enqueue.enqueue_all("rewrite_note_links")
   end
 

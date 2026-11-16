@@ -202,6 +202,11 @@ config :engram, Oban,
     export: 1,
     cleanup: 1,
     indexing: 2,
+    # Link rewrites after a rename (Engram.Workers.RewriteNoteLinks), off
+    # `indexing`: a 1k-note folder move on staging held indexing for minutes
+    # (another tenant's extraction waited 407 s). One slot per node bounds
+    # the WAL a rewrite storm writes at once (#2523 S5).
+    link_rewrite: 1,
     # Overflow lane for CRDT unbind checkpoints under a reconnect storm (see
     # Engram.Notes.CheckpointGate + Engram.Workers.CheckpointNote).
     #

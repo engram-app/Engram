@@ -849,6 +849,58 @@ defmodule Engram.Links do
   end
 
   @doc """
+  `pre_rename_candidates/5` for a whole folder move at once, keyed by OLD
+  basename hmac: `%{hmac => %{live: count, candidates: index}}`. `moves` are
+  `%{kind:, id:, old_path:}` of rows that are live now.
+
+  Every moved row sits back at its old path, siblings included: before the
+  move they were all there, so an occurrence resolves to the one row it named
+  then. That makes the set the same for every target sharing a basename, so
+  it is fetched, decrypted and indexed once per basename, in two queries for
+  the whole batch (`live` is the post-move count the `collision?` rule reads).
+  """
+  @spec pre_move_candidate_sets(map(), map(), [map()]) :: %{
+          binary() => %{live: non_neg_integer(), candidates: map()}
+        }
+  def pre_move_candidate_sets(_user, _vault, []), do: %{}
+
+  def pre_move_candidate_sets(user, vault, moves) do
+    # Outside the scope and threaded down: see `resolve_target/4` above.
+    {:ok, dek} = Crypto.get_dek(user)
+    filter_key = Crypto.dek_filter_key_from_bytes(dek)
+    by_hmac = Enum.group_by(moves, &Crypto.hmac_field(filter_key, basename_key(&1.old_path)))
+    hmacs = Map.keys(by_hmac)
+
+    {:ok, {notes, attachments}} =
+      Repo.with_tenant(user.id, fn ->
+        {fetch_candidates_by_hmac(user, vault, hmacs, :notes, dek),
+         fetch_candidates_by_hmac(user, vault, hmacs, :attachments, dek)}
+      end)
+
+    Map.new(by_hmac, fn {hmac, group} ->
+      old = Map.new(group, &{&1.id, &1.old_path})
+      live_notes = Map.get(notes, hmac, [])
+      live_atts = Map.get(attachments, hmac, [])
+
+      sets = %{
+        notes: at_old_paths(live_notes, old, group, :note),
+        attachments: at_old_paths(live_atts, old, group, :attachment)
+      }
+
+      {hmac,
+       %{live: length(live_notes) + length(live_atts), candidates: index_candidate_sets(sets)}}
+    end)
+  end
+
+  # Moved rows back at their old paths; a moved row this read missed is added
+  # there, as `pre_rename_candidates/5` adds its one synthetic candidate.
+  defp at_old_paths(live, old, group, kind) do
+    seen = MapSet.new(live, &elem(&1, 0))
+    missing = for %{kind: ^kind, id: id} <- group, id not in seen, do: {id, old[id]}
+    Enum.map(live, fn {id, path} -> {id, Map.get(old, id, path)} end) ++ missing
+  end
+
+  @doc """
   Would `target` have resolved to the renamed row (`renamed_id`) at its OLD
   path, under `resolve_target/4`'s rules? `candidates` comes from
   `pre_rename_candidates/5` — fetched once per job batch and shared

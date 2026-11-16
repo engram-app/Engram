@@ -22,7 +22,7 @@ defmodule Engram.PromEx.Indexing do
       minute), `disk` (Qdrant volume over `:rebuild_max_disk_percent`),
       `queue` (update queue over 100), `optimizer` (not green or points
       awaiting optimization) or `unavailable` (collection info unreadable).
-    * `engram_prom_ex_indexing_link_rewrite_failures_total` — counter of
+    * `engram_prom_ex_indexing_link_rewrite_failures_total` — sum (of `count`) of
       per-source-note link-rewrite failures from `RewriteNoteLinks`
       (rename propagation, #648/#1231), tagged by `:reason`.
     * `engram_prom_ex_indexing_stale_points_leaked_total` — Qdrant points a
@@ -263,9 +263,12 @@ defmodule Engram.PromEx.Indexing do
               "change no event queued (expected near zero).",
           tags: [:reason, :missed]
         ),
-        counter(
+        # A sum of `count`, not a counter: a folder chain reports all of a
+        # page's skipped entries in one event. Same exported name and type.
+        sum(
           metric_prefix ++ [:link_rewrite, :failures, :total],
           event_name: @link_rewrite_failed_event,
+          measurement: :count,
           description:
             "Per-source-note link-rewrite failures (rename propagation, #648/#1231). " <>
               ":reason is a closed set — known pipeline error atoms plus " <>

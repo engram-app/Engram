@@ -8,7 +8,9 @@ defmodule Engram.Workers.DeleteNoteIndex do
   duration of any in-flight or recently-completed job.
   """
 
-  use Oban.Worker, queue: :indexing, max_attempts: 3
+  # Priority 1: yields the shared `indexing` lane to ExtractNoteLinks (0),
+  # whose edges make a just-written link resolve (ObanQueueConfigTest).
+  use Oban.Worker, queue: :indexing, priority: 1, max_attempts: 3
 
   import Ecto.Query, only: [from: 2]
 

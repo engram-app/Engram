@@ -47,6 +47,7 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
   defp settle! do
     _ = NoteCommittedDispatch.run()
     _ = Oban.drain_queue(queue: :indexing, with_scheduled: true, with_recursion: true)
+    _ = Oban.drain_queue(queue: :link_rewrite, with_scheduled: true, with_recursion: true)
     if NoteCommittedDispatch.run() > 0, do: settle!(), else: :ok
   end
 

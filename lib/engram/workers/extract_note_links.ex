@@ -202,8 +202,11 @@ defmodule Engram.Workers.ExtractNoteLinks do
   #   * "sweep" => true makes the repair chain terminate WITHOUT enqueueing
   #     another sweep (RewriteNoteLinks.maybe_enqueue_sweep/1) — one walk.
   #   * insert-time unique on [target_id, old_basename_hmac] over
-  #     available/scheduled collapses concurrent repairs AND defers to the
-  #     rename's own still-pending sweep (identical work, already scheduled).
+  #     available/scheduled collapses concurrent repairs AND defers to a
+  #     per-note rename's own still-pending sweep (identical work, already
+  #     scheduled). A folder chain's pending sweep carries neither key at top
+  #     level, so a late edge inside its window gets both that sweep and a
+  #     per-note repair walk: extra reads only, both rewrites are idempotent.
   #     Chain successors insert via plain new/1 and are unaffected — this is
   #     a single-shot entry, not the self-re-enqueueing cursor-chain case the
   #     worker's no-unique rule exists for.
@@ -246,24 +249,67 @@ defmodule Engram.Workers.ExtractNoteLinks do
   defp recent_rename_job_args(hmacs_b64, user_id, vault_id) do
     cutoff = DateTime.add(DateTime.utc_now(), -@repair_window_seconds, :second)
 
-    Repo.all(
-      from(j in Oban.Job,
-        where: j.worker == "Engram.Workers.RewriteNoteLinks",
-        where: j.inserted_at > ^cutoff,
-        where:
-          fragment(
-            "? ->> 'old_basename_hmac' = ANY(?)",
-            j.args,
-            type(^hmacs_b64, {:array, :string})
-          ),
-        where: fragment("? ->> 'user_id' = ?", j.args, ^to_string(user_id)),
-        where: fragment("? ->> 'vault_id' = ?", j.args, ^to_string(vault_id)),
-        distinct: fragment("? ->> 'old_basename_hmac'", j.args),
-        order_by: [desc: j.inserted_at],
-        select: j.args
+    note_rows =
+      Repo.all(
+        from(j in Oban.Job,
+          where: j.worker == "Engram.Workers.RewriteNoteLinks",
+          where: j.inserted_at > ^cutoff,
+          where:
+            fragment(
+              "? ->> 'old_basename_hmac' = ANY(?)",
+              j.args,
+              type(^hmacs_b64, {:array, :string})
+            ),
+          where: fragment("? ->> 'user_id' = ?", j.args, ^to_string(user_id)),
+          where: fragment("? ->> 'vault_id' = ?", j.args, ^to_string(vault_id)),
+          distinct: fragment("? ->> 'old_basename_hmac'", j.args),
+          order_by: [desc: j.inserted_at],
+          select: j.args
+        )
       )
-    )
+
+    (note_rows ++ folder_rename_job_args(hmacs_b64, user_id, vault_id, cutoff))
+    |> Enum.uniq_by(& &1["old_basename_hmac"])
   end
+
+  # A folder rename queues ONE chain whose args list every moved note under
+  # "targets" (`RewriteNoteLinks.new_for_folder/3`). The matched entries come
+  # back as the per-note args the repair re-enqueues, so the repair rewrites
+  # toward that one row. Chain heads only (cursor at the start: the first
+  # page and its sweep), as every successor repeats the same targets. The
+  # containment on args uses `oban_jobs_args_index` (GIN). `"targets" => []`
+  # adds the GIN key `targets` (an empty array is contained in any array), so
+  # only folder chains match, not every rewrite head the vault kept for a day.
+  defp folder_rename_job_args(hmacs_b64, user_id, vault_id, cutoff) do
+    probe = Map.put(head(user_id, vault_id), "targets", [])
+
+    from(j in Oban.Job,
+      join: t in fragment("jsonb_array_elements(? -> 'targets')", j.args),
+      on: true,
+      where: j.worker == "Engram.Workers.RewriteNoteLinks",
+      where: j.inserted_at > ^cutoff,
+      where: fragment("? @> ?", j.args, type(^probe, :map)),
+      where:
+        fragment(
+          "? ->> 'old_basename_hmac' = ANY(?)",
+          t.value,
+          type(^hmacs_b64, {:array, :string})
+        ),
+      distinct: fragment("? ->> 'old_basename_hmac'", t.value),
+      order_by: [desc: j.inserted_at],
+      select: t.value
+    )
+    |> Repo.all()
+    # Entries carry their own target_kind; "note" is the pre-kind default.
+    |> Enum.map(&Map.merge(Map.put(head(user_id, vault_id), "target_kind", "note"), &1))
+  end
+
+  defp head(user_id, vault_id),
+    do: %{
+      "user_id" => to_string(user_id),
+      "vault_id" => to_string(vault_id),
+      "cursor" => @start_cursor
+    }
 
   defp enqueue_repair(args) do
     :telemetry.execute([:engram, :links, :repair_enqueued], %{count: 1}, %{origin: :extract})

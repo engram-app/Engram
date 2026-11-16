@@ -7,7 +7,9 @@ defmodule Engram.Workers.RebindNoteLinks do
   failing as an unknown worker. Delete it in the release after this one.
   """
 
-  use Oban.Worker, queue: :indexing, max_attempts: 1
+  # Priority 1: yields the shared `indexing` lane to ExtractNoteLinks (0),
+  # whose edges make a just-written link resolve (ObanQueueConfigTest).
+  use Oban.Worker, queue: :indexing, priority: 1, max_attempts: 1
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.seconds(5)

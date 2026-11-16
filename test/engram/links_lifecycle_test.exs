@@ -29,8 +29,10 @@ defmodule Engram.LinksLifecycleTest do
     assert :ok = perform_job(ExtractNoteLinks, %{note_id: note_id, user_id: user.id})
   end
 
+  # Rename link rewrites run on their own queue (RewriteNoteLinks).
   defp drain_indexing! do
     Oban.drain_queue(queue: :indexing)
+    Oban.drain_queue(queue: :link_rewrite)
   end
 
   defp only_link(user, note_id) do

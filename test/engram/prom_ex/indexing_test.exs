@@ -17,7 +17,9 @@ defmodule Engram.PromEx.IndexingTest do
     refute Enum.any?(PromExMetrics.of(Indexing).metrics, &(:repath in &1.name))
   end
 
-  test "event_metrics/1 maps the link-rewrite :failed event to a reason-tagged counter" do
+  # A sum of the event's `count`, not a counter of events: a folder chain
+  # reports every skipped entry in one event (`count: n`).
+  test "event_metrics/1 sums the link-rewrite :failed event's count, by reason" do
     built = PromExMetrics.of(Indexing)
     metrics = built.metrics
 
@@ -25,7 +27,8 @@ defmodule Engram.PromEx.IndexingTest do
 
     assert [metric] = link_rewrite_metrics
 
-    assert match?(%Telemetry.Metrics.Counter{}, metric)
+    assert match?(%Telemetry.Metrics.Sum{}, metric)
+    assert metric.measurement == :count
     assert metric.name == [:engram, :prom_ex, :indexing, :link_rewrite, :failures, :total]
 
     # Cardinality contract: only the bounded :reason — never note/user/vault ids.

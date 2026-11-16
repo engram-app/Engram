@@ -63,6 +63,7 @@ defmodule Engram.Links.Rewriter do
     CrdtRoom,
     CrdtUpdateLog,
     Enqueue,
+    Keys,
     Note,
     NoteBody
   }
@@ -83,22 +84,46 @@ defmodule Engram.Links.Rewriter do
   prefix — pass `full_text` itself for plaintext-only callers). Returned
   `rel_start`/`len` are byte offsets into `body`. Idempotent: occurrences
   already carrying the new text plan no edit.
-  """
-  @spec plan_edits(map(), map(), String.t(), String.t(), map()) :: [map()]
-  def plan_edits(user, vault, full_text, body, target) do
-    body_start = byte_size(full_text) - byte_size(body)
-    old_key = Links.basename_key(target.old_path)
 
-    occurrences =
+  `targets` is one target or a list (a folder rename's moved notes): the
+  note is parsed once and every target's edits come back as one plan, so
+  the caller writes the note once however many moved notes it links.
+  """
+  @spec plan_edits(map(), map(), String.t(), String.t(), map() | [map()]) :: [map()]
+  def plan_edits(user, vault, full_text, body, targets) do
+    body_start = byte_size(full_text) - byte_size(body)
+
+    by_key =
       full_text
       |> Parser.extract_all()
-      |> Enum.filter(&(Links.basename_key(&1.target) == old_key))
+      |> Enum.group_by(&Links.basename_key(&1.target))
 
-    # Indexed once per source note, so each occurrence resolves in O(1)
-    # rather than re-sorting every same-basename candidate.
+    targets
+    |> List.wrap()
+    |> Enum.flat_map(
+      &plan_target(user, vault, Map.get(by_key, Links.basename_key(&1.old_path), []), &1)
+    )
+    # Each target answers "did this occurrence resolve to ME before the
+    # move" from its own candidate snapshot, so two moved notes sharing a
+    # basename could both claim one occurrence; overlapping splices would
+    # corrupt the note. First claim wins, as the per-note chains' order did.
+    |> Enum.uniq_by(& &1.rel_start)
+    |> Enum.map(&Map.update!(&1, :rel_start, fn start -> start - body_start end))
+    # Occurrence sits before the body (frontmatter) — the parser already
+    # excludes frontmatter, so this is belt-and-suspenders only.
+    |> Enum.reject(&(&1.rel_start < 0))
+  end
+
+  defp plan_target(_user, _vault, [], _target), do: []
+
+  defp plan_target(user, vault, occurrences, target) do
+    # Indexed once per source note and target, so each occurrence resolves
+    # in O(1) rather than re-sorting every same-basename candidate; a folder
+    # target arrives indexed once per page (`build_folder_targets/3`).
     candidates =
-      if occurrences != [],
-        do: user |> pre_rename_candidates(vault, target) |> Links.index_candidate_sets()
+      Map.get_lazy(target, :candidate_index, fn ->
+        user |> pre_rename_candidates(vault, target) |> Links.index_candidate_sets()
+      end)
 
     occurrences
     |> Enum.filter(fn occ ->
@@ -106,18 +131,20 @@ defmodule Engram.Links.Rewriter do
     end)
     |> Enum.flat_map(fn occ ->
       replacement = replacement_target(occ, target)
-      rel = occ.target_start - body_start
 
-      cond do
-        # Already the new text — idempotent no-op. Compared against the RAW
-        # span (not the decoded target) because that is what gets spliced:
-        # for a markdown occurrence both sides are percent-encoded here.
-        occ.target_raw == replacement -> []
-        # Occurrence sits before the body (frontmatter) — the parser already
-        # excludes frontmatter, so this is belt-and-suspenders only.
-        rel < 0 -> []
-        true -> [%{rel_start: rel, len: occ.target_len, old: occ.target_raw, new: replacement}]
-      end
+      # Already the new text — idempotent no-op. Compared against the RAW
+      # span (not the decoded target) because that is what gets spliced:
+      # for a markdown occurrence both sides are percent-encoded here.
+      if occ.target_raw == replacement,
+        do: [],
+        else: [
+          %{
+            rel_start: occ.target_start,
+            len: occ.target_len,
+            old: occ.target_raw,
+            new: replacement
+          }
+        ]
     end)
   end
 
@@ -220,59 +247,201 @@ defmodule Engram.Links.Rewriter do
   # `{:discard, :target_gone}`. Oban then threw the rewrite away as a
   # legitimate terminal state, so every inbound `[[wikilink]]` kept pointing at
   # the old path permanently, with no error logged and no retry to heal it.
-  defp current_path(user, vault, :note, id) do
-    row =
-      Repo.with_tenant!(user.id, fn ->
-        Repo.one(
-          from(n in Note,
-            where:
-              n.id == ^id and n.user_id == ^user.id and n.vault_id == ^vault.id and
-                n.kind == "note" and is_nil(n.deleted_at),
-            # The path only: never the body.
-            select: struct(n, ^Note.path_fields())
-          )
-        )
-      end)
-
-    with %Note{} = note <- row,
-         {:ok, %{path: path}} when is_binary(path) <- Crypto.maybe_decrypt_note_fields(note, user) do
-      {:ok, path}
-    else
+  defp current_path(user, vault, kind, id) do
+    case current_paths(user, vault, kind, [id]) do
+      %{^id => path} -> {:ok, path}
       _ -> {:error, :target_gone}
     end
+  end
+
+  # `%{id => current decrypted path}` for the live rows among `ids`, one query.
+  # A row that is gone or fails to decrypt is absent (`:target_gone`).
+  defp current_paths(_user, _vault, _kind, []), do: %{}
+
+  defp current_paths(user, vault, :note, ids) do
+    user
+    |> scoped_rows(
+      from(n in Note,
+        where:
+          n.id in ^ids and n.user_id == ^user.id and n.vault_id == ^vault.id and
+            n.kind == "note" and is_nil(n.deleted_at),
+        # The path only: never the body.
+        select: struct(n, ^Note.path_fields())
+      )
+    )
+    |> decrypted_paths(user, &Crypto.maybe_decrypt_note_fields/2)
   end
 
   # Scoped for the same reason as the `:note` clause above, and with the same
   # read-inside / decrypt-outside split; `attachments` is also FORCE ROW LEVEL
   # SECURITY.
-  defp current_path(user, vault, :attachment, id) do
-    row =
-      Repo.with_tenant!(user.id, fn ->
-        Repo.one(
-          from(a in Attachment,
-            where:
-              a.id == ^id and a.user_id == ^user.id and a.vault_id == ^vault.id and
-                is_nil(a.deleted_at)
-          )
-        )
+  defp current_paths(user, vault, :attachment, ids) do
+    user
+    |> scoped_rows(
+      from(a in Attachment,
+        where:
+          a.id in ^ids and a.user_id == ^user.id and a.vault_id == ^vault.id and
+            is_nil(a.deleted_at)
+      )
+    )
+    |> decrypted_paths(user, &Crypto.maybe_decrypt_attachment_fields/2)
+  end
+
+  defp scoped_rows(user, query), do: Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
+
+  defp decrypted_paths(rows, user, decrypt) do
+    for row <- rows,
+        {:ok, %{path: path}} when is_binary(path) <- [decrypt.(row, user)],
+        into: %{},
+        do: {row.id, path}
+  end
+
+  @doc """
+  `%{old_path_hmac => plaintext old path}` for every hmac with a readable
+  rename tombstone, one query (the worker recovers old paths from these; the
+  plaintext never rides job args). Decrypted paths map back by their own
+  hmac; the newest tombstone per path wins.
+  """
+  @spec tombstone_old_paths(map(), map(), :note | :attachment, [binary()]) :: %{
+          binary() => String.t()
+        }
+  def tombstone_old_paths(user, vault, kind, hmacs) do
+    # Tenant-scoped: `notes` and `attachments` carry FORCE ROW LEVEL
+    # SECURITY, so unscoped this returns nothing and old-path recovery
+    # silently fails: the rename's link rewrite then has nothing to rewrite
+    # toward, with no error. `user.id` is already in the WHERE clause.
+    #
+    # Only the READ is scoped. The decrypt below derives the user's DEK and
+    # stays OUTSIDE the scope for the reason given on `Links.resolve_target/4`:
+    # a KMS provider round trip inside the scope would hold row locks for the
+    # provider's latency.
+    {:ok, rows} =
+      Repo.with_tenant(user.id, fn -> Repo.all(tombstones_query(user, vault, kind, hmacs)) end)
+
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+
+    decrypt =
+      if kind == :note,
+        do: &Crypto.maybe_decrypt_note_fields/2,
+        else: &Crypto.maybe_decrypt_attachment_fields/2
+
+    Enum.reduce(rows, %{}, fn row, acc ->
+      case decrypt.(row, user) do
+        {:ok, %{path: path}} when is_binary(path) ->
+          Map.put_new(acc, Crypto.hmac_field(filter_key, path), path)
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  defp tombstones_query(user, vault, :note, hmacs) do
+    ids? = Keys.ids?()
+    path_col = Keys.col(:path, ids?)
+
+    from(n in Note,
+      where:
+        n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
+          not is_nil(n.deleted_at),
+      # notes_path_tomb (vault_id, path_id, seq): a backward probe per path,
+      # newest row only (DISTINCT ON the path key, seq descending).
+      where: ^Keys.in_any(:path, hmacs, ids?),
+      distinct: [asc: field(n, ^path_col)],
+      order_by: [desc: n.seq],
+      # The path only: never the body.
+      select: struct(n, ^Note.path_fields())
+    )
+  end
+
+  defp tombstones_query(user, vault, :attachment, hmacs) do
+    from(a in Attachment,
+      where:
+        a.user_id == ^user.id and a.vault_id == ^vault.id and
+          a.path_hmac in ^hmacs and not is_nil(a.deleted_at),
+      distinct: [asc: a.path_hmac],
+      order_by: [desc: a.seq]
+    )
+  end
+
+  @doc """
+  `build_target/5` for a page of a folder move's targets in a constant
+  number of queries: one current-path read per kind, then one candidate
+  read per table for every basename (`Links.pre_move_candidate_sets/3`).
+  `moves` are `{kind, id, old_path}`. Returns `{targets, gone}`; `gone`
+  are the ids with no live row (deleted, or renamed and deleted).
+
+  A target renamed to another basename after the move (rare) builds alone,
+  since its `collision?` reads the NEW basename.
+  """
+  @spec build_folder_targets(map(), map(), [{:note | :attachment, binary(), String.t()}]) ::
+          {[map()], [binary()]}
+  def build_folder_targets(user, vault, moves) do
+    moves =
+      Enum.map(moves, fn {kind, id, old_path} -> %{kind: kind, id: id, old_path: old_path} end)
+
+    current =
+      moves
+      |> Enum.group_by(& &1.kind, & &1.id)
+      |> Enum.reduce(%{}, fn {kind, ids}, acc ->
+        Map.merge(acc, current_paths(user, vault, kind, ids))
       end)
 
-    with %Attachment{} = att <- row,
-         {:ok, %{path: path}} when is_binary(path) <-
-           Crypto.maybe_decrypt_attachment_fields(att, user) do
-      {:ok, path}
-    else
-      _ -> {:error, :target_gone}
-    end
+    {live, gone} = Enum.split_with(moves, &Map.has_key?(current, &1.id))
+
+    {same, renamed} =
+      Enum.split_with(live, fn m ->
+        Links.basename_key(m.old_path) == Links.basename_key(current[m.id])
+      end)
+
+    sets = Links.pre_move_candidate_sets(user, vault, same)
+    {:ok, filter_key} = Crypto.dek_filter_key(user)
+
+    batched =
+      Enum.map(same, fn m ->
+        hmac = Crypto.hmac_field(filter_key, Links.basename_key(m.old_path))
+        %{live: live_count, candidates: index} = Map.fetch!(sets, hmac)
+
+        %{
+          kind: m.kind,
+          id: m.id,
+          old_path: m.old_path,
+          new_path: current[m.id],
+          old_basename_hmac: hmac,
+          collision?: live_count > 1,
+          candidate_index: index
+        }
+      end)
+
+    alone =
+      Enum.flat_map(renamed, fn m ->
+        case build_target(user, vault, m.kind, m.id, m.old_path) do
+          {:ok, t} -> [t]
+          {:error, :target_gone} -> []
+        end
+      end)
+
+    {batched ++ alone, Enum.map(gone, & &1.id)}
   end
 
   @doc """
   Distinct source-note ids with an edge whose `target_basename_hmac`
-  matches the renamed row's OLD basename. Keyed on the hmac (indexed),
-  which a rename never rewrites, so this set is stable.
+  matches the renamed row's OLD basename (or any of a folder rename's OLD
+  basenames, given a list). Keyed on the hmac (indexed), which a rename
+  never rewrites, so this set is stable.
+
+  Cost per page: one `= ANY` descent of `note_links_basename_idx` per
+  basename, then a sort of every matching edge past `cursor` for the
+  `DISTINCT ... ORDER BY source_note_id LIMIT`. So a page reads the
+  remaining edges to its basenames, not just `limit` rows.
   """
-  @spec source_note_ids(map(), map(), binary(), binary(), pos_integer()) :: [binary()]
-  def source_note_ids(user, vault, old_basename_hmac, cursor, limit) do
+  # ponytail: the sort is O(edges to the moved basenames past the cursor) per
+  # page; #2523 S5 item 5 (source_note_id on the basename index) bounds it.
+  @spec source_note_ids(map(), map(), binary() | [binary()], binary(), pos_integer()) ::
+          [binary()]
+  def source_note_ids(user, vault, old_basename_hmacs, cursor, limit) do
+    hmacs = List.wrap(old_basename_hmacs)
+
     # Scoped here rather than at the two call sites (`walk/4` and
     # `Workers.RewriteNoteLinks.run/1`) so both are covered by one guard.
     # `note_links` carries FORCE ROW LEVEL SECURITY; unscoped this returned
@@ -283,12 +452,34 @@ defmodule Engram.Links.Rewriter do
         from(l in Engram.Links.NoteLink,
           where:
             l.user_id == ^user.id and l.vault_id == ^vault.id and
-              l.target_basename_hmac == ^old_basename_hmac and
+              l.target_basename_hmac in ^hmacs and
               l.source_note_id > ^cursor,
           distinct: true,
           select: l.source_note_id,
           order_by: [asc: l.source_note_id],
           limit: ^limit
+        )
+      )
+    end)
+  end
+
+  @doc """
+  `{source_note_id, target_basename_hmac}` pairs among `source_ids` (one
+  `source_note_ids/5` page) for the basenames in `hmacs`: which moved notes
+  each linking note may name. One probe of the source-id index per page.
+  """
+  @spec linked_basenames(map(), map(), [binary()], [binary()]) :: [{binary(), binary()}]
+  def linked_basenames(_user, _vault, [], _hmacs), do: []
+
+  def linked_basenames(user, vault, source_ids, hmacs) do
+    Repo.with_tenant!(user.id, fn ->
+      Repo.all(
+        from(l in Engram.Links.NoteLink,
+          where:
+            l.user_id == ^user.id and l.vault_id == ^vault.id and
+              l.source_note_id in ^source_ids and l.target_basename_hmac in ^hmacs,
+          distinct: true,
+          select: {l.source_note_id, l.target_basename_hmac}
         )
       )
     end)
@@ -324,8 +515,9 @@ defmodule Engram.Links.Rewriter do
   end
 
   @doc """
-  Rewrite one source note. Loads the canonical doc (snapshot + tail),
-  plans edits, authors them as ONE Y-text transaction, and persists the
+  Rewrite one source note toward one target or a list of them (a folder
+  rename's moved notes). Loads the canonical doc (snapshot + tail),
+  plans every target's edits, authors them as ONE Y-text transaction, and persists the
   delta through the client-update path (live room when one exists, direct
   `CrdtPersistence.update_v1/4` append otherwise). Bounded optimistic
   retry when the tail head advances under a roomless append.
@@ -333,7 +525,7 @@ defmodule Engram.Links.Rewriter do
   `opts[:before_persist]` — test seam, a 0-arity fun run between edit
   authoring and the roomless head re-check.
   """
-  @spec rewrite_source_note(map(), map(), binary(), map(), keyword()) ::
+  @spec rewrite_source_note(map(), map(), binary(), map() | [map()], keyword()) ::
           {:ok, :rewritten | :noop | :skipped} | {:error, term()}
   def rewrite_source_note(user, vault, source_note_id, target, opts \\ []) do
     before_persist = Keyword.get(opts, :before_persist, fn -> :ok end)

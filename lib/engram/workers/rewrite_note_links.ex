@@ -10,7 +10,8 @@ defmodule Engram.Workers.RewriteNoteLinks do
   resurrect-rename (`Notes.genesis_resurrect`, the same rename arriving for a
   TOMBSTONED row) — both gated by `Notes.crdt_rename_rewrites?/1` so only
   non-Obsidian origins enqueue, and the folder-rename
-  cascade (`Notes.do_rename_folder`, one job per moved note). The gating
+  cascade (`Notes.do_rename_folder`, ONE chain per folder rename, see
+  "Folder chains" below). The gating
   rule across all five: plugin/Obsidian-origin renames never enqueue —
   Obsidian's "Automatically update internal links" rewrites those itself,
   preserving the exactly-one-rewriter invariant.
@@ -51,6 +52,28 @@ defmodule Engram.Workers.RewriteNoteLinks do
   [:engram, :links, :repair_enqueued] absorbing the late-edge cases and the
   sweep's second walks planning zero edits (rewrite failed=0, sweeps no-op).
 
+  Folder chains (#2523 S5): a folder rename used to queue one chain per
+  moved note (and per moved attachment), so a note linking N moved rows was
+  rewritten N times (staging, 1k moved notes: 1,000 version bumps on one
+  index note in 8 min, 1.13 GB of WAL). `new_for_folder/3` queues one chain
+  per kind of moved row (the note cascade, the attachment bulk move), whose
+  args carry every moved row as a `"targets"` entry (the per-note args' ids
+  and HMACs plus `target_kind`, up to 1,000 per chain). Each
+  page takes the next linking notes of ANY moved basename (keyset on
+  `source_note_id`), builds only the targets that page's notes name, in a
+  constant number of queries (one tombstone read per kind, then
+  `Rewriter.build_folder_targets/3`), and rewrites each linking note ONCE
+  with every edit: one Y-update, one link rebuild. A note linking moved
+  notes AND moved attachments is written once per chain (twice). A target
+  that cannot be built (gone, old path unrecoverable) is skipped and
+  counted; the rest proceed. Folder chains run at `folder_priority/0`,
+  behind single renames and repairs.
+
+  Queue `:link_rewrite` (limit 1 per node, worker and single-node only), off
+  `:indexing`: a big move waited out other tenants' extraction there. Kill
+  switch `:link_rewrite` (`enabled?/0`, a runtime ServiceConfig override):
+  off, every job snoozes before any read, nothing is dropped.
+
   Args carry ids + base64 HMACs only (T3.2/H3 — plaintext in
   `oban_jobs.args` JSONB defeats at-rest encryption). The old plaintext
   path is recovered at run time from one of two sources: the rename
@@ -65,17 +88,13 @@ defmodule Engram.Workers.RewriteNoteLinks do
   # loop after one batch — see git history for the removed note-links backfill. Idempotence
   # comes from the rewrite itself: already-rewritten occurrences plan no
   # edits, so a duplicate job converges as a no-op pass.
-  use Oban.Worker, queue: :indexing, max_attempts: 3
+  use Oban.Worker, queue: :link_rewrite, max_attempts: 3
 
-  import Ecto.Query
-
-  alias Engram.Attachments.Attachment
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.RotationGate
   alias Engram.Links.Rewriter
   alias Engram.Logger.Metadata
-  alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vaults
 
@@ -84,6 +103,14 @@ defmodule Engram.Workers.RewriteNoteLinks do
   @default_batch_size 100
   @start_cursor "00000000-0000-0000-0000-000000000000"
   @sweep_delay_seconds 60
+  # Bounds one chain's args (~130 B a target, copied to every successor) and
+  # the targets one page may build. A move past it queues one chain per
+  # chunk, so a note linking more moved notes than this is written once a chunk.
+  @max_folder_targets 1_000
+  # Long, so a paused backlog wakes rarely; short enough that "back on"
+  # resumes within minutes (RefreshKeywordVectors' kill switch, copied).
+  @paused_snooze 300
+  @folder_priority 1
 
   # The tagged error atoms the rewrite pipeline actually produces
   # (rewrite_source_note/attempt/persist + this worker's own path recovery).
@@ -94,11 +121,57 @@ defmodule Engram.Workers.RewriteNoteLinks do
     :version_conflict,
     :path_undecryptable,
     :decrypt_failed,
-    :old_path_unrecoverable
+    :old_path_unrecoverable,
+    # A folder entry whose HMACs are missing or not base64 (skipped).
+    :invalid_hmac_base64
   ]
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
+
+  @doc "False while the `:link_rewrite` kill switch is off."
+  @spec enabled?() :: boolean()
+  def enabled?, do: Engram.ServiceConfig.get(:link_rewrite, true) != false
+
+  @doc """
+  Folder chains run behind single renames and repairs (priority 0) on the
+  one `link_rewrite` slot, so a big move never holds another tenant's
+  single rename behind every chunk's first page. Successors and sweeps keep it.
+  """
+  @spec folder_priority() :: 1
+  def folder_priority, do: @folder_priority
+
+  @doc """
+  The folder-move chains for `moves`, one per 1,000-row chunk.
+  `moves` are `{kind, target_id, old_path_hmac_b64, old_basename_hmac_b64}`,
+  notes or attachments (T3.2: ids and HMACs only).
+  """
+  @spec new_for_folder(binary(), binary(), [
+          {:note | :attachment, binary(), String.t(), String.t()}
+        ]) :: [Ecto.Changeset.t()]
+  def new_for_folder(user_id, vault_id, moves) do
+    moves
+    |> Enum.chunk_every(@max_folder_targets)
+    |> Enum.map(fn chunk ->
+      new(
+        %{
+          "user_id" => user_id,
+          "vault_id" => vault_id,
+          "cursor" => @start_cursor,
+          "targets" =>
+            Enum.map(chunk, fn {kind, id, path_hmac, basename_hmac} ->
+              %{
+                "target_kind" => Atom.to_string(kind),
+                "target_id" => id,
+                "old_path_hmac" => path_hmac,
+                "old_basename_hmac" => basename_hmac
+              }
+            end)
+        },
+        priority: @folder_priority
+      )
+    end)
+  end
 
   @doc """
   Build a rewrite job. `old_path_hmac_b64`/`old_basename_hmac_b64` are
@@ -150,10 +223,44 @@ defmodule Engram.Workers.RewriteNoteLinks do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
-    case RotationGate.check(args["user_id"]) do
-      {:error, :rotation_in_progress} -> {:snooze, 60}
-      {:error, :user_not_found} -> {:discard, :user_deleted}
-      :ok -> run(args)
+    with :ok <- if(enabled?(), do: :ok, else: {:snooze, @paused_snooze}) do
+      case RotationGate.check(args["user_id"]) do
+        {:error, :rotation_in_progress} -> {:snooze, 60}
+        {:error, :user_not_found} -> {:discard, :user_deleted}
+        :ok -> run(args)
+      end
+    end
+  end
+
+  defp run(%{"targets" => entries} = args) do
+    cursor = args["cursor"] || @start_cursor
+    batch_size = args["batch_size"] || @default_batch_size
+
+    with {:ok, user} <- load_user(args["user_id"]),
+         {:ok, vault} <- load_vault(user, args["vault_id"]) do
+      by_hmac = entries |> decoded_entries(args) |> Enum.group_by(& &1.basename_hmac)
+      hmacs = Map.keys(by_hmac)
+      ids = Rewriter.source_note_ids(user, vault, hmacs, cursor, batch_size)
+      linked = Rewriter.linked_basenames(user, vault, ids, hmacs)
+
+      targets =
+        linked
+        |> Enum.map(&elem(&1, 1))
+        |> Enum.uniq()
+        |> Enum.flat_map(&Map.fetch!(by_hmac, &1))
+        |> then(&folder_targets(user, vault, &1))
+        |> Enum.group_by(& &1.old_basename_hmac)
+
+      wanted = Enum.group_by(linked, &elem(&1, 0), &elem(&1, 1))
+
+      ids
+      |> Enum.map(fn id ->
+        {id, wanted |> Map.get(id, []) |> Enum.flat_map(&Map.get(targets, &1, []))}
+      end)
+      |> Enum.reject(fn {_id, ts} -> ts == [] end)
+      |> then(&rewrite_each(user, vault, &1))
+
+      continue(args, ids, batch_size)
     end
   end
 
@@ -178,22 +285,82 @@ defmodule Engram.Workers.RewriteNoteLinks do
          {:ok, old_path} <- recover_old_path(user, vault, kind, old_path_hmac, args),
          {:ok, target} <- build_target(user, vault, kind, target_id, old_path) do
       ids = Rewriter.source_note_ids(user, vault, old_basename_hmac, cursor, batch_size)
-      rewrite_each(user, vault, ids, target)
-
-      if length(ids) == batch_size do
-        args
-        |> Map.put("cursor", List.last(ids))
-        |> new()
-        |> Oban.insert()
-        |> case do
-          {:ok, _job} -> :ok
-          {:error, reason} -> {:error, reason}
-        end
-      else
-        maybe_enqueue_sweep(args)
-      end
+      rewrite_each(user, vault, Enum.map(ids, &{&1, target}))
+      continue(args, ids, batch_size)
     end
   end
+
+  # A full page re-enqueues the chain at its last id; a short one ends it.
+  defp continue(args, ids, batch_size) do
+    if length(ids) == batch_size do
+      args
+      |> Map.put("cursor", List.last(ids))
+      |> new(priority: priority(args))
+      |> Oban.insert()
+      |> case do
+        {:ok, _job} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      maybe_enqueue_sweep(args)
+    end
+  end
+
+  # A page's folder entries to rewrite targets, in a constant number of
+  # queries: one tombstone read per kind for the old paths, then
+  # `Rewriter.build_folder_targets/3`. An entry whose old path cannot be
+  # recovered, or whose row is gone, is counted and skipped, so it never stops
+  # the rest of the folder's rewrite (the per-note chain discards instead).
+  defp folder_targets(user, vault, entries) do
+    {moves, lost} =
+      entries
+      |> Enum.group_by(& &1.kind)
+      |> Enum.flat_map(fn {kind, group} ->
+        paths = Rewriter.tombstone_old_paths(user, vault, kind, Enum.map(group, & &1.path_hmac))
+        Enum.map(group, &{kind, &1.id, Map.get(paths, &1.path_hmac)})
+      end)
+      |> Enum.split_with(fn {_kind, _id, path} -> is_binary(path) end)
+
+    {targets, gone} = Rewriter.build_folder_targets(user, vault, moves)
+
+    count_failed(:old_path_unrecoverable, length(lost))
+    count_failed(:target_gone, length(gone))
+    targets
+  end
+
+  # Folder entries with both HMACs decoded. Entries are server-built, so a
+  # malformed or keyless one is a bug: it is skipped, never allowed to fail the
+  # page and, after retries, discard the chain. Every page and the sweep
+  # repeat the entries, so only the chain head's first page logs (ids only)
+  # and counts them. An Oban retry of that page counts them again.
+  defp decoded_entries(entries, args) do
+    {good, bad} =
+      Enum.reduce(entries, {[], []}, fn e, {good, bad} ->
+        with {:ok, path_hmac} <- decode_b64(e["old_path_hmac"]),
+             {:ok, basename_hmac} <- decode_b64(e["old_basename_hmac"]) do
+          entry = %{kind: kind_from(e["target_kind"]), id: e["target_id"]}
+          {[Map.merge(entry, %{path_hmac: path_hmac, basename_hmac: basename_hmac}) | good], bad}
+        else
+          {:discard, :invalid_hmac_base64} -> {good, [e["target_id"] | bad]}
+        end
+      end)
+
+    if bad != [] and args["cursor"] in [nil, @start_cursor] and args["sweep"] != true do
+      Logger.warning(
+        "link rewrite skipped a malformed folder entry",
+        Metadata.with_category(:warning, :sync, target_id: hd(bad), total_count: length(bad))
+      )
+
+      count_failed(:invalid_hmac_base64, length(bad))
+    end
+
+    Enum.reverse(good)
+  end
+
+  defp count_failed(_reason, 0), do: :ok
+
+  defp count_failed(reason, n),
+    do: :telemetry.execute([:engram, :links, :rewrite, :failed], %{count: n}, %{reason: reason})
 
   # Chain terminated. A plain run schedules one delayed sweep to catch any
   # edge that indexed in after this walk started (see moduledoc). A sweep
@@ -204,13 +371,16 @@ defmodule Engram.Workers.RewriteNoteLinks do
     args
     |> Map.put("cursor", @start_cursor)
     |> Map.put("sweep", true)
-    |> new(schedule_in: @sweep_delay_seconds)
+    |> new(schedule_in: @sweep_delay_seconds, priority: priority(args))
     |> Oban.insert()
     |> case do
       {:ok, _job} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp priority(%{"targets" => _}), do: @folder_priority
+  defp priority(_args), do: 0
 
   defp kind_from("attachment"), do: :attachment
   defp kind_from(_), do: :note
@@ -221,6 +391,9 @@ defmodule Engram.Workers.RewriteNoteLinks do
       :error -> {:discard, :invalid_hmac_base64}
     end
   end
+
+  # A missing key is as malformed as a bad encoding.
+  defp decode_b64(_missing), do: {:discard, :invalid_hmac_base64}
 
   defp load_user(user_id) do
     case Repo.get(Engram.Accounts.User, user_id) do
@@ -248,53 +421,11 @@ defmodule Engram.Workers.RewriteNoteLinks do
   # The rename tombstone at the OLD path carries the plaintext we must not
   # put in args: decrypt it. Newest tombstone wins (repeated renames
   # through the same path).
-  defp tombstone_old_path(user, vault, :note, old_path_hmac) do
-    # Tenant-scoped: `notes` carries FORCE ROW LEVEL SECURITY, so unscoped this
-    # returns nil and old-path recovery silently fails — the rename's link
-    # rewrite then has nothing to rewrite toward, with no error. `user.id` is
-    # in scope; it is already in the WHERE clause below.
-    #
-    # Only the READ is scoped. The decrypt below derives the user's DEK and
-    # stays OUTSIDE the scope for the reason given on `Links.resolve_target/4`:
-    # a KMS provider round trip inside the scope would hold row locks for the
-    # provider's latency.
-    {:ok, tombstone} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.one(
-          from(n in Note,
-            where:
-              n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
-                not is_nil(n.deleted_at),
-            # notes_path_tomb (vault_id, path_id, seq): a backward probe.
-            where: ^Engram.Notes.Keys.eq(:path, old_path_hmac),
-            order_by: [desc: n.seq],
-            limit: 1,
-            # The path only: never the body.
-            select: struct(n, ^Note.path_fields())
-          )
-        )
-      end)
-
-    decrypt_tombstone_path(tombstone, user, &Crypto.maybe_decrypt_note_fields/2)
-  end
-
-  defp tombstone_old_path(user, vault, :attachment, old_path_hmac) do
-    # Tenant-scoped for the same reason as the `:note` clause above;
-    # `attachments` is also FORCE ROW LEVEL SECURITY.
-    {:ok, tombstone} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.one(
-          from(a in Attachment,
-            where:
-              a.user_id == ^user.id and a.vault_id == ^vault.id and
-                a.path_hmac == ^old_path_hmac and not is_nil(a.deleted_at),
-            order_by: [desc: a.seq],
-            limit: 1
-          )
-        )
-      end)
-
-    decrypt_tombstone_path(tombstone, user, &Crypto.maybe_decrypt_attachment_fields/2)
+  defp tombstone_old_path(user, vault, kind, old_path_hmac) do
+    case Rewriter.tombstone_old_paths(user, vault, kind, [old_path_hmac]) do
+      %{^old_path_hmac => path} -> {:ok, path}
+      _ -> {:discard, :old_path_unrecoverable}
+    end
   end
 
   # Old-path recovery, two sources in order:
@@ -333,17 +464,9 @@ defmodule Engram.Workers.RewriteNoteLinks do
 
   defp args_old_path(_user, _args), do: {:discard, :old_path_unrecoverable}
 
-  defp decrypt_tombstone_path(nil, _user, _decrypt), do: {:discard, :old_path_unrecoverable}
-
-  defp decrypt_tombstone_path(row, user, decrypt) do
-    case decrypt.(row, user) do
-      {:ok, decrypted} when is_binary(decrypted.path) -> {:ok, decrypted.path}
-      _ -> {:discard, :old_path_unrecoverable}
-    end
-  end
-
-  defp rewrite_each(user, vault, ids, target) do
-    Enum.each(ids, fn source_id ->
+  # `{source_id, target_or_targets}` pairs: each linking note is written once.
+  defp rewrite_each(user, vault, pairs) do
+    Enum.each(pairs, fn {source_id, target} ->
       result =
         try do
           Rewriter.rewrite_source_note(user, vault, source_id, target)
@@ -362,7 +485,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
             "link rewrite failed for source note",
             Metadata.with_category(:warning, :sync,
               note_id: source_id,
-              target_id: target.id,
+              target_id: if(is_map(target), do: target.id),
               # Full error_kind detail (exception module etc.) — logs are
               # not cardinality-bound the way the metric label below is.
               reason: inspect(Engram.Telemetry.error_kind(reason))
@@ -386,6 +509,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
           :decrypt_failed
           | :exception
           | :head_advanced
+          | :invalid_hmac_base64
           | :old_path_unrecoverable
           | :other
           | :path_undecryptable

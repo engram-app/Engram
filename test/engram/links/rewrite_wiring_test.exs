@@ -203,7 +203,7 @@ defmodule Engram.Links.RewriteWiringTest do
   end
 
   describe "folder rename fan-out (Phase 3, #648/#1231)" do
-    test "enqueues one rewrite per moved note and no rebind", %{
+    test "enqueues ONE rewrite chain naming every moved note, and no rebind", %{
       user: user,
       vault: vault
     } do
@@ -220,19 +220,20 @@ defmodule Engram.Links.RewriteWiringTest do
 
       {:ok, 3} = Notes.rename_folder(user, vault, "docs", "archive")
 
-      rewrite_jobs = all_enqueued(worker: RewriteNoteLinks)
-      assert length(rewrite_jobs) == 3
+      assert [chain] = all_enqueued(worker: RewriteNoteLinks)
+      assert chain.queue == "link_rewrite"
+      targets = chain.args["targets"]
 
-      assert Enum.map(rewrite_jobs, & &1.args["target_id"]) |> Enum.sort() ==
+      assert Enum.map(targets, & &1["target_id"]) |> Enum.sort() ==
                Enum.sort([a.id, b.id, c.id])
 
-      for job <- rewrite_jobs do
-        assert job.args["target_kind"] == "note"
-        assert {:ok, _} = Base.decode64(job.args["old_path_hmac"])
-        assert {:ok, _} = Base.decode64(job.args["old_basename_hmac"])
-        refute Map.has_key?(job.args, "old_path")
-        refute Map.has_key?(job.args, "old_path_ciphertext")
+      for t <- targets do
+        assert {:ok, _} = Base.decode64(t["old_path_hmac"])
+        assert {:ok, _} = Base.decode64(t["old_basename_hmac"])
       end
+
+      refute inspect(chain.args) =~ "docs"
+      refute Map.has_key?(chain.args, "old_path_ciphertext")
 
       # Targets resolve on read: nothing re-resolves edges after a move.
       assert all_enqueued(worker: RebindNoteLinks) == []
@@ -260,7 +261,8 @@ defmodule Engram.Links.RewriteWiringTest do
         Notes.batch_move_folders(user, vault, [marker.id], {:path, "dst"})
 
       assert [job] = all_enqueued(worker: RewriteNoteLinks)
-      assert job.args["target_id"] == note.id
+      assert [%{"target_id" => id}] = job.args["targets"]
+      assert id == note.id
     end
 
     test "MCP rename_folder routes through Folders.rename — same fan-out", %{
@@ -305,7 +307,8 @@ defmodule Engram.Links.RewriteWiringTest do
 
       kinds =
         all_enqueued(worker: RewriteNoteLinks)
-        |> Enum.map(& &1.args["target_kind"])
+        # One folder chain per kind of moved row, each entry naming its kind.
+        |> Enum.flat_map(fn j -> Enum.map(j.args["targets"], & &1["target_kind"]) end)
         |> Enum.sort()
 
       assert kinds == ["attachment", "note"]
