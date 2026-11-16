@@ -421,14 +421,15 @@ defmodule Engram.Notes.Location do
   @doc """
   THE shown path of one note row: what every write decides old and new
   paths by (rename, relocate, re-create, the stale-key free). `paths/3`'s
-  rule; a row under no moved chain answers its stored path. Probes
-  `named?/2` only for a derivable row, so a vault holding no folder moved
-  without a cascade pays one probe and no chain read. nil when it does not
+  rule; a row under no moved chain answers its stored path. `moved?` is the
+  vault's moved-folder bit when the caller read it with the row (the
+  `moved__` column), else `:probe` sends `named?/2`. nil when it does not
   decrypt.
   """
-  @spec shown_path(map(), map()) :: String.t() | nil
-  def shown_path(user, row) do
-    derive? = derivable?(row) and named?(user.id, row.vault_id)
+  @spec shown_path(map(), map(), boolean() | :probe) :: String.t() | nil
+  def shown_path(user, row, moved? \\ :probe) do
+    moved? = if moved? == :probe, do: named?(user.id, row.vault_id), else: moved? and on?()
+    derive? = derivable?(row) and moved?
     Map.get(paths(user, [row], derive?), row.id)
   end
 

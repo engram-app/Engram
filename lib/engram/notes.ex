@@ -1644,7 +1644,9 @@ defmodule Engram.Notes do
          shown when is_binary(shown) and shown != path <- Location.shown_path(user, row) do
       # The shown path's own key may be stale too (a chain of moves): free
       # it first, or this write would hit it and abort the transaction.
-      _ = free_stale_slot(user, vault_id, shown, except, depth - 1)
+      # `except` is the top of the walk only: further up, the note being
+      # written may itself hold the next stale key, and must be freed too.
+      _ = free_stale_slot(user, vault_id, shown, nil, depth - 1)
 
       # Fenced on what was read: a rename or cascade that moved the row in
       # between changes its path key or folder reference, and wins.
@@ -1899,15 +1901,15 @@ defmodule Engram.Notes do
          claim
        ) do
     case classify_by_id(vault, canonical_id) do
-      {:live, %Note{} = live} ->
+      {:live, %Note{} = live, moved?} ->
         # A dek_filter_key failure here must NOT masquerade as a definite
         # id_conflict (a transient crypto hiccup would permanently reject
         # an idempotent retry): {:ok, true} idempotent, {:ok, false}
         # genuine conflict, {:error, _} a clean crypto error (→
         # create_failed) — never a fabricated conflict.
-        case same_path?(live, user, sanitized_path) do
+        case same_path?(live, user, sanitized_path, moved?) do
           {:ok, true, shown} ->
-            {:ok, live |> decrypt_or_raise!(user) |> Location.found_at(shown)}
+            {:ok, live |> decrypt_or_raise!(user) |> found_at(shown)}
 
           {:ok, false, _shown} when claim == :pending ->
             # A relocate claims BEFORE the row moves (see
@@ -1924,7 +1926,7 @@ defmodule Engram.Notes do
             # A target path OCCUPIED by a DIFFERENT live note stays a
             # genuine conflict (the pre-E2 behavior).
             genesis_relocate_live(
-              {live, shown},
+              {live, shown, moved?},
               user,
               vault,
               sanitized_path,
@@ -1937,8 +1939,8 @@ defmodule Engram.Notes do
             err
         end
 
-      {:tombstone, %Note{} = prior} ->
-        genesis_resurrect(prior, user, vault, sanitized_path, folder, origin, recording)
+      {:tombstone, %Note{} = prior, moved?} ->
+        genesis_resurrect({prior, moved?}, user, vault, sanitized_path, folder, origin, recording)
 
       :taken ->
         # The id is already spoken for by a row of theirs that this
@@ -2110,13 +2112,15 @@ defmodule Engram.Notes do
   # branching, which only needs the row-or-nil answer.
   defp classify_by_id(vault, id) do
     with {:ok, uuid} <- Ecto.UUID.cast(id),
-         %Note{} = row <- NoteBody.get(uuid) do
-      case row do
+         %{} = row <- classify_read(uuid) do
+      {note, %{moved__: moved?}} = NoteBody.to_note(row, [:moved__])
+
+      case note do
         %Note{vault_id: vid, kind: "note", deleted_at: nil} = live when vid == vault.id ->
-          {:live, live}
+          {:live, live, moved? == true}
 
         %Note{vault_id: vid, kind: "note"} = tombstone when vid == vault.id ->
-          {:tombstone, tombstone}
+          {:tombstone, tombstone, moved? == true}
 
         %Note{} ->
           :taken
@@ -2124,6 +2128,18 @@ defmodule Engram.Notes do
     else
       _ -> :none
     end
+  end
+
+  # The row by id, with whether its vault holds a folder moved without a
+  # cascade riding the same statement (the `moved__` column): the shown-path
+  # checks below cost nothing in a vault with none.
+  defp classify_read(uuid) do
+    Note
+    |> where([n], n.id == ^uuid)
+    |> NoteBody.select_map(NoteBody.note_fields(), %{
+      moved__: dynamic([n], fragment(WalkSql.moved(), n.vault_id))
+    })
+    |> Repo.one()
   end
 
   # `note.path` is a virtual field (real path lives encrypted in
@@ -2138,12 +2154,22 @@ defmodule Engram.Notes do
   #
   # S5: decided by the note's SHOWN path (`Location.shown_path/2`, the one
   # rule every write uses): a moved note's stored key is its old path.
-  defp same_path?(%Note{} = note, user, sanitized_path) do
-    case Location.shown_path(user, note) do
+  # Unmoved vault: the stored key decides, no statement, no decrypt (`nil`
+  # shown: the stored path). Moved vault: the shown path, derived.
+  defp same_path?(%Note{} = note, user, sanitized_path, false) do
+    with {:ok, fk} <- Crypto.dek_filter_key(user),
+         do: {:ok, note.path_hmac == Crypto.hmac_field(fk, sanitized_path), nil}
+  end
+
+  defp same_path?(%Note{} = note, user, sanitized_path, true) do
+    case Location.shown_path(user, note, true) do
       nil -> {:error, :undecryptable}
       shown -> {:ok, shown == sanitized_path, shown}
     end
   end
+
+  defp found_at(note, nil), do: note
+  defp found_at(note, shown), do: Location.found_at(note, shown)
 
   # Resurrects a tombstone found by client id: reuses move_note's re-path +
   # deleted_at-clear + version/seq-bump pipeline, but feeds it the tombstone's
@@ -2218,7 +2244,7 @@ defmodule Engram.Notes do
   end
 
   defp genesis_relocate_live(
-         {live, shown},
+         {live, shown, moved?},
          user,
          vault,
          sanitized_path,
@@ -2231,7 +2257,7 @@ defmodule Engram.Notes do
         nil ->
           # At its SHOWN path: the old path the broadcast deletes and the
           # link rewriter reads (a moved note's stored path is its old one).
-          decrypted = live |> decrypt_or_raise!(user) |> Location.found_at(shown)
+          decrypted = live |> decrypt_or_raise!(user) |> found_at(shown)
 
           base_attrs = %{
             content: decrypted.content,
@@ -2241,7 +2267,9 @@ defmodule Engram.Notes do
             mtime: decrypted.mtime
           }
 
-          case move_note(decrypted, base_attrs, user, sanitized_path, folder, "sync", recording) do
+          case move_note(decrypted, base_attrs, user, sanitized_path, folder, "sync", recording,
+                 free_slot: moved?
+               ) do
             {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
               case Crypto.maybe_decrypt_note_fields(updated, user) do
                 {:ok, moved} ->
@@ -2347,10 +2375,18 @@ defmodule Engram.Notes do
     end
   end
 
-  defp genesis_resurrect(prior, user, vault, sanitized_path, folder, origin, recording) do
+  defp genesis_resurrect({prior, moved?}, user, vault, sanitized_path, folder, origin, recording) do
     case Crypto.maybe_decrypt_note_fields(prior, user) do
       {:ok, prior} ->
-        genesis_resurrect_decrypted(prior, user, vault, sanitized_path, folder, origin, recording)
+        genesis_resurrect_decrypted(
+          {prior, moved?},
+          user,
+          vault,
+          sanitized_path,
+          folder,
+          origin,
+          recording
+        )
 
       {:error, reason} ->
         log_resurrect_decrypt_failure(reason, user, prior)
@@ -2359,13 +2395,23 @@ defmodule Engram.Notes do
   end
 
   defp shown_by_other?(user, vault, path, id) do
+    :ok = Engram.Vaults.lock_seq!(vault.id)
+
     case located_ids_at(user, vault, [path]) do
       {%{^path => other}, _named?} -> other != id
       _ -> false
     end
   end
 
-  defp genesis_resurrect_decrypted(prior, user, vault, sanitized_path, folder, origin, recording) do
+  defp genesis_resurrect_decrypted(
+         {prior, moved?},
+         user,
+         vault,
+         sanitized_path,
+         folder,
+         origin,
+         recording
+       ) do
     # FIX 1 — delete-wins (#970): a tombstone re-created at its OWN path within
     # the delete window is a stale device un-deleting a note another device
     # deleted. Mirror the REST upsert_pathless guard EXACTLY — refuse so the
@@ -2377,17 +2423,17 @@ defmodule Engram.Notes do
 
       # A live note SHOWN at the target (by name under a moved folder, which
       # no unique key holds) is a conflict, as a keyed holder is. Only in a
-      # vault holding such a folder (one probe otherwise).
-      Location.named?(user.id, vault.id) and
-          shown_by_other?(user, vault, sanitized_path, prior.id) ->
+      # vault holding such a folder (`moved?`, read with the row), under the
+      # vault seq lock so no uncascaded move lands between check and write.
+      moved? and shown_by_other?(user, vault, sanitized_path, prior.id) ->
         {:error, :id_conflict, prior}
 
       true ->
-        resurrect_move(prior, user, vault, sanitized_path, folder, origin, recording)
+        resurrect_move({prior, moved?}, user, vault, sanitized_path, folder, origin, recording)
     end
   end
 
-  defp resurrect_move(prior, user, vault, sanitized_path, folder, origin, recording) do
+  defp resurrect_move({prior, moved?}, user, vault, sanitized_path, folder, origin, recording) do
     # FIX 7 — did the path change? A rename restore must broadcast the
     # new-path upsert so peers converge; a same-path resurrect is covered by
     # announce_ready discovery alone. Decide by the decrypted prior path.
@@ -2401,7 +2447,9 @@ defmodule Engram.Notes do
       mtime: prior.mtime
     }
 
-    case move_note(prior, base_attrs, user, sanitized_path, folder, "sync", recording) do
+    case move_note(prior, base_attrs, user, sanitized_path, folder, "sync", recording,
+           free_slot: moved?
+         ) do
       {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
         case Crypto.maybe_decrypt_note_fields(updated, user) do
           {:ok, decrypted} ->
@@ -2659,7 +2707,9 @@ defmodule Engram.Notes do
     actor = Keyword.fetch!(opts, :actor)
     base_hash = Keyword.get(opts, :base_hash)
 
-    case existing_by_client_id(client_id, vault) do
+    {existing, moved?} = existing_by_client_id(client_id, vault)
+
+    case existing do
       %Note{deleted_at: nil} = live ->
         # Live id-collision: this note_id already names a LIVE note at a
         # DIFFERENT path (there is no live note at THIS path — the lookup
@@ -2693,7 +2743,8 @@ defmodule Engram.Notes do
             folder,
             actor,
             Keyword.fetch!(opts, :recording),
-            embed_opts: opts
+            embed_opts: opts,
+            free_slot: moved?
           )
         end
 
@@ -2734,18 +2785,18 @@ defmodule Engram.Notes do
       end
   end
 
-  # Row-or-nil view of classify_by_id/2, kept for upsert_pathless's legacy REST
+  # `{row or nil, moved?}` view of classify_by_id/2, kept for upsert_pathless's legacy REST
   # branching. A projection rather than a second copy of the rule: both used to
   # spell out cast -> Repo.get -> vault+kind, so a change to what counts as
   # "this vault's note" had to be made twice or the CRDT genesis path and the
   # REST path would silently disagree.
-  defp existing_by_client_id(nil, _vault), do: nil
+  defp existing_by_client_id(nil, _vault), do: {nil, false}
 
   defp existing_by_client_id(client_id, vault) do
     case classify_by_id(vault, client_id) do
-      {:live, note} -> note
-      {:tombstone, note} -> note
-      _ -> nil
+      {:live, note, moved?} -> {note, moved?}
+      {:tombstone, note, moved?} -> {note, moved?}
+      _ -> {nil, false}
     end
   end
 
@@ -2772,7 +2823,7 @@ defmodule Engram.Notes do
          folder,
          actor,
          recording,
-         opts \\ []
+         opts
        ) do
     # `:folder_refs` is the batch's up-front folder ids; `outbox: false` is a
     # caller that queues the revived notes' jobs itself (a trash restore, in
@@ -4752,45 +4803,61 @@ defmodule Engram.Notes do
   defp note_ids_at(_user, _vault, []), do: %{}
 
   defp note_ids_at(user, vault, paths) do
-    # In a vault holding a folder moved without a cascade, the shown paths:
-    # a stale key is no holder (`here`), and a note shown at a path by name
-    # alone is one (`Location.named_ids_at/3`, two statements per batch).
-    if Location.named?(user.id, vault_id(vault)) do
-      with %{} = held <- stored_ids_at(user, vault, paths, true) do
-        free = Enum.reject(paths, &Map.has_key?(held, &1))
-        Map.merge(Location.named_ids_at(user, vault_id(vault), free), held)
-      end
-    else
-      stored_ids_at(user, vault, paths, false)
+    case ids_at(user, vault, paths) do
+      {:error, _} = err -> err
+      {held, _moved?} -> held
     end
   end
 
-  defp stored_ids_at(user, vault, paths, moved?) do
+  # `note_ids_at/3` plus whether the vault holds a folder moved without a
+  # cascade, read in the stored-key statement itself (a sentinel row), so a
+  # vault with none sends exactly the one statement it always did. In such a
+  # vault the shown paths decide: a stale key is no holder (`moved_chain`),
+  # and a note shown at a path by name alone is one
+  # (`Location.named_ids_at/3`, two statements per batch).
+  defp ids_at(_user, _vault, []), do: {%{}, false}
+
+  defp ids_at(user, vault, paths) do
     case Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
         by_hmac = Map.new(paths, fn path -> {Crypto.hmac_field(filter_key, path), path} end)
         hmacs = Map.keys(by_hmac)
         ids? = Keys.ids?()
+        vid = vault_id(vault)
+        on? = Location.on?()
+
+        probe =
+          from(_ in fragment("(SELECT)"),
+            select: {
+              type(^nil, :binary),
+              type(^nil, Ecto.UUID),
+              fragment(WalkSql.moved(), type(^vid, Ecto.UUID)) and ^on?
+            }
+          )
 
         query =
           from(n in live_notes(user, vault, ids?),
             where: ^Keys.in_any(:path, hmacs, ids?),
-            select: {n.path_hmac, n.id}
+            # A stale key (its own chain moved) holds nothing; the moved
+            # probe is an InitPlan, so a vault with no moved folder walks no
+            # chain.
+            where:
+              not (fragment(WalkSql.moved(), type(^vid, Ecto.UUID)) and ^on?) or
+                is_nil(n.folder_ref_id) or not fragment(WalkSql.moved_chain(), n.folder_ref_id),
+            select: {n.path_hmac, n.id, false},
+            union_all: ^probe
           )
 
-        query =
-          if moved?,
-            do:
-              where(
-                query,
-                [n],
-                is_nil(n.folder_ref_id) or not fragment(WalkSql.moved_chain(), n.folder_ref_id)
-              ),
-            else: query
-
         rows = Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
+        moved? = Enum.any?(rows, fn {h, _id, m} -> is_nil(h) and m == true end)
+        held = for {h, id, _} <- rows, h != nil, into: %{}, do: {Map.fetch!(by_hmac, h), id}
 
-        Map.new(rows, fn {hmac, id} -> {Map.fetch!(by_hmac, hmac), id} end)
+        if moved? do
+          free = Enum.reject(paths, &Map.has_key?(held, &1))
+          {Map.merge(Location.named_ids_at(user, vid, free), held), true}
+        else
+          {held, false}
+        end
 
       # No filter key means no way to look anything up. Answering "nothing is
       # taken" would let a claim through unvalidated, which is the failure this
@@ -9020,10 +9087,18 @@ defmodule Engram.Notes do
             n.id in ^ids and n.kind == "note" and n.delete_op_id == ^op_id and
               not is_nil(n.deleted_at)
         )
-        # The restored body is the one `note_bodies` holds (`NoteBody`).
-        |> NoteBody.select_note()
+        # The restored body is the one `note_bodies` holds (`NoteBody`). The
+        # vault's moved-folder bit rides the read (`moved__`): a vault with
+        # none frees no stale key, one statement per note less.
+        |> NoteBody.select_map(NoteBody.note_fields(), %{
+          moved__: dynamic([n], fragment(WalkSql.moved(), n.vault_id))
+        })
         |> Repo.all()
-        |> restore_rows(user, vault)
+        |> Enum.map(&NoteBody.to_note(&1, [:moved__]))
+        |> then(fn rows ->
+          moved? = Enum.any?(rows, fn {_n, %{moved__: m}} -> m == true end)
+          rows |> Enum.map(&elem(&1, 0)) |> restore_rows(user, vault, moved?)
+        end)
         |> tap(&enqueue_restored_jobs(user, &1))
       end)
 
@@ -9056,7 +9131,7 @@ defmodule Engram.Notes do
   # Decrypt the whole chunk, resolve its distinct folders ONCE (vault seq lock
   # first, outside the per-row savepoints, so a skipped row cannot take a
   # folder row with it), then write each row against that map.
-  defp restore_rows(tombs, user, vault) do
+  defp restore_rows(tombs, user, vault, moved?) do
     decrypted = Map.new(tombs, &{&1.id, decrypt_tomb(user, &1)})
 
     folders =
@@ -9072,7 +9147,7 @@ defmodule Engram.Notes do
       end
 
     Map.new(decrypted, fn
-      {id, {:ok, prior}} -> {id, restore_decrypted(user, prior, refs)}
+      {id, {:ok, prior}} -> {id, restore_decrypted(user, prior, refs, moved?)}
       {id, skip} -> {id, skip}
     end)
   end
@@ -9088,7 +9163,7 @@ defmodule Engram.Notes do
     end
   end
 
-  defp restore_decrypted(user, prior, refs) do
+  defp restore_decrypted(user, prior, refs, moved?) do
     base_attrs = %{
       content: prior.content,
       title: prior.title,
@@ -9112,9 +9187,9 @@ defmodule Engram.Notes do
            false,
            mode: :savepoint,
            folder_refs: refs,
-           # The plan counts a stale key as free (the shown-path rule), so
-           # the free re-paths its holder before the write takes the key.
-           free_slot: true,
+           # In a moved vault the plan counts a stale key as free (the
+           # shown-path rule), so the free re-paths its holder first.
+           free_slot: moved?,
            # restore_notes queues every restored note's jobs in one bulk insert.
            outbox: false
          ) do
