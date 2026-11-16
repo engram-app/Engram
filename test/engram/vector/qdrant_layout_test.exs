@@ -242,7 +242,7 @@ defmodule Engram.Vector.QdrantLayoutTest do
                "search_max_hnsw_ef" => 512,
                "upsert_max_batchsize" => 256,
                "filter_max_conditions" => 64,
-               "condition_max_size" => 20_480,
+               "condition_max_size" => 4096,
                "max_timeout" => 30,
                "search_max_batchsize" => 8,
                # Retired breaker: lifted to the ceiling, see `@retired_limits`.

@@ -43,7 +43,6 @@ defmodule Engram.Vector.Qdrant do
   # pins both sides.
   @max_page 4096
   @max_ids 2048
-  @max_note_ids 10_240
   @max_write_batch 64
 
   # No @specs on these constant accessors: dialyzer's :underspecs flags
@@ -57,9 +56,9 @@ defmodule Engram.Vector.Qdrant do
 
   @doc """
   Most note ids one search filter carries on `n` (`build_tenant_filter/1`'s
-  `:note_scope`), as ONE `match.any` (R3b; R3a sent 5 blocks of 2048).
+  `:note_scope`): 5 `match.any` blocks of `max_ids/0`.
   """
-  def max_note_ids, do: @max_note_ids
+  def max_note_ids, do: 5 * @max_ids
 
   @doc """
   Whether the collection has its `n` payload index (immutable chunk index,
@@ -1737,9 +1736,8 @@ defmodule Engram.Vector.Qdrant do
   # costs one index probe. Kept for a self-host that skips releases: its
   # points without `n` stay findable until its backfill reaches them. The
   # tenant (`u`, `v`) holds for every point. An empty complement matches the
-  # whole tenant. The ids are ONE `match.any` (R3b); past `max_note_ids/0`
-  # it would break the strict `condition_max_size`, so it raises: the
-  # resolver caps below it. The exclusion is nested in `must`, so a caller's
+  # whole tenant. Past `max_note_ids/0` the filter would break the strict
+  # condition limits, so it raises: the resolver caps below it. The exclusion is nested in `must`, so a caller's
   # own top-level `must_not` (recommend's source points) stays its own.
   defp note_scope(tenant, nil), do: %{must: tenant}
   defp note_scope(tenant, {:exclude, []}), do: %{must: tenant}
@@ -1749,8 +1747,8 @@ defmodule Engram.Vector.Qdrant do
       do: raise(ArgumentError, "note_scope: #{length(ids)} ids > #{max_note_ids()}")
 
     case kind do
-      :ids -> %{must: tenant ++ [%{should: [n_any(ids), n_empty()]}]}
-      :exclude -> %{must: tenant ++ [%{must_not: [n_any(ids)]}]}
+      :ids -> %{must: tenant ++ [%{should: n_blocks(ids) ++ [n_empty()]}]}
+      :exclude -> %{must: tenant ++ [%{must_not: n_blocks(ids)}]}
     end
   end
 
@@ -1758,6 +1756,8 @@ defmodule Engram.Vector.Qdrant do
 
   # No ids stays one condition that matches nothing: an empty `should`
   # matches everything.
+  defp n_blocks([]), do: [n_any([])]
+  defp n_blocks(ids), do: id_blocks(ids, &n_any/1)
 
   defp n_any(ids),
     do: %{
@@ -1981,8 +1981,10 @@ defmodule Engram.Vector.Qdrant do
   # each condition stays under the Cloud `condition_max_size`.
   # ponytail: a note past ~110k points (64 filter conditions) still trips
   # `filter_max_conditions`; average a sample of its points if one appears.
-  defp has_ids(point_ids),
-    do: point_ids |> Enum.chunk_every(@max_ids) |> Enum.map(&%{has_id: &1})
+  defp has_ids(point_ids), do: id_blocks(point_ids, &%{has_id: &1})
+
+  # One condition per `max_ids/0` ids (`has_id`, `n` any).
+  defp id_blocks(ids, condition), do: ids |> Enum.chunk_every(@max_ids) |> Enum.map(condition)
 
   # The body is decoded in Rust (`Engram.Native.json_decode/1`): with vectors
   # requested it is ~200 x 1024 floats, 2.3 MB of JSON that took Jason ~290 ms

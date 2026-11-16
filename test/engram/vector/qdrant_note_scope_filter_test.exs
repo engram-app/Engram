@@ -2,8 +2,7 @@ defmodule Engram.Vector.QdrantNoteScopeFilterTest do
   @moduledoc """
   The note-id reader (immutable chunk index, Engram#2263): Postgres resolves
   a search's filters to note ids, and the Qdrant filter is the tenant (`u`,
-  `v`) plus the note ids on `n`, in ONE `match.any` of up to
-  `Qdrant.max_note_ids/0` (R3b).
+  `v`) plus the note ids on `n`, in `match.any` blocks of `Qdrant.max_ids/0`.
   R3a: no payload condition rides along. A point without `n` (not yet
   backfilled) is let through by `is_empty(n)` and post-filtered in Postgres
   (`Engram.Search`), so it stays findable at every moment of the backfill.
@@ -40,12 +39,14 @@ defmodule Engram.Vector.QdrantNoteScopeFilterTest do
   defp key(_, _), do: []
 
   describe "{:ids, ids}" do
-    test "the tenant, then ONE should: one n match-any or no n" do
+    test "the tenant, then ONE should: the n blocks or no n" do
       ids = ids(5_000)
       %{should: should} = scope_clause(filter({:ids, ids}))
 
-      assert [%{key: "n"} = n_any, @empty_n] = should
-      assert n_any.match.any == Enum.map(ids, &FilterId.uuid/1)
+      assert {blocks, [@empty_n]} = Enum.split(should, -1)
+      assert block_sizes(blocks) == [2048, 2048, 904]
+      assert Enum.all?(blocks, &(&1.key == "n"))
+      assert Enum.flat_map(blocks, & &1.match.any) == Enum.map(ids, &FilterId.uuid/1)
     end
 
     test "names no payload key but u, v and n anywhere in the tree" do
@@ -53,12 +54,17 @@ defmodule Engram.Vector.QdrantNoteScopeFilterTest do
       assert filter |> keys() |> Enum.uniq() |> Enum.sort() == ~w(n u user_id v vault_id)
     end
 
-    # R3b: one condition for the whole scope, not 5 blocks of 2048.
-    test "max_note_ids (10,240) is one match-any, one more is refused" do
-      assert Qdrant.max_note_ids() == 10_240
+    test "exactly max_ids is one block, one more is two" do
+      %{should: s1} = scope_clause(filter({:ids, ids(2048)}))
+      %{should: s2} = scope_clause(filter({:ids, ids(2049)}))
+      assert block_sizes(Enum.drop(s1, -1)) == [2048]
+      assert block_sizes(Enum.drop(s2, -1)) == [2048, 1]
+    end
+
+    test "max_note_ids (5 blocks) is accepted, one more is refused" do
+      assert Qdrant.max_note_ids() == 5 * Qdrant.max_ids()
       %{should: should} = scope_clause(filter({:ids, ids(Qdrant.max_note_ids())}))
-      assert [n_any, @empty_n] = should
-      assert length(n_any.match.any) == 10_240
+      assert length(should) == 6
       assert_raise ArgumentError, fn -> filter({:ids, ids(Qdrant.max_note_ids() + 1)}) end
     end
 
@@ -71,9 +77,9 @@ defmodule Engram.Vector.QdrantNoteScopeFilterTest do
 
   describe "{:exclude, ids}" do
     test "the tenant, then n outside the ids (a point without n passes, post-filtered)" do
-      ids = ids(Qdrant.max_note_ids())
+      ids = ids(2049)
       %{must_not: blocks} = scope_clause(filter({:exclude, ids}))
-      assert block_sizes(blocks) == [10_240]
+      assert block_sizes(blocks) == [2048, 1]
       assert Enum.all?(blocks, &(&1.key == "n"))
     end
 
