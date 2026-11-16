@@ -48,6 +48,21 @@ defmodule Engram.QdrantStub do
     end)
   end
 
+  @doc """
+  A Qdrant write ack (`{"result": true}`), sent after reading the whole
+  request body. A stub that answers first flakes on big writes: cowboy
+  (Bypass) closes the connection once a handler answers with over 1 MB of
+  the body unread (`max_skip_body_length`), so a client still sending a
+  multi-MB upsert reads `Req.TransportError{reason: :closed}`.
+  """
+  def ack(conn) do
+    {:ok, _body, conn} = Plug.Conn.read_body(conn, length: 64 * 1024 * 1024)
+
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(200, ~s({"result": true}))
+  end
+
   defp json(conn, body) do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
