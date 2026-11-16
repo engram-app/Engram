@@ -54,14 +54,32 @@ defmodule Engram.Workers.DeleteNoteIndexTest do
     )
   end
 
-  test "returns the Qdrant error so Oban retries, keeping the rows", %{
-    bypass: bypass,
-    note: note
-  } do
+  # A Qdrant outage (5xx, connection refused) snoozes: three attempts with
+  # Oban's backoff burn in under a minute, and a discard left the rows and
+  # points until OrphanSweep's next daily pass. A refusal (4xx) still fails.
+  test "snoozes on a Qdrant 5xx, keeping the rows", %{bypass: bypass, note: note} do
     Bypass.expect(bypass, fn conn ->
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.send_resp(500, ~s({"status":{"error":"boom"}}))
+    end)
+
+    assert {:snooze, _} = perform_job(DeleteNoteIndex, args(note))
+    assert chunk_count(note) == 1
+  end
+
+  test "snoozes when Qdrant is unreachable", %{bypass: bypass, note: note} do
+    Bypass.down(bypass)
+
+    assert {:snooze, _} = perform_job(DeleteNoteIndex, args(note))
+    assert chunk_count(note) == 1
+  end
+
+  test "returns a Qdrant 4xx so Oban retries, keeping the rows", %{bypass: bypass, note: note} do
+    Bypass.expect(bypass, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(400, ~s({"status":{"error":"bad request"}}))
     end)
 
     assert {:error, _} = perform_job(DeleteNoteIndex, args(note))
@@ -92,7 +110,7 @@ defmodule Engram.Workers.DeleteNoteIndexTest do
       |> Plug.Conn.send_resp(500, ~s({"status":{"error":"boom"}}))
     end)
 
-    assert {:error, _} = perform_job(DeleteNoteIndex, args(note))
+    assert {:snooze, _} = perform_job(DeleteNoteIndex, args(note))
 
     assert Repo.aggregate(
              from(l in Engram.Links.NoteLink, where: l.source_note_id == ^note.id),

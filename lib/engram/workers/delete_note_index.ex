@@ -102,7 +102,8 @@ defmodule Engram.Workers.DeleteNoteIndex do
     {:discard, "T3.2 legacy or malformed args (keys=#{inspect(Map.keys(args))})"}
   end
 
-  # A failed Qdrant delete is returned so Oban retries it (#1608). Discarding
+  # A failed Qdrant delete is returned (or, for an outage, snoozed) so Oban
+  # retries it (#1608). Discarding
   # it left both the rows and the points, and the deleted note kept answering
   # searches with nothing left to retry the delete.
   #
@@ -117,11 +118,21 @@ defmodule Engram.Workers.DeleteNoteIndex do
     :ok = Engram.Search.NameTerms.on_note_deleted(user_id, note_id)
 
     # Strict mode never refuses a delete; mapped anyway so a refusal is a
-    # snooze here like on every other Qdrant writer.
+    # snooze here like on every other Qdrant writer. An outage snoozes too:
+    # three attempts with Oban's backoff burn in under a minute, and a
+    # discarded job waits for OrphanSweep's daily re-enqueue.
     case Indexing.delete_note_index(note) do
-      {:error, :qdrant_backpressure} -> Qdrant.backpressure_snooze(:refused)
-      {:error, :qdrant_wait_timeout} -> Qdrant.wait_timeout_snooze()
-      other -> other
+      {:error, :qdrant_backpressure} ->
+        Qdrant.backpressure_snooze(:refused)
+
+      {:error, :qdrant_wait_timeout} ->
+        Qdrant.wait_timeout_snooze()
+
+      {:error, reason} = error ->
+        if Qdrant.transient_error?(reason), do: Qdrant.transient_snooze(), else: error
+
+      other ->
+        other
     end
   end
 

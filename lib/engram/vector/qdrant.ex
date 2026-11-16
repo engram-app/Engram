@@ -1143,7 +1143,20 @@ defmodule Engram.Vector.Qdrant do
   write is idempotent, so the retry is safe. The event was already emitted
   by the write.
   """
-  def wait_timeout_snooze, do: {:snooze, 30 + :rand.uniform(60)}
+  def wait_timeout_snooze, do: transient_snooze()
+
+  @doc """
+  The Oban answer for a Qdrant error worth waiting out
+  (`transient_error?/1`): the same jittered 31..90s snooze, so an outage
+  does not burn a worker's attempts.
+  """
+  def transient_snooze, do: {:snooze, 30 + :rand.uniform(60)}
+
+  @doc "True for an error reason a later try can clear: a Qdrant 5xx, or no connection."
+  @spec transient_error?(term()) :: boolean()
+  def transient_error?({status, _body}) when is_integer(status), do: status >= 500
+  def transient_error?(%Req.TransportError{}), do: true
+  def transient_error?(_reason), do: false
 
   @doc """
   True when disk or heap is within `QDRANT_PREFLIGHT_MARGIN_POINTS` (default
