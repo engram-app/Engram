@@ -695,28 +695,41 @@ class CdpClient:
         """The active editor's text, or None when no editor is open."""
         return await self.evaluate("app.workspace.activeEditor?.editor?.getValue() ?? null")
 
-    async def arm_create_spy(self) -> None:
-        """Record every path Obsidian CREATES from now on, until disarmed.
+    async def arm_vault_spy(self) -> None:
+        """Record every vault create, delete and rename from now on, until disarmed.
 
         A conflict copy cannot be found by scanning disk afterwards: the copy is
         stamped as synced but never pushed, so the next manifest reconcile reads
-        it as server-deleted and trashes it within a second (Engram#1931). Only
-        a live `vault.on('create')` listener sees it. The expression ends in
-        `true` because CDP cannot serialize the returned EventRef.
+        it as server-deleted and trashes it within a second (Engram#1931). A
+        trash-then-redownload is invisible on disk for the same reason. Only
+        live `vault.on(...)` listeners see them (`fileManager.trashFile`
+        dispatches `delete`). The expression ends in `true` because CDP cannot
+        serialize the returned EventRefs.
         """
         await self.evaluate(
-            "window.__e2eCreates = [];"
-            "window.__e2eCreatesRef && app.vault.offref(window.__e2eCreatesRef);"
-            "window.__e2eCreatesRef = app.vault.on('create', f => window.__e2eCreates.push(f.path)); true"
+            "(window.__e2eVaultRefs || []).forEach(r => app.vault.offref(r));"
+            "window.__e2eVaultEvents = [];"
+            "window.__e2eVaultRefs = ['create', 'delete', 'rename'].map(ev => app.vault.on(ev,"
+            " (f, old) => window.__e2eVaultEvents.push({event: ev, path: f.path, old: old ?? null})));"
+            " true"
         )
+
+    async def disarm_vault_spy(self) -> list[dict]:
+        """Stop recording; every `{event, path, old}` since `arm_vault_spy`."""
+        raw = await self.evaluate(
+            "(window.__e2eVaultRefs || []).forEach(r => app.vault.offref(r));"
+            "window.__e2eVaultRefs = null;"
+            "JSON.stringify(window.__e2eVaultEvents || [])"
+        )
+        return json.loads(raw or "[]")
+
+    async def arm_create_spy(self) -> None:
+        """`arm_vault_spy`, for callers that only need the created paths."""
+        await self.arm_vault_spy()
 
     async def disarm_create_spy(self) -> list[str]:
         """Stop recording and return every path created since `arm_create_spy`."""
-        raw = await self.evaluate(
-            "app.vault.offref(window.__e2eCreatesRef); window.__e2eCreatesRef = null;"
-            "JSON.stringify(window.__e2eCreates || [])"
-        )
-        return json.loads(raw or "[]")
+        return [e["path"] for e in await self.disarm_vault_spy() if e["event"] == "create"]
 
     async def is_sync_blocked(self) -> bool:
         """Read the engine's syncBlocked flag. False when plugin lacks gate."""
