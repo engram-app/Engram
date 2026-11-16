@@ -19,8 +19,8 @@ defmodule Engram.Notes.Location do
       wants it). Only in a vault holding a
       folder moved without a cascade (from S5 on, so never in S3 alone) and
       only when no row holds the path does the name answer: the folder part
-      of the path is walked on `folders_live_name` (`Engram.Folders.WalkSql`,
-      one unique-index probe per segment), then the note is probed on
+      of the path is walked on `folders_live_name_ids` (`Engram.Folders.WalkSql`,
+      one index-only probe per segment), then the note is probed on
       `notes_name_key_live` by `(vault_id, name_key)`, the stored
       `name_ci_hmac || folder_ref_id` the `notes_set_name_key` trigger keeps
       (NULL unless the name stamp is current), with the exact `name_hmac`.
