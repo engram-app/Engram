@@ -653,6 +653,9 @@ defmodule Engram.Workers.OrphanSweep do
   # persisted cursor, then `idx_chunks_note` and vault primary-key lookups
   # for that page only. A short page wraps. Notes in a soft-deleted vault
   # are `CleanupVault`'s (the 30-day restore window), so they are skipped.
+  #
+  # A re-queued delete of an old trashed note never reaches a newer note at
+  # the same path: per-note deletes match by note id `n` only (R3b).
   defp requeue_trashed_index do
     page = trashed_page(Cursor.get(@trashed_cursor))
 
@@ -674,7 +677,7 @@ defmodule Engram.Workers.OrphanSweep do
     |> Enum.count(fn note ->
       match?(
         {:ok, %Oban.Job{conflict?: false}},
-        Oban.insert(DeleteNoteIndex.job(note, unique: true))
+        Oban.insert(DeleteNoteIndex.job(note, dedupe: true))
       )
     end)
   end
@@ -688,11 +691,11 @@ defmodule Engram.Workers.OrphanSweep do
 
     Repo.cross_tenant(fn ->
       Note
-      |> where([n], not is_nil(n.deleted_at))
+      |> where([n], not is_nil(n.deleted_at) and n.kind == "note")
       |> after_trashed(cursor)
       |> order_by([n], asc: n.vault_id, asc: n.path_id, asc: n.seq)
       |> limit(^trashed_page_size())
-      |> select([n], map(n, [:id, :user_id, :vault_id, :path_id, :seq, :kind, :path_hmac]))
+      |> select([n], map(n, [:id, :user_id, :vault_id, :path_id, :seq, :path_hmac]))
       |> repo.all()
     end)
   end
@@ -716,7 +719,7 @@ defmodule Engram.Workers.OrphanSweep do
   end
 
   defp stranded_index(page) do
-    notes = Enum.filter(page, &(&1.kind == "note" and is_binary(&1.path_hmac)))
+    notes = Enum.filter(page, &is_binary(&1.path_hmac))
 
     case notes do
       [] ->
