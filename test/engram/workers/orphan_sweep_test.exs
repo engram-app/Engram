@@ -243,6 +243,36 @@ defmodule Engram.Workers.OrphanSweepTest do
       refute_received {:qdrant_delete, _}
     end
 
+    # Staging 2026-11-16: the exact facet answered 4 tenant ids with count 0
+    # (index entries left by deleted points) and no users row. Counted as
+    # departed they tripped the share guard, so every run refused.
+    test "the facet answers stale tenant ids with count 0", %{bypass: bypass} do
+      live = insert(:user)
+      stale = for _ <- 1..3, do: Ecto.UUID.generate()
+      stub_qdrant(bypass, [FilterId.uuid(live.id)], [], stale: stale)
+      stub_delete(bypass)
+
+      {result, log} = with_log(fn -> perform_job(OrphanSweep, %{}) end)
+      assert result == :ok
+      refute_received {:qdrant_delete, _}
+      refute log =~ "orphan_sweep aborting"
+    end
+
+    # `runaway?/2` on its own: 100 departed is its floor, and 100 of 250 is
+    # under half, so the small-deployment share check stays quiet.
+    test "100+ departed tenants are over the runaway ratio but under half", %{
+      bypass: bypass
+    } do
+      live = for _ <- 1..150, do: insert(:user)
+      departed = for _ <- 1..100, do: Ecto.UUID.generate()
+      stub_qdrant(bypass, departed ++ Enum.map(live, &FilterId.uuid(&1.id)))
+      stub_delete(bypass)
+
+      {_result, log} = with_log(fn -> perform_job(OrphanSweep, %{}) end)
+      refute_received {:qdrant_delete, _}
+      assert log =~ "orphan_sweep aborting qdrant"
+    end
+
     # A user who signs up after `users` was read but before the facet answers
     # is in Qdrant and not in the snapshot. The candidates are re-read right
     # before deleting.
@@ -332,7 +362,7 @@ defmodule Engram.Workers.OrphanSweepTest do
   # legacy-only point per id in `legacy`; the point pass's id-only scroll
   # finds nothing. Each request is sent to the test process. `opts`:
   # `facet_status`/`legacy_status` fail that request, `on_facet`/`on_legacy`
-  # run as that request is answered.
+  # run as that request is answered, `stale` adds count-0 facet hits.
   defp stub_qdrant(bypass, tenants, legacy \\ [], opts \\ []) do
     test_pid = self()
     on_facet = Keyword.get(opts, :on_facet, fn -> :ok end)
@@ -345,9 +375,13 @@ defmodule Engram.Workers.OrphanSweepTest do
 
       case Keyword.get(opts, :facet_status, 200) do
         200 ->
-          json(conn, %{
-            "result" => %{"hits" => Enum.map(tenants, &%{"value" => &1, "count" => 1})}
-          })
+          stale = Keyword.get(opts, :stale, [])
+
+          hits =
+            Enum.map(tenants, &%{"value" => &1, "count" => 1}) ++
+              Enum.map(stale, &%{"value" => &1, "count" => 0})
+
+          json(conn, %{"result" => %{"hits" => hits}})
 
         status ->
           Plug.Conn.resp(conn, status, ~s({"status":{"error":"boom"}}))

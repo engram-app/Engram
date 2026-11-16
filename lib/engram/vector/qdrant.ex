@@ -1595,7 +1595,8 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
-  Every distinct value of the indexed payload `key`, read from its index
+  Every distinct value of the indexed payload `key` that some point still
+  holds (count above 0), read from its index
   (`POST /collections/{col}/facet`, Qdrant >= 1.12; a uuid index answers
   dashed). No point payload is read. `exact: true` because the approximate
   facet samples once a segment holds many values and can miss rare ones.
@@ -1629,7 +1630,7 @@ defmodule Engram.Vector.Qdrant do
       instrument(:facet, fn ->
         case Req.post("#{base_url()}/collections/#{col}/facet", opts) do
           {:ok, %{status: 200, body: %{"result" => %{"hits" => hits}}}} ->
-            {:ok, Enum.map(hits, & &1["value"])}
+            {:ok, hits}
 
           {:ok, %{status: status, body: body}} ->
             {:error, {:qdrant_facet, status, body}}
@@ -1639,10 +1640,18 @@ defmodule Engram.Vector.Qdrant do
         end
       end)
 
-    case result do
-      {:ok, values} when length(values) < @max_page -> {:ok, seen ++ values}
-      {:ok, values} -> facet_page(col, key, seen ++ values)
-      error -> error
+    # The exact facet counts visible points only, so an index entry left by
+    # deleted points answers count 0: no value of the key, dropped. Hits come
+    # count-descending, so after a 0 every value is 0 and the walk is done;
+    # a 0 never reaches the next page's exclusion list (or the strict
+    # condition cap).
+    with {:ok, hits} <- result do
+      {live, dead} = Enum.split_with(hits, &(is_integer(&1["count"]) and &1["count"] > 0))
+      seen = seen ++ Enum.map(live, & &1["value"])
+
+      if length(hits) < @max_page or dead != [],
+        do: {:ok, seen},
+        else: facet_page(col, key, seen)
     end
   end
 

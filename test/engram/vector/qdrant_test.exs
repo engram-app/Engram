@@ -721,6 +721,33 @@ defmodule Engram.Vector.QdrantTest do
       assert :counters.get(count, 1) == 2
     end
 
+    # Exact facet counts only visible points, so an index entry left behind
+    # by deleted points answers count 0 (staging 2026-11-16: 4 such tenant
+    # ids). It is no value of the key. Hits come back count-descending, so a
+    # 0 means every later value is 0 too: the walk stops there, and no 0 is
+    # carried into the next page's exclusion list.
+    test "drops count-0 hits and stops paging at the first", %{bypass: bypass} do
+      live = for i <- 1..(Qdrant.max_page() - 2), do: "v#{i}"
+      count = :counters.new(1, [])
+
+      Bypass.expect(bypass, "POST", "/collections/test_col/facet", fn conn ->
+        {:ok, _body, conn} = Plug.Conn.read_body(conn)
+        :counters.add(count, 1, 1)
+
+        hits =
+          Enum.map(live, &%{"value" => &1, "count" => 3}) ++
+            [%{"value" => "gone1", "count" => 0}, %{"value" => "gone2"}]
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"hits" => hits}}))
+      end)
+
+      assert {:ok, values} = Qdrant.facet_values("test_col", "u")
+      assert Enum.sort(values) == Enum.sort(live)
+      assert :counters.get(count, 1) == 1
+    end
+
     test "a non-200 is an error, never a partial set", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/facet", fn conn ->
         Plug.Conn.send_resp(conn, 400, ~s({"status":{"error":"bad"}}))
