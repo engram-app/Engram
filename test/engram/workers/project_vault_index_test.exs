@@ -1134,12 +1134,27 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     before = row.()
     :ok = seed_index(ctx, [{"B/x.md", n.id}])
 
+    me = self()
+    id = "s5-projection-#{System.unique_integer()}"
+
+    :telemetry.attach(
+      id,
+      [:engram, :crdt, :index_projection],
+      fn _, m, _, _ -> if Map.has_key?(m, :conflict), do: send(me, {:projected, m}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+
     assert :ok =
              perform_job(ProjectVaultIndex, %{
                "user_id" => ctx.user.id,
                "vault_id" => ctx.vault.id
              })
 
+    # A no-op: neither a rename (a write) nor a conflict (the stored path
+    # answering for the moved note, re-logged on every pass).
+    assert_received {:projected, %{applied: 0, conflict: 0}}
     assert row.() == before
     assert path_of(ctx, n.id) == "B/x.md"
   end
