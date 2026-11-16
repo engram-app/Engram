@@ -68,6 +68,31 @@ defmodule Engram.Workers.DeleteNoteIndexTest do
     assert chunk_count(note) == 1
   end
 
+  # Snoozes cost no attempt, so an outage that never clears would snooze
+  # forever and alert nothing, and the open job would block OrphanSweep's
+  # re-enqueue. Past the cap it fails: Oban records the error, retries, then
+  # discards, and the sweep's daily step re-queues the note (see
+  # orphan_sweep_trashed_index_test, "whose delete job was discarded").
+  test "a 5xx that never clears fails after the snooze cap", %{bypass: bypass, note: note} do
+    Bypass.expect(bypass, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(500, ~s({"status":{"error":"boom"}}))
+    end)
+
+    capped = %{"snoozed" => DeleteNoteIndex.max_snoozes()}
+
+    {result, log} =
+      ExUnit.CaptureLog.with_log(fn -> perform_job(DeleteNoteIndex, args(note), meta: capped) end)
+
+    assert {:error, _} = result
+    assert log =~ "delete_note_index snooze cap reached"
+    assert chunk_count(note) == 1
+
+    below = %{"snoozed" => DeleteNoteIndex.max_snoozes() - 1}
+    assert {:snooze, _} = perform_job(DeleteNoteIndex, args(note), meta: below)
+  end
+
   test "snoozes when Qdrant is unreachable", %{bypass: bypass, note: note} do
     Bypass.down(bypass)
 

@@ -15,10 +15,15 @@ defmodule Engram.Workers.DeleteNoteIndex do
   import Ecto.Query, only: [from: 2]
 
   alias Engram.Indexing
+  alias Engram.Logger.Metadata
   alias Engram.Links
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vector.Qdrant
+
+  require Logger
+
+  @max_snoozes 20
 
   # OrphanSweep's re-enqueue (`job(note, unique: true)`): one open job per
   # note, while a completed or discarded one does not block it.
@@ -60,6 +65,7 @@ defmodule Engram.Workers.DeleteNoteIndex do
   # arg; it is ignored.
   @impl Oban.Worker
   def perform(%Oban.Job{
+        meta: meta,
         args: %{
           "note_id" => note_id,
           "user_id" => user_id,
@@ -83,7 +89,7 @@ defmodule Engram.Workers.DeleteNoteIndex do
         # EmbedNote landing between this check and the Qdrant delete still get
         # wiped, with embed_hash stamped. Closing it means holding a row lock
         # across a Qdrant call; do that only if this is ever seen in prod.
-        if live?(user_id, note_id), do: :ok, else: unlink_then_delete_index(note)
+        if live?(user_id, note_id), do: :ok, else: unlink_then_delete_index(note, meta)
 
       :error ->
         {:discard, "invalid path_hmac base64 for note_id=#{note_id}"}
@@ -111,7 +117,7 @@ defmodule Engram.Workers.DeleteNoteIndex do
   # delete, a brief Qdrant 5xx would burn all three attempts and the note would
   # keep its outgoing edges forever, since nothing re-enqueues this job. Each
   # step here is idempotent, so a retry repeating them is free.
-  defp unlink_then_delete_index(%{id: note_id, user_id: user_id} = note) do
+  defp unlink_then_delete_index(%{id: note_id, user_id: user_id} = note, meta) do
     # #591 — the note is gone: drop its outgoing edges.
     :ok = Links.on_note_soft_deleted(user_id, note_id)
     # S1: its name terms go too (Postgres only).
@@ -129,10 +135,39 @@ defmodule Engram.Workers.DeleteNoteIndex do
         Qdrant.wait_timeout_snooze()
 
       {:error, reason} = error ->
-        if Qdrant.transient_error?(reason), do: Qdrant.transient_snooze(), else: error
+        outage(reason, error, meta, note_id)
 
       other ->
         other
+    end
+  end
+
+  @doc "Snoozes a job may spend waiting out a Qdrant outage (~20 to 30 min)."
+  def max_snoozes, do: @max_snoozes
+
+  # Snoozes cost no attempt, so an outage that never clears (a broken shard,
+  # a server bug on one filter) would snooze forever, alert nothing, and the
+  # open job would block OrphanSweep's unique re-enqueue. Past the cap the
+  # error goes to Oban (recorded, retried, then discarded) with an error log
+  # that ships to Loki; the sweep's daily step re-queues the note.
+  defp outage(reason, error, meta, note_id) do
+    cond do
+      not Qdrant.transient_error?(reason) ->
+        error
+
+      Map.get(meta || %{}, "snoozed", 0) < @max_snoozes ->
+        Qdrant.transient_snooze()
+
+      true ->
+        Logger.error(
+          "delete_note_index snooze cap reached, failing to Oban",
+          Metadata.with_category(:error, :oban,
+            note_id: note_id,
+            reason: Metadata.safe_reason(reason)
+          )
+        )
+
+        error
     end
   end
 
