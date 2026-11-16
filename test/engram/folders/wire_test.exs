@@ -70,17 +70,11 @@ defmodule Engram.Folders.WireTest do
       assert nudges(events) == []
     end
 
-    # With the S3 name reads on too, the manifest carries them anyway
-    # (`EngramWeb.FolderChainListingTest`); both off is the old manifest.
-    test "with name reads off too, the manifest carries no folders and no folder_id", %{
+    test "the manifest carries no folders and no folder_id", %{
       conn: conn,
       user: user,
       vault: vault
     } do
-      ServiceConfig.put_override(:name_reads_ledger, :read)
-      Engram.Cache.clear_local(:note_name)
-      on_exit(fn -> Engram.Cache.clear_local(:note_name) end)
-
       {:ok, _} =
         Engram.Notes.upsert_note(user, vault, %{"path" => "A/n.md", "content" => "x"},
           actor: "api"

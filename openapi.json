@@ -330,7 +330,7 @@
             "x-validate": null
           },
           "folder_id": {
-            "description": "Notes only, while the server's folder_ops switch or folder-row reads are on: the id of the note's folder (null at the root, or for a folder with no row yet).",
+            "description": "Notes only, and only while the server's folder_ops switch is on: the id of the note's folder (null at the root, or for a folder with no row yet).",
             "format": "uuid",
             "nullable": true,
             "type": "string",
@@ -696,7 +696,7 @@
             "x-validate": null
           },
           "folders": {
-            "description": "Only while the server's folder_ops switch or folder-row reads are on: every live folder. The root has no entry; its children have parent_id null.",
+            "description": "Only while the server's folder_ops switch is on: every live folder. The root has no entry; its children have parent_id null.",
             "items": {
               "$ref": "#/components/schemas/FolderNode"
             },

@@ -33,7 +33,7 @@ defmodule EngramWeb.Schemas.ManifestEntry do
         format: :uuid,
         nullable: true,
         description:
-          "Notes only, while the server's folder_ops switch or folder-row reads are on: " <>
+          "Notes only, and only while the server's folder_ops switch is on: " <>
             "the id of the note's folder (null at the root, or for a folder with no row yet)."
       },
       name: %Schema{
@@ -63,7 +63,7 @@ defmodule EngramWeb.Schemas.ManifestResponse do
       folders: %Schema{
         type: :array,
         description:
-          "Only while the server's folder_ops switch or folder-row reads are on: every live folder. " <>
+          "Only while the server's folder_ops switch is on: every live folder. " <>
             "The root has no entry; its children have parent_id null.",
         items: EngramWeb.Schemas.FolderNode
       },

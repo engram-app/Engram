@@ -135,10 +135,14 @@ defmodule EngramWeb.VaultTreeController do
   # the payload. Writes that skip it (DEK rotation, AAD rebind) re-encrypt
   # the same plaintext and change nothing the tree shows. user and vault ids
   # keep a tag unusable against another tree (two fresh vaults share seq 0);
-  # the release version retires every tag when the payload shape changes.
+  # the release version (and the name-reads switch) retires every tag when
+  # the payload shape changes.
   defp etag(user, vault, seq) do
     vsn = Application.spec(:engram, :vsn)
-    hash = :crypto.hash(:sha256, "#{user.id}:#{vault.id}:#{seq}:#{vsn}")
+    # The name reads change the payload's shape (`folder_tree`, `folder_id`),
+    # so flipping their switch retires every tag too.
+    names = if Location.on?(), do: "n", else: "p"
+    hash = :crypto.hash(:sha256, "#{user.id}:#{vault.id}:#{seq}:#{vsn}:#{names}")
     ~s(") <> Base.url_encode64(binary_part(hash, 0, 16), padding: false) <> ~s(")
   end
 

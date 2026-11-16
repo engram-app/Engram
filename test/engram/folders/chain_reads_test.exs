@@ -146,6 +146,23 @@ defmodule Engram.Folders.ChainReadsTest do
       assert d in sub(u, v, ["A/B/C/D"])
     end
 
+    test "a move is refused when a stale hash on the new parent's ANCESTOR is in the subtree",
+         %{user: u, vault: v} do
+      # A/B carries a stale hash equal to "X": the writer would resolve the
+      # new parent's ancestor X to A/B, inside the subtree being moved.
+      {:ok, fk} = Crypto.dek_filter_key(u)
+      t = FolderRows.tree(u)
+
+      sql!("UPDATE folders SET full_path_hmac = $1 WHERE id = $2", [
+        Rows.path_hmac(fk, "X"),
+        Ecto.UUID.dump!(t["A/B"].id)
+      ])
+
+      assert {:error, :invalid_path} = Notes.rename_folder(u, v, "A", "X/Y/Z")
+      assert FolderRows.tree(u)["A"].id == t["A"].id
+      assert FolderRows.tree(u)["A/B"].id == t["A/B"].id
+    end
+
     test "a live row under a dead ancestor has no path", %{user: u, vault: v} do
       %{"A/B" => b, "A/B/C" => c} = by_path(u, v, ["A/B", "A/B/C"])
       sql!("UPDATE folders SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(b)])

@@ -41,6 +41,9 @@ defmodule EngramWeb.FolderChainListingTest do
 
   defp by_id(entries), do: Map.new(entries, &{&1["id"], &1})
 
+  # The S4 folder-op wire, which alone adds the manifest's folder fields.
+  defp wire_on!, do: ServiceConfig.put_override(:folder_ops, true)
+
   defp names_off! do
     ServiceConfig.put_override(:name_reads_ledger, :read)
     Engram.Cache.clear_local(:note_name)
@@ -57,6 +60,7 @@ defmodule EngramWeb.FolderChainListingTest do
       b = folder(u, v, "A/B")
       c = folder(u, v, "A/B/C")
       lower = folder(u, v, "A/b")
+      wire_on!()
 
       expected = %{
         ids["A/B/x.md"] => {"A/B/x.md", b, "x.md"},
@@ -89,6 +93,7 @@ defmodule EngramWeb.FolderChainListingTest do
       ids: ids
     } do
       other = folder(u, v, "A/b")
+      wire_on!()
 
       Repo.query!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [
         Ecto.UUID.dump!(ids["A/B/x.md"]),
@@ -109,6 +114,38 @@ defmodule EngramWeb.FolderChainListingTest do
       refute Enum.any?(notes_reads, &(&1 =~ ~s(n0."name_ciphertext")))
       # One probe of the empty moved-folder index per listing, nothing else new.
       assert [_, _] = for(%{sql: s, pid: ^me} <- queries, s =~ "notes_cascaded", do: s)
+    end
+
+    test "names on, folder_ops off: the manifest has no folder fields, the tree has them", %{
+      conn: conn
+    } do
+      # The S4 plugin takes a manifest `folders` list as the wire being on:
+      # turning `folder_ops` off must still take it away.
+      m = manifest(conn)
+      refute Map.has_key?(m, "folders")
+      refute Enum.any?(m["notes"], &Map.has_key?(&1, "folder_id"))
+
+      t = tree(conn)
+      assert is_list(t["folder_tree"])
+      assert Enum.all?(t["notes"], &Map.has_key?(&1, "folder_id"))
+    end
+
+    test "flipping the name reads retires the tree's ETag", %{conn: conn} do
+      etag = conn |> get(~p"/api/vault/tree") |> get_resp_header("etag") |> hd()
+
+      assert conn
+             |> put_req_header("if-none-match", etag)
+             |> get(~p"/api/vault/tree")
+             |> Map.get(:status) ==
+               304
+
+      names_off!()
+
+      assert conn
+             |> put_req_header("if-none-match", etag)
+             |> get(~p"/api/vault/tree")
+             |> Map.get(:status) ==
+               200
     end
 
     test "names off: stored paths and no new fields", %{conn: conn, ids: ids} do
@@ -143,6 +180,7 @@ defmodule EngramWeb.FolderChainListingTest do
       b: b
     } do
       c = folder(u, v, "A/Z/C")
+      wire_on!()
 
       for body <- [manifest(conn), tree(conn)] do
         notes = by_id(body["notes"])
@@ -159,6 +197,7 @@ defmodule EngramWeb.FolderChainListingTest do
       end
     end
 
+    # With `folder_ops` off: the derived paths do not depend on the wire.
     test "a row the previous release rewrote (stale name stamp) keeps its stored path", %{
       conn: conn,
       ids: ids

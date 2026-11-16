@@ -941,27 +941,30 @@ defmodule Engram.Folders.Rows do
 
       true ->
         moving = user |> subtree_refs(vault_id, [old_folder]) |> MapSet.new(& &1.id)
-        # The new parent as the readers find it (the chain) AND as the
-        # writer will (`resolve_all/2`, still by `full_path_hmac` until S5):
-        # a stale hash must not let the writer parent a folder under its own
-        # subtree.
+        # The new parent as the readers find it (the chain) AND every row
+        # the writer may take on the way to it (`resolve_all/2` resolves the
+        # new parent's prefixes by `full_path_hmac` until S5): a stale hash on
+        # the parent or any ancestor must not let the writer place a folder
+        # under its own subtree.
         parents = ids_at(user, vault_id, [parent_path]) ++ hash_ids(user, vault_id, parent_path)
         if Enum.any?(parents, &MapSet.member?(moving, &1)), do: {:error, :invalid_path}, else: :ok
     end
   end
 
-  # The live rows whose stored `full_path_hmac` names `path`: what the
-  # writer's `resolve_all/2` would take. Only `check_move/4` reads it.
+  # The live rows whose stored `full_path_hmac` names `path` or any of its
+  # ancestors: what the writer's `resolve_all/2` could take on its way to
+  # `path`. One statement, O(depth) keys. Only `check_move/4` reads it.
   defp hash_ids(_user, _vault_id, ""), do: []
 
   defp hash_ids(user, vault_id, path) do
     case Crypto.dek_filter_key(user) do
       {:ok, fk} ->
+        hmacs = path |> prefixes() |> Enum.map(&path_hmac(fk, &1))
+
         Repo.all(
           from(f in Folder,
             where:
-              f.vault_id == ^vault_id and f.full_path_hmac == ^path_hmac(fk, path) and
-                is_nil(f.deleted_at),
+              f.vault_id == ^vault_id and f.full_path_hmac in ^hmacs and is_nil(f.deleted_at),
             select: f.id
           )
         )
