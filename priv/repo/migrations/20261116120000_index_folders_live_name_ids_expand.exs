@@ -18,19 +18,27 @@ defmodule Engram.Repo.Migrations.IndexFoldersLiveNameIdsExpand do
 
   Why (staging 0.87.0, 2026-11-16): below the root each walk probe read
   `folders_live_parent_id` with `name_hmac` only a Filter, reading every
-  sibling (O(siblings) a level). The planner costs `parent_id = <outer
-  row>` at the AVERAGE siblings (about 3), and with the heap in parent
-  order that scan costs the one page the unique probe does: 8.30 vs 8.43,
-  the gap only btree height (the churned `folders_live_name`, 615 pages for
-  1,406 entries, is one level taller). Same plan as superuser, so not RLS.
-  An index-only probe saves the heap page (about 4.0 of the 8.3), a margin
-  no plain scan of another index ties while the table is mostly
-  all-visible (staging 577 of 607 pages).
+  sibling (O(siblings) a level). The planner treats `vault_id` and
+  `parent_id` as independent (1,436 rows x 1/8 vaults x 1/412 parents =
+  0.43, clamped to 1 row), so that scan is estimated at the same one row
+  and one heap page as the unique probe: 8.30 vs 8.43, the gap only btree
+  height (the churned `folders_live_name`, 615 pages for 1,406 entries, is
+  one level taller). More vaults and parents only lower that estimate.
+  Same plan as superuser, so not RLS. An index-only probe saves the heap
+  page (about 4.0 of the 8.3), a margin no plain scan of another index
+  ties while the table is mostly all-visible (staging 577 of 607 pages).
+
+  Accepted risk: the margin rests on the visibility map. Right after a
+  CLUSTER, VACUUM FULL or restore (relallvisible near 0) an index-only scan
+  is costed like a heap read and the tie can return until autovacuum sets
+  the map again.
 
   ponytail: not UNIQUE. `folders_live_name` stays the uniqueness
   constraint (insert `on_conflict`, `FolderTableTest`), and
   `BoundedIndexBuild` is frozen to plain `CREATE INDEX`. The cost is one
-  more index entry per folder create, move or delete (rare writes). Upgrade
+  more index entry per folder insert and per non-HOT folder update (staging:
+  2,263 of 3,213 updates); HOT-ness is unchanged, as every key column is
+  already in `folders_live_name`. Upgrade
   path: build this as UNIQUE NULLS NOT DISTINCT and drop `folders_live_name`
   in a later contract step. `folders_parent` stays: the FK
   `folders_parent_fk` checks on a hard delete need a non-partial

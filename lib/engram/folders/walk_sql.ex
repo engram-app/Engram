@@ -31,9 +31,9 @@ defmodule Engram.Folders.WalkSql do
   and `user_id`, which `folders_live_name_ids` INCLUDEs, so it is an
   index-only scan. That margin (no heap page) is what keeps the planner off
   `folders_live_parent_id` and `folders_parent`, which key only
-  `(vault_id, parent_id)` and read every sibling: they are costed at the
-  AVERAGE siblings, so on a mostly one-child tree they tie with a plain
-  probe of the name index (staging 0.87.0 picked them;
+  `(vault_id, parent_id)` and read every sibling: the planner multiplies
+  the two keys' selectivities as independent, estimates about one row, and
+  ties them with a plain probe of the name index (staging 0.87.0 picked them;
   `Engram.Folders.WalkIndexCondTest`). A probe that also selected another column would
   lose the index-only scan and the tie would be back.
   """

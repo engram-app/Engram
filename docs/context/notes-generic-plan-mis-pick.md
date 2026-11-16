@@ -118,10 +118,12 @@ The fix above held at the root but not below it. Staging row 7, as
 cost O(siblings). The SAME plan as the superuser, so not RLS and not a
 leakproof problem. The cause is the cost model:
 
-- a probe keyed by `parent_id = <outer row>` is costed at the AVERAGE
-  siblings (staging `parent_id` n_distinct -0.29, about 3 a parent), and
-  the heap is in parent order, so that scan is costed at the same one heap
-  page as the unique `(vault_id, parent_id, name_hmac)` probe;
+- the planner treats `vault_id` and `parent_id` as independent and
+  multiplies their selectivities: 1,436 rows x 1/8 vaults x 1/412 parents
+  = 0.43, clamped to 1 row. So the parent-keyed scan is estimated at the
+  same one row and one heap page as the unique
+  `(vault_id, parent_id, name_hmac)` probe. More vaults and parents only
+  lower that estimate (the heap is NOT in parent order: correlation 0.033);
 - the two tied at 8.30 vs 8.43, and the gap was only btree height:
   `folders_live_name` had churned to 615 pages for 1,406 entries (41k
   inserts, 50k deletes), one level taller than the 32-page
@@ -134,9 +136,12 @@ the root too. Either way the actual sibling count never enters the plan.
 Fix: `folders_live_name_ids`, the same key with `INCLUDE (user_id, id)`.
 Every walk probe reads only those, so it is an index-only scan with no heap
 page, about half the cost, which no plain scan of another index ties while
-the table is mostly all-visible (staging 577 of 607 pages). Not unique:
+the table is mostly all-visible (staging 577 of 607 pages; right after a
+CLUSTER, VACUUM FULL or restore the tie can return until autovacuum sets
+the visibility map). Not unique:
 `folders_live_name` stays the constraint. `Rows.live_child` (the
-conflicted-insert read) now probes `id` alone, then reads the row by key.
+conflicted-insert read) now probes `id` alone, then reads the row by key
+under the same live predicate (a row tombstoned in between is not returned).
 `WalkIndexCondTest` reproduces it with `parent_id` n_distinct -0.29 and
 `QueryPlan.all_visible!/1`, 500 vs 5 siblings: 9 buffers for 3 prefixes
 either way.

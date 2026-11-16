@@ -7,19 +7,22 @@ defmodule Engram.Folders.WalkIndexCondTest do
   # Staging 0.87.0 (2026-11-16): below the root every probe read
   # `folders_live_parent_id` (`(vault_id, parent_id, id) INCLUDE (user_id)`)
   # with `name_hmac` only a Filter, so it read every sibling. Superuser and
-  # engram_app picked the same plan, so it is not RLS. The planner costs a
-  # probe keyed by `parent_id = <outer row>` at the average siblings (staging
-  # `parent_id` n_distinct -0.29, about 3 children a parent), and with the
-  # heap in parent order that index costs the same one page as the unique
-  # name index: 8.30 vs 8.43, the difference only the btree height. A tie
-  # broken by height cannot be what makes a 5,000-child folder cost one
-  # probe. `folders_live_name_ids` adds INCLUDE (user_id, id), so the walk
-  # is an index-only scan on its key (no heap page), which no plain scan of
-  # another index ties.
+  # engram_app picked the same plan, so it is not RLS. The planner treats
+  # `vault_id` and `parent_id` as independent: `rows x 1/n_distinct(vault)
+  # x 1/n_distinct(parent)` (staging 1,436 x 1/8 x 1/412 = 0.43), clamped
+  # to 1 row, the same 1 row the unique name probe gets. So both cost one
+  # index and one heap page, 8.30 vs 8.43, the gap only btree height (the
+  # churned `folders_live_name` is a level taller). The more vaults and
+  # parents, the lower that estimate, so the tie is structural; the real
+  # sibling count never enters it. `folders_live_name_ids` adds INCLUDE
+  # (user_id, id), so the walk is an index-only scan on its key (no heap
+  # page), which no plain scan of another index ties.
   #
-  # The setup reproduces staging's statistics: 40 tenants and the measured
-  # parent_id ratio, all-visible pages as a vacuumed table's (staging: 577
-  # of 607). Not async: ALTER TABLE, CLUSTER and the role drop.
+  # The setup: `n_distinct = 40` on the tenant columns (the prod-shape
+  # convention of the other plan tests; staging has 3 users and 8 vaults),
+  # staging's measured parent_id ratio, and all-visible pages as a vacuumed
+  # table's (staging: 577 of 607). Not async: ALTER TABLE, CLUSTER and the
+  # role drop.
   use Engram.DataCase, async: false
 
   alias Engram.{Crypto, FolderRows, QueryPlan, QueryRecorder, Repo}
@@ -114,23 +117,71 @@ defmodule Engram.Folders.WalkIndexCondTest do
   test "ensure_all's conflict read (the live child by name) is one probe too",
        %{user: u, vault: v} do
     {:ok, fk} = Crypto.dek_filter_key(u)
-    big = Repo.with_tenant!(u.id, fn -> Rows.id_by_walk(u, v.id, "Big") end)
-    # A live row the path-hash read misses (no `full_path_hmac`), so the
-    # insert conflicts and `ensure_all` reads it by `(parent, name)`.
-    orphan = FolderRows.insert!(u, v, Rows.name_hmac(fk, "Orphan"), parent: big)
 
-    plans =
+    # A live row the path-hash read misses (no `full_path_hmac`) under each
+    # parent, so the insert conflicts and `ensure_all` reads it by
+    # `(parent, name)`. The probe statement (the only one keyed by name and
+    # parent and not by id) is matched on main's shape too, so main fails
+    # on its plan, not on a missing statement.
+    conflict_plans = fn parent ->
+      parent_id = Repo.with_tenant!(u.id, fn -> Rows.id_by_walk(u, v.id, parent) end)
+      orphan = FolderRows.insert!(u, v, Rows.name_hmac(fk, "Orphan"), parent: parent_id)
+      path = parent <> "/Orphan"
+
       plans(
         u,
-        fn ->
-          assert {:ok, %{"Big/Orphan" => ^orphan}} = Rows.ensure_all(u, v.id, ["Big/Orphan"])
-        end,
-        ~r/^SELECT f0\."id" FROM "folders" AS f0 WHERE .*"name_hmac" = .*"parent_id" = /
+        fn -> assert {:ok, %{^path => ^orphan}} = Rows.ensure_all(u, v.id, [path]) end,
+        ~r/^SELECT f0\."id"(, f0\."full_path_hmac", f0\."explicit")? FROM "folders" AS f0 WHERE (?!.*f0\."id" = ).*"name_hmac" = .*"parent_id" = /
       )
+    end
 
-    for plan <- [plans.custom, plans.generic] do
-      assert_name_in_index_cond(plan)
-      assert QueryPlan.buffers(plan) <= 6, plan
+    big = conflict_plans.("Big")
+    small = conflict_plans.("Small")
+
+    for plan <- [big.custom, big.generic, small.custom, small.generic],
+        do: assert_name_in_index_cond(plan)
+
+    assert QueryPlan.buffers(big.custom) == QueryPlan.buffers(small.custom), big.custom
+    assert QueryPlan.buffers(big.generic) == QueryPlan.buffers(small.generic), big.generic
+  end
+
+  test "ensure_all's conflict read never returns a row tombstoned after its probe",
+       %{user: u, vault: v} do
+    # The race the two statements open: the probe finds the live row, then
+    # it is tombstoned before the read by key. A telemetry handler tombstones
+    # it right after the probe; the read by key must apply the probe's live
+    # predicate, or it hands back a dead row as live.
+    {:ok, fk} = Crypto.dek_filter_key(u)
+    big = Repo.with_tenant!(u.id, fn -> Rows.id_by_walk(u, v.id, "Big") end)
+    orphan = FolderRows.insert!(u, v, Rows.name_hmac(fk, "Orphan"), parent: big)
+
+    me = self()
+
+    tombstone = fn ->
+      Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(orphan)])
+
+      send(me, :tombstoned)
+    end
+
+    :telemetry.attach(
+      "tombstone-after-probe",
+      [:engram, :repo, :query],
+      fn _, _, %{query: sql}, _ ->
+        if sql =~ ~r/^SELECT f0\."id" FROM "folders" AS f0 WHERE (?!.*f0\."id" = ).*"name_hmac"/,
+          do: tombstone.()
+      end,
+      nil
+    )
+
+    try do
+      {:ok, %{"Big/Orphan" => id}} =
+        Repo.with_tenant!(u.id, fn -> Rows.ensure_all(u, v.id, ["Big/Orphan"]) end)
+
+      assert_received :tombstoned
+      # The tombstoned row is not handed back as live: a fresh row is made.
+      refute id == orphan
+    after
+      :telemetry.detach("tombstone-after-probe")
     end
   end
 end

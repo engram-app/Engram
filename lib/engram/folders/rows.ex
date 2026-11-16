@@ -358,20 +358,21 @@ defmodule Engram.Folders.Rows do
 
   # The probe selects only `id`, so it is index-only on
   # `folders_live_name_ids`, never a read of every sibling (`WalkSql`); the
-  # row is then read by its primary key. Two statements, not an `IN
-  # (subquery)`: the planner joins that against the tenant's folders
-  # (`folders_user`, the average-tenant estimate). Only a conflicted insert
-  # gets here.
+  # row is then read by its primary key under the same live predicate, so a
+  # row tombstoned or moved between the two reads is not returned. Two
+  # statements, not an `IN (subquery)`: the planner joins that against the
+  # tenant's folders (`folders_user`, the average-tenant estimate). Only a
+  # conflicted insert gets here.
   defp live_child(vault_id, parent_id, name_h) do
-    probe = siblings(vault_id, parent_id, name_h) |> select([f], f.id)
+    probe = siblings(vault_id, parent_id, name_h)
 
-    case Repo.one(probe) do
+    case Repo.one(select(probe, [f], f.id)) do
       nil ->
         nil
 
       id ->
         Repo.one(
-          from(f in Folder,
+          from(f in probe,
             where: f.id == ^id,
             select: %{id: f.id, full: f.full_path_hmac, explicit: f.explicit}
           )
