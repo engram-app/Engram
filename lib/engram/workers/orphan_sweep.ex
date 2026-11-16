@@ -604,20 +604,31 @@ defmodule Engram.Workers.OrphanSweep do
   defp max_missing_candidates,
     do: Application.get_env(:engram, :orphan_sweep_max_missing_candidates, @max_candidates)
 
-  defp live_user_ids do
+  defp live_user_ids(ids \\ nil) do
     # Includes soft-deleted users (deleted_at IS NOT NULL but row exists) —
     # they are the InactivityCleanup ladder's responsibility, not ours.
     #
     # On the maintenance pool even though `users` carries no RLS today, because
     # this is the most destructive authority read in the file and the safety of
     # reading it on the app pool is a fact stored in another module. Its two
-    # consumers diff against it and then delete with NO runaway guard at all:
-    # `sweep_qdrant/1` drops a whole user's vectors, `sweep_s3/1` drops a whole
-    # user's attachment prefix. An empty result deletes every user's data in one
-    # tick. Adding `users` to `@tenant_tables` would make that real and no test
-    # here would catch it, so the pool choice does not depend on that staying
-    # true.
-    maintenance_repo().all(from(u in User, select: u.id)) |> MapSet.new()
+    # consumers diff against it and then delete: `sweep_qdrant/1` drops a whole
+    # user's vectors (behind `runaway?/2`, which a small deployment sits
+    # under), `sweep_s3/1` drops a whole user's attachment prefix with no
+    # guard at all. An empty result deletes every user's data in one tick.
+    # Adding `users` to `@tenant_tables` would make that real and no test here
+    # would catch it, so the pool choice does not depend on that staying true.
+    #
+    # `ids` re-reads only those users (`sweep_qdrant/1`'s candidates, one
+    # bounded `IN` query), so a signup that committed after the full read is
+    # still live. Ids that are not UUIDs cannot name a user.
+    query = from(u in User, select: u.id)
+
+    query =
+      if ids,
+        do: where(query, [u], u.id in ^Enum.filter(ids, &match?({:ok, _}, Ecto.UUID.cast(&1)))),
+        else: query
+
+    query |> maintenance_repo().all() |> MapSet.new(&String.downcase/1)
   end
 
   # -- Qdrant --------------------------------------------------------------
@@ -625,30 +636,9 @@ defmodule Engram.Workers.OrphanSweep do
   defp sweep_qdrant(live_ids) do
     case discover_qdrant_user_ids() do
       {:ok, qdrant_ids} ->
-        orphans = MapSet.difference(qdrant_ids, live_ids)
-
-        Enum.reduce(orphans, 0, fn user_id, acc ->
-          case Qdrant.delete_by_user(user_id) do
-            :ok ->
-              Logger.debug(
-                "orphan_sweep deleted Qdrant points",
-                Metadata.with_category(:debug, :oban, user_id: user_id)
-              )
-
-              acc + 1
-
-            other ->
-              Logger.error(
-                "orphan_sweep Qdrant delete failed",
-                Metadata.with_category(:error, :oban,
-                  user_id: user_id,
-                  reason: Metadata.safe_reason(other)
-                )
-              )
-
-              acc
-          end
-        end)
+        qdrant_ids
+        |> MapSet.difference(live_ids)
+        |> delete_departed(MapSet.size(qdrant_ids))
 
       {:error, reason} ->
         Logger.error(
@@ -660,6 +650,57 @@ defmodule Engram.Workers.OrphanSweep do
     end
   end
 
+  defp delete_departed(candidates, tenants) do
+    cond do
+      MapSet.size(candidates) == 0 ->
+        0
+
+      # Same premise as the point pass: a large departed share means the
+      # `users` read is wrong (a restore, a repointed database), not that
+      # that many users left. Deleting would drop live users' vectors.
+      runaway?(candidates, tenants) ->
+        Logger.error(
+          "orphan_sweep aborting: departed tenant ratio implies a bad authority",
+          Metadata.with_category(:error, :oban,
+            total_count: MapSet.size(candidates),
+            result: %{scanned: tenants, max_ratio: @max_candidate_ratio}
+          )
+        )
+
+        0
+
+      true ->
+        candidates
+        |> MapSet.difference(live_user_ids(MapSet.to_list(candidates)))
+        |> delete_tenants()
+    end
+  end
+
+  defp delete_tenants(orphans) do
+    Enum.reduce(orphans, 0, fn user_id, acc ->
+      case Qdrant.delete_by_user(user_id) do
+        :ok ->
+          Logger.debug(
+            "orphan_sweep deleted Qdrant points",
+            Metadata.with_category(:debug, :oban, user_id: user_id)
+          )
+
+          acc + 1
+
+        other ->
+          Logger.error(
+            "orphan_sweep Qdrant delete failed",
+            Metadata.with_category(:error, :oban,
+              user_id: user_id,
+              reason: Metadata.safe_reason(other)
+            )
+          )
+
+          acc
+      end
+    end)
+  end
+
   # Tenants come from the `u` index (one facet request), not from a scroll
   # of every point's payload: in prod (2026-11-16, 1.35M points) that scroll
   # was ~2.7k requests and ~550 MB of payload reads a run. Every point
@@ -669,7 +710,9 @@ defmodule Engram.Workers.OrphanSweep do
   # only them, so with none it is one empty page.
   defp discover_qdrant_user_ids do
     with {:ok, tenants} <- Qdrant.facet_values(PayloadKeys.short(:user_id)) do
-      ids = MapSet.new(tenants, &FilterId.dashed(FilterId.uuid(&1)))
+      ids =
+        MapSet.new(tenants, &(&1 |> FilterId.uuid() |> FilterId.dashed() |> String.downcase()))
+
       scroll_legacy_ids(nil, ids)
     end
   end
@@ -689,7 +732,7 @@ defmodule Engram.Workers.OrphanSweep do
         acc =
           Enum.reduce(points, acc, fn point, set ->
             case point["payload"] do
-              %{"user_id" => uid} when is_binary(uid) -> MapSet.put(set, uid)
+              %{"user_id" => uid} when is_binary(uid) -> MapSet.put(set, String.downcase(uid))
               _ -> set
             end
           end)

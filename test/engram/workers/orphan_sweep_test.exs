@@ -3,8 +3,8 @@ defmodule Engram.Workers.OrphanSweepTest do
   use Oban.Testing, repo: Engram.Repo
 
   import Engram.QdrantFilterView
+  import ExUnit.CaptureLog
 
-  alias Engram.QdrantStub
   alias Engram.Storage
   alias Engram.Test.LogCapture
   alias Engram.Vector.FilterId
@@ -98,6 +98,77 @@ defmodule Engram.Workers.OrphanSweepTest do
     assert get_in(hd(legacy_view(decoded["filter"]["must"])), ["match", "value"]) == ghost_id
   end
 
+  # Fail closed: this pass deletes a whole user's vectors, irreversible
+  # without a paid re-embed. A discovery error, an id in another spelling, a
+  # signup that commits mid-run or an implausible departed share must all
+  # delete nothing.
+  describe "the Qdrant tenant pass deletes nothing when" do
+    test "the facet request fails", %{bypass: bypass} do
+      stub_qdrant(bypass, [Ecto.UUID.generate()], [], facet_status: 500)
+      stub_delete(bypass)
+
+      assert :ok = perform_job(OrphanSweep, %{})
+      refute_received {:qdrant_delete, _}
+    end
+
+    test "the legacy-only scroll fails", %{bypass: bypass} do
+      stub_qdrant(bypass, [Ecto.UUID.generate()], [], legacy_status: 500)
+      stub_delete(bypass)
+
+      assert :ok = perform_job(OrphanSweep, %{})
+      refute_received {:qdrant_delete, _}
+    end
+
+    # Real Qdrant answers a uuid index value dashed (the integration test in
+    # qdrant_strict_mode_test).
+    test "a live tenant comes back dashed", %{bypass: bypass} do
+      live = insert(:user)
+      stub_qdrant(bypass, [live.id])
+      stub_delete(bypass)
+
+      assert :ok = perform_job(OrphanSweep, %{})
+      refute_received {:qdrant_delete, _}
+    end
+
+    test "a live tenant comes back uppercase, from the facet or a legacy point", %{
+      bypass: bypass
+    } do
+      live = insert(:user)
+      upper = String.upcase(live.id)
+      stub_qdrant(bypass, [String.upcase(FilterId.uuid(live.id))], [upper])
+      stub_delete(bypass)
+
+      assert :ok = perform_job(OrphanSweep, %{})
+      refute_received {:qdrant_delete, _}
+    end
+
+    # The departed share is `runaway?/2`'s: 100+ departed tenants that are
+    # over 10% of all tenants means the `users` read is wrong (a restore, a
+    # repointed database), not that that many users left.
+    test "the departed share is implausible", %{bypass: bypass} do
+      stub_qdrant(bypass, for(_ <- 1..150, do: Ecto.UUID.generate()))
+      stub_delete(bypass)
+
+      {_result, log} = with_log(fn -> perform_job(OrphanSweep, %{}) end)
+      refute_received {:qdrant_delete, _}
+      assert log =~ "orphan_sweep aborting"
+    end
+
+    # A user who signs up after `users` was read but before the facet answers
+    # is in Qdrant and not in the snapshot. The candidates are re-read right
+    # before deleting.
+    test "a tenant signs up after the users snapshot", %{bypass: bypass} do
+      late_id = Ecto.UUID.generate()
+
+      stub_qdrant(bypass, [late_id], [], on_facet: fn -> insert(:user, id: late_id) end)
+
+      stub_delete(bypass)
+
+      assert :ok = perform_job(OrphanSweep, %{})
+      refute_received {:qdrant_delete, _}
+    end
+  end
+
   test "deletes S3 prefix for users that no longer exist", %{bypass: bypass} do
     live = insert(:user)
     ghost_id = Ecto.UUID.generate()
@@ -157,22 +228,57 @@ defmodule Engram.Workers.OrphanSweepTest do
   # The sweep's Qdrant reads, routed the way one collection answers them: the
   # tenant facet on `u` answers `tenants`; the `is_empty(u)` scroll answers a
   # legacy-only point per id in `legacy`; the point pass's id-only scroll
-  # finds nothing. Each request is sent to the test process.
-  defp stub_qdrant(bypass, tenants, legacy \\ []) do
+  # finds nothing. Each request is sent to the test process. `opts`:
+  # `facet_status`/`legacy_status` fail that request, `on_facet` runs as the
+  # facet answers.
+  defp stub_qdrant(bypass, tenants, legacy \\ [], opts \\ []) do
     test_pid = self()
-    QdrantStub.stub_facet(bypass, "test_col", tenants)
+    on_facet = Keyword.get(opts, :on_facet, fn -> :ok end)
 
-    Bypass.expect(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
+    Bypass.expect(bypass, "POST", "/collections/test_col/facet", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:qdrant_facet, Jason.decode!(body)})
+      on_facet.()
+
+      case Keyword.get(opts, :facet_status, 200) do
+        200 ->
+          json(conn, %{
+            "result" => %{"hits" => Enum.map(tenants, &%{"value" => &1, "count" => 1})}
+          })
+
+        status ->
+          Plug.Conn.resp(conn, status, ~s({"status":{"error":"boom"}}))
+      end
+    end)
+
+    Bypass.stub(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       decoded = Jason.decode!(body)
       send(test_pid, {:scroll, decoded})
+      legacy? = decoded["filter"] == @legacy_only
 
       points =
-        if decoded["filter"] == @legacy_only,
+        if legacy?,
           do: Enum.map(legacy, &%{"id" => Ecto.UUID.generate(), "payload" => %{"user_id" => &1}}),
           else: []
 
-      json(conn, %{"result" => %{"points" => points, "next_page_offset" => nil}})
+      case {legacy?, Keyword.get(opts, :legacy_status, 200)} do
+        {true, status} when status != 200 ->
+          Plug.Conn.resp(conn, status, ~s({"status":{"error":"boom"}}))
+
+        _ ->
+          json(conn, %{"result" => %{"points" => points, "next_page_offset" => nil}})
+      end
+    end)
+  end
+
+  defp stub_delete(bypass) do
+    test_pid = self()
+
+    Bypass.stub(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:qdrant_delete, body})
+      Plug.Conn.resp(conn, 200, ~s({"result":{}}))
     end)
   end
 
