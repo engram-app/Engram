@@ -10,8 +10,9 @@ defmodule Engram.Workers.OrphanSweep do
   Sweeps in sequence:
 
     1. Build authoritative user_id set from `users` (alive + soft-deleted).
-    2. Qdrant — scroll all points; group by payload `user_id`; for each
-       user_id NOT in the live set, call `Qdrant.delete_by_user/2`.
+    2. Qdrant — facet the indexed tenant key `u` (plus legacy points that
+       carry only `user_id`); for each user_id NOT in the live set, call
+       `Qdrant.delete_by_user/2`.
     3. S3 — list bucket with `delimiter: "/"` to get user_id prefixes;
        for each prefix NOT in the live set, call `Storage.delete_prefix/1`.
     4. Qdrant points — scroll every point id; delete the ones no
@@ -39,11 +40,13 @@ defmodule Engram.Workers.OrphanSweep do
   alias Engram.Repo
   alias Engram.Storage
   alias Engram.Vector.FilterId
+  alias Engram.Vector.PayloadKeys
   alias Engram.Vector.PointIds
   alias Engram.Vector.Qdrant
 
   require Logger
 
+  # Page of the legacy-only (`is_empty(u)`) tenant scroll.
   @qdrant_scroll_limit 500
   # The point pass fetches ids only — no payload, no vectors — so a page is
   # ~36 bytes an id and can be far larger than the payload-carrying scroll
@@ -657,14 +660,25 @@ defmodule Engram.Workers.OrphanSweep do
     end
   end
 
-  defp discover_qdrant_user_ids, do: scroll_qdrant_ids(nil, MapSet.new())
+  # Tenants come from the `u` index (one facet request), not from a scroll
+  # of every point's payload: in prod (2026-11-16, 1.35M points) that scroll
+  # was ~2.7k requests and ~550 MB of payload reads a run. Every point
+  # carries the indexed `u` since the n backfill; one written before `u`
+  # existed (a self-hoster skipping releases) has only `user_id`, which the
+  # facet cannot see. `scroll_legacy_ids/2` finds those: `is_empty(u)` reads
+  # only them, so with none it is one empty page.
+  defp discover_qdrant_user_ids do
+    with {:ok, tenants} <- Qdrant.facet_values(PayloadKeys.short(:user_id)) do
+      ids = MapSet.new(tenants, &FilterId.dashed(FilterId.uuid(&1)))
+      scroll_legacy_ids(nil, ids)
+    end
+  end
 
-  defp scroll_qdrant_ids(offset, acc) do
+  defp scroll_legacy_ids(offset, acc) do
     opts = [
-      filter: %{},
+      filter: %{must: [%{is_empty: %{key: PayloadKeys.short(:user_id)}}]},
       limit: @qdrant_scroll_limit,
-      # `u` is the v5 point's user id (undashed, `PayloadKeys`).
-      with_payload: ["user_id", "u"],
+      with_payload: ["user_id"],
       with_vector: false
     ]
 
@@ -676,12 +690,11 @@ defmodule Engram.Workers.OrphanSweep do
           Enum.reduce(points, acc, fn point, set ->
             case point["payload"] do
               %{"user_id" => uid} when is_binary(uid) -> MapSet.put(set, uid)
-              %{"u" => uid} when is_binary(uid) -> MapSet.put(set, FilterId.dashed(uid))
               _ -> set
             end
           end)
 
-        if next, do: scroll_qdrant_ids(next, acc), else: {:ok, acc}
+        if next, do: scroll_legacy_ids(next, acc), else: {:ok, acc}
 
       {:error, reason} ->
         {:error, reason}

@@ -128,6 +128,32 @@ defmodule Engram.Vector.QdrantStrictModeTest do
       assert {:ok, _} = Qdrant.hybrid_search(col, @vector, %{indices: [1], values: [1.0]}, opts)
     end
 
+    # OrphanSweep's tenant discovery: one exact facet on `u` (the indexed
+    # tenant key), plus the `is_empty(u)` scroll that finds legacy-only points.
+    # The setup point is one of those (`user_id`, no `u`).
+    test "the tenant facet on u and the legacy-only scroll fit", %{col: col} do
+      v5_user = Ecto.UUID.generate()
+
+      :ok =
+        Qdrant.upsert_points(col, [
+          %{
+            id: Ecto.UUID.generate(),
+            vector: %{"dense" => @vector},
+            payload: %{u: Engram.Vector.FilterId.uuid(v5_user)}
+          }
+        ])
+
+      # A uuid index answers dashed, whatever form was written.
+      assert {:ok, [^v5_user]} = Qdrant.facet_values(col, "u")
+
+      assert {:ok, %{points: [%{"payload" => %{"user_id" => @user_id}}]}} =
+               Qdrant.scroll(col,
+                 filter: %{must: [%{is_empty: %{key: "u"}}]},
+                 with_payload: ["user_id"],
+                 limit: 500
+               )
+    end
+
     test "the kill switch PATCH is accepted and lifts every limit", %{col: col} do
       off = Engram.Vector.QdrantLayout.desired(Version.parse!("1.19.2"), nil, false, :cloud)
 

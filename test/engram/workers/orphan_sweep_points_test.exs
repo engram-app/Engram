@@ -13,6 +13,8 @@ defmodule Engram.Workers.OrphanSweepPointsTest do
 
   setup do
     bypass = Bypass.open()
+    # Tenant discovery (`sweep_qdrant/1`) is not under test here.
+    Engram.QdrantStub.stub_facet(bypass, "test_col", [])
     prior_collection = Application.get_env(:engram, :qdrant_collection)
     prior_storage = Application.get_env(:engram, :storage)
 

@@ -4,9 +4,14 @@ defmodule Engram.Workers.OrphanSweepTest do
 
   import Engram.QdrantFilterView
 
+  alias Engram.QdrantStub
   alias Engram.Storage
   alias Engram.Test.LogCapture
+  alias Engram.Vector.FilterId
   alias Engram.Workers.OrphanSweep
+
+  # The legacy-only tenant scroll's filter (`is_empty(u)`).
+  @legacy_only %{"must" => [%{"is_empty" => %{"key" => "u"}}]}
 
   setup do
     bypass = Bypass.open()
@@ -30,29 +35,55 @@ defmodule Engram.Workers.OrphanSweepTest do
     %{bypass: bypass}
   end
 
-  test "deletes Qdrant points for users that no longer exist", %{bypass: bypass} do
+  # Tenant discovery reads the `u` index through one facet request. It was a
+  # scroll of every point with payload `["user_id", "u"]`: in prod
+  # (2026-11-16, 1.35M points) ~2.7k requests and ~550 MB of payload reads a
+  # run, visible as a daily page-cache jump on the Qdrant node.
+  test "discovers tenants with one facet on `u` and deletes the departed ones", %{
+    bypass: bypass
+  } do
     live = insert(:user)
     ghost_id = Ecto.UUID.generate()
+    test_pid = self()
 
-    Bypass.expect(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(
-        200,
-        Jason.encode!(%{
-          "result" => %{
-            "points" => [
-              %{"id" => 1, "payload" => %{"user_id" => live.id}},
-              %{"id" => 2, "payload" => %{"user_id" => ghost_id}}
-            ],
-            "next_page_offset" => nil
-          }
-        })
-      )
+    # Undashed, as `u` is written (`FilterId.uuid/1`).
+    stub_qdrant(bypass, [FilterId.uuid(live.id), FilterId.uuid(ghost_id)])
+
+    Bypass.expect(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:qdrant_delete, body})
+      Plug.Conn.resp(conn, 200, ~s({"result":{}}))
     end)
 
-    # Capture the delete_by_user call for the ghost.
+    assert :ok = perform_job(OrphanSweep, %{})
+
+    assert_received {:qdrant_facet, %{"key" => "u", "exact" => true}}
+    refute_received {:qdrant_facet, _second}
+
+    for {:scroll, body} <- drain(:scroll) do
+      assert body["with_payload"] in [false, ["user_id"]],
+             "a scroll read payload it does not need: #{inspect(body)}"
+
+      if body["with_payload"] == ["user_id"], do: assert(body["filter"] == @legacy_only)
+    end
+
+    assert_received {:qdrant_delete, body}
+    decoded = Jason.decode!(body)
+    assert get_in(hd(legacy_view(decoded["filter"]["must"])), ["match", "value"]) == ghost_id
+    refute_received {:qdrant_delete, _live_user}
+  end
+
+  # A point written before `u` existed (a self-hoster skipping releases) has
+  # only `user_id`, which the facet cannot see. The `is_empty(u)` scroll finds
+  # it; with no such point it is one empty page.
+  test "a legacy-only point (user_id, no u) still gets its departed tenant swept", %{
+    bypass: bypass
+  } do
+    live = insert(:user)
+    ghost_id = Ecto.UUID.generate()
     test_pid = self()
+
+    stub_qdrant(bypass, [FilterId.uuid(live.id)], [ghost_id])
 
     Bypass.expect(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -75,14 +106,7 @@ defmodule Engram.Workers.OrphanSweepTest do
     Storage.adapter().put("#{ghost_id}/1/orphan.bin", "orphan data")
 
     # Qdrant has no orphans to find.
-    Bypass.expect(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(
-        200,
-        Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}})
-      )
-    end)
+    stub_qdrant(bypass, [])
 
     assert :ok = perform_job(OrphanSweep, %{})
 
@@ -94,19 +118,7 @@ defmodule Engram.Workers.OrphanSweepTest do
     user = insert(:user)
     Storage.adapter().put("#{user.id}/1/keep.bin", "live")
 
-    Bypass.expect(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(
-        200,
-        Jason.encode!(%{
-          "result" => %{
-            "points" => [%{"id" => 1, "payload" => %{"user_id" => user.id}}],
-            "next_page_offset" => nil
-          }
-        })
-      )
-    end)
+    stub_qdrant(bypass, [FilterId.uuid(user.id)])
 
     # No delete_by_user call should fire.
     Bypass.stub(bypass, "POST", "/collections/test_col/points/delete", fn _ ->
@@ -128,19 +140,7 @@ defmodule Engram.Workers.OrphanSweepTest do
     user = insert(:user)
     Storage.adapter().put("#{user.id}/1/keep.bin", "live")
 
-    Bypass.expect(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(
-        200,
-        Jason.encode!(%{
-          "result" => %{
-            "points" => [%{"id" => 1, "payload" => %{"user_id" => user.id}}],
-            "next_page_offset" => nil
-          }
-        })
-      )
-    end)
+    stub_qdrant(bypass, [FilterId.uuid(user.id)])
 
     {result, events} = LogCapture.with_events(fn -> perform_job(OrphanSweep, %{}) end)
     assert result == :ok
@@ -152,6 +152,42 @@ defmodule Engram.Workers.OrphanSweepTest do
     assert summary.meta[:category] == :oban
     assert summary.meta[:loki_ship] == true
     assert summary.meta[:total_count] == 0
+  end
+
+  # The sweep's Qdrant reads, routed the way one collection answers them: the
+  # tenant facet on `u` answers `tenants`; the `is_empty(u)` scroll answers a
+  # legacy-only point per id in `legacy`; the point pass's id-only scroll
+  # finds nothing. Each request is sent to the test process.
+  defp stub_qdrant(bypass, tenants, legacy \\ []) do
+    test_pid = self()
+    QdrantStub.stub_facet(bypass, "test_col", tenants)
+
+    Bypass.expect(bypass, "POST", "/collections/test_col/points/scroll", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      decoded = Jason.decode!(body)
+      send(test_pid, {:scroll, decoded})
+
+      points =
+        if decoded["filter"] == @legacy_only,
+          do: Enum.map(legacy, &%{"id" => Ecto.UUID.generate(), "payload" => %{"user_id" => &1}}),
+          else: []
+
+      json(conn, %{"result" => %{"points" => points, "next_page_offset" => nil}})
+    end)
+  end
+
+  defp json(conn, body) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.resp(200, Jason.encode!(body))
+  end
+
+  defp drain(tag) do
+    receive do
+      {^tag, body} -> [{tag, body} | drain(tag)]
+    after
+      0 -> []
+    end
   end
 
   # engram-app/Engram#1746. `tenancy_unsafe?/0` clears the moment a maintenance

@@ -1582,6 +1582,58 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
+  Every distinct value of the indexed payload `key`, read from its index
+  (`POST /collections/{col}/facet`, Qdrant >= 1.12; a uuid index answers
+  dashed). No point payload is read. `exact: true` because the approximate
+  facet samples once a segment holds many values and can miss rare ones.
+
+  Facet has no offset, so a full page (`max_page/0`, under the strict
+  `max_query_limit`) repeats with every value seen so far excluded, in
+  `max_ids/0` chunks (the strict `condition_max_size`), until a short page.
+  https://api.qdrant.tech/api-reference/points/facet
+  """
+  @spec facet_values(String.t() | nil, String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def facet_values(col \\ nil, key), do: facet_page(col || collection(), key, [])
+
+  # ponytail: one must_not condition per max_ids chunk, so the strict
+  # filter_max_conditions (64) caps this near 64 * max_ids (~131k values).
+  # Past that, page on a second indexed key.
+  defp facet_page(col, key, seen) do
+    body = %{key: key, limit: @max_page, exact: true}
+
+    body =
+      if seen == [],
+        do: body,
+        else:
+          Map.put(body, :filter, %{
+            must_not:
+              for(ids <- Enum.chunk_every(seen, @max_ids), do: %{key: key, match: match(ids)})
+          })
+
+    opts = [json: body, params: [timeout: server_timeout_s(:indexing)]] ++ req_opts()
+
+    result =
+      instrument(:facet, fn ->
+        case Req.post("#{base_url()}/collections/#{col}/facet", opts) do
+          {:ok, %{status: 200, body: %{"result" => %{"hits" => hits}}}} ->
+            {:ok, Enum.map(hits, & &1["value"])}
+
+          {:ok, %{status: status, body: body}} ->
+            {:error, {:qdrant_facet, status, body}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end)
+
+    case result do
+      {:ok, values} when length(values) < @max_page -> {:ok, seen ++ values}
+      {:ok, values} -> facet_page(col, key, seen ++ values)
+      error -> error
+    end
+  end
+
+  @doc """
   Vector similarity search. Returns list of result structs with score + payload.
 
   Options:
