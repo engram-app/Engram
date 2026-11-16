@@ -1541,22 +1541,21 @@ class CdpClient:
         js = f"""
         (function() {{
             const se = {ENGINE_PATH};
-            se._origPushNote = se.api.pushNote.bind(se.api);
-            se._origPushNotesBatch = se.api.pushNotesBatch.bind(se.api);
-            se._origDeleteNote = se.api.deleteNote.bind(se.api);
-            se._origPushAttachment = se.api.pushAttachment.bind(se.api);
-            se._origDeleteAttachment = se.api.deleteAttachment.bind(se.api);
-            se._origHealth = se.api.health.bind(se.api);
             const fail = async () => {{ throw new Error('simulated offline'); }};
-            se.api.pushNote = fail;
-            // pushNotesBatch (POST /notes/batch, protocol rev #557) is a SEPARATE
-            // method — without overriding it too, multi-file pushes that coalesce
-            // into a batch bypass the simulation, the real call succeeds, and the
-            // engine flips back online (goOnline) so it never goes offline (#635).
-            se.api.pushNotesBatch = fail;
-            se.api.deleteNote = fail;
-            se.api.pushAttachment = fail;
-            se.api.deleteAttachment = fail;
+            // Every REST write the plugin has. Each is stubbed only if this
+            // build has it: `pushNotesBatch` (POST /notes/batch, #557) is gone
+            // from the plugin, and `.bind` on it threw, so this helper failed
+            // on every build. While it exists it must be stubbed too, or a
+            // coalesced batch push bypasses the simulation and flips the
+            // engine back online (#635). `renameAttachment` is Engram-obsidian#689.
+            se._origApi = {{}};
+            for (const m of ['pushNote', 'pushNotesBatch', 'deleteNote', 'pushAttachment',
+                             'deleteAttachment', 'renameAttachment']) {{
+                if (typeof se.api[m] !== 'function') continue;
+                se._origApi[m] = se.api[m].bind(se.api);
+                se.api[m] = fail;
+            }}
+            se._origHealth = se.api.health.bind(se.api);
             se.api.health = async () => false;
             // Drive the REAL offline transition deterministically instead of
             // waiting for the engine to react to a failed push. The engine
@@ -1585,17 +1584,9 @@ class CdpClient:
         js = f"""
         (function() {{
             const se = {ENGINE_PATH};
-            if (se._origPushNote) se.api.pushNote = se._origPushNote;
-            if (se._origPushNotesBatch) se.api.pushNotesBatch = se._origPushNotesBatch;
-            if (se._origDeleteNote) se.api.deleteNote = se._origDeleteNote;
-            if (se._origPushAttachment) se.api.pushAttachment = se._origPushAttachment;
-            if (se._origDeleteAttachment) se.api.deleteAttachment = se._origDeleteAttachment;
+            for (const [m, f] of Object.entries(se._origApi || {{}})) se.api[m] = f;
             if (se._origHealth) se.api.health = se._origHealth;
-            delete se._origPushNote;
-            delete se._origPushNotesBatch;
-            delete se._origDeleteNote;
-            delete se._origPushAttachment;
-            delete se._origDeleteAttachment;
+            delete se._origApi;
             delete se._origHealth;
             // Drive the REAL online transition: clears `offline` (so file
             // events stop being re-enqueued mid-flush), stops the health-check
