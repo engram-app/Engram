@@ -1285,10 +1285,17 @@ defmodule Engram.Attachments do
       |> unwrap_tenant()
       |> case do
         {:ok, {count, moved}} ->
-          Enum.each(moved, fn {item, att} ->
-            broadcast_attachment(user.id, vault.id, "delete", item.old_path, att)
-            broadcast_attachment(user.id, vault.id, "upsert", item.new_path, att)
-          end)
+          # After the commit, like the notes leg: inside a folder rename this
+          # lands after that op's `folder_changed`, so a client sees the folder
+          # move before its files (#2523). With no enclosing transaction it
+          # runs at once.
+          :ok =
+            Repo.after_commit(fn ->
+              Enum.each(moved, fn {item, att} ->
+                broadcast_attachment(user.id, vault.id, "delete", item.old_path, att)
+                broadcast_attachment(user.id, vault.id, "upsert", item.new_path, att)
+              end)
+            end)
 
           {:ok, count}
 

@@ -47,6 +47,32 @@ defmodule Engram.Folders.WireTest do
   defp nudge?({"note_changed", p}), do: not Map.has_key?(p, "id") and not Map.has_key?(p, :id)
   defp nudge?(_), do: false
 
+  # A cascade's per-file events: attachments carry `kind`, notes only an id.
+  defp att?({"note_changed", %{"kind" => "attachment"}}), do: true
+  defp att?(_), do: false
+  defp note?({"note_changed", %{"id" => _} = p}), do: not Map.has_key?(p, "kind")
+  defp note?(_), do: false
+
+  defp put_att!(user, vault, path) do
+    {:ok, _} =
+      Engram.Attachments.upsert_attachment(user, vault, %{
+        "path" => path,
+        "content_base64" => Base.encode64("x")
+      })
+
+    flush_broadcasts()
+  end
+
+  # A note and an attachment under `folder`, with their own events drained.
+  defp put_note_and_att!(user, vault, folder) do
+    {:ok, _} =
+      Engram.Notes.upsert_note(user, vault, %{"path" => "#{folder}/n.md", "content" => "x"},
+        actor: "api"
+      )
+
+    put_att!(user, vault, "#{folder}/a.png")
+  end
+
   defp folder_changed(events), do: for({"folder_changed", p} <- events, do: p)
   defp nudges(events), do: events |> Enum.filter(&nudge?/1) |> Enum.map(&elem(&1, 1))
 
@@ -231,6 +257,50 @@ defmodule Engram.Folders.WireTest do
     test "rename returns the op's seq", %{user: user, vault: vault} do
       assert {:ok, %{seq: seq}} = Folders.rename(user, vault, "A", "A2")
       assert seq == Engram.Vaults.current_seq(user.id, vault.id)
+    end
+
+    # #2523: a plugin follows the move as ONE op only if `folder_changed`
+    # lands before any per-file event of that move.
+    test "folder_changed is the first event of a rename, before note and attachment legs",
+         %{user: user, vault: vault} do
+      put_note_and_att!(user, vault, "A")
+
+      assert {:ok, %{attachments: 1}} = Folders.rename(user, vault, "A", "B/A")
+      events = broadcasts()
+
+      assert [{"folder_changed", _} | rest] = events
+      assert Enum.any?(rest, &att?/1)
+      assert Enum.any?(rest, &note?/1)
+    end
+
+    test "folder_changed is the first event of a batch move too", %{user: user, vault: vault} do
+      put_note_and_att!(user, vault, "A")
+
+      assert {:ok, %{attachments: 1}} =
+               Folders.batch_move(user, vault, [id_of(user, vault, "A")], {:path, "B"})
+
+      assert [{"folder_changed", _} | rest] = broadcasts()
+      assert Enum.any?(rest, &att?/1)
+    end
+
+    test "a rename that rolls back emits no attachment events", %{user: user, vault: vault} do
+      put_note_and_att!(user, vault, "A")
+      put_att!(user, vault, "A2/a.png")
+
+      assert {:error, :conflict} = Folders.rename(user, vault, "A", "A2")
+      assert broadcasts() == []
+    end
+
+    test "a plain attachment batch move still emits its pair once, after commit",
+         %{user: user, vault: vault} do
+      put_att!(user, vault, "A/a.png")
+
+      assert {:ok, %{moved: 1}} = Engram.Attachments.batch_move(user, vault, ["A/a.png"], "B")
+
+      assert [
+               {"note_changed", %{"event_type" => "delete", "path" => "A/a.png"}},
+               {"note_changed", %{"event_type" => "upsert", "path" => "B/a.png"}}
+             ] = broadcasts()
     end
 
     test "a nudge path never ends in .md or .canvas", %{user: user, vault: vault} do
