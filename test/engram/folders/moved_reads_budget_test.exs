@@ -15,6 +15,9 @@ defmodule Engram.Folders.MovedReadsBudgetTest do
   @restore 53
 
   setup do
+    # Fresh node caches (as query_budget_test.exs), so the warm-up refills
+    # every entry and none expires before the measured call.
+    Engram.DataCase.clear_request_caches()
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user)
     %{user: user, vault: vault}
