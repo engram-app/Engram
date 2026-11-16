@@ -45,12 +45,16 @@ defmodule Engram.Links do
   alias Engram.Batch
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Folders.WalkSql
   alias Engram.Links.NoteLink
   alias Engram.Links.Parser
   alias Engram.Logger.DecryptFailure
   alias Engram.Notes.Keys
+  alias Engram.Notes.Location
   alias Engram.Notes.Note
   alias Engram.Repo
+
+  require WalkSql
 
   @typedoc "A candidate set indexed by `index_candidates/1`."
   @type candidate_index :: %{
@@ -612,11 +616,19 @@ defmodule Engram.Links do
         basename_hmac: n.basename_hmac,
         path_ciphertext: n.path_ciphertext,
         path_nonce: n.path_nonce,
-        dek_version: n.dek_version
+        dek_version: n.dek_version,
+        # Where the row is (S5, `shown_paths/2`).
+        vault_id: n.vault_id,
+        deleted_at: n.deleted_at,
+        folder_ref_id: n.folder_ref_id,
+        name_ciphertext: n.name_ciphertext,
+        name_nonce: n.name_nonce,
+        name_stamp: n.name_stamp,
+        moved__: fragment(WalkSql.moved(), type(^vault.id, Ecto.UUID))
       }
     )
     |> Repo.all(skip_tenant_check: true)
-    |> decrypt_and_group(dek, :notes)
+    |> then(&decrypt_and_group(&1, dek, :notes, shown_paths(user, &1)))
   end
 
   defp fetch_candidates_by_hmac(user, vault, hmacs, :attachments, dek) do
@@ -633,7 +645,21 @@ defmodule Engram.Links do
       }
     )
     |> Repo.all(skip_tenant_check: true)
-    |> decrypt_and_group(dek, :attachments)
+    |> decrypt_and_group(dek, :attachments, %{})
+  end
+
+  # S5: `%{id => path}` for the candidates under a folder moved without a
+  # cascade, where their folder rows put them (`Location.listing_paths/2`):
+  # their stored paths are the old ones. The moved-vault probe rides the
+  # candidate read (`moved__`), so a vault with no such folder reads nothing
+  # more; a moved one reads its chains once.
+  defp shown_paths(user, rows) do
+    with true <- Location.moved?(rows),
+         [_ | _] = chains <- Location.chains(rows) do
+      Location.listing_paths(user, {rows, chains})
+    else
+      _ -> %{}
+    end
   end
 
   # Takes the DEK rather than deriving it. Every caller reaches here from
@@ -648,9 +674,9 @@ defmodule Engram.Links do
   # observe: `index_candidates/1` sorts on `{String.length(path), path}`, and live rows in one
   # vault have distinct paths, so that ordering is total and no stable-sort tie
   # survives to break.
-  defp decrypt_and_group([], _dek, _table), do: %{}
+  defp decrypt_and_group([], _dek, _table, _shown), do: %{}
 
-  defp decrypt_and_group(rows, dek, table) do
+  defp decrypt_and_group(rows, dek, table, shown) do
     paths = decrypt_column(rows, dek, table, :path, &{&1.path_ciphertext, &1.path_nonce})
 
     rows
@@ -659,7 +685,8 @@ defmodule Engram.Links do
       {_row, nil}, acc ->
         acc
 
-      {row, path}, acc ->
+      {row, stored}, acc ->
+        path = Map.get(shown, row.id, stored)
         Map.update(acc, row.basename_hmac, [{row.id, path}], &[{row.id, path} | &1])
     end)
   end
@@ -1250,7 +1277,9 @@ defmodule Engram.Links do
 
     raw =
       for {table, tag} <- [notes: 1, attachments: 2], into: %{} do
-        {table, rows |> Enum.filter(&(&1.table == tag)) |> decrypt_and_group(dek, table)}
+        part = Enum.filter(rows, &(&1.table == tag))
+        shown = if table == :notes, do: shown_paths(user, part), else: %{}
+        {table, decrypt_and_group(part, dek, table, shown)}
       end
 
     indexed = index_groups(raw)
@@ -1353,7 +1382,15 @@ defmodule Engram.Links do
           basename_hmac: c.basename_hmac,
           path_ciphertext: c.path_ciphertext,
           path_nonce: c.path_nonce,
-          dek_version: c.dek_version
+          dek_version: c.dek_version,
+          # Where the row is (S5, `shown_paths/2`).
+          vault_id: c.vault_id,
+          deleted_at: c.deleted_at,
+          folder_ref_id: c.folder_ref_id,
+          name_ciphertext: c.name_ciphertext,
+          name_nonce: c.name_nonce,
+          name_stamp: c.name_stamp,
+          moved__: fragment(WalkSql.moved(), type(^vault_id, Ecto.UUID))
         }
       )
 
@@ -1405,7 +1442,15 @@ defmodule Engram.Links do
           basename_hmac: c.basename_hmac,
           path_ciphertext: c.path_ciphertext,
           path_nonce: c.path_nonce,
-          dek_version: c.dek_version
+          dek_version: c.dek_version,
+          # Where the row is (S5, `shown_paths/2`).
+          vault_id: c.vault_id,
+          deleted_at: c.deleted_at,
+          folder_ref_id: c.folder_ref_id,
+          name_ciphertext: c.name_ciphertext,
+          name_nonce: c.name_nonce,
+          name_stamp: c.name_stamp,
+          moved__: fragment(WalkSql.moved(), type(^vault_id, Ecto.UUID))
         }
       )
 

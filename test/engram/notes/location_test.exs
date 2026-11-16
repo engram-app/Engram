@@ -80,6 +80,15 @@ defmodule Engram.Notes.LocationTest do
     ])
   end
 
+  # The note's OWN chain moved without a cascade (the folder keeps its name,
+  # so the note is shown at its stored path): only such a note answers by
+  # name, the rule the output paths use (second review of #2610).
+  defp move_chain!(user, vault, folder) do
+    sql!("UPDATE folders SET notes_cascaded = false WHERE id = $1", [
+      dump(folder_id(user, vault, folder))
+    ])
+  end
+
   # Incompressible, so its stored size is its length.
   defp random_text(n),
     do: n |> :crypto.strong_rand_bytes() |> Base.encode64() |> binary_part(0, n)
@@ -128,7 +137,7 @@ defmodule Engram.Notes.LocationTest do
 
     test "no row holds the path in a moved vault: the folder chain and the name find the note",
          %{user: u, vault: v, note: note} do
-      mark_moved!(u, v)
+      move_chain!(u, v, "A/B")
       corrupt_path_key!(note.id)
       assert found(u, v, "A/B/x.md") == note.id
       assert Notes.note_exists?(u, v, "A/B/x.md")
@@ -137,13 +146,15 @@ defmodule Engram.Notes.LocationTest do
       assert found(u, v, "A/B/x.md") == nil
     end
 
-    test "a folder moved with no cascade: found at the new path, and at the stored one",
+    test "a folder moved with no cascade: found at the new path, not at the stored one",
          %{user: u, vault: v, note: note} do
       move_folder_row!(u, folder_id(u, v, "A/B"), "C")
 
       assert found(u, v, "A/C/x.md") == note.id
-      # Writers still cascade, so the stored path stays authoritative.
-      assert found(u, v, "A/B/x.md") == note.id
+      # S5: an uncascaded move is the real move, so the stored path is the
+      # OLD one and no longer answers for the note (S3 kept it, because its
+      # writers still cascaded).
+      assert found(u, v, "A/B/x.md") == nil
       # The note reads back at the path it was found at.
       assert {:ok, %{path: "A/C/x.md", folder: "A/C"}} = Notes.get_note(u, v, "A/C/x.md")
 
@@ -153,7 +164,7 @@ defmodule Engram.Notes.LocationTest do
 
     test "the name is exact: another case of the same name is a different path",
          %{user: u, vault: v, note: note} do
-      mark_moved!(u, v)
+      move_chain!(u, v, "A/B")
       corrupt_path_key!(note.id)
       assert found(u, v, "A/B/x.md") == note.id
       assert found(u, v, "A/B/X.md") == nil
@@ -276,11 +287,18 @@ defmodule Engram.Notes.LocationTest do
       assert found(u, v, "A/B/x.md") == note.id
     end
 
+    test "in a vault moved elsewhere a drift row is not found by name",
+         %{user: u, vault: v, note: note} do
+      mark_moved!(u, v)
+      assert found(u, v, "Z/x.md") == nil
+      assert found(u, v, "A/B/x.md") == note.id
+    end
+
     test "in a moved vault two name matches and no holder give the lowest id",
          %{user: u, vault: v, note: note} do
       other = note!(u, v, "Z/x.md")
       corrupt_path_key!(other.id)
-      mark_moved!(u, v)
+      move_chain!(u, v, "Z")
       assert found(u, v, "Z/x.md") == Enum.min([note.id, other.id])
     end
 
@@ -289,7 +307,7 @@ defmodule Engram.Notes.LocationTest do
     test "in a moved vault a rename onto a name-matched path conflicts before any claim",
          %{user: u, vault: v} do
       _ = note!(u, v, "D/o.md")
-      mark_moved!(u, v)
+      move_chain!(u, v, "Z")
       me = self()
       id = "orphan-claim-#{System.unique_integer()}"
 

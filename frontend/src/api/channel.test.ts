@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	__resetNoteChangeBatch,
 	backfillStructural,
+	handleFolderChanged,
 	handleFoldersBatch,
 	handleNoteChanged,
 	handleNotesBatch,
@@ -231,6 +232,20 @@ describe("handleFoldersBatch", () => {
 		const qc = mockQueryClient();
 		handleFoldersBatch({ op: "create", folder: "New/Empty" }, qc, "7");
 		expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["vault-tree", "7"] });
+	});
+});
+
+// From S5 (Engram#2523) a folder rename or move made elsewhere arrives as ONE
+// `folder_changed`, never as one note_changed per note: every note under it
+// changed path, so the tree and the open notes must be re-read.
+describe("handleFolderChanged", () => {
+	it("refetches the tree and the notes under a moved folder", () => {
+		const qc = mockQueryClient();
+		handleFolderChanged({ folder_id: "f", parent_id: null, name: "B", seq: 9 }, qc, "7");
+		const keys = qc.invalidateQueries.mock.calls.map((c) => c[0].queryKey);
+		expect(keys).toContainEqual(["vault-tree", "7"]);
+		expect(keys).toContainEqual(["note", "7"]);
+		expect(keys).toContainEqual(["folderNotes", "7"]);
 	});
 });
 

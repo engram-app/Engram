@@ -45,12 +45,32 @@ defmodule Engram.Folders.WalkSql do
   @moved "EXISTS (SELECT 1 FROM folders m WHERE m.vault_id = ? AND NOT m.notes_cascaded " <>
            "AND m.deleted_at IS NULL)"
 
+  # S5: whether a folder on the chain of `ref` (a folder id: a column or a
+  # `?`) was renamed without a cascade, walking UP `parent_id` from it on the
+  # primary key, O(depth), stopping at the first such folder. A note under
+  # one keeps its OLD stored path, so its stored path key must not answer for
+  # it: the path is shown where the folder row puts it (`Location`). Any
+  # other row, drift included, is still at its stored path.
+  moved_chain = fn ref ->
+    "EXISTS (WITH RECURSIVE up(parent_id, moved, d) AS (" <>
+      "SELECT f.parent_id, NOT f.notes_cascaded, 0 FROM folders f WHERE f.id = " <>
+      ref <>
+      " AND f.deleted_at IS NULL" <>
+      " UNION ALL SELECT f.parent_id, NOT f.notes_cascaded, up.d + 1 FROM folders f " <>
+      "JOIN up ON f.id = up.parent_id WHERE NOT up.moved AND up.d < 512" <>
+      " AND f.deleted_at IS NULL" <>
+      ") SELECT 1 FROM up WHERE up.moved)"
+  end
+
   # The note a path's folder row and name name: `notes.name_key` (the
   # casefolded name hash plus the folder row's id, kept by the
   # `notes_set_name_key` trigger, NULL unless the name keys are current)
   # against the walk's folder with the asked name's hash, on
   # `notes_name_key_live`, the exact name, and no live note holding the
-  # path (`holder`). The lowest id of the matches, so one row, never two.
+  # path (`holder`), and only a note whose own chain moved (`moved_chain`):
+  # the one rule the output paths use, so a drift row (folder ref and stored
+  # path disagree, chain not moved) answers only at its stored path. The
+  # lowest id of the matches, so one row, never two.
   # Only when the vault holds a folder moved without a cascade: otherwise
   # NULL, and neither the walk nor the probe runs.
   #
@@ -62,18 +82,25 @@ defmodule Engram.Folders.WalkSql do
       " THEN (SELECT m.id FROM notes m WHERE m.vault_id = ? AND m.name_key = (" <>
       @walk <>
       " SELECT ? || uuid_send(w.id) FROM w WHERE w.i = ?) AND m.name_hmac = ? " <>
-      "AND m.deleted_at IS NULL AND m.kind = 'note' AND NOT EXISTS (" <>
+      "AND m.deleted_at IS NULL AND m.kind = 'note' AND " <>
+      moved_chain.("m.folder_ref_id") <>
+      " AND NOT EXISTS (" <>
       holder <> ") ORDER BY m.id LIMIT 1) END)"
   end
 
+  @moved_chain moved_chain.("?")
+
+  # A holder whose own chain moved holds only a stale key (above).
+  @here "AND (p.folder_ref_id IS NULL OR NOT " <> moved_chain.("p.folder_ref_id") <> ")"
+
   @by_id name_match.(
            "SELECT 1 FROM notes p WHERE p.vault_id = ? AND p.path_id = ? " <>
-             "AND p.deleted_at IS NULL AND NOT p.is_folder"
+             "AND p.deleted_at IS NULL AND NOT p.is_folder " <> @here
          )
 
   @by_hmac name_match.(
              "SELECT 1 FROM notes p WHERE p.vault_id = ? AND p.path_hmac = ? " <>
-               "AND p.deleted_at IS NULL AND p.kind = 'note'"
+               "AND p.deleted_at IS NULL AND p.kind = 'note' " <> @here
            )
 
   # Many paths in one statement: their distinct prefixes as a trie, one row
@@ -135,4 +162,11 @@ defmodule Engram.Folders.WalkSql do
 
   @doc "`EXISTS` a live folder of the vault renamed without a cascade (param: vault id)."
   defmacro moved, do: @moved
+
+  @doc """
+  `EXISTS` a folder renamed without a cascade on the chain of the folder id
+  given (param: the id, usually a note's `folder_ref_id` column): its notes'
+  stored paths are stale (S5). O(depth) primary-key probes.
+  """
+  defmacro moved_chain, do: @moved_chain
 end

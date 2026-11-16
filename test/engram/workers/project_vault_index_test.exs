@@ -1104,4 +1104,58 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       100 -> acc
     end
   end
+
+  # S5 readers (Engram#2523): a folder moved without a cascade leaves its
+  # notes' stored paths old while the index room holds their NEW paths (the
+  # writer's re-claim, or a plugin's own re-key). Projection must compare
+  # against where the note is shown, or it would write every moved note's
+  # row back: the cascade again, one rename (and link chain) per note.
+  test "S5: an entry at a moved note's shown path writes nothing", ctx do
+    n = note(ctx, "A/x.md")
+
+    folder =
+      Repo.with_tenant!(ctx.user.id, fn ->
+        Engram.Folders.Rows.ids_by_path(ctx.user, ctx.vault.id, ["A"])
+      end)["A"]
+
+    Engram.FolderRows.move_uncascaded!(ctx.user, folder, "B")
+
+    row = fn ->
+      Repo.with_tenant!(ctx.user.id, fn ->
+        Repo.one(
+          from(r in Engram.Notes.Note,
+            where: r.id == ^n.id,
+            select: {r.path_hmac, r.seq, r.version, r.updated_at}
+          )
+        )
+      end)
+    end
+
+    before = row.()
+    :ok = seed_index(ctx, [{"B/x.md", n.id}])
+
+    me = self()
+    id = "s5-projection-#{System.unique_integer()}"
+
+    :telemetry.attach(
+      id,
+      [:engram, :crdt, :index_projection],
+      fn _, m, _, _ -> if Map.has_key?(m, :conflict), do: send(me, {:projected, m}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+
+    assert :ok =
+             perform_job(ProjectVaultIndex, %{
+               "user_id" => ctx.user.id,
+               "vault_id" => ctx.vault.id
+             })
+
+    # A no-op: neither a rename (a write) nor a conflict (the stored path
+    # answering for the moved note, re-logged on every pass).
+    assert_received {:projected, %{applied: 0, conflict: 0}}
+    assert row.() == before
+    assert path_of(ctx, n.id) == "B/x.md"
+  end
 end

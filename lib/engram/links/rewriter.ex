@@ -64,6 +64,7 @@ defmodule Engram.Links.Rewriter do
     CrdtUpdateLog,
     Enqueue,
     Keys,
+    Location,
     Note,
     NoteBody
   }
@@ -258,18 +259,23 @@ defmodule Engram.Links.Rewriter do
   # A row that is gone or fails to decrypt is absent (`:target_gone`).
   defp current_paths(_user, _vault, _kind, []), do: %{}
 
+  # Where each note is shown (`Location.paths/2`): under a folder moved
+  # without a cascade (S5) its stored path is the old one, and rewriting a
+  # link to it would write the old path back.
   defp current_paths(user, vault, :note, ids) do
-    user
-    |> scoped_rows(
-      from(n in Note,
-        where:
-          n.id in ^ids and n.user_id == ^user.id and n.vault_id == ^vault.id and
-            n.kind == "note" and is_nil(n.deleted_at),
-        # The path only: never the body.
-        select: struct(n, ^Note.path_fields())
+    rows =
+      scoped_rows(
+        user,
+        from(n in Note,
+          where:
+            n.id in ^ids and n.user_id == ^user.id and n.vault_id == ^vault.id and
+              n.kind == "note" and is_nil(n.deleted_at),
+          # The path and location columns only: never the body.
+          select: struct(n, ^Enum.uniq(Note.path_fields() ++ Location.fields()))
+        )
       )
-    )
-    |> decrypted_paths(user, &Crypto.maybe_decrypt_note_fields/2)
+
+    for {id, path} when is_binary(path) <- Location.paths(user, rows), into: %{}, do: {id, path}
   end
 
   # Scoped for the same reason as the `:note` clause above, and with the same
@@ -362,6 +368,38 @@ defmodule Engram.Links.Rewriter do
       distinct: [asc: a.path_hmac],
       order_by: [desc: a.seq]
     )
+  end
+
+  @doc """
+  S5 (a folder moved without a cascade, so no rename tombstone):
+  `%{old_path_hmac => old path}` for `entries` (`%{id, path_hmac}`) still
+  under folder `folder_id`: its OLD path `old_folder` plus where each note
+  sits under the folder now. A note no longer under it, or whose rebuilt
+  path does not hash to its entry's (it moved since), is left out. One folder
+  path read and one note read. Plaintext stays in memory here, never in args.
+  """
+  @spec folder_move_old_paths(map(), map(), Ecto.UUID.t(), String.t(), [map()]) :: %{
+          binary() => String.t()
+        }
+  def folder_move_old_paths(user, vault, folder_id, old_folder, entries) do
+    with {:ok, now} <-
+           Repo.with_tenant!(user.id, fn ->
+             Engram.Folders.Rows.path_by_id(user, vault.id, folder_id)
+           end),
+         {:ok, fk} <- Crypto.dek_filter_key(user),
+         {:ok, by_id} <- Notes.get_note_meta_by_ids(user, vault, Enum.map(entries, & &1.id)) do
+      prefix = now <> "/"
+
+      for e <- entries,
+          shown = by_id[e.id] && by_id[e.id].path,
+          is_binary(shown) and String.starts_with?(shown, prefix),
+          old = old_folder <> "/" <> String.replace_prefix(shown, prefix, ""),
+          Crypto.hmac_field(fk, old) == e.path_hmac,
+          into: %{},
+          do: {e.path_hmac, old}
+    else
+      _ -> %{}
+    end
   end
 
   @doc """
