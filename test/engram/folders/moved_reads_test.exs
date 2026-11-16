@@ -255,6 +255,16 @@ defmodule Engram.Folders.MovedReadsTest do
     end
   end
 
+  # Delta check of #2610: delete-wins answers before the occupancy check, so
+  # a stale device still trashes its copy (`recently_deleted`).
+  test "a re-create at its own just-deleted path stays recently_deleted when taken",
+       %{user: u, vault: v} do
+    gone = put!(u, v, "Other/q.md", "gone")
+    :deleted = Notes.delete_note_reporting(u, v, "Other/q.md")
+    _taker = put!(u, v, "Other/q.md", "taker")
+    assert {:error, :recently_deleted} = Notes.genesis_crdt_note(u, v, gone.id, "Other/q.md")
+  end
+
   # Another live note keyed or named where `id` is shown.
   defp live_at_name?(user, vault, id) do
     {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0, limit: 500)

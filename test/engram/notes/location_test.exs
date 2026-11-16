@@ -287,6 +287,13 @@ defmodule Engram.Notes.LocationTest do
       assert found(u, v, "A/B/x.md") == note.id
     end
 
+    test "in a vault moved elsewhere a drift row is not found by name",
+         %{user: u, vault: v, note: note} do
+      mark_moved!(u, v)
+      assert found(u, v, "Z/x.md") == nil
+      assert found(u, v, "A/B/x.md") == note.id
+    end
+
     test "in a moved vault two name matches and no holder give the lowest id",
          %{user: u, vault: v, note: note} do
       other = note!(u, v, "Z/x.md")

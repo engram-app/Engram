@@ -1620,7 +1620,7 @@ defmodule Engram.Notes do
   # transaction.
   @spec free_stale_slot(map(), Ecto.UUID.t(), String.t(), Ecto.UUID.t() | nil, non_neg_integer()) ::
           :freed | :none
-  def free_stale_slot(user, vault_id, path, except \\ nil, depth \\ 8)
+  def free_stale_slot(user, vault_id, path, except \\ nil, depth \\ 64)
   def free_stale_slot(_user, _vault_id, _path, _except, 0), do: :none
 
   def free_stale_slot(user, vault_id, path, except, depth) do
@@ -2358,72 +2358,80 @@ defmodule Engram.Notes do
     end
   end
 
-  # A live note SHOWN at the target (by name under a moved folder, which no
-  # unique key holds) is a conflict, as a keyed holder is.
-  defp genesis_resurrect_decrypted(prior, user, vault, sanitized_path, folder, origin, recording) do
-    case located_ids_at(user, vault, [sanitized_path]) do
-      {%{^sanitized_path => other}, _named?} when other != prior.id ->
-        {:error, :id_conflict, prior}
-
-      _ ->
-        resurrect_decrypted(prior, user, vault, sanitized_path, folder, origin, recording)
+  defp shown_by_other?(user, vault, path, id) do
+    case located_ids_at(user, vault, [path]) do
+      {%{^path => other}, _named?} -> other != id
+      _ -> false
     end
   end
 
-  defp resurrect_decrypted(prior, user, vault, sanitized_path, folder, origin, recording) do
+  defp genesis_resurrect_decrypted(prior, user, vault, sanitized_path, folder, origin, recording) do
     # FIX 1 — delete-wins (#970): a tombstone re-created at its OWN path within
     # the delete window is a stale device un-deleting a note another device
     # deleted. Mirror the REST upsert_pathless guard EXACTLY — refuse so the
     # delete stands; the client trashes its local copy on `recently_deleted`.
     # A rename (different path) lands outside this guard and resurrects below.
-    if recent_same_path_tombstone?(prior, sanitized_path, user) do
-      {:error, :recently_deleted}
-    else
-      # FIX 7 — did the path change? A rename restore must broadcast the
-      # new-path upsert so peers converge; a same-path resurrect is covered by
-      # announce_ready discovery alone. Decide by the decrypted prior path.
-      renamed? = prior.path != sanitized_path
+    cond do
+      recent_same_path_tombstone?(prior, sanitized_path, user) ->
+        {:error, :recently_deleted}
 
-      base_attrs = %{
-        content: prior.content,
-        title: prior.title,
-        tags: prior.tags,
-        content_hash: prior.content_hash,
-        mtime: prior.mtime
-      }
+      # A live note SHOWN at the target (by name under a moved folder, which
+      # no unique key holds) is a conflict, as a keyed holder is. Only in a
+      # vault holding such a folder (one probe otherwise).
+      Location.named?(user.id, vault.id) and
+          shown_by_other?(user, vault, sanitized_path, prior.id) ->
+        {:error, :id_conflict, prior}
 
-      case move_note(prior, base_attrs, user, sanitized_path, folder, "sync", recording) do
-        {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
-          case Crypto.maybe_decrypt_note_fields(updated, user) do
-            {:ok, decrypted} ->
-              # #648 Phase 2 — a resurrect-rename IS a rename (move_note over a
-              # tombstoned row), so it owes the same server-side link rewrite
-              # genesis_relocate_live enqueues, under the same one-rewriter
-              # gate. Same in-txn, never-raises discipline; the old path rides
-              # as AAD-bound ciphertext because move_note repointed the row and
-              # left no old-path tombstone for the worker to read.
-              _ =
-                if renamed? and crdt_rename_rewrites?(origin) do
-                  enqueue_crdt_rename_rewrite(user, vault, decrypted.id, prior.path)
-                end
+      true ->
+        resurrect_move(prior, user, vault, sanitized_path, folder, origin, recording)
+    end
+  end
 
-              # A rename-restore carries the OLD (tombstone) path so peers clear
-              # it; a same-path resurrect just announces.
-              tag = if renamed?, do: {:announce_moved, prior.path}, else: :announce
-              {:ok, decrypted, tag}
+  defp resurrect_move(prior, user, vault, sanitized_path, folder, origin, recording) do
+    # FIX 7 — did the path change? A rename restore must broadcast the
+    # new-path upsert so peers converge; a same-path resurrect is covered by
+    # announce_ready discovery alone. Decide by the decrypted prior path.
+    renamed? = prior.path != sanitized_path
 
-            {:error, reason} ->
-              log_resurrect_decrypt_failure(reason, user, updated)
-              {:error, reason}
-          end
+    base_attrs = %{
+      content: prior.content,
+      title: prior.title,
+      tags: prior.tags,
+      content_hash: prior.content_hash,
+      mtime: prior.mtime
+    }
 
-        {:error, _} = err ->
-          err
+    case move_note(prior, base_attrs, user, sanitized_path, folder, "sync", recording) do
+      {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
+        case Crypto.maybe_decrypt_note_fields(updated, user) do
+          {:ok, decrypted} ->
+            # #648 Phase 2 — a resurrect-rename IS a rename (move_note over a
+            # tombstoned row), so it owes the same server-side link rewrite
+            # genesis_relocate_live enqueues, under the same one-rewriter
+            # gate. Same in-txn, never-raises discipline; the old path rides
+            # as AAD-bound ciphertext because move_note repointed the row and
+            # left no old-path tombstone for the worker to read.
+            _ =
+              if renamed? and crdt_rename_rewrites?(origin) do
+                enqueue_crdt_rename_rewrite(user, vault, decrypted.id, prior.path)
+              end
 
-        # See genesis_relocate_live: move_note can now lose its snapshot fence.
-        :stale_snapshot ->
-          {:error, :stale_snapshot}
-      end
+            # A rename-restore carries the OLD (tombstone) path so peers clear
+            # it; a same-path resurrect just announces.
+            tag = if renamed?, do: {:announce_moved, prior.path}, else: :announce
+            {:ok, decrypted, tag}
+
+          {:error, reason} ->
+            log_resurrect_decrypt_failure(reason, user, updated)
+            {:error, reason}
+        end
+
+      {:error, _} = err ->
+        err
+
+      # See genesis_relocate_live: move_note can now lose its snapshot fence.
+      :stale_snapshot ->
+        {:error, :stale_snapshot}
     end
   end
 
@@ -4746,22 +4754,25 @@ defmodule Engram.Notes do
   defp note_ids_at(_user, _vault, []), do: %{}
 
   defp note_ids_at(user, vault, paths) do
-    # In a vault holding a folder moved without a cascade, the shown paths:
-    # a stale key is no holder (`here`), and for a few paths a name match is
-    # one (`located_ids_at/3`, one folder walk per path).
-    # ponytail: a name-only occupant is checked for up to @located_cap paths;
-    # a bigger batch (a cascade claim, a large restore) checks stored keys
-    # only. Bulk name checks need one walk per distinct folder, not per path.
-    named? = Location.named?(user.id, vault_id(vault))
-
-    if named? and length(paths) <= @located_cap do
-      with {held, _named?} <- located_ids_at(user, vault, paths), do: held
+    # In a vault holding a folder moved without a cascade, the shown paths
+    # (`located_ids_at/3`): a stale key is no holder, a name match is. One
+    # folder walk per path, so @located_cap paths per statement (a bigger
+    # statement plans slowly and nears the bind-parameter cap).
+    if Location.named?(user.id, vault_id(vault)) do
+      paths
+      |> Enum.chunk_every(@located_cap)
+      |> Enum.reduce_while(%{}, fn chunk, acc ->
+        case located_ids_at(user, vault, chunk) do
+          {:error, _} = err -> {:halt, err}
+          {held, _named?} -> {:cont, Map.merge(acc, held)}
+        end
+      end)
     else
-      stored_ids_at(user, vault, paths, named?)
+      stored_ids_at(user, vault, paths)
     end
   end
 
-  defp stored_ids_at(user, vault, paths, named?) do
+  defp stored_ids_at(user, vault, paths) do
     case Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
         by_hmac = Map.new(paths, fn path -> {Crypto.hmac_field(filter_key, path), path} end)
@@ -4773,16 +4784,6 @@ defmodule Engram.Notes do
             where: ^Keys.in_any(:path, hmacs, ids?),
             select: {n.path_hmac, n.id}
           )
-
-        query =
-          if named?,
-            do:
-              where(
-                query,
-                [n],
-                is_nil(n.folder_ref_id) or not fragment(WalkSql.moved_chain(), n.folder_ref_id)
-              ),
-            else: query
 
         rows = Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
 
@@ -9108,8 +9109,9 @@ defmodule Engram.Notes do
            false,
            mode: :savepoint,
            folder_refs: refs,
-           # The plan already skipped every held path, a stale holder too.
-           free_slot: false,
+           # The plan counts a stale key as free (the shown-path rule), so
+           # the free re-paths its holder before the write takes the key.
+           free_slot: true,
            # restore_notes queues every restored note's jobs in one bulk insert.
            outbox: false
          ) do
