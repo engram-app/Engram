@@ -248,9 +248,13 @@ defmodule Engram.Folders do
 
       claim = fn -> Notes.claim_folder_rename(user, vault, old_folder, new_folder, precheck) end
 
+      # Read before the transaction: the fleet check is an erpc to every node,
+      # never to be held under the folder-write lock and a pooled connection.
+      stop? = WriteStop.on?()
+
       claimed_atomic(user, vault, claim, fn ->
         with :ok <- check_expected(user, vault, old_folder, new_folder, expect),
-             {:ok, notes, how} <- notes_leg(user, vault, old_folder, new_folder),
+             {:ok, notes, how} <- notes_leg(user, vault, old_folder, new_folder, stop?),
              :ok <- move_bare_row(user, vault, old_folder, new_folder, notes, how, expect),
              {:ok, atts} <- Attachments.move_folder_pairs(user, vault, att_pairs) do
           seq = Wire.changed(user, vault, [new_folder], opts[:origin_device_id])
@@ -264,9 +268,9 @@ defmodule Engram.Folders do
   # serve the op; else, or with it off, the cascade. Attachments still move
   # row by row either way (`move_folder_pairs/3`): their readers read stored
   # paths.
-  defp notes_leg(user, vault, old, new) do
+  defp notes_leg(user, vault, old, new, stop?) do
     uncascaded =
-      if WriteStop.on?(),
+      if stop?,
         do: Notes.rename_folder_uncascaded(user, vault, old, new),
         else: :cascade
 

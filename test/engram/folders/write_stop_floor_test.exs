@@ -10,22 +10,22 @@ defmodule Engram.Folders.WriteStopFloorTest do
   # change `@s4_plugin` to it.
   use EngramWeb.ConnCase, async: true
 
+  alias Engram.Folders.WriteStop
   alias Engram.PluginVersion
   alias Engram.Release.Floor
 
-  # release-please's next minor after 1.39.3 for plugin PR 689's `feat:`.
-  @s4_plugin "1.40.0"
-  # The first release that reads folders by their chain (Gap A) and carries
-  # the S4.5 plugin floor. Set to the real S4.5 tag when it is cut.
-  @s4_5_release "release-v0.86.0"
-
-  test "a rollback cannot land below S4.5" do
-    assert Floor.at_least?(@s4_5_release)
+  # One source of truth: the constants the gate itself reads.
+  test "a rollback cannot land below the S5 readers release" do
+    assert Floor.at_least?(WriteStop.reads_release())
   end
 
   test "plugins without folder ops are refused, the S4 plugin is not" do
     refute PluginVersion.supported?("1.39.3")
-    assert PluginVersion.supported?(@s4_plugin)
+    assert PluginVersion.supported?(WriteStop.s4_plugin())
+  end
+
+  test "the write stop's floor check passes as prod runs it" do
+    assert WriteStop.floors?(:enforce)
   end
 
   describe "the HTTP seam" do

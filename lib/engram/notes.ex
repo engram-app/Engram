@@ -7955,8 +7955,11 @@ defmodule Engram.Notes do
          # stored-folder filter dropped may still name this folder by
          # reference, and would move silently. The cascade decides it.
          [] <- drift do
-      :ok = key_names(user, vault, notes)
-      move_folder_row(user, vault, folder_id, {old_folder, new_folder}, notes, markers)
+      case key_names(user, vault, notes) do
+        :ok -> move_folder_row(user, vault, folder_id, {old_folder, new_folder}, notes, markers)
+        # A row the trigger cannot key (no name hash): only the cascade moves it.
+        :unkeyed -> :cascade
+      end
     else
       {:error, _} = err -> err
       _ -> :cascade
@@ -7985,15 +7988,20 @@ defmodule Engram.Notes do
           )
         )
 
-      if unkeyed != [] do
+      if unkeyed == [] do
+        :ok
+      else
         Repo.update_all(
           from(n in Note, where: n.id in ^unkeyed, update: [set: [name_stamp: n.name_stamp]]),
           []
         )
+
+        still =
+          Repo.exists?(from(n in Note, where: n.id in ^unkeyed and fragment("name_key IS NULL")))
+
+        if still, do: :unkeyed, else: :ok
       end
     end)
-
-    :ok
   end
 
   defp move_folder_row(user, vault, folder_id, {old_folder, new_folder}, notes, markers) do
@@ -8020,44 +8028,100 @@ defmodule Engram.Notes do
 
     with :ok <- claimed,
          {:ok, :ok} <-
-           write_folder_row(user, vault, folder_id, {old_folder, new_folder}, marker_rows, links) do
+           write_claimed(
+             user,
+             vault,
+             folder_id,
+             {old_folder, new_folder},
+             notes,
+             {marker_rows, links},
+             claims
+           ) do
       # Counted as the cascade counts: every row under the folder, markers
       # included (REST and MCP answer 404 for 0).
       {:ok, length(notes) + length(markers)}
     else
+      # A benign race (a folder appeared at the target, a note under this one
+      # was written after the scan): the cascade runs instead and re-claims.
+      {:ok, {:error, reason}} when reason in [:merge, :raced] ->
+        :cascade
+
       {:ok, {:error, reason}} ->
         # The claim committed but no row moved: report it, as the cascade
         # does (projection converges the map back to the rows).
         _ = orphan_claim(user, vault, length(claims), reason)
-        if reason == :merge, do: :cascade, else: {:error, reason}
+        {:error, reason}
 
       {:error, _} = err ->
         err
     end
   end
 
-  # Under the vault seq lock: one seq, the folder row, the markers, the link
-  # chain. Returns `{:ok, :ok}` or `{:ok, {:error, reason}}`.
-  defp write_folder_row(user, vault, folder_id, {old_folder, new_folder}, marker_rows, links) do
+  # The row write after a committed claim, reported like the cascade's if it
+  # raises (`orphan_claim/4`).
+  defp write_claimed(user, vault, folder_id, folders, notes, {marker_rows, links}, claims) do
+    write_folder_row(user, vault, folder_id, folders, notes, marker_rows, links)
+  rescue
+    e ->
+      _ = orphan_claim(user, vault, length(claims), e)
+      reraise e, __STACKTRACE__
+  end
+
+  # Under the vault seq lock: one seq, then a re-check that nothing under the
+  # folder changed since the scan (a note written there since has a higher
+  # seq, and so does a scanned note written, moved out or deleted since; such
+  # a note would miss the claim and the link targets), then the folder row,
+  # the markers, the link chain. Returns `{:ok, :ok}` or `{:ok, {:error, _}}`.
+  defp write_folder_row(
+         user,
+         vault,
+         folder_id,
+         {old_folder, new_folder},
+         notes,
+         marker_rows,
+         links
+       ) do
     Repo.with_tenant(user.id, fn ->
       seq = Engram.Vaults.next_seq!(vault.id)
 
-      case Rows.rename(user, vault.id, old_folder, new_folder, uncascaded: seq) do
-        :ok ->
-          BulkRename.update!(marker_rows, @marker_rename_cols, seq, DateTime.utc_now())
+      with false <- raced?(user, vault, old_folder, notes),
+           :ok <- Rows.rename(user, vault.id, old_folder, new_folder, uncascaded: seq) do
+        BulkRename.update!(marker_rows, @marker_rename_cols, seq, DateTime.utc_now())
 
-          user.id
-          |> RewriteNoteLinks.new_for_folder(vault.id, links,
-            folder_move: folder_move_args(user, folder_id, old_folder)
-          )
-          |> Enqueue.enqueue_all("rewrite_note_links")
+        user.id
+        |> RewriteNoteLinks.new_for_folder(vault.id, links,
+          folder_move: folder_move_args(user, folder_id, old_folder)
+        )
+        |> Enqueue.enqueue_all("rewrite_note_links")
 
-          :ok
-
-        {:error, _} = err ->
-          err
+        :ok
+      else
+        true -> {:error, :raced}
+        {:error, _} = err -> err
       end
     end)
+  end
+
+  # Two indexed probes: notes under the subtree (`notes_folder_ref_live`)
+  # above the scan's seq, and the scanned notes by primary key.
+  defp raced?(user, vault, old_folder, notes) do
+    max_seq = notes |> Enum.map(& &1.seq) |> Enum.max(fn -> 0 end)
+    ids = Enum.map(notes, & &1.id)
+    refs = user |> Rows.subtree_refs(vault.id, [old_folder]) |> Enum.map(& &1.id)
+
+    Repo.exists?(
+      from(n in Note,
+        where:
+          n.vault_id == ^vault.id and is_nil(n.deleted_at) and n.kind == "note" and
+            n.folder_ref_id in ^refs and n.seq > ^max_seq
+      )
+    ) or
+      (ids != [] and
+         Repo.exists?(
+           from(n in Note,
+             where: n.id in ^ids and (n.seq > ^max_seq or not is_nil(n.deleted_at))
+           )
+         ))
   end
 
   # The folder's old path rides the link chain once, as user-DEK ciphertext

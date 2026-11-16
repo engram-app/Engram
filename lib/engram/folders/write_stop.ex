@@ -45,6 +45,14 @@ defmodule Engram.Folders.WriteStop do
   @reads_release "release-v0.87.0"
   @s4_plugin "1.40.0"
 
+  @doc "The first release with the S5 readers: the rollback floor must reach it."
+  @spec reads_release() :: String.t()
+  def reads_release, do: @reads_release
+
+  @doc "The first plugin that learns folder moves from `folder_changed`: the plugin floor must reach it."
+  @spec s4_plugin() :: String.t()
+  def s4_plugin, do: @s4_plugin
+
   @doc "Whether folder renames and moves write one folder row (see the moduledoc)."
   @spec on?() :: boolean()
   def on? do
@@ -53,9 +61,9 @@ defmodule Engram.Folders.WriteStop do
   end
 
   @doc "Whether the rollback and plugin floors cover the S5 readers and the S4 plugin."
-  @spec floors?() :: boolean()
-  def floors? do
-    Application.get_env(:engram, :write_stop_floors, :enforce) == :assume or
+  @spec floors?(:assume | :enforce) :: boolean()
+  def floors?(mode \\ Application.get_env(:engram, :write_stop_floors, :enforce)) do
+    mode == :assume or
       (Floor.at_least?(@reads_release) and
          Version.compare(Version.parse!(PluginVersion.minimum()), Version.parse!(@s4_plugin)) !=
            :lt)
