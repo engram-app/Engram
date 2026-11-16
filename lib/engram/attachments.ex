@@ -1184,10 +1184,10 @@ defmodule Engram.Attachments do
   Moves each attachment into `target_folder` (\"\" = root). All-or-nothing: any
   conflict/not_found rolls back every prior move's DB write.
 
-  Caveat: each `move_attachment` broadcasts its `note_changed` events as its own
-  inner transaction commits, BEFORE the outer rollback can fire — so a later
-  failure can't retract earlier items' broadcasts. Clients self-heal on the next
-  pull. Same trade-off as `Notes.rename_folder`; not worth deferring broadcasts.
+  Each moved item's `note_changed` delete+upsert pair fires once, after the
+  move commits (`Repo.after_commit/1`), and never on a rollback. Inside a
+  folder rename or batch move (`Engram.Folders`) the pairs go out after that
+  op's `folder_changed`.
   """
   @spec batch_move(map(), map(), [String.t()], String.t()) ::
           {:ok, %{moved: non_neg_integer()}} | {:error, {atom(), String.t()} | term()}
