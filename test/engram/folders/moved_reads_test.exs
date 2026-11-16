@@ -285,6 +285,19 @@ defmodule Engram.Folders.MovedReadsTest do
     end
   end
 
+  # Re-review of #2610 (M1): the self-skip applies at the top of the chain
+  # walk only, so a chain through the note being written frees it too.
+  test "a moved note moves into a folder reusing a moved folder's old name",
+       %{user: u, vault: v, notes: ns} do
+    k = put!(u, v, "C/n1.md", "k")
+    FolderRows.move_uncascaded!(u, folder_id(u, v, "C"), "A")
+    assert {:ok, %{id: id}} = Notes.genesis_crdt_note(u, v, ns[1].id, "C/n1.md")
+    assert id == ns[1].id
+    assert {:ok, %{id: ^id}} = Notes.get_note(u, v, "C/n1.md")
+    assert {:ok, %{id: kid, content: "k"}} = Notes.get_note(u, v, "A/n1.md")
+    assert kid == k.id
+  end
+
   # Another live note keyed or named where `id` is shown.
   defp live_at_name?(user, vault, id) do
     {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0, limit: 500)
