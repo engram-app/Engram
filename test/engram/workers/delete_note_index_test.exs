@@ -54,14 +54,57 @@ defmodule Engram.Workers.DeleteNoteIndexTest do
     )
   end
 
-  test "returns the Qdrant error so Oban retries, keeping the rows", %{
-    bypass: bypass,
-    note: note
-  } do
+  # A Qdrant outage (5xx, connection refused) snoozes: three attempts with
+  # Oban's backoff burn in under a minute, and a discard left the rows and
+  # points until OrphanSweep's next daily pass. A refusal (4xx) still fails.
+  test "snoozes on a Qdrant 5xx, keeping the rows", %{bypass: bypass, note: note} do
     Bypass.expect(bypass, fn conn ->
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.send_resp(500, ~s({"status":{"error":"boom"}}))
+    end)
+
+    assert {:snooze, _} = perform_job(DeleteNoteIndex, args(note))
+    assert chunk_count(note) == 1
+  end
+
+  # Snoozes cost no attempt, so an outage that never clears would snooze
+  # forever and alert nothing, and the open job would block OrphanSweep's
+  # re-enqueue. Past the cap it fails: Oban records the error, retries, then
+  # discards, and the sweep's daily step re-queues the note (see
+  # orphan_sweep_trashed_index_test, "whose delete job was discarded").
+  test "a 5xx that never clears fails after the snooze cap", %{bypass: bypass, note: note} do
+    Bypass.expect(bypass, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(500, ~s({"status":{"error":"boom"}}))
+    end)
+
+    capped = %{"snoozed" => DeleteNoteIndex.max_snoozes()}
+
+    {result, log} =
+      ExUnit.CaptureLog.with_log(fn -> perform_job(DeleteNoteIndex, args(note), meta: capped) end)
+
+    assert {:error, _} = result
+    assert log =~ "delete_note_index snooze cap reached"
+    assert chunk_count(note) == 1
+
+    below = %{"snoozed" => DeleteNoteIndex.max_snoozes() - 1}
+    assert {:snooze, _} = perform_job(DeleteNoteIndex, args(note), meta: below)
+  end
+
+  test "snoozes when Qdrant is unreachable", %{bypass: bypass, note: note} do
+    Bypass.down(bypass)
+
+    assert {:snooze, _} = perform_job(DeleteNoteIndex, args(note))
+    assert chunk_count(note) == 1
+  end
+
+  test "returns a Qdrant 4xx so Oban retries, keeping the rows", %{bypass: bypass, note: note} do
+    Bypass.expect(bypass, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(400, ~s({"status":{"error":"bad request"}}))
     end)
 
     assert {:error, _} = perform_job(DeleteNoteIndex, args(note))
@@ -92,7 +135,7 @@ defmodule Engram.Workers.DeleteNoteIndexTest do
       |> Plug.Conn.send_resp(500, ~s({"status":{"error":"boom"}}))
     end)
 
-    assert {:error, _} = perform_job(DeleteNoteIndex, args(note))
+    assert {:snooze, _} = perform_job(DeleteNoteIndex, args(note))
 
     assert Repo.aggregate(
              from(l in Engram.Links.NoteLink, where: l.source_note_id == ^note.id),
@@ -123,5 +166,36 @@ defmodule Engram.Workers.DeleteNoteIndexTest do
     # No Bypass.expect: any Qdrant call fails the test.
     assert :ok = perform_job(DeleteNoteIndex, args(note))
     assert chunk_count(note) == 1
+  end
+
+  # A restore can land after the job's unlocked "still trashed" check, while
+  # the Qdrant delete runs, and an embed can stamp the restored note before
+  # the chunk rows go. Deleting them then left a live note with no points,
+  # no chunk rows and `embed_hash` stamped: nothing ever re-indexed it. The
+  # chunk-row transaction re-checks under the note's row lock; a live note
+  # keeps its rows and is flagged for re-embed.
+  test "a restore during the Qdrant delete keeps the rows and re-indexes", %{
+    bypass: bypass,
+    note: note
+  } do
+    Bypass.expect(bypass, fn conn ->
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        [set: [deleted_at: nil, embed_hash: "stamped"]],
+        skip_tenant_check: true
+      )
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result":{"status":"completed"}}))
+    end)
+
+    assert :ok = perform_job(DeleteNoteIndex, args(note))
+    assert chunk_count(note) == 1
+
+    assert Repo.one(
+             from(n in Engram.Notes.Note, where: n.id == ^note.id, select: n.embed_hash),
+             skip_tenant_check: true
+           ) == nil
   end
 end

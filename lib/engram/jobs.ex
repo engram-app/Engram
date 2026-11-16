@@ -90,6 +90,10 @@ defmodule Engram.Jobs do
     ],
     Engram.Workers.ConnectionCreated => [keys: [:user_id, :client_id], period: 30 * 24 * 3600],
     Engram.Workers.DailySnapshot => [period: 3000],
+    # OrphanSweep's re-enqueue of a stranded trashed-note delete only
+    # (`DeleteNoteIndex.job(note, dedupe: true)`): one open job per note. A
+    # completed or discarded one does not block it.
+    Engram.Workers.DeleteNoteIndex => [keys: [:note_id], period: :infinity, states: :incomplete],
     Engram.Workers.DataMigrationsRunner => [period: 3000, states: :incomplete],
     Engram.Workers.DrainStrandedTails => [period: 600, states: :incomplete],
     Engram.Workers.EmbedNote => [period: 60, keys: [:note_id], states: :incomplete],

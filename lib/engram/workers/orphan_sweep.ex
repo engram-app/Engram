@@ -10,8 +10,9 @@ defmodule Engram.Workers.OrphanSweep do
   Sweeps in sequence:
 
     1. Build authoritative user_id set from `users` (alive + soft-deleted).
-    2. Qdrant — scroll all points; group by payload `user_id`; for each
-       user_id NOT in the live set, call `Qdrant.delete_by_user/2`.
+    2. Qdrant: facet the indexed tenant key `u` (plus legacy points that
+       carry only `user_id`); for each user_id NOT in the live set, call
+       `Qdrant.delete_by_user/2`.
     3. S3 — list bucket with `delimiter: "/"` to get user_id prefixes;
        for each prefix NOT in the live set, call `Storage.delete_prefix/1`.
     4. Qdrant points — scroll every point id; delete the ones no
@@ -36,14 +37,20 @@ defmodule Engram.Workers.OrphanSweep do
   alias Engram.Indexing
   alias Engram.Logger.Metadata
   alias Engram.Maintenance.Cursor
+  alias Engram.Notes.Chunk
+  alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Storage
+  alias Engram.Vaults.Vault
   alias Engram.Vector.FilterId
+  alias Engram.Vector.PayloadKeys
   alias Engram.Vector.PointIds
   alias Engram.Vector.Qdrant
+  alias Engram.Workers.DeleteNoteIndex
 
   require Logger
 
+  # Page of the legacy-only (`is_empty(u)`) tenant scroll.
   @qdrant_scroll_limit 500
   # The point pass fetches ids only — no payload, no vectors — so a page is
   # ~36 bytes an id and can be far larger than the payload-carrying scroll
@@ -62,6 +69,9 @@ defmodule Engram.Workers.OrphanSweep do
   @max_candidates 50_000
   @points_cursor "orphan_sweep:points"
   @chunks_cursor "orphan_sweep:chunks"
+  @trashed_cursor "orphan_sweep:trashed"
+  # Trashed notes examined per run: one `notes_path_tomb` page.
+  @trashed_page 1000
   # Above this share of the scanned collection, the diff is telling us the
   # authority is wrong, not that the points are strays. See `runaway?/2`.
   @max_candidate_ratio 0.10
@@ -109,6 +119,7 @@ defmodule Engram.Workers.OrphanSweep do
     s3_deleted = sweep_s3(live_ids)
     points_deleted = sweep_point_orphans()
     notes_flagged = sweep_missing_points(force: Map.get(args, "force", false))
+    index_requeued = requeue_trashed_index()
     # Frontmatter keys no note uses any more: frees per-user cap space (ids
     # are never reused, see `FrontmatterKeys.reap_unused/1`).
     keys_reaped = Engram.Notes.FrontmatterKeys.reap_unused()
@@ -120,6 +131,7 @@ defmodule Engram.Workers.OrphanSweep do
         s3_prefixes_swept: s3_deleted,
         qdrant_points_swept: points_deleted,
         notes_flagged_for_reindex: notes_flagged,
+        trashed_index_requeued: index_requeued,
         frontmatter_keys_reaped: keys_reaped
       },
       %{}
@@ -134,6 +146,7 @@ defmodule Engram.Workers.OrphanSweep do
           s3_prefixes_swept: s3_deleted,
           qdrant_points_swept: points_deleted,
           notes_flagged_for_reindex: notes_flagged,
+          trashed_index_requeued: index_requeued,
           frontmatter_keys_reaped: keys_reaped
         }
       )
@@ -601,51 +614,148 @@ defmodule Engram.Workers.OrphanSweep do
   defp max_missing_candidates,
     do: Application.get_env(:engram, :orphan_sweep_max_missing_candidates, @max_candidates)
 
-  defp live_user_ids do
+  defp live_user_ids(ids \\ nil) do
     # Includes soft-deleted users (deleted_at IS NOT NULL but row exists) —
     # they are the InactivityCleanup ladder's responsibility, not ours.
     #
     # On the maintenance pool even though `users` carries no RLS today, because
     # this is the most destructive authority read in the file and the safety of
     # reading it on the app pool is a fact stored in another module. Its two
-    # consumers diff against it and then delete with NO runaway guard at all:
-    # `sweep_qdrant/1` drops a whole user's vectors, `sweep_s3/1` drops a whole
-    # user's attachment prefix. An empty result deletes every user's data in one
-    # tick. Adding `users` to `@tenant_tables` would make that real and no test
-    # here would catch it, so the pool choice does not depend on that staying
-    # true.
-    maintenance_repo().all(from(u in User, select: u.id)) |> MapSet.new()
+    # consumers diff against it and then delete: `sweep_qdrant/1` drops a whole
+    # user's vectors, `sweep_s3/1` a whole user's attachment prefix, both
+    # behind `delete_departed/4`. An empty result would make every user look
+    # departed.
+    # Adding `users` to `@tenant_tables` would make that real and no test here
+    # would catch it, so the pool choice does not depend on that staying true.
+    #
+    # `ids` re-reads only those users (`sweep_qdrant/1`'s candidates, one
+    # bounded `IN` query), so a signup that committed after the full read is
+    # still live. Ids that are not UUIDs cannot name a user.
+    query = from(u in User, select: u.id)
+
+    query =
+      if ids,
+        do: where(query, [u], u.id in ^Enum.filter(ids, &match?({:ok, _}, Ecto.UUID.cast(&1)))),
+        else: query
+
+    query |> maintenance_repo().all() |> MapSet.new(&user_key/1)
   end
+
+  # -- Trashed notes still indexed ------------------------------------------
+
+  # `DeleteNoteIndex` gives up after `max_attempts`. A trashed note whose job
+  # was discarded keeps its chunk rows and points, and the point pass keeps
+  # any point a chunk row names, so nothing else ever cleans them. Re-enqueue
+  # the job (unique per note) for trashed notes that still have chunk rows.
+  #
+  # Constant per run: one page along the partial index `notes_path_tomb`
+  # (`(vault_id, path_id, seq) WHERE deleted_at IS NOT NULL`) from a
+  # persisted cursor, then `idx_chunks_note` and vault primary-key lookups
+  # for that page only. A short page wraps. Notes in a soft-deleted vault
+  # are `CleanupVault`'s (the 30-day restore window), so they are skipped.
+  #
+  # A re-queued delete of an old trashed note never reaches a newer note at
+  # the same path: per-note deletes match by note id `n` only (R3b).
+  defp requeue_trashed_index do
+    page = trashed_page(Cursor.get(@trashed_cursor))
+
+    if length(page) < trashed_page_size() do
+      :ok = Cursor.reset(@trashed_cursor)
+    else
+      last = List.last(page)
+
+      :ok =
+        Cursor.put(@trashed_cursor, %{
+          "vault_id" => last.vault_id,
+          "path_id" => last.path_id,
+          "seq" => last.seq
+        })
+    end
+
+    page
+    |> stranded_index()
+    |> Enum.count(fn note ->
+      match?(
+        {:ok, %Oban.Job{conflict?: false}},
+        Oban.insert(DeleteNoteIndex.job(note, dedupe: true))
+      )
+    end)
+  end
+
+  # ponytail: a row whose path_id or seq is NULL never compares greater than
+  # the cursor, so it is skipped. path_id is derived from path_hmac by
+  # trigger and seq is NOT NULL, so only a note with no path_hmac (which
+  # `DeleteNoteIndex` cannot clean anyway) falls there.
+  defp trashed_page(cursor) do
+    repo = maintenance_repo()
+
+    Repo.cross_tenant(fn ->
+      Note
+      |> where([n], not is_nil(n.deleted_at) and n.kind == "note")
+      |> after_trashed(cursor)
+      |> order_by([n], asc: n.vault_id, asc: n.path_id, asc: n.seq)
+      |> limit(^trashed_page_size())
+      |> select([n], map(n, [:id, :user_id, :vault_id, :path_id, :seq, :path_hmac]))
+      |> repo.all()
+    end)
+  end
+
+  defp after_trashed(query, nil), do: query
+
+  defp after_trashed(query, %{"vault_id" => v, "path_id" => p, "seq" => s}) do
+    where(
+      query,
+      [n],
+      fragment(
+        "(?, ?, ?) > (?, ?, ?)",
+        n.vault_id,
+        n.path_id,
+        n.seq,
+        type(^v, :binary_id),
+        type(^p, :binary_id),
+        ^s
+      )
+    )
+  end
+
+  defp stranded_index(page) do
+    notes = Enum.filter(page, &is_binary(&1.path_hmac))
+
+    case notes do
+      [] ->
+        []
+
+      notes ->
+        repo = maintenance_repo()
+        note_ids = Enum.map(notes, & &1.id)
+        vault_ids = notes |> Enum.map(& &1.vault_id) |> Enum.uniq()
+
+        {indexed, dead_vaults} =
+          Repo.cross_tenant(fn ->
+            {from(c in Chunk, where: c.note_id in ^note_ids, distinct: true, select: c.note_id)
+             |> repo.all()
+             |> MapSet.new(),
+             from(v in Vault,
+               where: v.id in ^vault_ids and not is_nil(v.deleted_at),
+               select: v.id
+             )
+             |> repo.all()
+             |> MapSet.new()}
+          end)
+
+        Enum.filter(notes, &(&1.id in indexed and &1.vault_id not in dead_vaults))
+    end
+  end
+
+  defp trashed_page_size,
+    do: Application.get_env(:engram, :orphan_sweep_trashed_page, @trashed_page)
 
   # -- Qdrant --------------------------------------------------------------
 
   defp sweep_qdrant(live_ids) do
     case discover_qdrant_user_ids() do
       {:ok, qdrant_ids} ->
-        orphans = MapSet.difference(qdrant_ids, live_ids)
-
-        Enum.reduce(orphans, 0, fn user_id, acc ->
-          case Qdrant.delete_by_user(user_id) do
-            :ok ->
-              Logger.debug(
-                "orphan_sweep deleted Qdrant points",
-                Metadata.with_category(:debug, :oban, user_id: user_id)
-              )
-
-              acc + 1
-
-            other ->
-              Logger.error(
-                "orphan_sweep Qdrant delete failed",
-                Metadata.with_category(:error, :oban,
-                  user_id: user_id,
-                  reason: Metadata.safe_reason(other)
-                )
-              )
-
-              acc
-          end
-        end)
+        delete_departed(:qdrant, qdrant_ids, live_ids, &delete_tenant/1)
 
       {:error, reason} ->
         Logger.error(
@@ -657,14 +767,106 @@ defmodule Engram.Workers.OrphanSweep do
     end
   end
 
-  defp discover_qdrant_user_ids, do: scroll_qdrant_ids(nil, MapSet.new())
+  # The one gate for whole-user deletes (a tenant's vectors, an attachment
+  # prefix), which diff a store's ids against `users`. `found` maps each
+  # `user_key/1` to every spelling the store holds it under, which is what
+  # `delete_fun` is handed: a legacy `user_id` keyword match is exact, so an
+  # uppercase legacy spelling needs its own delete. Returns how many ids
+  # `delete_fun` removed (it answers 1 or 0 per id). The candidates are
+  # re-read from `users` right before deleting, so a signup that committed
+  # after the full read stays live.
+  defp delete_departed(store, found, live_ids, delete_fun) do
+    departed = found |> Map.keys() |> MapSet.new() |> MapSet.difference(live_ids)
+    total = map_size(found)
 
-  defp scroll_qdrant_ids(offset, acc) do
+    cond do
+      MapSet.size(departed) == 0 ->
+        0
+
+      implausible_departures?(departed, total) ->
+        Logger.error(
+          "orphan_sweep aborting #{store}: departed share implies a bad authority",
+          Metadata.with_category(:error, :oban,
+            total_count: MapSet.size(departed),
+            result: %{store: store, scanned: total, max_ratio: @max_candidate_ratio}
+          )
+        )
+
+        0
+
+      true ->
+        departed
+        |> MapSet.difference(live_user_ids(MapSet.to_list(departed)))
+        |> Enum.reduce(0, &(delete_fun.(Map.fetch!(found, &1)) + &2))
+    end
+  end
+
+  # Real departures are a few users. Over `runaway?/2`'s share, or (below
+  # its floor of 100, which leaves every small deployment open) two or more
+  # departed that are over half of all found, the `users` read is wrong: a
+  # restore, a repointed database. Deleting would drop live users' data.
+  defp implausible_departures?(departed, total) do
+    n = MapSet.size(departed)
+    runaway?(departed, total) or (n >= 2 and n * 2 > total)
+  end
+
+  # The one spelling every side of the diff is compared in: lowercase and
+  # dashed. Qdrant's `u` is undashed, a legacy `user_id` or an S3 prefix is
+  # whatever was written, `users.id` is Ecto's.
+  defp user_key(id), do: id |> String.downcase() |> FilterId.uuid() |> FilterId.dashed()
+
+  defp add_spelling(ids, uid),
+    do: Map.update(ids, user_key(uid), [uid], &Enum.uniq(&1 ++ [uid]))
+
+  # 1 when every spelling's delete succeeded.
+  defp delete_tenant(spellings) do
+    if Enum.all?(spellings, &(delete_spelling(&1) == :ok)), do: 1, else: 0
+  end
+
+  defp delete_spelling(user_id) do
+    case Qdrant.delete_by_user(user_id) do
+      :ok ->
+        Logger.debug(
+          "orphan_sweep deleted Qdrant points",
+          Metadata.with_category(:debug, :oban, user_id: user_id)
+        )
+
+        :ok
+
+      other ->
+        Logger.error(
+          "orphan_sweep Qdrant delete failed",
+          Metadata.with_category(:error, :oban,
+            user_id: user_id,
+            reason: Metadata.safe_reason(other)
+          )
+        )
+
+        :error
+    end
+  end
+
+  # Tenants come from the `u` index (one facet request), not from a scroll
+  # of every point's payload: in prod (2026-11-16, 1.35M points) that scroll
+  # was ~2.7k requests and ~550 MB of payload reads a run. Every point
+  # carries the indexed `u` since the n backfill; one written before `u`
+  # existed (a self-hoster skipping releases) has only `user_id`, which the
+  # facet cannot see. `scroll_legacy_ids/2` finds those: `is_empty(u)` reads
+  # only them, so with none it is one empty page.
+  defp discover_qdrant_user_ids do
+    with {:ok, tenants} <- Qdrant.facet_values(PayloadKeys.short(:user_id)) do
+      # A uuid index matches any spelling, so the canonical one is its own.
+      ids = Map.new(tenants, &{user_key(&1), [user_key(&1)]})
+
+      scroll_legacy_ids(nil, ids)
+    end
+  end
+
+  defp scroll_legacy_ids(offset, acc) do
     opts = [
-      filter: %{},
+      filter: %{must: [%{is_empty: %{key: PayloadKeys.short(:user_id)}}]},
       limit: @qdrant_scroll_limit,
-      # `u` is the v5 point's user id (undashed, `PayloadKeys`).
-      with_payload: ["user_id", "u"],
+      with_payload: ["user_id"],
       with_vector: false
     ]
 
@@ -673,15 +875,14 @@ defmodule Engram.Workers.OrphanSweep do
     case Qdrant.scroll(opts) do
       {:ok, %{points: points, next_page_offset: next}} ->
         acc =
-          Enum.reduce(points, acc, fn point, set ->
+          Enum.reduce(points, acc, fn point, ids ->
             case point["payload"] do
-              %{"user_id" => uid} when is_binary(uid) -> MapSet.put(set, uid)
-              %{"u" => uid} when is_binary(uid) -> MapSet.put(set, FilterId.dashed(uid))
-              _ -> set
+              %{"user_id" => uid} when is_binary(uid) -> add_spelling(ids, uid)
+              _ -> ids
             end
           end)
 
-        if next, do: scroll_qdrant_ids(next, acc), else: {:ok, acc}
+        if next, do: scroll_legacy_ids(next, acc), else: {:ok, acc}
 
       {:error, reason} ->
         {:error, reason}
@@ -693,30 +894,7 @@ defmodule Engram.Workers.OrphanSweep do
   defp sweep_s3(live_ids) do
     case discover_s3_user_prefixes() do
       {:ok, s3_ids} ->
-        orphans = MapSet.difference(s3_ids, live_ids)
-
-        Enum.reduce(orphans, 0, fn user_id, acc ->
-          case Storage.adapter().delete_prefix("#{user_id}/") do
-            {:ok, _count} ->
-              Logger.debug(
-                "orphan_sweep deleted S3 prefix",
-                Metadata.with_category(:debug, :oban, user_id: user_id)
-              )
-
-              acc + 1
-
-            other ->
-              Logger.error(
-                "orphan_sweep S3 delete failed",
-                Metadata.with_category(:error, :oban,
-                  user_id: user_id,
-                  reason: Metadata.safe_reason(other)
-                )
-              )
-
-              acc
-          end
-        end)
+        delete_departed(:s3, s3_ids, live_ids, &delete_prefix/1)
 
       {:error, reason} ->
         Logger.error(
@@ -728,9 +906,34 @@ defmodule Engram.Workers.OrphanSweep do
     end
   end
 
+  defp delete_prefix([user_id]) do
+    case Storage.adapter().delete_prefix("#{user_id}/") do
+      {:ok, _count} ->
+        Logger.debug(
+          "orphan_sweep deleted S3 prefix",
+          Metadata.with_category(:debug, :oban, user_id: user_id)
+        )
+
+        1
+
+      other ->
+        Logger.error(
+          "orphan_sweep S3 delete failed",
+          Metadata.with_category(:error, :oban,
+            user_id: user_id,
+            reason: Metadata.safe_reason(other)
+          )
+        )
+
+        0
+    end
+  end
+
   defp discover_s3_user_prefixes do
     case Storage.adapter().list_user_prefixes() do
-      {:ok, ids} -> {:ok, MapSet.new(ids)}
+      # Already canonical: the adapters cast each prefix through
+      # `Ecto.UUID.cast/1`, so S3 is one spelling per user.
+      {:ok, ids} -> {:ok, Map.new(ids, &{user_key(&1), [&1]})}
       {:error, _} = err -> err
     end
   end

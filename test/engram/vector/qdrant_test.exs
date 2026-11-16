@@ -649,6 +649,114 @@ defmodule Engram.Vector.QdrantTest do
     end
   end
 
+  # OrphanSweep's tenant discovery (prod 2026-11-16: the payload scroll it
+  # replaces was ~2.7k requests and ~550 MB of payload reads a run).
+  describe "facet_values/2" do
+    defp facet_hits(conn, values) do
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(
+        200,
+        Jason.encode!(%{
+          "result" => %{"hits" => Enum.map(values, &%{"value" => &1, "count" => 1})}
+        })
+      )
+    end
+
+    test "one exact facet request on the key, capped at max_page, no payload", %{
+      bypass: bypass
+    } do
+      test_pid = self()
+
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/facet", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:facet, Jason.decode!(body)})
+        facet_hits(conn, ["a", "b"])
+      end)
+
+      assert {:ok, ["a", "b"]} = Qdrant.facet_values("test_col", "u")
+      assert_received {:facet, body}
+      assert body == %{"key" => "u", "limit" => Qdrant.max_page(), "exact" => true}
+    end
+
+    # Qdrant facet has no offset. A full page may have cut values off, so the
+    # next request excludes every value already seen, in `max_ids/0` chunks
+    # (the Cloud `condition_max_size`), until a short page.
+    test "pages past a full response by excluding the values already seen", %{bypass: bypass} do
+      first = for i <- 1..Qdrant.max_page(), do: "v#{i}"
+      test_pid = self()
+
+      Bypass.expect(bypass, "POST", "/collections/test_col/facet", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+        send(test_pid, {:facet, decoded})
+
+        if decoded["filter"], do: facet_hits(conn, ["last"]), else: facet_hits(conn, first)
+      end)
+
+      assert {:ok, values} = Qdrant.facet_values("test_col", "u")
+      assert Enum.sort(values) == Enum.sort(["last" | first])
+
+      assert_received {:facet, first_body}
+      refute Map.has_key?(first_body, "filter")
+
+      assert_received {:facet, %{"filter" => %{"must_not" => conditions}}}
+      assert Enum.all?(conditions, &(&1["key"] == "u"))
+      assert Enum.all?(conditions, &(length(&1["match"]["any"]) <= Qdrant.max_ids()))
+      assert conditions |> Enum.flat_map(& &1["match"]["any"]) |> Enum.sort() == Enum.sort(first)
+    end
+
+    test "exactly max_page values costs one extra, empty request", %{bypass: bypass} do
+      first = for i <- 1..Qdrant.max_page(), do: "v#{i}"
+      count = :counters.new(1, [])
+
+      Bypass.expect(bypass, "POST", "/collections/test_col/facet", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        :counters.add(count, 1, 1)
+        facet_hits(conn, if(Jason.decode!(body)["filter"], do: [], else: first))
+      end)
+
+      assert {:ok, values} = Qdrant.facet_values("test_col", "u")
+      assert length(values) == Qdrant.max_page()
+      assert :counters.get(count, 1) == 2
+    end
+
+    # Exact facet counts only visible points, so an index entry left behind
+    # by deleted points answers count 0 (staging 2026-11-16: 4 such tenant
+    # ids). It is no value of the key. Hits come back count-descending, so a
+    # 0 means every later value is 0 too: the walk stops there, and no 0 is
+    # carried into the next page's exclusion list.
+    test "drops count-0 hits and stops paging at the first", %{bypass: bypass} do
+      live = for i <- 1..(Qdrant.max_page() - 2), do: "v#{i}"
+      count = :counters.new(1, [])
+
+      Bypass.expect(bypass, "POST", "/collections/test_col/facet", fn conn ->
+        {:ok, _body, conn} = Plug.Conn.read_body(conn)
+        :counters.add(count, 1, 1)
+
+        hits =
+          Enum.map(live, &%{"value" => &1, "count" => 3}) ++
+            [%{"value" => "gone1", "count" => 0}, %{"value" => "gone2"}]
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"hits" => hits}}))
+      end)
+
+      assert {:ok, values} = Qdrant.facet_values("test_col", "u")
+      assert Enum.sort(values) == Enum.sort(live)
+      assert :counters.get(count, 1) == 1
+    end
+
+    test "a non-200 is an error, never a partial set", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/facet", fn conn ->
+        Plug.Conn.send_resp(conn, 400, ~s({"status":{"error":"bad"}}))
+      end)
+
+      assert {:error, {:qdrant_facet, 400, _}} = Qdrant.facet_values("test_col", "u")
+    end
+  end
+
   describe "search_body/2 — body builder (no HTTP)" do
     test "sets with_vector when requested" do
       body = Qdrant.search_body(%{some: :vec}, user_id: "u1", with_vector: true)

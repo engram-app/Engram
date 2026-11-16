@@ -5749,17 +5749,10 @@ defmodule Engram.Notes do
     end)
   end
 
-  # T3.2 — base64 path_hmac, never plaintext. Single builder shared by
-  # delete_note/3, batch_delete_notes/3, and the folder-delete cascade so an
+  # Single builder (`DeleteNoteIndex.job/2`) shared by delete_note/3,
+  # batch_delete_notes/3, the folder-delete cascade and OrphanSweep, so an
   # arg change cannot drift between sites (silently orphaning Qdrant points).
-  defp delete_note_index_job(note) do
-    DeleteNoteIndex.new(%{
-      note_id: note.id,
-      user_id: note.user_id,
-      vault_id: note.vault_id,
-      path_hmac: Base.encode64(note.path_hmac)
-    })
-  end
+  defp delete_note_index_job(note), do: DeleteNoteIndex.job(note)
 
   @doc """
   Atomic batch move. Each note in `ids` is moved into the folder identified

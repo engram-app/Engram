@@ -63,6 +63,21 @@ defmodule Engram.QdrantStub do
     |> Plug.Conn.send_resp(200, ~s({"result": true}))
   end
 
+  @doc """
+  Answers `POST /collections/{col}/facet` with one hit per value in `values`
+  (OrphanSweep's tenant discovery, `Qdrant.facet_values/2`) and sends each
+  decoded request to the calling process as `{:qdrant_facet, body}`.
+  """
+  def stub_facet(bypass, col, values) do
+    test_pid = self()
+
+    Bypass.stub(bypass, "POST", "/collections/#{col}/facet", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:qdrant_facet, Jason.decode!(body)})
+      json(conn, %{"result" => %{"hits" => Enum.map(values, &%{"value" => &1, "count" => 1})}})
+    end)
+  end
+
   defp json(conn, body) do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")

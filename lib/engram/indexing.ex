@@ -1749,26 +1749,48 @@ defmodule Engram.Indexing do
   Remove all indexed data for a note (Qdrant points first, then Postgres
   chunks). The Qdrant filter keys off the note id `n`, never a path.
   """
-  def delete_note_index(note) do
+  #
+  # `trashed_only: true` (`Engram.Workers.DeleteNoteIndex`) re-checks under
+  # the note's row lock, in the transaction that drops the chunk rows, that
+  # the note is still trashed. A restore that landed after the caller's own
+  # unlocked check (during the Qdrant delete) finds the note live: its chunk
+  # rows stay and it is flagged for re-embed, so it can never end up live
+  # with no points, no rows and `embed_hash` stamped. A restore after this
+  # commits finds `embed_hash` already NULL (the trash cleared it) and is
+  # re-embedded by `ReconcileEmbeddings`. The Qdrant call stays outside the
+  # lock: holding a notes row lock across it would make a restore wait on a
+  # Qdrant brownout.
+  def delete_note_index(note, opts \\ []) do
     with :ok <- delete_note_points(note) do
       # Tenant-scoped: a DELETE is FILTERED by the policy rather than rejected,
       # so unscoped this removes nothing and reports success, leaving orphan
       # chunk rows naming points that are already gone from Qdrant.
       #
       # `note` may be a synthetic map here, not a Note struct (see
-      # `Engram.Workers.DeleteNoteIndex.perform/1`) — it carries `:user_id`,
+      # `Engram.Workers.DeleteNoteIndex.perform/1`) - it carries `:user_id`,
       # which is all this needs.
       {:ok, _} =
         Repo.with_tenant(note.user_id, fn ->
           :ok = ChunkRows.lock_notes!([note.id])
-          Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id))
-          _ = ChunkRows.recount!([note.id])
-          Repo.delete_all(from(p in ChunkPoint, where: p.note_id == ^note.id))
+
+          if Keyword.get(opts, :trashed_only, false) and live_note?(note.id) do
+            flag_notes_for_rebuild([note.id], Repo)
+          else
+            Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id))
+            _ = ChunkRows.recount!([note.id])
+            Repo.delete_all(from(p in ChunkPoint, where: p.note_id == ^note.id))
+          end
         end)
 
       :ok
     end
   end
+
+  defp live_note?(note_id),
+    do:
+      Repo.exists?(
+        from(n in Note, where: n.id == ^note_id and n.kind == "note" and is_nil(n.deleted_at))
+      )
 
   # Every Qdrant point a note could own, removed two ways.
   #

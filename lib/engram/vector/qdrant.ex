@@ -1143,7 +1143,20 @@ defmodule Engram.Vector.Qdrant do
   write is idempotent, so the retry is safe. The event was already emitted
   by the write.
   """
-  def wait_timeout_snooze, do: {:snooze, 30 + :rand.uniform(60)}
+  def wait_timeout_snooze, do: transient_snooze()
+
+  @doc """
+  The Oban answer for a Qdrant error worth waiting out
+  (`transient_error?/1`): the same jittered 31..90s snooze, so an outage
+  does not burn a worker's attempts.
+  """
+  def transient_snooze, do: {:snooze, 30 + :rand.uniform(60)}
+
+  @doc "True for an error reason a later try can clear: a Qdrant 5xx, or no connection."
+  @spec transient_error?(term()) :: boolean()
+  def transient_error?({status, _body}) when is_integer(status), do: status >= 500
+  def transient_error?(%Req.TransportError{}), do: true
+  def transient_error?(_reason), do: false
 
   @doc """
   True when disk or heap is within `QDRANT_PREFLIGHT_MARGIN_POINTS` (default
@@ -1579,6 +1592,67 @@ defmodule Engram.Vector.Qdrant do
           {:error, reason}
       end
     end)
+  end
+
+  @doc """
+  Every distinct value of the indexed payload `key` that some point still
+  holds (count above 0), read from its index
+  (`POST /collections/{col}/facet`, Qdrant >= 1.12; a uuid index answers
+  dashed). No point payload is read. `exact: true` because the approximate
+  facet samples once a segment holds many values and can miss rare ones.
+
+  Facet has no offset, so a full page (`max_page/0`, under the strict
+  `max_query_limit`) repeats with every value seen so far excluded, in
+  `max_ids/0` chunks (the strict `condition_max_size`), until a short page.
+  https://api.qdrant.tech/api-reference/points/facet
+  """
+  @spec facet_values(String.t() | nil, String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def facet_values(col \\ nil, key), do: facet_page(col || collection(), key, [])
+
+  # ponytail: one must_not condition per max_ids chunk, so the strict
+  # filter_max_conditions (64) caps this near 64 * max_ids (~131k values).
+  # Past that, page on a second indexed key.
+  defp facet_page(col, key, seen) do
+    body = %{key: key, limit: @max_page, exact: true}
+
+    body =
+      if seen == [],
+        do: body,
+        else:
+          Map.put(body, :filter, %{
+            must_not:
+              for(ids <- Enum.chunk_every(seen, @max_ids), do: %{key: key, match: match(ids)})
+          })
+
+    opts = [json: body, params: [timeout: server_timeout_s(:indexing)]] ++ req_opts()
+
+    result =
+      instrument(:facet, fn ->
+        case Req.post("#{base_url()}/collections/#{col}/facet", opts) do
+          {:ok, %{status: 200, body: %{"result" => %{"hits" => hits}}}} ->
+            {:ok, hits}
+
+          {:ok, %{status: status, body: body}} ->
+            {:error, {:qdrant_facet, status, body}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end)
+
+    # The exact facet counts visible points only, so an index entry left by
+    # deleted points answers count 0: no value of the key, dropped. Hits come
+    # count-descending, so after a 0 every value is 0 and the walk is done;
+    # a 0 never reaches the next page's exclusion list (or the strict
+    # condition cap).
+    with {:ok, hits} <- result do
+      {live, dead} = Enum.split_with(hits, &(is_integer(&1["count"]) and &1["count"] > 0))
+      seen = seen ++ Enum.map(live, & &1["value"])
+
+      if length(hits) < @max_page or dead != [],
+        do: {:ok, seen},
+        else: facet_page(col, key, seen)
+    end
   end
 
   @doc """
