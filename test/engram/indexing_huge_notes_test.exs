@@ -23,6 +23,8 @@ defmodule Engram.IndexingHugeNotesTest do
   import Engram.IndexingTestHelpers
   import Mox
 
+  require Logger
+
   alias Engram.Crypto
   alias Engram.Indexing
   alias Engram.KeywordIndex.QdrantSparse
@@ -114,6 +116,7 @@ defmodule Engram.IndexingHugeNotesTest do
     bypass = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
     Bypass.stub(bypass, :any, :any, &record_qdrant(&1, dir))
+    log_fake_qdrant_500s()
 
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user, is_default: true)
@@ -588,6 +591,28 @@ defmodule Engram.IndexingHugeNotesTest do
   # list and the keyword dims of upserted points are read back after the
   # measured call.
   # ---------------------------------------------------------------------------
+
+  # A `{500, ""}` with no crash log (main c8aec0027, 2026-11-15) is cowboy
+  # answering for a request process that exited `shutdown` or an idle timer.
+  # Log the request's cowboy events when it answers 5xx, so the next one shows
+  # its path, duration and body bytes read (printed only on a failure, under
+  # `capture_log`). Global, which `async: false` makes safe.
+  defp log_fake_qdrant_500s do
+    id = "huge-notes-500-#{System.unique_integer([:positive])}"
+    events = [[:cowboy, :request, :stop], [:cowboy, :request, :exception]]
+
+    :telemetry.attach_many(id, events, &log_fake_qdrant_500/4, nil)
+    on_exit(fn -> :telemetry.detach(id) end)
+  end
+
+  defp log_fake_qdrant_500(event, measurements, %{resp_status: status} = meta, _) do
+    if (is_integer(status) and status >= 500) or match?([_, _, :exception], event) do
+      Logger.warning(
+        "fake Qdrant #{inspect(status)} #{meta.req.method} #{meta.req.path} " <>
+          "#{inspect(Map.take(meta, [:error, :kind, :reason]))} #{inspect(measurements)}"
+      )
+    end
+  end
 
   defp record_qdrant(conn, dir) do
     file = Path.join(dir, "q-#{System.unique_integer([:positive, :monotonic])}.json")
