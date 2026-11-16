@@ -64,6 +64,7 @@ defmodule Engram.Links.Rewriter do
     CrdtUpdateLog,
     Enqueue,
     Keys,
+    Location,
     Note,
     NoteBody
   }
@@ -258,18 +259,23 @@ defmodule Engram.Links.Rewriter do
   # A row that is gone or fails to decrypt is absent (`:target_gone`).
   defp current_paths(_user, _vault, _kind, []), do: %{}
 
+  # Where each note is shown (`Location.paths/2`): under a folder moved
+  # without a cascade (S5) its stored path is the old one, and rewriting a
+  # link to it would write the old path back.
   defp current_paths(user, vault, :note, ids) do
-    user
-    |> scoped_rows(
-      from(n in Note,
-        where:
-          n.id in ^ids and n.user_id == ^user.id and n.vault_id == ^vault.id and
-            n.kind == "note" and is_nil(n.deleted_at),
-        # The path only: never the body.
-        select: struct(n, ^Note.path_fields())
+    rows =
+      scoped_rows(
+        user,
+        from(n in Note,
+          where:
+            n.id in ^ids and n.user_id == ^user.id and n.vault_id == ^vault.id and
+              n.kind == "note" and is_nil(n.deleted_at),
+          # The path and location columns only: never the body.
+          select: struct(n, ^Enum.uniq(Note.path_fields() ++ Location.fields()))
+        )
       )
-    )
-    |> decrypted_paths(user, &Crypto.maybe_decrypt_note_fields/2)
+
+    for {id, path} when is_binary(path) <- Location.paths(user, rows), into: %{}, do: {id, path}
   end
 
   # Scoped for the same reason as the `:note` clause above, and with the same

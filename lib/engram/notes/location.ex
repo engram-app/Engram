@@ -10,9 +10,13 @@ defmodule Engram.Notes.Location do
   With `on?/0`:
 
     * **by-path lookup** (`at/5`, `at_any/5`): in a vault `named?/2`
-      finds moved, ONE statement, `path_key OR id = <name match>`. A live
-      note whose stored path key is the asked path is that path's note,
-      always. Only in a vault holding a
+      finds moved, ONE statement, `(path_key AND here) OR id = <name match>`.
+      A live note whose stored path key is the asked path is that path's
+      note unless a folder on its own chain was renamed without a cascade
+      (`here`, S5: such a note keeps its old stored path, and must not
+      answer for it;
+      `Engram.Notes.free_stale_slot/3` frees that key for a writer that
+      wants it). Only in a vault holding a
       folder moved without a cascade (from S5 on, so never in S3 alone) and
       only when no row holds the path does the name answer: the folder part
       of the path is walked on `folders_live_name` (`Engram.Folders.WalkSql`,
@@ -63,6 +67,16 @@ defmodule Engram.Notes.Location do
 
   require NameKeys
   require WalkSql
+
+  @doc """
+  The S5 readers' capability level (Engram#2523): a node answering 1 reads,
+  writes next to, deletes and restores notes under a folder moved without
+  a cascade correctly. The S5 writer moves folders that way only while every
+  node answers it (`Engram.Cluster.Readiness.peers_report/4`); an older build
+  has no such function and counts as behind.
+  """
+  @spec s5_reads() :: 1
+  def s5_reads, do: 1
 
   @doc "The columns `paths/2` reads from a row, beside `id`, `vault_id`, `deleted_at` and the path."
   @spec fields() :: [:folder_ref_id | :name_ciphertext | :name_nonce | :name_stamp, ...]
@@ -170,9 +184,10 @@ defmodule Engram.Notes.Location do
   # drive none, and the lookup would read the whole vault
   # (docs/context/rls-leakproof-index-quals.md). Sent only for a vault
   # holding a folder moved without a cascade (`named?/2`), and matches only
-  # when no live note holds the path: until S5 writes one, a name match can
-  # only be drift, a row the user sees somewhere else, so every lookup,
-  # push, delete and CRDT create reads stored paths exactly as 0.83.0 did.
+  # when no live note holds the path (a holder whose own chain moved holds
+  # only a stale key, `WalkSql`). In a vault with no such folder,
+  # every lookup, push, delete and CRDT create reads stored paths exactly as
+  # 0.83.0 did.
   defp named(filter_key, vault_id, path, path_key, ids?) do
     case path |> String.split("/") |> Enum.split(-1) do
       {[], _root} ->
@@ -183,8 +198,23 @@ defmodule Engram.Notes.Location do
         hmac = Crypto.hmac_field(filter_key, path)
         ci = Name.ci_hmac(filter_key, name)
         exact = Name.hmac(filter_key, name)
-        dynamic([n], ^path_key or n.id == ^name_match(vault_id, segs, ci, exact, hmac, ids?))
+
+        dynamic(
+          [n],
+          (^path_key and ^here()) or
+            n.id == ^name_match(vault_id, segs, ci, exact, hmac, ids?)
+        )
     end
+  end
+
+  # S5: a row found by its stored path key is at that path unless a folder
+  # on its own chain was renamed without a cascade (then its stored path is
+  # the old one, and it is shown, and found by name, where its folder row
+  # puts it). Drift rows and rows with no folder reference keep their stored
+  # path, as in S3. O(depth) primary-key probes, for the row(s) the path key
+  # matched only.
+  defp here do
+    dynamic([n], is_nil(n.folder_ref_id) or not fragment(WalkSql.moved_chain(), n.folder_ref_id))
   end
 
   defp name_match(vault_id, segs, ci, exact, hmac, true) do

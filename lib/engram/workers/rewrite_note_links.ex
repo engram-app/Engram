@@ -93,8 +93,10 @@ defmodule Engram.Workers.RewriteNoteLinks do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.RotationGate
+  alias Engram.Folders.Rows
   alias Engram.Links.Rewriter
   alias Engram.Logger.Metadata
+  alias Engram.Notes
   alias Engram.Repo
   alias Engram.Vaults
 
@@ -145,31 +147,48 @@ defmodule Engram.Workers.RewriteNoteLinks do
   The folder-move chains for `moves`, one per 1,000-row chunk.
   `moves` are `{kind, target_id, old_path_hmac_b64, old_basename_hmac_b64}`,
   notes or attachments (T3.2: ids and HMACs only).
+
+  `folder_move: %{folder_id:, ciphertext:, nonce:}` (S5, a folder moved
+  without a cascade, so no rename tombstone exists): the folder's OLD path as
+  user-DEK ciphertext bound to the folder id, base64. A target with no
+  tombstone then gets its old path from it: the old folder plus where the
+  target sits under the folder now.
   """
-  @spec new_for_folder(binary(), binary(), [
-          {:note | :attachment, binary(), String.t(), String.t()}
-        ]) :: [Ecto.Changeset.t()]
-  def new_for_folder(user_id, vault_id, moves) do
+  @spec new_for_folder(
+          binary(),
+          binary(),
+          [{:note | :attachment, binary(), String.t(), String.t()}],
+          keyword()
+        ) :: [Ecto.Changeset.t()]
+  def new_for_folder(user_id, vault_id, moves, opts \\ []) do
+    folder_move =
+      case opts[:folder_move] do
+        %{folder_id: id, ciphertext: ct, nonce: n} ->
+          %{"folder_move" => %{"folder_id" => id, "ciphertext" => ct, "nonce" => n}}
+
+        nil ->
+          %{}
+      end
+
     moves
     |> Enum.chunk_every(@max_folder_targets)
     |> Enum.map(fn chunk ->
-      new(
-        %{
-          "user_id" => user_id,
-          "vault_id" => vault_id,
-          "cursor" => @start_cursor,
-          "targets" =>
-            Enum.map(chunk, fn {kind, id, path_hmac, basename_hmac} ->
-              %{
-                "target_kind" => Atom.to_string(kind),
-                "target_id" => id,
-                "old_path_hmac" => path_hmac,
-                "old_basename_hmac" => basename_hmac
-              }
-            end)
-        },
-        priority: @folder_priority
-      )
+      %{
+        "user_id" => user_id,
+        "vault_id" => vault_id,
+        "cursor" => @start_cursor,
+        "targets" =>
+          Enum.map(chunk, fn {kind, id, path_hmac, basename_hmac} ->
+            %{
+              "target_kind" => Atom.to_string(kind),
+              "target_id" => id,
+              "old_path_hmac" => path_hmac,
+              "old_basename_hmac" => basename_hmac
+            }
+          end)
+      }
+      |> Map.merge(folder_move)
+      |> new(priority: @folder_priority)
     end)
   end
 
@@ -248,7 +267,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
         |> Enum.map(&elem(&1, 1))
         |> Enum.uniq()
         |> Enum.flat_map(&Map.fetch!(by_hmac, &1))
-        |> then(&folder_targets(user, vault, &1))
+        |> then(&folder_targets(user, vault, &1, args["folder_move"]))
         |> Enum.group_by(& &1.old_basename_hmac)
 
       wanted = Enum.group_by(linked, &elem(&1, 0), &elem(&1, 1))
@@ -311,12 +330,13 @@ defmodule Engram.Workers.RewriteNoteLinks do
   # `Rewriter.build_folder_targets/3`. An entry whose old path cannot be
   # recovered, or whose row is gone, is counted and skipped, so it never stops
   # the rest of the folder's rewrite (the per-note chain discards instead).
-  defp folder_targets(user, vault, entries) do
+  defp folder_targets(user, vault, entries, folder_move) do
     {moves, lost} =
       entries
       |> Enum.group_by(& &1.kind)
       |> Enum.flat_map(fn {kind, group} ->
         paths = Rewriter.tombstone_old_paths(user, vault, kind, Enum.map(group, & &1.path_hmac))
+        paths = Map.merge(moved_old_paths(user, vault, kind, group, paths, folder_move), paths)
         Enum.map(group, &{kind, &1.id, Map.get(paths, &1.path_hmac)})
       end)
       |> Enum.split_with(fn {_kind, _id, path} -> is_binary(path) end)
@@ -326,6 +346,50 @@ defmodule Engram.Workers.RewriteNoteLinks do
     count_failed(:old_path_unrecoverable, length(lost))
     count_failed(:target_gone, length(gone))
     targets
+  end
+
+  # S5: `%{old_path_hmac => old path}` for the notes of `group` that no
+  # tombstone covers, from the moved folder's old path (the chain's
+  # `folder_move`) plus where each note sits under that folder now. A note no
+  # longer under the folder, or whose rebuilt old path does not hash to its
+  # entry's (it moved since), is left out: lost, like an unreadable tombstone.
+  # One folder path read and one note read per page.
+  defp moved_old_paths(_user, _vault, _kind, _group, _paths, nil), do: %{}
+
+  defp moved_old_paths(user, vault, :note, group, paths, %{"folder_id" => fid} = move) do
+    open = Enum.reject(group, &Map.has_key?(paths, &1.path_hmac))
+
+    with [_ | _] <- open,
+         {:ok, old_folder} <- old_folder(user, move),
+         {:ok, now} <- Repo.with_tenant!(user.id, fn -> Rows.path_by_id(user, vault.id, fid) end),
+         {:ok, fk} <- Crypto.dek_filter_key(user),
+         {:ok, by_id} <- Notes.get_note_meta_by_ids(user, vault, Enum.map(open, & &1.id)) do
+      prefix = now <> "/"
+
+      for e <- open,
+          %{path: path} when is_binary(path) <- [by_id[e.id]],
+          String.starts_with?(path, prefix),
+          old = old_folder <> "/" <> String.replace_prefix(path, prefix, ""),
+          Crypto.hmac_field(fk, old) == e.path_hmac,
+          into: %{},
+          do: {e.path_hmac, old}
+    else
+      _ -> %{}
+    end
+  end
+
+  defp moved_old_paths(_user, _vault, _kind, _group, _paths, _move), do: %{}
+
+  defp old_folder(user, %{"folder_id" => fid, "ciphertext" => ct_b64, "nonce" => nonce_b64}) do
+    with {:ok, ct} <- decode_b64(ct_b64),
+         {:ok, nonce} <- decode_b64(nonce_b64),
+         {:ok, dek} <- Crypto.get_dek(user),
+         aad = Crypto.aad_for_row("oban_rewrite_note_links", "old_folder", fid),
+         {:ok, path} <- Envelope.decrypt(ct, nonce, dek, aad) do
+      {:ok, path}
+    else
+      _ -> :error
+    end
   end
 
   # Folder entries with both HMACs decoded. Entries are server-built, so a
