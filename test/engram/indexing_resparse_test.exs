@@ -502,7 +502,7 @@ defmodule Engram.IndexingResparseTest do
     assert count > 0 and count + unmatched == length(upserted)
   end
 
-  # A rename moves the points (RepathNoteIndex) without re-indexing, so every
+  # A rename leaves the points in place without re-indexing, so every
   # row keeps a fingerprint built from the OLD path's context prefix. Offsets
   # and the stored text checksum (`chunk_points.slice_sum`) still name the
   # chunk. Before this, every point of a renamed note was unmatched (671

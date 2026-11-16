@@ -34,6 +34,19 @@ defmodule Engram.JobsOptionsTest do
     end
   end
 
+  # A row for a deleted worker is dead config (R3b removed `RepathNoteIndex`
+  # and its row together).
+  test "every policy names a worker that exists" do
+    workers =
+      for key <- Jobs.unique_keys(),
+          worker = if(is_tuple(key), do: elem(key, 0), else: key),
+          String.starts_with?(to_string(worker), "Elixir."),
+          do: worker
+
+    assert workers != []
+    assert Enum.reject(workers, &Code.ensure_loaded?/1) == []
+  end
+
   test "overrides merge, :none never dedups, an unknown key raises" do
     assert Jobs.unique({Engram.Workers.EmbedNote, :debounced}, period: 90)[:period] == 90
     assert Jobs.unique(:none) == false

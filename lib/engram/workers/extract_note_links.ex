@@ -168,8 +168,8 @@ defmodule Engram.Workers.ExtractNoteLinks do
   # keep enqueueing jobs that discard.
   #
   # Here the arity change alone is enough — there is no `/1` left, so a stale
-  # caller fails to COMPILE. `EmbedNote` and `RepathNoteIndex` keep an `opts`
-  # default, so their `/2` still exists and they need an `is_binary(user_id)`
+  # caller fails to COMPILE. `EmbedNote` keeps an `opts` default, so its
+  # `/2` still exists and it needs an `is_binary(user_id)`
   # guard to get an equivalent (runtime) failure instead of a keyword list
   # landing in `args.user_id`.
   #

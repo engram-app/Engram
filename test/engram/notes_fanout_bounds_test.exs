@@ -13,7 +13,6 @@ defmodule Engram.NotesFanoutBoundsTest do
     DeleteNoteIndex,
     EmbedNote,
     ExtractNoteLinks,
-    RepathNoteIndex,
     RewriteNoteLinks
   }
 
@@ -140,8 +139,6 @@ defmodule Engram.NotesFanoutBoundsTest do
 
       assert [chain] = all_enqueued(worker: RewriteNoteLinks)
       assert chain.args["targets"] |> Enum.map(& &1["target_id"]) |> Enum.sort() == ids
-      # R3a: a move makes no Qdrant write.
-      assert all_enqueued(worker: RepathNoteIndex) == []
     end
   end
 

@@ -167,11 +167,6 @@ defmodule Engram.Jobs do
       keys: [:note_id],
       states: [:available, :scheduled]
     ],
-    Engram.Workers.RepathNoteIndex => [
-      period: 120,
-      keys: [:note_id, :old_path_hmac],
-      states: :incomplete
-    ],
     # Period is the caller's repair window (`ExtractNoteLinks`).
     {Engram.Workers.RewriteNoteLinks, :repair} => [
       keys: [:target_id, :old_basename_hmac],
@@ -323,8 +318,8 @@ defmodule Engram.Jobs do
     count
   end
 
-  # Held copies one release makes available. Prod had 801 held repaths: all
-  # at once is a burst of Qdrant payload writes and DB updates. The hourly
+  # Held copies one release makes available. Prod once had 801 held copies:
+  # all at once is a burst of Qdrant writes and DB updates. The hourly
   # release drains the rest over the next runs.
   @release_per_run 200
 
