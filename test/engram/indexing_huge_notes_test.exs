@@ -23,8 +23,6 @@ defmodule Engram.IndexingHugeNotesTest do
   import Engram.IndexingTestHelpers
   import Mox
 
-  require Logger
-
   alias Engram.Crypto
   alias Engram.Indexing
   alias Engram.KeywordIndex.QdrantSparse
@@ -32,6 +30,8 @@ defmodule Engram.IndexingHugeNotesTest do
   alias Engram.Notes.Helpers
   alias Engram.Search
   alias Engram.ServiceConfig
+
+  require Logger
 
   setup :verify_on_exit!
 
