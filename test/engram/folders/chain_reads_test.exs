@@ -87,7 +87,13 @@ defmodule Engram.Folders.ChainReadsTest do
 
     test "the root, an unknown path and a dirty path", %{user: u, vault: v} do
       e = by_path(u, v, ["A/B/C/D/E"])["A/B/C/D/E"]
-      assert by_path(u, v, ["", "Nope", "A/Nope/C"]) == %{"" => nil, "Nope" => nil, "A/Nope/C" => nil}
+
+      assert by_path(u, v, ["", "Nope", "A/Nope/C"]) == %{
+               "" => nil,
+               "Nope" => nil,
+               "A/Nope/C" => nil
+             }
+
       assert by_path(u, v, ["A//B/C/D/E/"]) == %{"A//B/C/D/E/" => e}
       assert at(u, v, [""]) == []
       assert sub(u, v, [""]) == []

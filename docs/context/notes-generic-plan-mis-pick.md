@@ -1,6 +1,6 @@
 # Keyed `notes` lookups run unnamed: the generic-plan mis-pick
 
-_Last verified: 2026-11-12_
+_Last verified: 2026-11-15_
 
 ## What this is
 
@@ -89,12 +89,36 @@ Dropping `pathed` alone would not change answers (a qualified miss falls
 back to fetching every same-named row), only cost; the plan test's SQL
 assertions are what catch that.
 
+## Third instance: the folder walk under RLS (Gap A, 2026-11-15)
+
+`Rows.ids_by_path/3` walks a batch of folder paths down
+`folders_live_name` (`WalkSql.walk_many/0`). Planned as `engram_app` at the
+40-tenant shape (`n_distinct = 40` on `folders.user_id`/`vault_id`, 170
+folders in one tenant), each probe read `folders_user` (the tenant's whole
+folder index, filtered) instead of the unique name index, in the CUSTOM
+plan too. Cause: the policy's tenant is an InitPlan, so the planner costs
+`folders_user` at the average tenant's size (about 4 rows here) and ties it
+with the 1-row unique probe; the smaller index wins the tie. Prod has many
+tenants with a handful of folders and a few with thousands, so the average
+is small and a heavy tenant pays a scan per probe.
+
+Fix: each probe also says `f.user_id = $user` as a bound value, so the
+custom plan sees this tenant's real count (most-common-value statistics),
+and the statement runs unnamed (`prepare: :unnamed`), so no generic plan
+replaces that estimate. After: 9 probes, 26 buffers, all
+`folders_live_name` (`ChainReadsTest`). The single-path walk embedded in the
+S3 name match (`WalkSql` `@walk`) has the same probe shape and was only
+proven without folder stats overrides; it runs only in moved vaults (S5).
+
 ## Rules
 
 - Read every plan as `engram_app` with a tenant (`QueryPlan.rls_plans/3`). As
   the suite's superuser RLS is skipped and a qual it would bar from an index
   looks fine (rls-leakproof-index-quals.md, the S3 lookup 2026-11-13).
 
+- A probe whose only tenant qual is the RLS policy's is costed at the
+  AVERAGE tenant. When a tenant-only index can tie with the key index, add
+  the tenant as a bound value and send the statement unnamed.
 - A keyed `notes` lookup stays unnamed. To name one, first add a
   generic-plan test at the 40-tenant shape that asserts EVERY scan reads its
   key index, and run it under `engram_app` with seq scans on.

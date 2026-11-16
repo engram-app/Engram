@@ -41,9 +41,10 @@ defmodule Engram.Folders.Wire do
 
   Today's per-note events keep flowing; these are additive.
 
-  Read side, also only while on: the sync manifest carries `folders: [{id,
-  parent_id, name}]` (every live folder, root parent null) and a `folder_id`
-  per note (`manifest_rows/1`, `manifest/3`), and the `crdt_create` reply
+  Read side: the sync manifest carries `folders: [{id, parent_id, name}]`
+  (every live folder, root parent null) and a `folder_id` and `name` per
+  note while the wire OR the S3 name reads are on (`manifest_rows/1`,
+  `manifest/3`); while the wire is on, the `crdt_create` reply
   carries the note's `folder_id` (`create_reply/1`). Root is null, never a row.
   """
 
@@ -51,7 +52,7 @@ defmodule Engram.Folders.Wire do
   alias Engram.Folders
   alias Engram.Folders.Rows
   alias Engram.Logger.Metadata
-  alias Engram.Notes.PathSanitizer
+  alias Engram.Notes.{Location, PathSanitizer}
   alias Engram.Repo
   alias Engram.ServiceConfig
   alias Engram.Sync.Broadcast
@@ -220,34 +221,34 @@ defmodule Engram.Folders.Wire do
 
   @doc """
   The manifest's folder rows, read in the manifest's tenant transaction
-  (`Rows.live_rows/1`), or nil with the switch off (no read). Cost: one
-  O(folders) read here, then O(folders) name decrypts plus an O(notes) map
-  lookup in `manifest/3`, next to the manifest's O(notes) path decrypts.
+  (`Rows.live_rows/1`), or nil (no read) unless the wire or the S3 name
+  reads (`Engram.Notes.Location.on?/0`) are on. The read also answers
+  whether the vault holds a folder moved without a cascade
+  (`Location.moved_column/1`, for `Location.listing_moves/3`). Cost: one O(folders) read
+  here, then O(folders) name decrypts plus an O(notes) map lookup in
+  `manifest/3`, next to the manifest's O(notes) path decrypts.
   """
   @spec manifest_rows(map()) :: [map()] | nil
-  def manifest_rows(vault), do: if(enabled?(), do: Rows.live_rows(vault.id))
+  def manifest_rows(vault),
+    do:
+      if(enabled?() or Location.on?(),
+        do: Rows.live_rows(vault.id, Location.moved_column(vault.id))
+      )
 
   @doc """
-  Adds the folder list and each note's `folder_id` to a rendered manifest,
-  given `manifest_rows/1`'s result (nil: the body unchanged). A note's folder
-  is found by its decrypted path, not `notes.folder_ref_id`, so the manifest
-  keeps its index-only notes read; a note whose folder has no row yet (drift)
-  gets `folder_id: nil` and is placed by its path.
+  Adds the folder list and each note's `folder_id` and `name` to a rendered
+  manifest (`Location.place/3`), given `manifest_rows/1`'s result (nil: the
+  body unchanged). A note's folder is found by the path it is served at,
+  not `notes.folder_ref_id`, so the manifest keeps its index-only notes
+  read; a note whose folder has no row yet (drift) gets `folder_id: nil`
+  and is placed by its path.
   """
   @spec manifest(map(), [map()] | nil, binary()) :: map()
   def manifest(body, nil, _dek), do: body
 
   def manifest(%{notes: notes} = body, rows, dek) do
-    tree = Rows.decrypt_tree(dek, rows)
-    id_of = Map.new(tree, &{&1.path, &1.id})
-
-    notes =
-      Enum.map(notes, fn n -> Map.put(n, :folder_id, id_of[Rows.parent_path(n.path)]) end)
-
-    Map.merge(body, %{
-      notes: notes,
-      folders: Enum.map(tree, &Map.take(&1, [:id, :parent_id, :name]))
-    })
+    {notes, folders} = Location.place(notes, rows, dek)
+    Map.merge(body, %{notes: notes, folders: folders})
   end
 
   @doc """

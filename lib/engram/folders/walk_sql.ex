@@ -14,6 +14,8 @@ defmodule Engram.Folders.WalkSql do
       Uncorrelated, so it runs once (an InitPlan). Params: vault id, segment
       hashes, vault id, segment hashes, then the depth. It reads `folders`
       in the statement's own tenant (FORCE RLS).
+    * `walk_many/0`: the same walk for many paths at once, over their
+      prefix trie (`Engram.Folders.Rows.ids_by_path/3`, Gap A).
     * `moved/0`: whether a vault has a live folder renamed without a cascade
       (`notes_cascaded = false`, written from S5 on), on
       `folders_moved_live`. Param: vault id.
@@ -73,6 +75,49 @@ defmodule Engram.Folders.WalkSql do
              "SELECT 1 FROM notes p WHERE p.vault_id = ? AND p.path_hmac = ? " <>
                "AND p.deleted_at IS NULL AND p.kind = 'note'"
            )
+
+  # Many paths in one statement: their distinct prefixes as a trie, one row
+  # each (`i`, its parent prefix `p`, 0 at the root, and its segment's
+  # `name_hmac`), walked down level by level with the same LATERAL probe of
+  # `folders_live_name` per prefix. The recursion follows the trie, which
+  # is finite and acyclic whatever `parent_id` holds. A prefix with no live
+  # row ends its branch. Each probe also names the tenant as a bound value
+  # (`f.user_id = ?`, beside the policy's own): the planner then costs the
+  # tenant's real folder count from its statistics instead of the average,
+  # so a probe of a large tenant is never planned as a scan of its
+  # `folders_user` entries (the caller sends it unnamed, so no generic plan
+  # replaces that estimate). Params: prefix ids, parent ids, segment
+  # hashes, user id, vault id, user id, vault id.
+  # Parenthesized: Ecto inlines a fragment source after FROM as is.
+  @walk_many """
+  (WITH RECURSIVE q(i, p, h) AS (
+     SELECT * FROM unnest(?::int4[], ?::int4[], ?::bytea[])
+   ), w(i, id) AS (
+     SELECT q.i, c.id FROM q CROSS JOIN LATERAL (
+       SELECT f.id FROM folders f
+       WHERE f.user_id = ? AND f.vault_id = ? AND f.parent_id IS NULL
+         AND f.name_hmac = q.h AND f.deleted_at IS NULL
+       LIMIT 1
+     ) c
+     WHERE q.p = 0
+     UNION ALL
+     SELECT q.i, c.id FROM w JOIN q ON q.p = w.i CROSS JOIN LATERAL (
+       SELECT f.id FROM folders f
+       WHERE f.user_id = ? AND f.vault_id = ? AND f.parent_id = w.id
+         AND f.name_hmac = q.h AND f.deleted_at IS NULL
+       LIMIT 1
+     ) c
+   )
+   SELECT w.i, w.id FROM w)
+  """
+
+  @doc """
+  `(i, id)` for every prefix of a path trie that has a live folder row (see
+  the comment above; params: prefix ids, parent ids, segment hashes, user
+  id, vault id, user id, vault id). One probe of `folders_live_name` per
+  distinct prefix. Send it unnamed (`prepare: :unnamed`).
+  """
+  defmacro walk_many, do: @walk_many
 
   @doc "`? = (<walk>)`: a folder id column against the walk (params: column, then the walk's, then the depth)."
   defmacro id_eq, do: "? = (" <> @walk <> " SELECT w.id FROM w WHERE w.i = ?)"

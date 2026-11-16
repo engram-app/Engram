@@ -9,6 +9,7 @@ defmodule EngramWeb.SyncController do
   alias Engram.Crypto.PathCrypto
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtUpdateLog
+  alias Engram.Notes.Location
   alias Engram.Notes.Note
   alias Engram.Notes.NoteBody
   alias Engram.Repo
@@ -204,8 +205,11 @@ defmodule EngramWeb.SyncController do
         )
       )
 
-    # The folder-op wire's folder rows (#2523 S4), nil with its switch off.
-    {notes, attachments, Engram.Folders.Wire.manifest_rows(vault)}
+    # The folder rows (#2523 S4 wire, S3 names), nil with both off; and, in
+    # a vault holding a folder moved without a cascade (none before S5), the
+    # notes' locations, so they are served where their folder rows put them.
+    folder_rows = Engram.Folders.Wire.manifest_rows(vault)
+    {notes, attachments, folder_rows, Location.listing_moves(user, vault, folder_rows)}
   end
 
   # The manifest's notes, in two halves of one statement (UNION ALL). A
@@ -244,7 +248,9 @@ defmodule EngramWeb.SyncController do
   defp path_half(query, :long),
     do: where(query, [n], fragment("(octet_length(?) <= 2000) IS NOT TRUE", n.path_ciphertext))
 
-  defp render_manifest(conn, {note_rows, attachment_rows, folder_rows}, dek, current_seq) do
+  defp render_manifest(conn, {note_rows, attachment_rows, folder_rows, moves}, dek, current_seq) do
+    moved = Location.listing_paths(conn.assigns.current_user, moves)
+
     # One batch native call per column (`PathCrypto.decrypt_many!/3`): one key
     # schedule, AAD built in Rust from the raw ids selected above. Measured
     # 2-5x the per-row loop (docs/context/native-nifs.md). Parallel was
@@ -256,7 +262,7 @@ defmodule EngramWeb.SyncController do
         Enum.zip_with(note_rows, PathCrypto.decrypt_many!(:notes, fields, dek), fn row, path ->
           %{
             id: row.id,
-            path: path,
+            path: Map.get(moved, row.id, path),
             content_hash: row.hash,
             seq: row.seq,
             crdt_head: row.crdt_head

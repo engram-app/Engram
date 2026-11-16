@@ -20,8 +20,10 @@ defmodule EngramWeb.VaultTreeController do
 
   alias Engram.Attachments
   alias Engram.Crypto
+  alias Engram.Folders.Rows
   alias Engram.Logger.Metadata
   alias Engram.Notes
+  alias Engram.Notes.Location
   alias Engram.Repo
   alias Engram.Vaults
   alias EngramWeb.ETag
@@ -77,6 +79,7 @@ defmodule EngramWeb.VaultTreeController do
               folder_marker_rows: Notes.raw_folder_marker_rows(user, vault),
               attachment_rows: Attachments.raw_tree_rows(user, vault)
             }
+            |> with_folder_rows(user, vault)
 
           true ->
             # No usable DEK: nothing decryptable exists to fetch (:no_dek) or
@@ -139,6 +142,15 @@ defmodule EngramWeb.VaultTreeController do
     ~s(") <> Base.url_encode64(binary_part(hash, 0, 16), padding: false) <> ~s(")
   end
 
+  # The folder rows (O(1) folder rename plan, #2523) with the S3 name reads
+  # on, read with the moved-folder probe folded in, and the moved notes'
+  # locations (nil unless a folder was moved without a cascade, never
+  # before S5). Inside the tree's snapshot.
+  defp with_folder_rows(raw, user, vault) do
+    rows = if Location.on?(), do: Rows.live_rows(vault.id, Location.moved_column(vault.id))
+    Map.merge(raw, %{folder_rows: rows, moves: Location.listing_moves(user, vault, rows)})
+  end
+
   defp dek_usable?({:ok, _}), do: true
   defp dek_usable?({:error, :no_dek}), do: true
   defp dek_usable?(_), do: false
@@ -148,7 +160,25 @@ defmodule EngramWeb.VaultTreeController do
   end
 
   defp render_tree(conn, raw, dek, user) do
-    notes = Notes.decrypt_tree_note_rows(raw.note_rows, dek)
+    moved = Location.listing_paths(user, raw.moves)
+
+    notes =
+      raw.note_rows
+      |> Notes.decrypt_tree_note_rows(dek)
+      |> Enum.map(&%{&1 | path: Map.get(moved, &1.id, &1.path)})
+
+    # Additive: each note's `folder_id` and `name`, and `folder_tree:
+    # [%{id, parent_id, name}]` (folder rows; `folders` keeps its counts
+    # shape for the SPA). Both absent with names off.
+    {notes, extra} =
+      case raw.folder_rows do
+        nil ->
+          {notes, %{}}
+
+        rows ->
+          {notes, tree} = Location.place(notes, rows, dek)
+          {notes, %{folder_tree: tree}}
+      end
 
     folder_counts =
       Notes.folder_counts_at(conn.assigns.current_vault, raw.seq, raw.folder_counts, dek)
@@ -157,16 +187,19 @@ defmodule EngramWeb.VaultTreeController do
     folders = Notes.combine_folders_payload(folder_counts, folder_markers)
     attachments = Attachments.decrypt_tree_rows(raw.attachment_rows, user)
 
-    json(conn, %{
-      folders: folders,
-      notes: Enum.sort_by(notes, & &1.path),
-      # decrypt_tree_rows/2 carries content_hash for the sync-facing listing;
-      # the tree never reads it, and the whole point of this endpoint is that
-      # it does not ship per-file hashes (see the moduledoc). Dropped here so
-      # the attachment half keeps the promise the notes half already makes.
-      attachments:
-        attachments |> Enum.sort_by(& &1.path) |> Enum.map(&Map.delete(&1, :content_hash)),
-      change_seq: raw.seq
-    })
+    json(
+      conn,
+      Map.merge(extra, %{
+        folders: folders,
+        notes: Enum.sort_by(notes, & &1.path),
+        # decrypt_tree_rows/2 carries content_hash for the sync-facing listing;
+        # the tree never reads it, and the whole point of this endpoint is that
+        # it does not ship per-file hashes (see the moduledoc). Dropped here so
+        # the attachment half keeps the promise the notes half already makes.
+        attachments:
+          attachments |> Enum.sort_by(& &1.path) |> Enum.map(&Map.delete(&1, :content_hash)),
+        change_seq: raw.seq
+      })
+    )
   end
 end

@@ -330,7 +330,7 @@
             "x-validate": null
           },
           "folder_id": {
-            "description": "Notes only, and only while the server's folder_ops switch is on: the id of the note's folder (null at the root, or for a folder with no row yet).",
+            "description": "Notes only, while the server's folder_ops switch or folder-row reads are on: the id of the note's folder (null at the root, or for a folder with no row yet).",
             "format": "uuid",
             "nullable": true,
             "type": "string",
@@ -340,6 +340,12 @@
           "id": {
             "description": "Stable note/attachment id — lets a client reconcile its path↔id map.",
             "format": "uuid",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "name": {
+            "description": "Notes only, with folder_id: the last segment of `path` (the note's own name).",
             "type": "string",
             "x-struct": null,
             "x-validate": null
@@ -690,7 +696,7 @@
             "x-validate": null
           },
           "folders": {
-            "description": "Only while the server's folder_ops switch is on: every live folder. The root has no entry; its children have parent_id null.",
+            "description": "Only while the server's folder_ops switch or folder-row reads are on: every live folder. The root has no entry; its children have parent_id null.",
             "items": {
               "$ref": "#/components/schemas/FolderNode"
             },
@@ -1647,6 +1653,15 @@
           "change_seq": {
             "description": "Current per-vault sequence watermark.",
             "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "folder_tree": {
+            "description": "Only while the server's folder-row reads are on: every live folder row, parents first. The root has no entry; its children have parent_id null.",
+            "items": {
+              "$ref": "#/components/schemas/FolderNode"
+            },
+            "type": "array",
             "x-struct": null,
             "x-validate": null
           },
@@ -2680,8 +2695,22 @@
             "x-struct": null,
             "x-validate": null
           },
+          "folder_id": {
+            "description": "With folder_tree only: the note's folder row (null at the root, or for a folder with no row yet).",
+            "format": "uuid",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "id": {
             "format": "uuid",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "name": {
+            "description": "With folder_tree only: the last segment of path.",
             "type": "string",
             "x-struct": null,
             "x-validate": null

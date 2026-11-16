@@ -74,7 +74,10 @@ defmodule EngramWeb.FolderChainListingTest do
 
       folders = Enum.sort_by(m["folders"], & &1["id"])
       assert folders == Enum.sort_by(t["folder_tree"], & &1["id"])
-      assert %{"id" => ^c, "parent_id" => ^b, "name" => "C"} = Enum.find(folders, &(&1["id"] == c))
+
+      assert %{"id" => ^c, "parent_id" => ^b, "name" => "C"} =
+               Enum.find(folders, &(&1["id"] == c))
+
       # The tree's counts shape is unchanged.
       assert Enum.all?(t["folders"], &Map.has_key?(&1, "count"))
     end
@@ -143,8 +146,13 @@ defmodule EngramWeb.FolderChainListingTest do
 
       for body <- [manifest(conn), tree(conn)] do
         notes = by_id(body["notes"])
-        assert {notes[ids["A/B/x.md"]]["path"], notes[ids["A/B/x.md"]]["folder_id"]} == {"A/Z/x.md", b}
-        assert {notes[ids["A/B/C/y.md"]]["path"], notes[ids["A/B/C/y.md"]]["folder_id"]} == {"A/Z/C/y.md", c}
+
+        assert {notes[ids["A/B/x.md"]]["path"], notes[ids["A/B/x.md"]]["folder_id"]} ==
+                 {"A/Z/x.md", b}
+
+        assert {notes[ids["A/B/C/y.md"]]["path"], notes[ids["A/B/C/y.md"]]["folder_id"]} ==
+                 {"A/Z/C/y.md", c}
+
         # Untouched notes keep their stored path.
         assert notes[ids["top.md"]]["path"] == "top.md"
         assert notes[ids["A/b/Ünï 日本.md"]]["path"] == "A/b/Ünï 日本.md"
