@@ -348,6 +348,7 @@ defmodule Engram.Workers.RewriteNoteLinksFolderTest do
     args = Map.update!(job.args, "targets", &(bad ++ &1))
     ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :links, :rewrite, :failed]])
     on_exit(fn -> :telemetry.detach(ref) end)
+    before = exported_invalid_hmac()
 
     log =
       ExUnit.CaptureLog.capture_log(fn ->
@@ -360,11 +361,33 @@ defmodule Engram.Workers.RewriteNoteLinksFolderTest do
     assert_received {[:engram, :links, :rewrite, :failed], ^ref, %{count: 2},
                      %{reason: :invalid_hmac_base64}}
 
+    # The exported series sums the measurement: two entries, +2.
+    assert exported_invalid_hmac() == before + 2
+
     # A later page of the same walk repeats the entries but not the count.
     later = Map.put(args, "cursor", "ffffffff-ffff-ffff-ffff-ffffffffffff")
     assert :ok = perform_job(RewriteNoteLinks, later)
 
+    # Nor does the delayed sweep, a second walk of the same entries.
+    assert :ok = perform_job(RewriteNoteLinks, Map.put(args, "sweep", true))
+
     refute_received {[:engram, :links, :rewrite, :failed], ^ref, _,
                      %{reason: :invalid_hmac_base64}}
+
+    assert exported_invalid_hmac() == before + 2
+  end
+
+  # The series as /metrics exports it (global PromEx state; this module is
+  # async: false).
+  defp exported_invalid_hmac do
+    series =
+      ~s(engram_prom_ex_indexing_link_rewrite_failures_total\{reason="invalid_hmac_base64"\})
+
+    scrape = Engram.PromEx |> PromEx.get_metrics() |> IO.iodata_to_binary()
+
+    case Regex.run(~r/^#{series} (\S+)$/m, scrape) do
+      [_, v] -> v |> Float.parse() |> elem(0)
+      nil -> 0.0
+    end
   end
 end
