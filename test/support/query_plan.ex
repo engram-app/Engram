@@ -41,6 +41,9 @@ defmodule Engram.QueryPlan do
 
   `seqscan: true` keeps seq scans on, to ask which plan Postgres picks.
 
+  `role:` plans as that role (for example `engram_maintenance`, the
+  cross-tenant sweeps' login) so its RLS policies shape the plan.
+
   `all_visible: true` tells the planner every heap page of each `analyze:`
   table is all-visible (`pg_class.relallvisible`, rolled back with the
   plan), as a vacuumed prod table mostly is. `fresh` leaves the visibility
@@ -72,6 +75,11 @@ defmodule Engram.QueryPlan do
               "UPDATE pg_class SET relallvisible = relpages WHERE oid = '#{table}'::regclass"
             )
       end
+
+      # The role the statement really runs as, so its RLS policies apply
+      # (a superuser plan skips them). Set after ANALYZE, which needs the owner.
+      if role = Keyword.get(opts, :role),
+        do: Repo.query!("SET LOCAL SESSION AUTHORIZATION #{role}")
 
       Repo.query!("SET LOCAL plan_cache_mode = force_generic_plan")
 

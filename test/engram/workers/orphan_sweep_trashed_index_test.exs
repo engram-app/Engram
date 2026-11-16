@@ -151,7 +151,8 @@ defmodule Engram.Workers.OrphanSweepTrashedIndexTest do
   end
 
   # The page must be an index walk, not a scan of every trashed note: both
-  # shapes (first page, and after a cursor) read `notes_path_tomb`.
+  # shapes (first page, and after a cursor) read `notes_path_tomb`, planned
+  # as `engram_maintenance` (the sweep's prod login) under FORCE RLS.
   test "both trashed-page statements read notes_path_tomb", %{user: user} do
     Application.put_env(:engram, :orphan_sweep_trashed_page, 1)
     on_exit(fn -> Application.delete_env(:engram, :orphan_sweep_trashed_page) end)
@@ -168,7 +169,13 @@ defmodule Engram.Workers.OrphanSweepTrashedIndexTest do
     assert length(statements) == 2, inspect(statements)
 
     for sql <- statements do
-      plan = Engram.QueryPlan.generic_plan(sql, analyze: ["notes"], bitmapscan: false)
+      plan =
+        Engram.QueryPlan.generic_plan(sql,
+          analyze: ["notes"],
+          bitmapscan: false,
+          role: "engram_maintenance"
+        )
+
       assert plan =~ "notes_path_tomb", plan
     end
   end
