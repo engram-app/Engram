@@ -868,7 +868,16 @@ defmodule Engram.Vector.QdrantReconcileTest do
       want = prod_v3["payload_schema"] |> Map.keys() |> Enum.filter(&(&1 in retired))
       assert want != []
       msgs = flush()
-      assert Enum.sort(for {:drop, f} <- msgs, do: f) == Enum.sort(want)
+      dropped = for {:drop, f} <- msgs, do: f
+      assert Enum.sort(dropped) == Enum.sort(want)
+
+      # Independent of the list above: the tenant and identity keys are never
+      # retired and never dropped. Prod's v3 schema holds `u` and `v` (its
+      # legacy `user_id`/`vault_id` indexes are gone already).
+      identity = ~w(u v n user_id vault_id)
+      assert Enum.all?(~w(u v), &Map.has_key?(prod_v3["payload_schema"], &1))
+      assert Enum.filter(identity, &(&1 in retired)) == []
+      assert Enum.filter(identity, &(&1 in dropped)) == []
 
       for {:patch, %{"strict_mode_config" => strict}} <- msgs do
         assert Map.get(strict, "unindexed_filtering_retrieve", false) == false
@@ -924,11 +933,13 @@ defmodule Engram.Vector.QdrantReconcileTest do
       json(conn, 500, %{status: %{error: "nope"}})
     end)
 
-    ExUnit.CaptureLog.capture_log(fn ->
-      assert :ok = Qdrant.ensure_collection("engram_notes", 1024)
-    end)
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = Qdrant.ensure_collection("engram_notes", 1024)
+      end)
 
     assert_received {:drop, "path_hmac"}
+    assert log =~ "qdrant_retired_index_drop_failed path_hmac"
   end
 
   test "a fresh create sends the desired storage params", %{bypass: bypass} do
