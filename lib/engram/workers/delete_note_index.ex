@@ -15,8 +15,8 @@ defmodule Engram.Workers.DeleteNoteIndex do
   import Ecto.Query, only: [from: 2]
 
   alias Engram.Indexing
-  alias Engram.Logger.Metadata
   alias Engram.Links
+  alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vector.Qdrant
