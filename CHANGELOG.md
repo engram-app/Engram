@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.86.0](https://github.com/engram-app/Engram/compare/0.85.0...0.86.0) (2026-11-16)
+
+
+### Features
+
+* per-user daily embed token ceiling with keyword fallback ([#2599](https://github.com/engram-app/Engram/issues/2599)) ([c8aec00](https://github.com/engram-app/Engram/commit/c8aec00277f17a5e62a7b494e9b8298c39783d71))
+
+
+### Bug Fixes
+
+* **links:** one rewrite chain per folder rename ([#2600](https://github.com/engram-app/Engram/issues/2600)) ([57fe03b](https://github.com/engram-app/Engram/commit/57fe03b2999d1d996db81733b383907b5496c295))
+* **links:** parse get_notes outgoing links from read text ([#2601](https://github.com/engram-app/Engram/issues/2601)) ([3b8cb9c](https://github.com/engram-app/Engram/commit/3b8cb9cfff598182902cea6fc54b20dc65ba4e1d))
+* **links:** table-escaped wikilink alias + attachment links in get_notes ([#2602](https://github.com/engram-app/Engram/issues/2602)) ([c87d1f8](https://github.com/engram-app/Engram/commit/c87d1f8cf5fe76e3917002b546f57ba5ab224ed4))
+
 ## [0.85.0](https://github.com/engram-app/Engram/compare/0.84.1...0.85.0) (2026-11-15)
 
 
