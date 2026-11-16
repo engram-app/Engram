@@ -178,6 +178,64 @@ defmodule Engram.Notes.Location do
     |> Enum.reduce(dynamic(false), &dynamic(^&2 or ^&1))
   end
 
+  @doc """
+  `%{path => id}` for the live notes SHOWN at `paths` by name alone: under
+  a folder moved without a cascade, on their own chain (the output rule),
+  which no stored path key names. For a batch (a cascade claim, a restore)
+  where `at_any/5`'s walk per path is too many: ONE walk of the distinct
+  folder parts (`Rows.ids_by_path/3`) and ONE probe set on
+  `notes_name_key_live`, so O(distinct folders + paths) index probes in two
+  statements. The lowest id per path. Callers merge their stored-key
+  holders over it (a holder wins, as in the lookup).
+  """
+  @spec named_ids_at(map(), Ecto.UUID.t(), [String.t()]) :: %{String.t() => Ecto.UUID.t()}
+  def named_ids_at(user, vault_id, paths) do
+    with {:ok, fk} <- Crypto.dek_filter_key(user),
+         split when split != [] <- folder_split(paths) do
+      Repo.with_tenant!(user.id, fn ->
+        ids = Rows.ids_by_path(user, vault_id, split |> Enum.map(&elem(&1, 1)) |> Enum.uniq())
+
+        wanted =
+          for {path, folder, name} <- split,
+              fid = ids[folder],
+              fid != nil,
+              into: %{},
+              do: {Name.ci_hmac(fk, name) <> Ecto.UUID.dump!(fid), {path, Name.hmac(fk, name)}}
+
+        if wanted == %{}, do: %{}, else: name_holders(vault_id, wanted)
+      end)
+    else
+      _ -> %{}
+    end
+  end
+
+  defp folder_split(paths) do
+    for path <- Enum.uniq(paths),
+        {[_ | _] = folders, [name]} = path |> String.split("/") |> Enum.split(-1),
+        do: {path, Enum.join(folders, "/"), name}
+  end
+
+  # `name_key` is trigger-kept and not on the schema, so it is read through
+  # a schemaless join of the row itself.
+  defp name_holders(vault_id, wanted) do
+    from(n in "notes",
+      where:
+        n.vault_id == type(^vault_id, Ecto.UUID) and
+          n.name_key in type(^Map.keys(wanted), {:array, :binary}) and
+          is_nil(n.deleted_at) and n.kind == "note" and
+          fragment(WalkSql.moved_chain(), n.folder_ref_id),
+      select: {n.name_key, n.name_hmac, type(n.id, Ecto.UUID)}
+    )
+    |> Repo.all()
+    |> Enum.sort_by(&elem(&1, 2))
+    |> Enum.reduce(%{}, fn {key, exact, id}, acc ->
+      case wanted[key] do
+        {path, ^exact} -> Map.put_new(acc, path, id)
+        _ -> acc
+      end
+    end)
+  end
+
   # The stored path's row, or the row the path's folder row and name name
   # (`WalkSql.name_match_by_id/0`): `path_key OR id = <name match>`. Both
   # arms compare a plain column to a bound value or an InitPlan parameter,

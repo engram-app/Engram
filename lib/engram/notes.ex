@@ -4741,8 +4741,6 @@ defmodule Engram.Notes do
     )
   end
 
-  @located_cap 32
-
   @doc false
   # Bulk `path -> note_id` for the claim-validation paths. ONE query for N
   # paths, because the naive shape is a genuine N+1: a 500-note folder cascade
@@ -4754,25 +4752,20 @@ defmodule Engram.Notes do
   defp note_ids_at(_user, _vault, []), do: %{}
 
   defp note_ids_at(user, vault, paths) do
-    # In a vault holding a folder moved without a cascade, the shown paths
-    # (`located_ids_at/3`): a stale key is no holder, a name match is. One
-    # folder walk per path, so @located_cap paths per statement (a bigger
-    # statement plans slowly and nears the bind-parameter cap).
+    # In a vault holding a folder moved without a cascade, the shown paths:
+    # a stale key is no holder (`here`), and a note shown at a path by name
+    # alone is one (`Location.named_ids_at/3`, two statements per batch).
     if Location.named?(user.id, vault_id(vault)) do
-      paths
-      |> Enum.chunk_every(@located_cap)
-      |> Enum.reduce_while(%{}, fn chunk, acc ->
-        case located_ids_at(user, vault, chunk) do
-          {:error, _} = err -> {:halt, err}
-          {held, _named?} -> {:cont, Map.merge(acc, held)}
-        end
-      end)
+      with %{} = held <- stored_ids_at(user, vault, paths, true) do
+        free = Enum.reject(paths, &Map.has_key?(held, &1))
+        Map.merge(Location.named_ids_at(user, vault_id(vault), free), held)
+      end
     else
-      stored_ids_at(user, vault, paths)
+      stored_ids_at(user, vault, paths, false)
     end
   end
 
-  defp stored_ids_at(user, vault, paths) do
+  defp stored_ids_at(user, vault, paths, moved?) do
     case Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
         by_hmac = Map.new(paths, fn path -> {Crypto.hmac_field(filter_key, path), path} end)
@@ -4784,6 +4777,16 @@ defmodule Engram.Notes do
             where: ^Keys.in_any(:path, hmacs, ids?),
             select: {n.path_hmac, n.id}
           )
+
+        query =
+          if moved?,
+            do:
+              where(
+                query,
+                [n],
+                is_nil(n.folder_ref_id) or not fragment(WalkSql.moved_chain(), n.folder_ref_id)
+              ),
+            else: query
 
         rows = Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
 
