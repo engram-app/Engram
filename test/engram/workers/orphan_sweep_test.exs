@@ -102,6 +102,18 @@ defmodule Engram.Workers.OrphanSweepTest do
   # without a paid re-embed. A discovery error, an id in another spelling, a
   # signup that commits mid-run or an implausible departed share must all
   # delete nothing.
+  test "a single departure on a small self-host is still swept", %{bypass: bypass} do
+    ghost_id = Ecto.UUID.generate()
+    stub_qdrant(bypass, [ghost_id])
+    stub_delete(bypass)
+
+    assert :ok = perform_job(OrphanSweep, %{})
+    assert_received {:qdrant_delete, body}
+
+    assert get_in(hd(legacy_view(Jason.decode!(body)["filter"]["must"])), ["match", "value"]) ==
+             ghost_id
+  end
+
   describe "the Qdrant tenant pass deletes nothing when" do
     test "the facet request fails", %{bypass: bypass} do
       stub_qdrant(bypass, [Ecto.UUID.generate()], [], facet_status: 500)
@@ -147,6 +159,18 @@ defmodule Engram.Workers.OrphanSweepTest do
     # repointed database), not that that many users left.
     test "the departed share is implausible", %{bypass: bypass} do
       stub_qdrant(bypass, for(_ <- 1..150, do: Ecto.UUID.generate()))
+      stub_delete(bypass)
+
+      {_result, log} = with_log(fn -> perform_job(OrphanSweep, %{}) end)
+      refute_received {:qdrant_delete, _}
+      assert log =~ "orphan_sweep aborting"
+    end
+
+    # `runaway?/2` only fires at 100+ departed, so a small deployment (most
+    # self-hosts) needs its own floor: two or more departed that are over half
+    # of every tenant found means the `users` read is wrong.
+    test "most of a small deployment's tenants look departed", %{bypass: bypass} do
+      stub_qdrant(bypass, for(_ <- 1..3, do: Ecto.UUID.generate()))
       stub_delete(bypass)
 
       {_result, log} = with_log(fn -> perform_job(OrphanSweep, %{}) end)

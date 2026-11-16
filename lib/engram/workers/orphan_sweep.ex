@@ -636,9 +636,7 @@ defmodule Engram.Workers.OrphanSweep do
   defp sweep_qdrant(live_ids) do
     case discover_qdrant_user_ids() do
       {:ok, qdrant_ids} ->
-        qdrant_ids
-        |> MapSet.difference(live_ids)
-        |> delete_departed(MapSet.size(qdrant_ids))
+        delete_departed(:qdrant, qdrant_ids, live_ids, &delete_tenant/1)
 
       {:error, reason} ->
         Logger.error(
@@ -650,55 +648,67 @@ defmodule Engram.Workers.OrphanSweep do
     end
   end
 
-  defp delete_departed(candidates, tenants) do
+  # The one gate for whole-user deletes (a tenant's vectors, an attachment
+  # prefix), which diff a store's ids `found` against `users`. Returns how
+  # many `delete_fun` removed (it answers 1 or 0 per id). The candidates are
+  # re-read from `users` right before deleting, so a signup that committed
+  # after the full read stays live.
+  defp delete_departed(store, found, live_ids, delete_fun) do
+    departed = MapSet.difference(found, live_ids)
+    total = MapSet.size(found)
+
     cond do
-      MapSet.size(candidates) == 0 ->
+      MapSet.size(departed) == 0 ->
         0
 
-      # Same premise as the point pass: a large departed share means the
-      # `users` read is wrong (a restore, a repointed database), not that
-      # that many users left. Deleting would drop live users' vectors.
-      runaway?(candidates, tenants) ->
+      implausible_departures?(departed, total) ->
         Logger.error(
-          "orphan_sweep aborting: departed tenant ratio implies a bad authority",
+          "orphan_sweep aborting #{store}: departed share implies a bad authority",
           Metadata.with_category(:error, :oban,
-            total_count: MapSet.size(candidates),
-            result: %{scanned: tenants, max_ratio: @max_candidate_ratio}
+            total_count: MapSet.size(departed),
+            result: %{store: store, scanned: total, max_ratio: @max_candidate_ratio}
           )
         )
 
         0
 
       true ->
-        candidates
-        |> MapSet.difference(live_user_ids(MapSet.to_list(candidates)))
-        |> delete_tenants()
+        departed
+        |> MapSet.difference(live_user_ids(MapSet.to_list(departed)))
+        |> Enum.reduce(0, &(delete_fun.(&1) + &2))
     end
   end
 
-  defp delete_tenants(orphans) do
-    Enum.reduce(orphans, 0, fn user_id, acc ->
-      case Qdrant.delete_by_user(user_id) do
-        :ok ->
-          Logger.debug(
-            "orphan_sweep deleted Qdrant points",
-            Metadata.with_category(:debug, :oban, user_id: user_id)
+  # Real departures are a few users. Over `runaway?/2`'s share, or (below
+  # its floor of 100, which leaves every small deployment open) two or more
+  # departed that are over half of all found, the `users` read is wrong: a
+  # restore, a repointed database. Deleting would drop live users' data.
+  defp implausible_departures?(departed, total) do
+    n = MapSet.size(departed)
+    runaway?(departed, total) or (n >= 2 and n * 2 > total)
+  end
+
+  defp delete_tenant(user_id) do
+    case Qdrant.delete_by_user(user_id) do
+      :ok ->
+        Logger.debug(
+          "orphan_sweep deleted Qdrant points",
+          Metadata.with_category(:debug, :oban, user_id: user_id)
+        )
+
+        1
+
+      other ->
+        Logger.error(
+          "orphan_sweep Qdrant delete failed",
+          Metadata.with_category(:error, :oban,
+            user_id: user_id,
+            reason: Metadata.safe_reason(other)
           )
+        )
 
-          acc + 1
-
-        other ->
-          Logger.error(
-            "orphan_sweep Qdrant delete failed",
-            Metadata.with_category(:error, :oban,
-              user_id: user_id,
-              reason: Metadata.safe_reason(other)
-            )
-          )
-
-          acc
-      end
-    end)
+        0
+    end
   end
 
   # Tenants come from the `u` index (one facet request), not from a scroll
