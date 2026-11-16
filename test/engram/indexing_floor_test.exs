@@ -94,11 +94,8 @@ defmodule Engram.IndexingFloorTest do
       bypass = Bypass.open()
       ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
 
-      Bypass.stub(bypass, :any, :any, fn conn ->
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result": true}))
-      end)
+      # Multi-MB floor upserts: the stub must read the body (`ack/1`).
+      Bypass.stub(bypass, :any, :any, &Engram.QdrantStub.ack/1)
 
       {:ok, user} = Crypto.ensure_user_dek(insert(:user))
       vault = insert(:vault, user: user)
