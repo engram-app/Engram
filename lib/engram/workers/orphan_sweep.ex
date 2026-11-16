@@ -10,7 +10,7 @@ defmodule Engram.Workers.OrphanSweep do
   Sweeps in sequence:
 
     1. Build authoritative user_id set from `users` (alive + soft-deleted).
-    2. Qdrant — facet the indexed tenant key `u` (plus legacy points that
+    2. Qdrant: facet the indexed tenant key `u` (plus legacy points that
        carry only `user_id`); for each user_id NOT in the live set, call
        `Qdrant.delete_by_user/2`.
     3. S3 — list bucket with `delimiter: "/"` to get user_id prefixes;
@@ -41,10 +41,10 @@ defmodule Engram.Workers.OrphanSweep do
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Storage
+  alias Engram.Vaults.Vault
   alias Engram.Vector.FilterId
   alias Engram.Vector.PayloadKeys
   alias Engram.Vector.PointIds
-  alias Engram.Vaults.Vault
   alias Engram.Vector.Qdrant
   alias Engram.Workers.DeleteNoteIndex
 
