@@ -197,8 +197,8 @@ defmodule Engram.Vector.FilterRoundtripTest do
       refute Map.has_key?(schema(col), "fa[].k")
       assert Map.has_key?(schema(col), "n")
 
-      # A peer node dropped them first: the server answers 404, counted as
-      # done, nothing logged.
+      # A peer node dropped them first: deleting a missing index is counted
+      # as done (404, or 200 on Qdrant versions that ignore it), nothing logged.
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           assert :ok = Qdrant.drop_retired_indexes(col, MapSet.new(["p", "fa[].k"]))

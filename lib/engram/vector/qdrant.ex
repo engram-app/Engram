@@ -1739,8 +1739,9 @@ defmodule Engram.Vector.Qdrant do
   # points without `n` stay findable until its backfill reaches them. The
   # tenant (`u`, `v`) holds for every point. An empty complement matches the
   # whole tenant. Past `max_note_ids/0` the filter would break the strict
-  # condition limits, so it raises: the resolver caps below it. The exclusion is nested in `must`, so a caller's
-  # own top-level `must_not` (recommend's source points) stays its own.
+  # condition limits, so it raises: the resolver caps below it. The exclusion
+  # is nested in `must`, so a caller's own top-level `must_not` (recommend's
+  # source points) stays its own.
   defp note_scope(tenant, nil), do: %{must: tenant}
   defp note_scope(tenant, {:exclude, []}), do: %{must: tenant}
 
