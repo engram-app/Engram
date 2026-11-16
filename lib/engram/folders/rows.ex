@@ -923,17 +923,25 @@ defmodule Engram.Folders.Rows do
   would make the `folders_release_refs` trigger NULL every moved row's
   reference and the move write it again: two writes per row (#2468 reviews).
   After them it releases only the stragglers.
-  """
-  @spec rename(map(), Ecto.UUID.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def rename(_user, _vault_id, same, same), do: :ok
 
-  def rename(_user, _vault_id, old_folder, new_folder)
+  `uncascaded: seq` (S5, `Engram.Folders.WriteStop`): the notes under the
+  folder do not move, so the moved row is stamped `notes_cascaded = false`
+  at the op's `seq` and readers derive its notes' paths from it. Refused
+  with `{:error, :merge}` when a live folder already holds `new_folder`: a
+  merge re-points the notes, so only the cascade can do it.
+  """
+  @spec rename(map(), Ecto.UUID.t(), String.t(), String.t(), keyword()) ::
+          :ok | {:error, term()}
+  def rename(user, vault_id, old_folder, new_folder, opts \\ [])
+  def rename(_user, _vault_id, same, same, _opts), do: :ok
+
+  def rename(_user, _vault_id, old_folder, new_folder, _opts)
       when old_folder == "" or new_folder == "",
       do: {:error, :invalid_path}
 
-  def rename(user, vault_id, old_folder, new_folder) do
+  def rename(user, vault_id, old_folder, new_folder, opts) do
     with :ok <- check_move(user, vault_id, old_folder, new_folder),
-         do: do_rename(user, vault_id, old_folder, new_folder)
+         do: do_rename(user, vault_id, old_folder, new_folder, opts)
   end
 
   @doc """
@@ -998,10 +1006,16 @@ defmodule Engram.Folders.Rows do
   def into_own_subtree?(old_folder, new_folder),
     do: new_folder == old_folder or String.starts_with?(new_folder, old_folder <> "/")
 
-  defp do_rename(user, vault_id, old_folder, new_folder) do
+  defp do_rename(user, vault_id, old_folder, new_folder, opts) do
     with {:ok, dek} <- Crypto.get_dek(user),
          {:ok, fk} <- Crypto.dek_filter_key(user) do
-      ctx = %{user_id: user.id, vault_id: vault_id, dek: dek, fk: fk}
+      ctx = %{
+        user_id: user.id,
+        vault_id: vault_id,
+        dek: dek,
+        fk: fk,
+        uncascaded: opts[:uncascaded]
+      }
 
       case subtree(user, vault_id, [old_folder]) do
         [] -> :ok
@@ -1025,6 +1039,9 @@ defmodule Engram.Folders.Rows do
     paths = new_paths(ctx, rows, root.id, new_folder)
 
     case live_child(ctx.vault_id, new_parent, new_name_h) do
+      %{id: occupant} when occupant != root.id and is_integer(ctx.uncascaded) ->
+        {:error, :merge}
+
       %{id: occupant} when occupant != root.id ->
         merge_subtree(ctx, rows, paths, root.id, occupant, new_parent)
 
@@ -1041,7 +1058,7 @@ defmodule Engram.Folders.Rows do
               full_path_hmac: path_hmac(ctx.fk, new_folder),
               dek_version: Crypto.row_version_aad_bound(),
               updated_at: now()
-            ] ++ Folder.name_keys(ctx.fk, new_segment, nonce)
+            ] ++ Folder.name_keys(ctx.fk, new_segment, nonce) ++ uncascaded(ctx.uncascaded)
         )
 
         :ok = put_names(ctx, [{root.id, new_segment}])
@@ -1050,6 +1067,9 @@ defmodule Engram.Folders.Rows do
         :ok
     end
   end
+
+  defp uncascaded(nil), do: []
+  defp uncascaded(seq) when is_integer(seq), do: [notes_cascaded: false, seq: seq]
 
   # id => new full path, for every row whose chain of names opens.
   defp new_paths(ctx, rows, root_id, new_folder) do

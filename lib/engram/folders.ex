@@ -43,6 +43,7 @@ defmodule Engram.Folders do
   alias Engram.Crypto
   alias Engram.Folders.Rows
   alias Engram.Folders.Wire
+  alias Engram.Folders.WriteStop
   alias Engram.Logger.Metadata
   alias Engram.Notes
   alias Engram.Notes.PathSanitizer
@@ -249,13 +250,35 @@ defmodule Engram.Folders do
 
       claimed_atomic(user, vault, claim, fn ->
         with :ok <- check_expected(user, vault, old_folder, new_folder, expect),
-             {:ok, notes} <- Notes.rename_folder(user, vault, old_folder, new_folder),
-             :ok <- move_bare_row(user, vault, old_folder, new_folder, notes, expect),
+             {:ok, notes, how} <- notes_leg(user, vault, old_folder, new_folder),
+             :ok <- move_bare_row(user, vault, old_folder, new_folder, notes, how, expect),
              {:ok, atts} <- Attachments.move_folder_pairs(user, vault, att_pairs) do
           seq = Wire.changed(user, vault, [new_folder], opts[:origin_device_id])
           {:ok, %{notes: notes, attachments: atts, seq: seq}}
         end
       end)
+    end
+  end
+
+  # S5 (`WriteStop`): one folder row, no note row, when the write stop can
+  # serve the op; else, or with it off, the cascade. Attachments still move
+  # row by row either way (`move_folder_pairs/3`): their readers read stored
+  # paths.
+  defp notes_leg(user, vault, old, new) do
+    uncascaded =
+      if WriteStop.on?(),
+        do: Notes.rename_folder_uncascaded(user, vault, old, new),
+        else: :cascade
+
+    case uncascaded do
+      :cascade ->
+        with {:ok, n} <- Notes.rename_folder(user, vault, old, new), do: {:ok, n, :cascaded}
+
+      {:ok, n} ->
+        {:ok, n, :uncascaded}
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -273,14 +296,14 @@ defmodule Engram.Folders do
   # still has an id the wire hands out, so the wire moves it here, under the
   # vault seq lock like every folder write. REST and MCP keep today's 404
   # for such a folder (no `expect:`).
-  defp move_bare_row(user, vault, old, new, 0, {_id, _parent}) do
+  defp move_bare_row(user, vault, old, new, 0, :cascaded, {_id, _parent}) do
     Repo.with_tenant!(user.id, fn ->
       _ = Vaults.next_seq!(vault.id)
       Rows.rename(user, vault.id, old, new)
     end)
   end
 
-  defp move_bare_row(_user, _vault, _old, _new, _notes, _expect), do: :ok
+  defp move_bare_row(_user, _vault, _old, _new, _notes, _how, _expect), do: :ok
 
   defp refuse_own_subtree(old, new) do
     if old != new and Rows.into_own_subtree?(old, new), do: {:error, :invalid_path}, else: :ok

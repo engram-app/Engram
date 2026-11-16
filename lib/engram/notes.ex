@@ -7897,6 +7897,179 @@ defmodule Engram.Notes do
     end
   end
 
+  # The folder-rename UPDATE column set for marker rows (see the per-class
+  # sets by `do_rename_folder/6`); the S5 leg rewrites markers too.
+  @marker_rename_cols [:folder_ciphertext, :folder_nonce, :folder_hmac]
+
+  @doc """
+  S5 of the O(1) folder rename plan (Engram#2523, `Engram.Folders.WriteStop`):
+  renames or moves `old_folder` to `new_folder` by updating ONE folder row
+  (`Rows.rename/5` with `uncascaded:`) at one seq. No note row is written, no
+  tombstone inserted, nothing broadcast per note: every reader derives the
+  notes' paths from the folder chain plus their names (`Location`). Returns
+  `{:ok, notes}` (the live notes now under the new path), an error, or
+  `:cascade` when only the cascade (`rename_folder/4`) can serve the op:
+
+    * no live folder row at `old_folder` (a path-only folder, drift), a
+      no-op, or nothing under it (the cascade's answer for that stands);
+    * a live folder already at `new_folder` (a merge or a conflict: the
+      cascade decides which);
+    * any placed drift in the vault (a folder reference that disagrees
+      with its stored folder), or a note under it with a stale name stamp
+      (the previous release wrote its path).
+
+  A note with no `name_key` yet (written before 20261113100000) has it
+  filled first (`key_names/3`): one statement, once per such row.
+
+  Still O(notes under the folder), all reads and CPU, no row writes: the
+  scan that decides the above, the `filemeta_v0` re-claim old plugins'
+  index room needs (one `Identity.claim`, the plan's condition C5, until
+  the vault's index projects from `filemeta_v1`), and the link-rewrite
+  targets (ids and HMACs, one `RewriteNoteLinks` chain per 1,000 notes).
+  Folder markers under it (explicit folders, O(subfolders)) and the
+  descendant folder rows' path keys (O(subfolders), S6 drops them) are still
+  rewritten: their writers and readers key on the stored folder path.
+
+  Runs in the caller's transaction (`Folders.rename/5`).
+  """
+  @spec rename_folder_uncascaded(map(), map(), String.t(), String.t()) ::
+          {:ok, non_neg_integer()} | :cascade | {:error, term()}
+  def rename_folder_uncascaded(user, vault, old_folder, new_folder) do
+    new_folder = String.trim_trailing(new_folder, "/")
+
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         false <- old_folder == new_folder,
+         ids =
+           Repo.with_tenant!(user.id, fn ->
+             Rows.ids_by_path(user, vault.id, [old_folder, new_folder])
+           end),
+         %{^old_folder => folder_id} when is_binary(folder_id) <- ids,
+         nil <- ids[new_folder],
+         {rows, drift} = scan_with_drift(user, vault, [old_folder]),
+         {markers, notes} = Enum.split_with(rows, &(&1.kind == "folder")),
+         # Nothing under it: the cascade answers (REST's 404 for an empty
+         # path-made folder, or the wire's bare-row move).
+         false <- notes == [] and markers == [],
+         true <- Enum.all?(notes, &uncascadable?/1),
+         # Any placed drift in the vault (0 in steady state): a drift row the
+         # stored-folder filter dropped may still name this folder by
+         # reference, and would move silently. The cascade decides it.
+         [] <- drift do
+      :ok = key_names(user, vault, notes)
+      move_folder_row(user, vault, folder_id, {old_folder, new_folder}, notes, markers)
+    else
+      {:error, _} = err -> err
+      _ -> :cascade
+    end
+  end
+
+  defp uncascadable?(note), do: Location.derivable?(note)
+
+  # Fills `name_key` for any of `notes` that has none (rows no writer
+  # touched since 20261113100000): the by-name lookup must find each of them
+  # once its stored path goes stale. Naming `name_stamp` fires the
+  # `notes_set_name_key` trigger, which computes the key in SQL: no crypto,
+  # no seq, nothing a reader shows changes. One read, and one write of only the
+  # unkeyed rows when there are any: a vault pays it once per legacy row.
+  defp key_names(_user, _vault, []), do: :ok
+
+  defp key_names(user, vault, notes) do
+    ids = Enum.map(notes, & &1.id)
+
+    Repo.with_tenant!(user.id, fn ->
+      unkeyed =
+        Repo.all(
+          from(n in Note,
+            where: n.vault_id == ^vault.id and n.id in ^ids and fragment("name_key IS NULL"),
+            select: n.id
+          )
+        )
+
+      if unkeyed != [] do
+        Repo.update_all(
+          from(n in Note, where: n.id in ^unkeyed, update: [set: [name_stamp: n.name_stamp]]),
+          []
+        )
+      end
+    end)
+
+    :ok
+  end
+
+  defp move_folder_row(user, vault, folder_id, {old_folder, new_folder}, notes, markers) do
+    old_len = String.length(old_folder)
+    relocate = fn path -> new_folder <> String.slice(path, old_len..-1//1) end
+    claims = Enum.map(notes, &{relocate.(&1.path), &1.id})
+
+    marker_rows =
+      markers
+      |> Enum.map(&{&1, nil, nil, relocate.(&1.folder), nil})
+      |> then(&group_rename_updates(user, &1, %{}))
+      |> Map.get(:marker, [])
+
+    links =
+      Enum.map(notes, fn n ->
+        {:note, n.id, old_path_hmac_b64!(user, n.path),
+         Base.encode64(Links.basename_hmac(user, Links.basename_key(n.path)))}
+      end)
+
+    # C5: the index room's path-keyed map is re-keyed in one transaction
+    # (old plugins hold it as their path authority), before the row moves,
+    # as the cascade does.
+    claimed = if claims == [], do: :ok, else: Identity.claim(user, vault.id, claims)
+
+    with :ok <- claimed,
+         {:ok, :ok} <-
+           write_folder_row(user, vault, folder_id, {old_folder, new_folder}, marker_rows, links) do
+      # Counted as the cascade counts: every row under the folder, markers
+      # included (REST and MCP answer 404 for 0).
+      {:ok, length(notes) + length(markers)}
+    else
+      {:ok, {:error, reason}} ->
+        # The claim committed but no row moved: report it, as the cascade
+        # does (projection converges the map back to the rows).
+        _ = orphan_claim(user, vault, length(claims), reason)
+        if reason == :merge, do: :cascade, else: {:error, reason}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # Under the vault seq lock: one seq, the folder row, the markers, the link
+  # chain. Returns `{:ok, :ok}` or `{:ok, {:error, reason}}`.
+  defp write_folder_row(user, vault, folder_id, {old_folder, new_folder}, marker_rows, links) do
+    Repo.with_tenant(user.id, fn ->
+      seq = Engram.Vaults.next_seq!(vault.id)
+
+      case Rows.rename(user, vault.id, old_folder, new_folder, uncascaded: seq) do
+        :ok ->
+          BulkRename.update!(marker_rows, @marker_rename_cols, seq, DateTime.utc_now())
+
+          user.id
+          |> RewriteNoteLinks.new_for_folder(vault.id, links,
+            folder_move: folder_move_args(user, folder_id, old_folder)
+          )
+          |> Enqueue.enqueue_all("rewrite_note_links")
+
+          :ok
+
+        {:error, _} = err ->
+          err
+      end
+    end)
+  end
+
+  # The folder's old path rides the link chain once, as user-DEK ciphertext
+  # bound to the folder id (T3.2: no plaintext in job args), so the chain can
+  # recover each moved note's old path without a tombstone.
+  defp folder_move_args(user, folder_id, old_folder) do
+    {:ok, dek} = Crypto.get_dek(user)
+    aad = Crypto.aad_for_row("oban_rewrite_note_links", "old_folder", folder_id)
+    {ct, nonce} = Envelope.encrypt(old_folder, dek, aad)
+    %{folder_id: folder_id, ciphertext: Base.encode64(ct), nonce: Base.encode64(nonce)}
+  end
+
   # Conflict-gated rename shared by the public entry point (rows = nil →
   # do_rename_folder scans the vault itself) and the batch-move path (rows =
   # the ONE decrypted scan shared across all K markers). Caller must have run
@@ -8453,7 +8626,6 @@ defmodule Engram.Notes do
   # phase_b_path_folder_for / full_aad_bound_kw), plus the `folder_ref_id` the
   # cascade adds for notes (markers have no reference) — values are fetched
   # from the kw by these names when the VALUES rows are built.
-  @marker_rename_cols [:folder_ciphertext, :folder_nonce, :folder_hmac]
   @v2_rename_cols [
     :folder_ref_id,
     :path_ciphertext,
