@@ -459,7 +459,10 @@ class ObsidianInstance:
             if port is not None:
                 try:
                     resp = requests.get(f"http://127.0.0.1:{port}/json/version", timeout=2)
-                except requests.ConnectionError:
+                # Refused (not listening yet) or slow (Chromium accepted the
+                # socket but is still booting; `ReadTimeout` is not a
+                # `ConnectionError`): poll again until the deadline.
+                except (requests.ConnectionError, requests.Timeout):
                     pass
                 else:
                     check_devtools_version(port, resp)  # fail fast, don't poll a foreign server

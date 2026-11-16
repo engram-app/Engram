@@ -55,3 +55,39 @@ def test_rejects_foreign_404():
 def test_rejects_200_that_is_not_chromium(body):
     with pytest.raises(CdpPortHijacked):
         check_devtools_version(9250, _resp(200, body))
+
+
+def test_a_slow_first_answer_is_polled_again(tmp_path, monkeypatch):
+    # PR 2606's e2e-clerk run lost test_82's setup: Chromium accepted the
+    # socket but answered /json/version after the 2 s read timeout, and
+    # `ReadTimeout` is not a `ConnectionError`, so the first slow reply
+    # raised instead of polling to the deadline.
+    import helpers.obsidian as obsidian
+
+    (tmp_path / "DevToolsActivePort").write_text("58175\n/devtools/browser/abc")
+    answers = iter(
+        [
+            requests.ReadTimeout("slow boot"),
+            _resp(200, b'{"Browser": "Chrome/132.0.6834.210", "webSocketDebuggerUrl": "ws://x"}'),
+        ]
+    )
+
+    def fake_get(*_args, **_kwargs):
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(obsidian.requests, "get", fake_get)
+    monkeypatch.setattr(obsidian.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(obsidian, "CdpClient", lambda port: ("cdp", port))
+
+    inst = obsidian.ObsidianInstance.__new__(obsidian.ObsidianInstance)
+    inst.name = "a"
+    inst.config_dir = tmp_path
+    inst.cdp = None
+
+    inst._wait_for_cdp(timeout=5)
+
+    assert inst.cdp_port == 58175
+    assert inst.cdp == ("cdp", 58175)

@@ -42,8 +42,9 @@ defmodule Engram.Folders.Wire do
   Today's per-note events keep flowing; these are additive.
 
   Read side, also only while on: the sync manifest carries `folders: [{id,
-  parent_id, name}]` (every live folder, root parent null) and a `folder_id`
-  per note (`manifest_rows/1`, `manifest/3`), and the `crdt_create` reply
+  parent_id, name}]` (every live folder, root parent null) and a
+  `folder_id` and `name` per note (`manifest_rows/1`, `manifest/3`), and the
+  `crdt_create` reply
   carries the note's `folder_id` (`create_reply/1`). Root is null, never a row.
   """
 
@@ -51,7 +52,7 @@ defmodule Engram.Folders.Wire do
   alias Engram.Folders
   alias Engram.Folders.Rows
   alias Engram.Logger.Metadata
-  alias Engram.Notes.PathSanitizer
+  alias Engram.Notes.{Location, PathSanitizer}
   alias Engram.Repo
   alias Engram.ServiceConfig
   alias Engram.Sync.Broadcast
@@ -228,26 +229,21 @@ defmodule Engram.Folders.Wire do
   def manifest_rows(vault), do: if(enabled?(), do: Rows.live_rows(vault.id))
 
   @doc """
-  Adds the folder list and each note's `folder_id` to a rendered manifest,
-  given `manifest_rows/1`'s result (nil: the body unchanged). A note's folder
-  is found by its decrypted path, not `notes.folder_ref_id`, so the manifest
-  keeps its index-only notes read; a note whose folder has no row yet (drift)
-  gets `folder_id: nil` and is placed by its path.
+  Adds the folder list and each note's `folder_id` and `name` to a rendered
+  manifest (`Location.place/3`), given `manifest_rows/1`'s result (nil, the
+  switch off: the body unchanged). Only the switch adds them, never the name
+  reads alone: the S4 plugin takes a manifest `folders` list as the wire
+  being on, so `folder_ops` off must still mean no list. A note's folder is
+  found by the path it is served at, not `notes.folder_ref_id`, so the
+  manifest keeps its index-only notes read; a note whose folder has no row
+  yet (drift) gets `folder_id: nil` and is placed by its path.
   """
   @spec manifest(map(), [map()] | nil, binary()) :: map()
   def manifest(body, nil, _dek), do: body
 
   def manifest(%{notes: notes} = body, rows, dek) do
-    tree = Rows.decrypt_tree(dek, rows)
-    id_of = Map.new(tree, &{&1.path, &1.id})
-
-    notes =
-      Enum.map(notes, fn n -> Map.put(n, :folder_id, id_of[Rows.parent_path(n.path)]) end)
-
-    Map.merge(body, %{
-      notes: notes,
-      folders: Enum.map(tree, &Map.take(&1, [:id, :parent_id, :name]))
-    })
+    {notes, folders} = Location.place(notes, rows, dek)
+    Map.merge(body, %{notes: notes, folders: folders})
   end
 
   @doc """
@@ -274,9 +270,9 @@ defmodule Engram.Folders.Wire do
 
   # `[%{id, parent_id, name}]` for `folder` and every ancestor, root first
   # (root itself has no entry, so its children have parent_id nil), so a
-  # client learns a new nested folder's ids at once. ONE bounded read: every
-  # prefix's row by its path hash (`Rows.ids_by_path/3`, O(depth) keys on one
-  # index); names are the path's own segments, so nothing is decrypted. The
+  # client learns a new nested folder's ids at once. ONE bounded read: the
+  # folder's parent chain walked from the root (`Rows.ids_by_path/3`, one
+  # probe per prefix); names are the path's own segments, so nothing is decrypted. The
   # chain stops at the first prefix with no row (a writer creates ancestors
   # first, so that is only drift).
   defp chain(_user, _vault, ""), do: []

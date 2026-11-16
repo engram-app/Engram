@@ -234,27 +234,32 @@ defmodule Engram.Notes.Location do
   names are off or no row has a folder.
   """
   @spec chains([map()]) :: [map()] | nil
-  def chains(rows) do
-    with true <- on?(),
-         [_ | _] = rows <- Enum.filter(rows, &derivable?/1) do
-      rows
-      |> Enum.group_by(& &1.vault_id, & &1.folder_ref_id)
-      |> Enum.flat_map(fn {vault_id, ids} ->
-        Rows.chain_rows(vault_id, Enum.uniq(ids), moved_only: true)
-      end)
-    else
-      _ -> nil
+  def chains(rows), do: if(on?(), do: read_chains(rows))
+
+  # `chains/1` past the names gate (a caller that already read it).
+  defp read_chains(rows) do
+    case Enum.filter(rows, &derivable?/1) do
+      [] ->
+        nil
+
+      rows ->
+        rows
+        |> Enum.group_by(& &1.vault_id, & &1.folder_ref_id)
+        |> Enum.flat_map(fn {vault_id, ids} ->
+          Rows.chain_rows(vault_id, Enum.uniq(ids), moved_only: true)
+        end)
     end
   end
 
   @doc """
   The select extra a page query of `vault_id` carries so it needs no
   `chains/1` read while nothing in the vault moved (`moved?/1`): `%{}` with
-  names off.
+  names off (`names?`, read once per request by a caller that reads it
+  again).
   """
-  @spec moved_column(Ecto.UUID.t()) :: map()
-  def moved_column(vault_id) do
-    if on?(),
+  @spec moved_column(Ecto.UUID.t(), boolean()) :: map()
+  def moved_column(vault_id, names? \\ on?()) do
+    if names?,
       do: %{moved__: dynamic(fragment(WalkSql.moved(), type(^vault_id, Ecto.UUID)))},
       else: %{}
   end
@@ -335,6 +340,75 @@ defmodule Engram.Notes.Location do
   end
 
   @doc """
+  What a whole-vault listing (`/sync/manifest`, `/vault/tree`) reads, in
+  its own tenant transaction, to serve its notes where their folder rows
+  put them, given rows it already read with `moved_column/2` (so they say
+  whether the vault holds a folder moved without a cascade, which no vault
+  does before S5; rows read without it, or none, say no): nil, reading
+  nothing, unless one does. Then the vault's live notes' location columns
+  (one O(notes) read of small columns, no content) and their moved chains.
+  """
+  @spec listing_moves(map(), map(), [map()] | nil) :: {[map()], [map()]} | nil
+  def listing_moves(user, vault, probed_rows) do
+    if moved?(probed_rows || []) do
+      rows =
+        Repo.all(
+          from(n in Engram.Notes.Note,
+            where:
+              n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
+                n.kind == "note",
+            select: map(n, ^[:id, :vault_id, :deleted_at, :path_nonce | fields()])
+          )
+        )
+
+      {rows, read_chains(rows)}
+    end
+  end
+
+  @doc """
+  `%{id => path}` for the notes of `listing_moves/3`'s answer that sit under
+  a folder moved without a cascade (`put_paths/3`'s rule): a listing serves
+  those at that path and every other note at its stored path. One name
+  decrypt per such note, none otherwise.
+  """
+  @spec listing_paths(map(), {[map()], [map()]} | nil) :: %{Ecto.UUID.t() => String.t()}
+  def listing_paths(_user, nil), do: %{}
+  def listing_paths(_user, {_rows, []}), do: %{}
+
+  def listing_paths(user, {rows, chains}) do
+    case Crypto.get_dek(user) do
+      {:ok, dek} ->
+        derive(dek, Enum.filter(rows, &derivable?/1), &Rows.moved_paths(dek, chains, &1))
+
+      _ ->
+        %{}
+    end
+  end
+
+  @doc """
+  The listing's additive folder fields (O(1) folder rename plan, Engram#2523),
+  from the vault's live folder rows (`Rows.live_rows/1`, read in the
+  listing's transaction): each of `notes` (maps with the `path` they are
+  served at) gains `folder_id` (nil at the root or for a folder with no row)
+  and `name` (its last segment), and `folders` is `[%{id, parent_id, name}]`,
+  parents first. A note's folder is found by its served path in the
+  decrypted tree, so `folder_id` always agrees with `path`. Cost: one batch
+  decrypt of O(folders) names; nothing per note but a map lookup.
+  """
+  @spec place([map()], [map()], binary()) :: {[map()], [map()]}
+  def place(notes, folder_rows, dek) do
+    tree = Rows.decrypt_tree(dek, folder_rows)
+    id_of = Map.new(tree, &{&1.path, &1.id})
+
+    notes =
+      Enum.map(notes, fn n ->
+        Map.merge(n, %{folder_id: id_of[Rows.parent_path(n.path)], name: Name.of_path(n.path)})
+      end)
+
+    {notes, Enum.map(tree, &Map.take(&1, [:id, :parent_id, :name]))}
+  end
+
+  @doc """
   `note`, found by `at/5` at `path`, shown at that path: the folder chain
   and the name it matched ARE its location, whatever its stored path still
   says. (Found by its path key, the two are the same path.)
@@ -363,16 +437,22 @@ defmodule Engram.Notes.Location do
 
   # `rows`' folder paths (`folder_paths`, given their folder ids) joined
   # with their decrypted names; a row whose folder has no path there is left
-  # out (it keeps its stored path).
+  # out (it keeps its stored path), and its name is never decrypted: only
+  # the rows a path is derived for pay a name decrypt.
   defp derive(_dek, [], _folder_paths), do: %{}
 
   defp derive(dek, rows, folder_paths) do
     folders = folder_paths.(rows |> Enum.map(& &1.folder_ref_id) |> Enum.uniq())
 
-    for {row, {:ok, name}} <- Enum.zip(rows, decrypt_names(dek, rows)),
-        folder = folders[row.folder_ref_id],
-        into: %{},
-        do: {row.id, folder <> "/" <> name}
+    case Enum.filter(rows, &Map.has_key?(folders, &1.folder_ref_id)) do
+      [] ->
+        %{}
+
+      rows ->
+        for {row, {:ok, name}} <- Enum.zip(rows, decrypt_names(dek, rows)),
+            into: %{},
+            do: {row.id, folders[row.folder_ref_id] <> "/" <> name}
+    end
   end
 
   # One native call for the batch (`Envelope.decrypt_many/3`); it is

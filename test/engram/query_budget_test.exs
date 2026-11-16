@@ -133,7 +133,11 @@ defmodule Engram.QueryBudgetTest do
     # insert: ReleaseIndexEntries.enqueue/3 coalesces per vault), commit.
     "mcp delete_note" => 12,
     # Read target 5; floor 6: begin, enter, change_seq (it decides whether the
-    # rows are read at all), notes rows, attachments rows, commit.
+    # rows are read at all), notes rows, attachments rows, commit. The notes
+    # read also carries the moved-folder probe (O(1) folder rename plan,
+    # #2523); the folder rows (+1) are read only with `folder_ops` on, and the
+    # notes' locations (+1) only in a vault holding a folder moved without a
+    # cascade (none before S5).
     "GET sync/manifest" => 6,
     "GET notes/*path" => 6,
     # The plugin's push: rotation lock, begin, enter, note row, crdt tail, seq

@@ -87,4 +87,35 @@ defmodule Engram.FolderRows do
 
     Map.new(by_id, fn {id, f} -> {path.(path, id, path), %{id: id, explicit: f.explicit}} end)
   end
+
+  @doc """
+  A folder rename that writes ONE folder row and nothing else (the S5 write
+  shape, `notes_cascaded = false`): its own name and path key move, its
+  descendants' `full_path_hmac` and the notes under it keep the old path.
+  """
+  def move_uncascaded!(user, folder_id, new_name) do
+    alias Engram.Folders.Rows
+
+    {:ok, dek} = Crypto.get_dek(user)
+    {:ok, fk} = Crypto.dek_filter_key(user)
+    {ct, nonce} = Rows.encrypt_name(dek, folder_id, new_name)
+
+    %{rows: [[vault_id]]} =
+      Repo.query!(
+        "UPDATE folders SET name_ciphertext = $2, name_nonce = $3, name_hmac = $4, " <>
+          "notes_cascaded = false WHERE id = $1 RETURNING vault_id",
+        [Ecto.UUID.dump!(folder_id), ct, nonce, Rows.name_hmac(fk, new_name)]
+      )
+
+    # Its own path key too (S5 keeps that one row's keys current).
+    {:ok, path} =
+      Repo.with_tenant!(user.id, fn ->
+        Rows.path_by_id(user, Ecto.UUID.load!(vault_id), folder_id)
+      end)
+
+    Repo.query!("UPDATE folders SET full_path_hmac = $2 WHERE id = $1", [
+      Ecto.UUID.dump!(folder_id),
+      Rows.path_hmac(fk, path)
+    ])
+  end
 end

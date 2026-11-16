@@ -709,7 +709,10 @@ defmodule Engram.Folders.ReadsTest do
         id,
         [:engram, :repo, :query],
         fn _, _, meta, _ ->
-          if self() == pid and meta[:source] == source and not Process.get(:healed, false) and
+          # `Rows.ids_by_path/3` walks from a fragment, which has no source.
+          reads? = meta[:source] == source or (meta[:query] || "") =~ ~r/FROM "?#{source}"? /
+
+          if self() == pid and reads? and not Process.get(:healed, false) and
                in_frame?(frame) do
             Process.put(:healed, true)
             heal.()

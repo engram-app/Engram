@@ -66,32 +66,9 @@ defmodule Engram.Notes.LocationTest do
     do:
       sql!("UPDATE notes SET folder_ref_id = $2 WHERE id = $1", [dump(note_id), dump(folder_id)])
 
-  # A folder rename that writes ONE folder row and nothing else (the S5
-  # write shape, `notes_cascaded = false`): the notes under it keep their
-  # old stored path.
-  defp move_folder_row!(user, folder_id, new_name) do
-    {:ok, dek} = Crypto.get_dek(user)
-    {:ok, fk} = Crypto.dek_filter_key(user)
-    {ct, nonce} = Rows.encrypt_name(dek, folder_id, new_name)
-
-    %{rows: [[vault_id]]} =
-      sql!(
-        "UPDATE folders SET name_ciphertext = $2, name_nonce = $3, name_hmac = $4, " <>
-          "notes_cascaded = false WHERE id = $1 RETURNING vault_id",
-        [dump(folder_id), ct, nonce, Rows.name_hmac(fk, new_name)]
-      )
-
-    # Its own path key too (S5 keeps that one row's keys current).
-    {:ok, path} =
-      Repo.with_tenant!(user.id, fn ->
-        Rows.path_by_id(user, Ecto.UUID.load!(vault_id), folder_id)
-      end)
-
-    sql!("UPDATE folders SET full_path_hmac = $2 WHERE id = $1", [
-      dump(folder_id),
-      Rows.path_hmac(fk, path)
-    ])
-  end
+  # The S5 write shape (`FolderRows.move_uncascaded!/3`).
+  defp move_folder_row!(user, folder_id, new_name),
+    do: Engram.FolderRows.move_uncascaded!(user, folder_id, new_name)
 
   # The vault holds a folder moved without a cascade (an empty marker
   # folder, so no note's chain changes).

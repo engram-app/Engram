@@ -9,6 +9,7 @@ defmodule EngramWeb.SyncController do
   alias Engram.Crypto.PathCrypto
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtUpdateLog
+  alias Engram.Notes.Location
   alias Engram.Notes.Note
   alias Engram.Notes.NoteBody
   alias Engram.Repo
@@ -106,15 +107,19 @@ defmodule EngramWeb.SyncController do
     # Phase E1 (#1065): when the client's last-validated watermark still equals
     # the vault's change_seq, nothing in the vault has changed — skip the
     # decrypt-heavy full render entirely. Invalid/absent since_seq falls
-    # through to the full manifest, never errors. One transaction reads the
-    # seq and, only when it moved, the rows (see manifest_rows/2).
+    # through to the full manifest, never errors. One read-only snapshot
+    # (`Repo.with_tenant_snapshot!/2`, as /vault/tree) reads the seq and,
+    # only when it moved, the rows (see manifest_rows/3): the notes, the
+    # folder rows and the moved notes' locations all come from one commit.
+    names? = Location.on?()
+
     {current, rows} =
-      Repo.with_tenant!(user.id, fn ->
+      Repo.with_tenant_snapshot!(user.id, fn ->
         current = Engram.Vaults.raw_current_seq(vault.id)
 
         if since == current,
           do: {current, :unchanged},
-          else: {current, manifest_rows(user, vault)}
+          else: {current, manifest_rows(user, vault, names?)}
       end)
 
     if rows == :unchanged do
@@ -178,7 +183,7 @@ defmodule EngramWeb.SyncController do
   end
 
   # MUST run inside the caller's with_tenant block.
-  defp manifest_rows(user, vault) do
+  defp manifest_rows(user, vault, names?) do
     # T3.6 — project `id` and `dek_version` so AAD-bound rows (v ≥ 2) can
     # reconstruct the bind string ("notes:path:<id>" / "attachments:path:<id>")
     # at decrypt time. Legacy rows (v = 1) decrypt with empty AAD.
@@ -189,9 +194,17 @@ defmodule EngramWeb.SyncController do
     # holding a DB connection across CPU-bound decrypt work is the shape
     # behind the 2026-07-09 CRDT pool-exhaustion incident.
     # `crdt_head` from the note's body row (`NoteBody`), the rest from notes.
+    # The notes read also answers whether the vault holds a folder moved
+    # without a cascade (`Location.moved_column/2`, an uncorrelated EXISTS on
+    # `folders_moved_live`, once per statement), so no statement of its own.
+    moved = Location.moved_column(vault.id, names?)
+
     notes =
       Repo.all(
-        union_all(manifest_notes(user, vault, :short), ^manifest_notes(user, vault, :long))
+        union_all(
+          manifest_notes(user, vault, :short, moved),
+          ^manifest_notes(user, vault, :long, moved)
+        )
       )
 
     attachments =
@@ -204,8 +217,12 @@ defmodule EngramWeb.SyncController do
         )
       )
 
-    # The folder-op wire's folder rows (#2523 S4), nil with its switch off.
-    {notes, attachments, Engram.Folders.Wire.manifest_rows(vault)}
+    # The folder-op wire's folder rows (#2523 S4), nil with its switch off;
+    # and, in a vault holding a folder moved without a cascade (none before
+    # S5), the notes' locations, so they are served where their folder rows
+    # put them.
+    {notes, attachments, Engram.Folders.Wire.manifest_rows(vault),
+     Location.listing_moves(user, vault, notes)}
   end
 
   # The manifest's notes, in two halves of one statement (UNION ALL). A
@@ -218,7 +235,7 @@ defmodule EngramWeb.SyncController do
   # 20261103050000). The no-body head fallback probes `notes` by primary
   # key per row (`NoteBody.head_off_notes_scan/0`), so it does not pull
   # `crdt_head` into the scan. EngramWeb.SyncManifestPlanTest.
-  defp manifest_notes(user, vault, half) do
+  defp manifest_notes(user, vault, half, moved) do
     from(n in Note,
       where:
         n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
@@ -235,7 +252,7 @@ defmodule EngramWeb.SyncController do
     )
     |> path_half(half)
     |> NoteBody.join()
-    |> select_merge(^%{crdt_head: NoteBody.head_off_notes_scan()})
+    |> select_merge(^Map.put(moved, :crdt_head, NoteBody.head_off_notes_scan()))
   end
 
   defp path_half(query, :short),
@@ -244,7 +261,9 @@ defmodule EngramWeb.SyncController do
   defp path_half(query, :long),
     do: where(query, [n], fragment("(octet_length(?) <= 2000) IS NOT TRUE", n.path_ciphertext))
 
-  defp render_manifest(conn, {note_rows, attachment_rows, folder_rows}, dek, current_seq) do
+  defp render_manifest(conn, {note_rows, attachment_rows, folder_rows, moves}, dek, current_seq) do
+    moved = Location.listing_paths(conn.assigns.current_user, moves)
+
     # One batch native call per column (`PathCrypto.decrypt_many!/3`): one key
     # schedule, AAD built in Rust from the raw ids selected above. Measured
     # 2-5x the per-row loop (docs/context/native-nifs.md). Parallel was
@@ -256,7 +275,7 @@ defmodule EngramWeb.SyncController do
         Enum.zip_with(note_rows, PathCrypto.decrypt_many!(:notes, fields, dek), fn row, path ->
           %{
             id: row.id,
-            path: path,
+            path: Map.get(moved, row.id, path),
             content_hash: row.hash,
             seq: row.seq,
             crdt_head: row.crdt_head

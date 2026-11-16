@@ -445,7 +445,16 @@ defmodule Engram.Repo do
     # always true.
     exit_source = tenant_exit_source()
     # Taken here so a block nested inside never sees it.
-    snapshot? = Process.delete(:engram_tenant_snapshot) == true and real_top_level?(exit_source)
+    requested? = Process.delete(:engram_tenant_snapshot) == true
+    snapshot? = requested? and real_top_level?(exit_source)
+
+    # Observability, and what a test sees of a snapshot the sandbox cannot
+    # open (every sandbox transaction is a savepoint): `applied` is false
+    # only for a block nested in another transaction.
+    if requested?,
+      do:
+        :telemetry.execute([:engram, :repo, :tenant_snapshot], %{count: 1}, %{applied: snapshot?})
+
     Process.put(:engram_tenant, uuid)
 
     try do
