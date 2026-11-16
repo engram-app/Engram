@@ -1787,7 +1787,10 @@ defmodule Engram.Indexing do
   end
 
   defp live_note?(note_id),
-    do: Repo.exists?(from(n in Note, where: n.id == ^note_id and is_nil(n.deleted_at)))
+    do:
+      Repo.exists?(
+        from(n in Note, where: n.id == ^note_id and n.kind == "note" and is_nil(n.deleted_at))
+      )
 
   # Every Qdrant point a note could own, removed two ways.
   #

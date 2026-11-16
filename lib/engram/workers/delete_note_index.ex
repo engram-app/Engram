@@ -25,22 +25,15 @@ defmodule Engram.Workers.DeleteNoteIndex do
 
   @max_snoozes 20
 
-  # OrphanSweep's re-enqueue (`job(note, unique: true)`): one open job per
-  # note, while a completed or discarded one does not block it.
-  @unique [
-    keys: [:note_id],
-    period: :infinity,
-    states: [:available, :scheduled, :executing, :retryable]
-  ]
-
   @doc """
   The job for a trashed `note` (anything with `:id`, `:user_id`, `:vault_id`
   and raw `:path_hmac` bytes). T3.2: `path_hmac` goes in base64, never the
-  plaintext path. `unique: true` dedupes against an open job for the note.
+  plaintext path. `dedupe: true` (OrphanSweep's re-enqueue) skips the insert
+  while an open job for the note exists (`Engram.Jobs` policy).
   """
   @spec job(map(), keyword()) :: Oban.Job.changeset()
   def job(note, opts \\ []) do
-    opts = if Keyword.get(opts, :unique), do: [unique: @unique], else: []
+    opts = if Keyword.get(opts, :dedupe), do: [unique: Engram.Jobs.unique(__MODULE__)], else: []
 
     new(
       %{
