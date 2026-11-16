@@ -331,30 +331,23 @@ defmodule Engram.Workers.RewriteNoteLinksFolderTest do
     assert big - small <= 2, "#{big} queries for 10 targets vs #{small} for 2"
   end
 
-  test "a malformed folder entry is skipped and logged; the rest of the page rewrites", ctx do
+  test "a malformed or keyless folder entry is skipped, logged and counted once per walk", ctx do
     %{user: user, vault: vault} = ctx
     seed_folder!(user, vault, "docs", 2)
     index = seed_source!(user, vault, "Index.md", links("docs", 2))
     {:ok, _} = Engram.Folders.rename(user, vault, "docs", "archive")
     [job] = all_enqueued(worker: RewriteNoteLinks)
     Repo.delete_all(from(j in Oban.Job, where: j.worker == "Engram.Workers.RewriteNoteLinks"))
+    good = hd(job.args["targets"])
 
     bad = [
-      %{
-        "target_kind" => "note",
-        "target_id" => Ecto.UUID.generate(),
-        "old_path_hmac" => "not base64!",
-        "old_basename_hmac" => hd(job.args["targets"])["old_basename_hmac"]
-      },
-      %{
-        "target_kind" => "note",
-        "target_id" => Ecto.UUID.generate(),
-        "old_path_hmac" => hd(job.args["targets"])["old_path_hmac"],
-        "old_basename_hmac" => "not base64!"
-      }
+      Map.merge(good, %{"target_id" => Ecto.UUID.generate(), "old_path_hmac" => "not base64!"}),
+      good |> Map.put("target_id", Ecto.UUID.generate()) |> Map.delete("old_basename_hmac")
     ]
 
     args = Map.update!(job.args, "targets", &(bad ++ &1))
+    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :links, :rewrite, :failed]])
+    on_exit(fn -> :telemetry.detach(ref) end)
 
     log =
       ExUnit.CaptureLog.capture_log(fn ->
@@ -363,5 +356,15 @@ defmodule Engram.Workers.RewriteNoteLinksFolderTest do
 
     assert log =~ "link rewrite skipped a malformed folder entry"
     assert authoritative!(user, index.id) == links("archive", 2)
+
+    assert_received {[:engram, :links, :rewrite, :failed], ^ref, %{count: 2},
+                     %{reason: :invalid_hmac_base64}}
+
+    # A later page of the same walk repeats the entries but not the count.
+    later = Map.put(args, "cursor", "ffffffff-ffff-ffff-ffff-ffffffffffff")
+    assert :ok = perform_job(RewriteNoteLinks, later)
+
+    refute_received {[:engram, :links, :rewrite, :failed], ^ref, _,
+                     %{reason: :invalid_hmac_base64}}
   end
 end
