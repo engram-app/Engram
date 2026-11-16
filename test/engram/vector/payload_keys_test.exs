@@ -42,10 +42,24 @@ defmodule Engram.Vector.PayloadKeysTest do
            }
   end
 
-  # R3a: a new collection indexes the identity keys, plus `p` while the note
-  # belts still match pre-`n` points by it.
-  test "the v5 index list is u, v, n and p" do
-    assert Enum.map(PayloadKeys.index_fields(), &elem(&1, 0)) |> Enum.sort() == ~w(n p u v)
+  # R3b: a collection indexes the identity keys only; the note belts match
+  # by `n` alone.
+  test "the v5 index list is u, v and n" do
+    assert Enum.map(PayloadKeys.index_fields(), &elem(&1, 0)) |> Enum.sort() == ~w(n u v)
+  end
+
+  # R3b: every field an earlier release indexed and no reader filters on.
+  test "retired_index_fields names every pre-R3b index but the tenant and n" do
+    retired = PayloadKeys.retired_index_fields()
+
+    assert Enum.sort(retired) ==
+             Enum.sort(
+               ~w(p f y g s a r o j up cr rd ex du pr fa[].k fa[].h fa[].n fa[].d) ++
+                 ~w(path_hmac type_hmac folder_hmac tags_hmac note_id fm_timestamp fm_created)
+             )
+
+    for {field, _} <- PayloadKeys.index_fields(), do: refute(field in retired)
+    for field <- ~w(user_id vault_id), do: refute(field in retired)
   end
 
   test "an unknown logical name raises instead of writing a long key" do

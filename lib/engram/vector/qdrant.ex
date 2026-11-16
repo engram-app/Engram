@@ -43,6 +43,7 @@ defmodule Engram.Vector.Qdrant do
   # pins both sides.
   @max_page 4096
   @max_ids 2048
+  @max_note_ids 10_240
   @max_write_batch 64
 
   # No @specs on these constant accessors: dialyzer's :underspecs flags
@@ -56,21 +57,20 @@ defmodule Engram.Vector.Qdrant do
 
   @doc """
   Most note ids one search filter carries on `n` (`build_tenant_filter/1`'s
-  `:note_scope`): 5 `match.any` blocks of `max_ids/0`.
+  `:note_scope`), as ONE `match.any` (R3b; R3a sent 5 blocks of 2048).
   """
-  def max_note_ids, do: 5 * @max_ids
+  def max_note_ids, do: @max_note_ids
 
   @doc """
   Whether the collection has its `n` payload index (immutable chunk index,
   Engram#2263), cached per node for a minute. Strict mode answers 400 to a
   filter on an unindexed key, and the index is created by the first index
   pass per node (`ensure_collection/2`, which then marks it here), so a
-  reader checks before it filters on `n`: a filtered search, and the
-  per-note deletes and counts. Each pays at most one collection-info read a
-  minute per collection.
+  filtered search checks before it filters on `n`. Each pays at most one
+  collection-info read a minute per collection.
 
-  A failed read answers no but is not cached: a cached "no" would keep the
-  per-note filters path-only for a minute, missing every point with no `p`.
+  A failed read answers no but is not cached: a cached "no" would keep
+  filtered searches on the slower tenant-only path for a minute.
   """
   @spec n_filterable?(String.t() | nil) :: boolean()
   def n_filterable?(col \\ nil) do
@@ -343,7 +343,10 @@ defmodule Engram.Vector.Qdrant do
         {:ok, :unverified}
 
       {:ok, {:exists, indexed}} ->
-        with :ok <- ensure_payload_indexes(col, indexed, version), do: reconciled(col)
+        with :ok <- ensure_payload_indexes(col, indexed, version) do
+          drop_retired_indexes(col, indexed)
+          reconciled(col)
+        end
 
       {:error, _} = error ->
         error
@@ -369,7 +372,7 @@ defmodule Engram.Vector.Qdrant do
   # indexes above gate `:verified`, because strict mode 400s without them.
   # Every payload index exists now, `n` included: say so to `n_filterable?/1`,
   # replacing a cached "no" from before the index was built (a reader that ran
-  # first after boot), so the per-note filters use the `n` arm at once.
+  # first after boot), so a filtered search uses the `n` scope at once.
   # Behind the memo switch for the memo's reason: the key is the base URL, a
   # recycled Bypass port under test, so the marker would leak into unrelated
   # tests (and turn on a search's `n` scope against a fake with no `n`).
@@ -440,6 +443,42 @@ defmodule Engram.Vector.Qdrant do
       case create_payload_index(col, field, schema, i == last) do
         :ok -> {:cont, :ok}
         error -> {:halt, error}
+      end
+    end)
+  end
+
+  # R3b: drop the indexes an earlier release built and no reader filters on
+  # any more (`PayloadKeys.retired_index_fields/0`), so they stop costing RAM
+  # and disk on every point. Best-effort, like `reconcile_config/1`: a failed
+  # drop is logged and retried on the next boot, never a reason to stop
+  # indexing (no filter needs the index gone). Only after the desired creates,
+  # and only fields the collection reports, so a collection without them gets
+  # no request and a second boot sends none. Only the last drop waits, as
+  # with the creates. A 404 (a peer node dropped it first) is done.
+  defp drop_retired_indexes(col, indexed) do
+    retired = Enum.filter(PayloadKeys.retired_index_fields(), &MapSet.member?(indexed, &1))
+    last = length(retired) - 1
+
+    for {field, i} <- Enum.with_index(retired) do
+      with {:error, reason} <- drop_payload_index(col, field, i == last) do
+        Logger.warning(
+          "qdrant_retired_index_drop_failed #{field}: #{Metadata.safe_reason(reason)}"
+        )
+      end
+    end
+
+    :ok
+  end
+
+  defp drop_payload_index(col, field, wait?) do
+    path = "#{base_url()}/collections/#{col}/index/#{URI.encode(field, &URI.char_unreserved?/1)}"
+    opts = [params: [wait: wait?]] ++ req_opts()
+
+    instrument(:delete_payload_index, fn ->
+      case Req.delete(path, opts) do
+        {:ok, %{status: status}} when status in [200, 404] -> :ok
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
       end
     end)
   end
@@ -1371,10 +1410,8 @@ defmodule Engram.Vector.Qdrant do
   Delete the listed point ids outright. Empty list is a no-op.
 
   The identity-safe delete: point ids come from `chunks.qdrant_point_id`, so
-  this reaches a note's points no matter what its `path_hmac` has since become.
-  `delete_by_note/5` cannot for a point with no `n`: a rename retags the note
-  row while the points keep the old hmac, and the path arm then matches
-  nothing. Callers use both.
+  this reaches a note's points even when one predates `n`, which
+  `delete_by_note/4` cannot match. Callers use both.
   """
   def delete_points(col \\ nil, point_ids)
   def delete_points(_col, []), do: :ok
@@ -1398,23 +1435,19 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
-  Delete all points of one note in a user+vault: the ones carrying its id
-  `n`, and the ones with no `n` under `path_hmac` (see `note_filter/5`).
-
-  T3.2 — `path_hmac` is the base64-encoded HMAC of the note path under the
-  user's filter key. Qdrant payloads carry `path_hmac` as a plaintext-safe
-  filter key alongside the encrypted `source_path` (Phase B.2.4).
+  Delete all points of one note in a user+vault, by its id `n` (see
+  `note_filter/4`).
   """
-  def delete_by_note(col \\ nil, user_id, vault_id, note_id, path_hmac),
-    do: delete_by_note_except(col, user_id, vault_id, note_id, path_hmac, [])
+  def delete_by_note(col \\ nil, user_id, vault_id, note_id),
+    do: delete_by_note_except(col, user_id, vault_id, note_id, [])
 
   @doc """
-  `delete_by_note/5`, keeping the points in `keep_ids`.
+  `delete_by_note/4`, keeping the points in `keep_ids`.
   """
-  def delete_by_note_except(col, user_id, vault_id, note_id, path_hmac, keep_ids) do
+  def delete_by_note_except(col, user_id, vault_id, note_id, keep_ids) do
     col = col || collection()
 
-    filter = note_filter(col, user_id, vault_id, note_id, path_hmac)
+    filter = note_filter(user_id, vault_id, note_id)
 
     filter =
       if keep_ids == [], do: filter, else: Map.put(filter, :must_not, [%{has_id: keep_ids}])
@@ -1430,16 +1463,6 @@ defmodule Engram.Vector.Qdrant do
         {:error, reason} -> {:error, reason}
       end
     end)
-  end
-
-  @doc """
-  Exact count of one note's points, matched as `delete_by_note/5` does. Used
-  by the repath worker (#746) to confirm points exist before/after a payload
-  PATCH and to detect an embedded note whose points went missing.
-  """
-  def count_by_note(col \\ nil, user_id, vault_id, note_id, path_hmac) do
-    col = col || collection()
-    count(col, note_filter(col, user_id, vault_id, note_id, path_hmac))
   end
 
   @doc "Exact count of the points matching `filter` (`{:ok, n}`)."
@@ -1621,7 +1644,7 @@ defmodule Engram.Vector.Qdrant do
   #
   # A collection that predates the v5 layout holds v3/v4 points (long
   # `*_hmac` keys, base64 HMACs, dashed uuids) next to v5 points (short
-  # `PayloadKeys` keys, 128-bit hex ids). The tenant and path conditions go
+  # `PayloadKeys` keys, 128-bit hex ids). The tenant conditions go
   # through `match_filter/2`: it matches EITHER format with a
   # `should` while `:legacy_filter_fields` is on (the default: a self-host
   # collection keeps its v3/v4 points until each note is rewritten), and only
@@ -1629,13 +1652,11 @@ defmodule Engram.Vector.Qdrant do
   # `should` nested in a `must` is still an AND with the other conditions, so
   # tenant scoping is unchanged.
 
-  @type match_field :: :user | :vault | :path
+  @type match_field :: :user | :vault
   @type key_condition :: %{key: String.t(), match: map()}
 
-  # `:path` stays for the note belts (`note_filter/5`, release D's), which
-  # still match points written before `n` by their path id.
-  @legacy_keys %{user: "user_id", vault: "vault_id", path: "path_hmac"}
-  @v5_keys %{user: :user_id, vault: :vault_id, path: :path_id}
+  @legacy_keys %{user: "user_id", vault: "vault_id"}
+  @v5_keys %{user: :user_id, vault: :vault_id}
 
   @doc """
   Whether filters still match the legacy (v3/v4) keys
@@ -1657,78 +1678,36 @@ defmodule Engram.Vector.Qdrant do
 
   @doc """
   One filter condition for `field` equal to `value` (a list matches any), in
-  both payload formats. `:user`/`:vault` take ids as stored in Postgres;
-  `:path` takes the base64 HMAC the legacy filters use. Every other filter
-  resolves in Postgres to note ids (`build_tenant_filter/1`, `:note_scope`).
-
-  With legacy filters off it never emits a legacy key
-  (the v3 cluster has no index for one). A value with no v5 form there (an
-  empty list, a malformed HMAC) matches nothing on the v5 key: fail closed.
+  both payload formats while legacy filters are on, v5 only once they are off
+  (the v3 cluster has no index for a legacy key). Takes ids as stored in
+  Postgres. Every other filter resolves in Postgres to note ids
+  (`build_tenant_filter/1`, `:note_scope`).
   """
   @spec match_filter(match_field(), term()) :: key_condition() | %{should: [key_condition()]}
   def match_filter(field, value) do
-    legacy = legacy_match_filter(field, value)
-    v5_key = PayloadKeys.short(Map.fetch!(@v5_keys, field))
+    v5 = %{key: PayloadKeys.short(Map.fetch!(@v5_keys, field)), match: match(v5_value(value))}
 
-    case v5_value(field, value) do
-      nil -> if legacy_filter_fields?(), do: legacy, else: %{key: v5_key, match: %{any: []}}
-      v -> v5_or_both(legacy, %{key: v5_key, match: match(v)})
-    end
+    if legacy_filter_fields?(),
+      do: %{should: [legacy_match_filter(field, value), v5]},
+      else: v5
   end
-
-  defp v5_or_both(legacy, v5),
-    do: if(legacy_filter_fields?(), do: %{should: [legacy, v5]}, else: v5)
 
   defp match(values) when is_list(values), do: %{any: values}
   defp match(value), do: %{value: value}
 
-  defp v5_value(field, ids) when field in [:user, :vault] and is_list(ids),
-    do: Enum.map(ids, &FilterId.uuid(to_string(&1)))
-
-  defp v5_value(field, id) when field in [:user, :vault], do: FilterId.uuid(to_string(id))
-
-  defp v5_value(_field, b64s) when is_list(b64s) do
-    case Enum.map(b64s, &hmac_id/1) |> Enum.reject(&is_nil/1) do
-      [] -> nil
-      ids -> ids
-    end
-  end
-
-  defp v5_value(_field, b64), do: hmac_id(b64)
-
-  # A legacy filter value that is not a full base64 HMAC (a test literal, a
-  # malformed opt) has no v5 form. `match_filter/2` then sends the legacy
-  # condition alone while legacy filters are on, and fails closed on the v5
-  # key once they are off.
-  defp hmac_id(b64) when is_binary(b64) do
-    case Base.decode64(b64) do
-      {:ok, <<_::binary-size(16), _::binary>> = hmac} -> FilterId.from_hmac(hmac)
-      _ -> nil
-    end
-  end
-
-  defp hmac_id(_), do: nil
+  defp v5_value(ids) when is_list(ids), do: Enum.map(ids, &FilterId.uuid(to_string(&1)))
+  defp v5_value(id), do: FilterId.uuid(to_string(id))
 
   defp v5_eq(name, value), do: %{key: PayloadKeys.short(name), match: %{value: value}}
 
-  # One note's points, decided per point like `note_scope/3`: a point with
-  # `n` by its note id, a point without one (v3 never has `n`; a v5 point the
-  # backfill has not reached) by its path. A point with `n` never matches by
-  # path, so after a rename swap a note's old path cannot reach the other
-  # note's points. An R3a chunk point carries `n` and no `p`, so only the
-  # `n` arm finds it. Without the `n` index (strict mode 400s an unindexed
-  # key) the path alone, as before. `config/test.exs` turns the probe off so
-  # the Bypass suites see no extra collection-info GET.
-  defp note_filter(col, user_id, vault_id, note_id, path_hmac) do
+  # One note's points, by its id `n` (R3b). Every point carries `n`: the
+  # writer has stamped it since R2, the prod backfill ledger is closed, and a
+  # self-host point the backfill has not reached yet is still removed by id
+  # (`delete_points/2`, the primary delete) and else by OrphanSweep. The
+  # `p`/`path_hmac` arm is gone with its retired indexes.
+  defp note_filter(user_id, vault_id, note_id) do
     tenant = [match_filter(:user, user_id), match_filter(:vault, vault_id)]
-    path = match_filter(:path, path_hmac)
-
-    if ServiceConfig.get(:qdrant_note_id_filter, true) and n_filterable?(col) do
-      by_id = v5_eq(:note, FilterId.uuid(to_string(note_id)))
-      %{must: tenant ++ [%{should: [by_id, %{must: [n_empty(), path]}]}]}
-    else
-      %{must: tenant ++ [path]}
-    end
+    %{must: tenant ++ [v5_eq(:note, FilterId.uuid(to_string(note_id)))]}
   end
 
   @doc false
@@ -1755,9 +1734,11 @@ defmodule Engram.Vector.Qdrant do
   # (or by `must_not` missing it) and `Engram.Search` drops it in Postgres
   # unless its note is in scope, so it stays findable during the backfill and
   # is never a wrong hit. After the backfill no point is empty, so the branch
-  # costs one index probe. The tenant (`u`, `v`) holds for every point. An
-  # empty complement matches the whole tenant. Past `max_note_ids/0` the
-  # filter would break the strict condition limits, so it raises: the
+  # costs one index probe. Kept for a self-host that skips releases: its
+  # points without `n` stay findable until its backfill reaches them. The
+  # tenant (`u`, `v`) holds for every point. An empty complement matches the
+  # whole tenant. The ids are ONE `match.any` (R3b); past `max_note_ids/0`
+  # it would break the strict `condition_max_size`, so it raises: the
   # resolver caps below it. The exclusion is nested in `must`, so a caller's
   # own top-level `must_not` (recommend's source points) stays its own.
   defp note_scope(tenant, nil), do: %{must: tenant}
@@ -1768,8 +1749,8 @@ defmodule Engram.Vector.Qdrant do
       do: raise(ArgumentError, "note_scope: #{length(ids)} ids > #{max_note_ids()}")
 
     case kind do
-      :ids -> %{must: tenant ++ [%{should: n_blocks(ids) ++ [n_empty()]}]}
-      :exclude -> %{must: tenant ++ [%{must_not: n_blocks(ids)}]}
+      :ids -> %{must: tenant ++ [%{should: [n_any(ids), n_empty()]}]}
+      :exclude -> %{must: tenant ++ [%{must_not: [n_any(ids)]}]}
     end
   end
 
@@ -1777,8 +1758,6 @@ defmodule Engram.Vector.Qdrant do
 
   # No ids stays one condition that matches nothing: an empty `should`
   # matches everything.
-  defp n_blocks([]), do: [n_any([])]
-  defp n_blocks(ids), do: id_blocks(ids, &n_any/1)
 
   defp n_any(ids),
     do: %{
@@ -2002,10 +1981,8 @@ defmodule Engram.Vector.Qdrant do
   # each condition stays under the Cloud `condition_max_size`.
   # ponytail: a note past ~110k points (64 filter conditions) still trips
   # `filter_max_conditions`; average a sample of its points if one appears.
-  defp has_ids(point_ids), do: id_blocks(point_ids, &%{has_id: &1})
-
-  # One condition per `max_ids/0` ids (`has_id`, `n` any).
-  defp id_blocks(ids, condition), do: ids |> Enum.chunk_every(@max_ids) |> Enum.map(condition)
+  defp has_ids(point_ids),
+    do: point_ids |> Enum.chunk_every(@max_ids) |> Enum.map(&%{has_id: &1})
 
   # The body is decoded in Rust (`Engram.Native.json_decode/1`): with vectors
   # requested it is ~200 x 1024 floats, 2.3 MB of JSON that took Jason ~290 ms

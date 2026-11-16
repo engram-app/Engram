@@ -90,11 +90,10 @@ defmodule Engram.Vector.QdrantLayout do
   # indexed only while `:legacy_filter_fields` is on (a collection that may
   # still hold v3/v4 points); the v5 short-key indexes come from
   # `PayloadKeys.index_fields/0`.
-  # R3a: the tenant and the path only. Every other filter resolves in
-  # Postgres; `path_hmac` stays while the note belts (`Qdrant.note_filter/3`)
-  # still match legacy points by it. An index already built is never dropped
-  # here (R3b drops the retired ones once no peer reads them).
-  @legacy_keyword ~w(user_id vault_id path_hmac)
+  # R3b: the tenant only. Every other filter resolves in Postgres, and the
+  # note belts match by `n` alone. The retired indexes an existing collection
+  # still has are `PayloadKeys.retired_index_fields/0`, dropped at boot.
+  @legacy_keyword ~w(user_id vault_id)
   # The tenant field of each format. Legacy `user_id` gets no `is_tenant`
   # (one tenant field per collection), but keeps `enable_hnsw` so copied
   # v3/v4 points still have a per-user graph while the pass runs.
@@ -114,7 +113,8 @@ defmodule Engram.Vector.QdrantLayout do
   # runaway sweeps (10-19 config audit #7, docs sweep #15). Each sits at 2x
   # the largest request the app sends, as `Qdrant` declares it: a 4096-id
   # scroll page (`max_page/0`, OrphanSweep; Qdrant applies `max_query_limit`
-  # to scroll too), a 2048-id `has_id` (`max_ids/0`), a 64-point write batch
+  # to scroll too), a search's 10,240-id `n` match-any (`max_note_ids/0`,
+  # R3b; it bounds the 2048-id `has_id` too), a 64-point write batch
   # (`max_write_batch/0`), a hybrid batch of 2. qdrant_strict_callers_test
   # pins it. `search_allow_exact` stays allowed (sweep #19): the
   # ANN-recall check compares against `params.exact: true`, and
@@ -129,7 +129,7 @@ defmodule Engram.Vector.QdrantLayout do
     "search_max_hnsw_ef" => 512,
     "upsert_max_batchsize" => 256,
     "filter_max_conditions" => 64,
-    "condition_max_size" => 4096,
+    "condition_max_size" => 20_480,
     "max_timeout" => @max_timeout_s,
     "search_max_batchsize" => 8
   }
@@ -292,9 +292,9 @@ defmodule Engram.Vector.QdrantLayout do
   edges.
 
   With `legacy?` off every filter is v5-only (`Qdrant.match_filter/2`), so no
-  legacy index is listed and a new collection never builds one. An existing
-  index is left alone: boot only creates missing indexes, it never deletes
-  one (so an old collection keeps a `note_id` index nothing reads).
+  legacy index is listed and a new collection never builds one. Boot drops
+  only the retired indexes (`PayloadKeys.retired_index_fields/0`); an index in
+  neither list is left alone.
   """
   @spec payload_indexes(Version.t() | nil, boolean()) :: [{String.t(), String.t() | map()}]
   def payload_indexes(version, legacy?) do

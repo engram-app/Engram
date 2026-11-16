@@ -7,8 +7,10 @@ defmodule Engram.Vector.FilterRoundtripTest do
       are accepted (no 400); a point without `n` passes the scope (for
       `Engram.Search` to post-filter), legacy-format points still match their
       tenant, and tenants never cross;
-    * release D's per-note filters (`delete_by_note*`, `count_by_note`): a
-      point with `n` by its note id, one without `n` by its path.
+    * the per-note delete (`delete_by_note*`, R3b): by the note id `n`
+      alone, never a path;
+    * R3b's retired indexes: `ensure_collection/2` drops one an existing
+      collection still has.
   """
   use ExUnit.Case, async: false
 
@@ -43,9 +45,6 @@ defmodule Engram.Vector.FilterRoundtripTest do
 
   setup do
     ServiceConfig.put_override(:qdrant_url, qdrant_url())
-    # The per-note filters' `n` arm (`config/test.exs` turns its probe off
-    # for the Bypass suites). Every per-note call here goes through it.
-    ServiceConfig.put_override(:qdrant_note_id_filter, true)
     Engram.Cache.clear_local(:note_id_filter)
     on_exit(fn -> Engram.Cache.clear_local(:note_id_filter) end)
     :ok
@@ -129,52 +128,37 @@ defmodule Engram.Vector.FilterRoundtripTest do
     end
   end
 
-  describe "the per-note filters (release D)" do
-    test "a note's points match by n, and by path only without n", %{col: col} do
+  describe "the per-note delete (R3b)" do
+    test "matches the note's points by n, never by path", %{col: col} do
       t = tenant()
       id = Ecto.UUID.generate()
-      [v3, v5, r3a] = [v3_point(t), n_path_point(t, id), v5_point(t, id)]
-      :ok = Qdrant.upsert_points(col, [v3, v5, r3a])
-      path = Base.encode64(t.path)
+      [v3, v5, r3a, no_n] = [v3_point(t), n_path_point(t, id), v5_point(t, id), pre_n_point(t)]
+      :ok = Qdrant.upsert_points(col, [v3, v5, r3a, no_n])
 
-      assert {:ok, 3} = Qdrant.count_by_note(col, t.user_id, t.vault_id, id, path)
+      assert :ok = Qdrant.delete_by_note_except(col, t.user_id, t.vault_id, id, [r3a.id])
+      assert left(col, t) == Enum.sort([v3.id, r3a.id, no_n.id])
 
-      assert :ok = Qdrant.delete_by_note_except(col, t.user_id, t.vault_id, id, path, [r3a.id])
-      assert left(col, t) == [r3a.id]
-
-      assert :ok = Qdrant.delete_by_note_except(col, t.user_id, t.vault_id, id, path, [v5.id])
-      assert left(col, t) == []
-
-      :ok = Qdrant.upsert_points(col, [r3a])
-      assert :ok = Qdrant.delete_by_note(col, t.user_id, t.vault_id, id, path)
-      assert {:ok, 0} = Qdrant.count_by_note(col, t.user_id, t.vault_id, id, path)
+      assert :ok = Qdrant.delete_by_note(col, t.user_id, t.vault_id, id)
+      assert left(col, t) == Enum.sort([v3.id, no_n.id])
     end
 
-    # Rename swap: note A left path X, note B moved onto X. A's old-path
-    # delete must not reach B's points. A point with `n` is matched by `n`
-    # only; a point with no `n` can only be matched by path (as before).
-    test "a note's old path never reaches another note's points that carry n", %{col: col} do
+    # Rename swap: note A left path X, note B moved onto X. A's delete never
+    # reaches B's points: it names A's id, never the shared path.
+    test "a note's delete never reaches another note's points", %{col: col} do
       t = tenant()
       [a, b] = [Ecto.UUID.generate(), Ecto.UUID.generate()]
       b_point = n_path_point(t, b)
-      no_n = pre_n_point(t)
-      :ok = Qdrant.upsert_points(col, [b_point, no_n, v5_point(t, a)])
-      path = Base.encode64(t.path)
+      :ok = Qdrant.upsert_points(col, [b_point, v5_point(t, a)])
 
-      assert {:ok, 2} = Qdrant.count_by_note(col, t.user_id, t.vault_id, a, path)
-      assert :ok = Qdrant.delete_by_note(col, t.user_id, t.vault_id, a, path)
+      assert :ok = Qdrant.delete_by_note(col, t.user_id, t.vault_id, a)
       assert left(col, t) == [b_point.id]
     end
 
-    # Strict mode 400s a filter on `n` while the collection has no `n` index:
-    # the per-note filters fall back to the path alone. `ensure_collection/2`
-    # rebuilding the index replaces the cached "no", so the very next filter
-    # takes the `n` arm (no stale-"no" minute after boot).
-    test "without the n index: path alone, no 400; ensure_collection turns the n arm on",
+    # `ensure_collection/2` rebuilding a lost `n` index replaces the cached
+    # "no", so the very next filtered search takes the `n` scope.
+    test "without the n index: ensure_collection rebuilds it and turns the n scope on",
          %{col: col} do
       {:ok, %{status: 200}} = Req.delete("#{qdrant_url()}/collections/#{col}/index/n?wait=true")
-      # Restore the index even if an assertion below fails (`on_exit` runs in
-      # another process, so it needs the URL override again).
       url = qdrant_url()
 
       on_exit(fn ->
@@ -190,22 +174,29 @@ defmodule Engram.Vector.FilterRoundtripTest do
       refute Qdrant.n_filterable?(col)
       assert Qdrant.n_index(col) == :missing
 
-      t = tenant()
-      id = Ecto.UUID.generate()
-      r3a = v5_point(t, id)
-      :ok = Qdrant.upsert_points(col, [n_path_point(t, id), r3a])
-      path = Base.encode64(t.path)
-
-      assert {:ok, 1} = Qdrant.count_by_note(col, t.user_id, t.vault_id, id, path)
-      assert :ok = Qdrant.delete_by_note(col, t.user_id, t.vault_id, id, path)
-      assert left(col, t) == [r3a.id]
-
       assert :ok = Qdrant.ensure_collection(col, @dims)
       assert Qdrant.n_index(col) == :present
-      assert {:ok, 1} = Qdrant.count_by_note(col, t.user_id, t.vault_id, id, path)
-      assert :ok = Qdrant.delete_by_note(col, t.user_id, t.vault_id, id, path)
-      assert left(col, t) == []
+      assert Qdrant.n_filterable?(col)
     end
+  end
+
+  describe "retired indexes (R3b)" do
+    test "ensure_collection drops a retired index an existing collection has", %{col: col} do
+      {:ok, %{status: 200}} =
+        Req.put("#{qdrant_url()}/collections/#{col}/index?wait=true",
+          json: %{field_name: "p", field_schema: "keyword"}
+        )
+
+      assert Map.has_key?(schema(col), "p")
+      assert :ok = Qdrant.ensure_collection(col, @dims)
+      refute Map.has_key?(schema(col), "p")
+      assert Map.has_key?(schema(col), "n")
+    end
+  end
+
+  defp schema(col) do
+    {:ok, info} = Qdrant.collection_info(col)
+    info["payload_schema"]
   end
 
   defp qdrant_url do

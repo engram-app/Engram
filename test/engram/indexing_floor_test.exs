@@ -222,14 +222,11 @@ defmodule Engram.IndexingFloorTest do
     end
 
     # The belt after a floor pass (`drop_replaced_points/4`) deletes the
-    # note's other points by its id `n` as well as its path: an R3a chunk
-    # point has `n` and no path key, and a path-only belt would strand it.
+    # note's other points by its id `n` alone (R3b): an R3a chunk point has
+    # `n` and no path key.
     test "the floor belt delete matches the note's points by n", %{user: user, vault: vault} do
       bypass = Bypass.open()
       ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
-      ServiceConfig.put_override(:qdrant_note_id_filter, true)
-      Engram.Cache.clear_local(:note_id_filter)
-      on_exit(fn -> Engram.Cache.clear_local(:note_id_filter) end)
       test_pid = self()
 
       Bypass.stub(bypass, :any, :any, fn conn ->
@@ -259,7 +256,8 @@ defmodule Engram.IndexingFloorTest do
 
       by_id = %{"key" => "n", "match" => %{"value" => FilterId.uuid(note.id)}}
       assert_received {:delete, %{"filter" => %{"must_not" => [_], "must" => must}}}
-      assert Enum.any?(must, &match?(%{"should" => [^by_id, _]}, &1))
+      assert by_id in must
+      refute inspect(must) =~ ~s("p")
     end
 
     test "the floor vector carries every section's terms", %{user: user, vault: vault} do

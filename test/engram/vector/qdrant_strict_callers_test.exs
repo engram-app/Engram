@@ -33,18 +33,15 @@ defmodule Engram.Vector.QdrantStrictCallersTest do
       assert @strict["condition_max_size"] >= 2 * Qdrant.max_ids()
     end
 
-    test "note-id filters: every n block fits one condition, all blocks fit one filter" do
-      # `Qdrant.build_tenant_filter/1` with `:note_scope`: up to
-      # `max_note_ids/0` ids in `match.any` blocks of `max_ids/0`, beside the
-      # tenant conditions (each `u`/`v` may be a legacy+v5 `should` pair).
-      assert @strict["condition_max_size"] >= 2 * Qdrant.max_ids()
-      blocks = div(Qdrant.max_note_ids(), Qdrant.max_ids())
-      assert blocks * Qdrant.max_ids() == Qdrant.max_note_ids()
-      assert blocks + 4 <= @strict["filter_max_conditions"]
+    # R3b: a search's note scope is ONE `n` match-any of up to
+    # `max_note_ids/0` ids, so `condition_max_size` sits 2x above it.
+    test "note-id filters: the whole scope fits one condition, with 2x headroom" do
+      assert Qdrant.max_note_ids() == 10_240
+      assert @strict["condition_max_size"] >= 2 * Qdrant.max_note_ids()
     end
 
-    # The largest filter a search can send (R3a): the tenant (a vault set at
-    # its largest) beside the 5 `n` blocks and `is_empty(n)`.
+    # The largest filter a search can send (R3b): the tenant (a vault set at
+    # its largest) beside the one `n` match-any and `is_empty(n)`.
     test "the note-id filter at its worst case fits filter_max_conditions" do
       ids = for _ <- 1..Qdrant.max_note_ids(), do: Ecto.UUID.generate()
 
