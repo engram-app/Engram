@@ -140,6 +140,31 @@ defmodule Engram.Workers.OrphanSweepTest do
     assert Enum.sort(deleted) == Enum.sort([v5_ghost, legacy_ghost, upper_ghost])
   end
 
+  # A departed user found by the facet who ALSO has legacy-only points spelled
+  # another way: the legacy arm of the delete is an exact keyword match, so
+  # each spelling gets its own delete, or those points are re-found forever.
+  test "a departed tenant is deleted under every spelling its points carry", %{
+    bypass: bypass
+  } do
+    live = for _ <- 1..3, do: insert(:user)
+    ghost = Ecto.UUID.generate()
+
+    stub_qdrant(bypass, [FilterId.uuid(ghost) | Enum.map(live, &FilterId.uuid(&1.id))], [
+      String.upcase(ghost)
+    ])
+
+    stub_delete(bypass)
+
+    assert :ok = perform_job(OrphanSweep, %{})
+
+    deleted =
+      for {:qdrant_delete, body} <- drain(:qdrant_delete) do
+        get_in(hd(legacy_view(Jason.decode!(body)["filter"]["must"])), ["match", "value"])
+      end
+
+    assert Enum.sort(deleted) == Enum.sort([ghost, String.upcase(ghost)])
+  end
+
   describe "the Qdrant tenant pass deletes nothing when" do
     test "the facet request fails", %{bypass: bypass} do
       stub_qdrant(bypass, [Ecto.UUID.generate()], [], facet_status: 500)

@@ -766,9 +766,10 @@ defmodule Engram.Workers.OrphanSweep do
 
   # The one gate for whole-user deletes (a tenant's vectors, an attachment
   # prefix), which diff a store's ids against `users`. `found` maps each
-  # `user_key/1` to the store's own spelling, which is what `delete_fun` is
-  # handed (S3 keys and a legacy keyword match are case-sensitive). Returns
-  # how many `delete_fun` removed (it answers 1 or 0 per id). The candidates are
+  # `user_key/1` to every spelling the store holds it under, which is what
+  # `delete_fun` is handed: a legacy `user_id` keyword match is exact, so an
+  # uppercase legacy spelling needs its own delete. Returns how many ids
+  # `delete_fun` removed (it answers 1 or 0 per id). The candidates are
   # re-read from `users` right before deleting, so a signup that committed
   # after the full read stays live.
   defp delete_departed(store, found, live_ids, delete_fun) do
@@ -811,7 +812,15 @@ defmodule Engram.Workers.OrphanSweep do
   # whatever was written, `users.id` is Ecto's.
   defp user_key(id), do: id |> String.downcase() |> FilterId.uuid() |> FilterId.dashed()
 
-  defp delete_tenant(user_id) do
+  defp add_spelling(ids, uid),
+    do: Map.update(ids, user_key(uid), [uid], &Enum.uniq(&1 ++ [uid]))
+
+  # 1 when every spelling's delete succeeded.
+  defp delete_tenant(spellings) do
+    if Enum.all?(spellings, &(delete_spelling(&1) == :ok)), do: 1, else: 0
+  end
+
+  defp delete_spelling(user_id) do
     case Qdrant.delete_by_user(user_id) do
       :ok ->
         Logger.debug(
@@ -819,7 +828,7 @@ defmodule Engram.Workers.OrphanSweep do
           Metadata.with_category(:debug, :oban, user_id: user_id)
         )
 
-        1
+        :ok
 
       other ->
         Logger.error(
@@ -830,7 +839,7 @@ defmodule Engram.Workers.OrphanSweep do
           )
         )
 
-        0
+        :error
     end
   end
 
@@ -844,7 +853,7 @@ defmodule Engram.Workers.OrphanSweep do
   defp discover_qdrant_user_ids do
     with {:ok, tenants} <- Qdrant.facet_values(PayloadKeys.short(:user_id)) do
       # A uuid index matches any spelling, so the canonical one is its own.
-      ids = Map.new(tenants, &{user_key(&1), user_key(&1)})
+      ids = Map.new(tenants, &{user_key(&1), [user_key(&1)]})
 
       scroll_legacy_ids(nil, ids)
     end
@@ -865,7 +874,7 @@ defmodule Engram.Workers.OrphanSweep do
         acc =
           Enum.reduce(points, acc, fn point, ids ->
             case point["payload"] do
-              %{"user_id" => uid} when is_binary(uid) -> Map.put_new(ids, user_key(uid), uid)
+              %{"user_id" => uid} when is_binary(uid) -> add_spelling(ids, uid)
               _ -> ids
             end
           end)
@@ -894,7 +903,7 @@ defmodule Engram.Workers.OrphanSweep do
     end
   end
 
-  defp delete_prefix(user_id) do
+  defp delete_prefix([user_id]) do
     case Storage.adapter().delete_prefix("#{user_id}/") do
       {:ok, _count} ->
         Logger.debug(
@@ -919,7 +928,9 @@ defmodule Engram.Workers.OrphanSweep do
 
   defp discover_s3_user_prefixes do
     case Storage.adapter().list_user_prefixes() do
-      {:ok, ids} -> {:ok, Map.new(ids, &{user_key(&1), &1})}
+      # Already canonical: the adapters cast each prefix through
+      # `Ecto.UUID.cast/1`, so S3 is one spelling per user.
+      {:ok, ids} -> {:ok, Map.new(ids, &{user_key(&1), [&1]})}
       {:error, _} = err -> err
     end
   end
