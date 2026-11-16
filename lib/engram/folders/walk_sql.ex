@@ -45,27 +45,6 @@ defmodule Engram.Folders.WalkSql do
   @moved "EXISTS (SELECT 1 FROM folders m WHERE m.vault_id = ? AND NOT m.notes_cascaded " <>
            "AND m.deleted_at IS NULL)"
 
-  # The note a path's folder row and name name: `notes.name_key` (the
-  # casefolded name hash plus the folder row's id, kept by the
-  # `notes_set_name_key` trigger, NULL unless the name keys are current)
-  # against the walk's folder with the asked name's hash, on
-  # `notes_name_key_live`, the exact name, and no live note holding the
-  # path (`holder`). The lowest id of the matches, so one row, never two.
-  # Only when the vault holds a folder moved without a cascade: otherwise
-  # NULL, and neither the walk nor the probe runs.
-  #
-  # Params: vault id (moved), vault id, the walk's four, the casefolded
-  # name hash, the depth, the exact name hash, then the holder's.
-  name_match = fn holder ->
-    "(CASE WHEN " <>
-      @moved <>
-      " THEN (SELECT m.id FROM notes m WHERE m.vault_id = ? AND m.name_key = (" <>
-      @walk <>
-      " SELECT ? || uuid_send(w.id) FROM w WHERE w.i = ?) AND m.name_hmac = ? " <>
-      "AND m.deleted_at IS NULL AND m.kind = 'note' AND NOT EXISTS (" <>
-      holder <> ") ORDER BY m.id LIMIT 1) END)"
-  end
-
   # S5: whether a folder on the chain of `ref` (a folder id: a column or a
   # `?`) was renamed without a cascade, walking UP `parent_id` from it on the
   # primary key, O(depth), stopping at the first such folder. A note under
@@ -81,6 +60,32 @@ defmodule Engram.Folders.WalkSql do
       "JOIN up ON f.id = up.parent_id WHERE NOT up.moved AND up.d < 512" <>
       " AND f.deleted_at IS NULL" <>
       ") SELECT 1 FROM up WHERE up.moved)"
+  end
+
+  # The note a path's folder row and name name: `notes.name_key` (the
+  # casefolded name hash plus the folder row's id, kept by the
+  # `notes_set_name_key` trigger, NULL unless the name keys are current)
+  # against the walk's folder with the asked name's hash, on
+  # `notes_name_key_live`, the exact name, and no live note holding the
+  # path (`holder`), and only a note whose own chain moved (`moved_chain`):
+  # the one rule the output paths use, so a drift row (folder ref and stored
+  # path disagree, chain not moved) answers only at its stored path. The
+  # lowest id of the matches, so one row, never two.
+  # Only when the vault holds a folder moved without a cascade: otherwise
+  # NULL, and neither the walk nor the probe runs.
+  #
+  # Params: vault id (moved), vault id, the walk's four, the casefolded
+  # name hash, the depth, the exact name hash, then the holder's.
+  name_match = fn holder ->
+    "(CASE WHEN " <>
+      @moved <>
+      " THEN (SELECT m.id FROM notes m WHERE m.vault_id = ? AND m.name_key = (" <>
+      @walk <>
+      " SELECT ? || uuid_send(w.id) FROM w WHERE w.i = ?) AND m.name_hmac = ? " <>
+      "AND m.deleted_at IS NULL AND m.kind = 'note' AND " <>
+      moved_chain.("m.folder_ref_id") <>
+      " AND NOT EXISTS (" <>
+      holder <> ") ORDER BY m.id LIMIT 1) END)"
   end
 
   @moved_chain moved_chain.("?")

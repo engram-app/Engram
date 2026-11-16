@@ -24,7 +24,9 @@ defmodule Engram.Notes.Location do
       `notes_name_key_live` by `(vault_id, name_key)`, the stored
       `name_ci_hmac || folder_ref_id` the `notes_set_name_key` trigger keeps
       (NULL unless the name stamp is current), with the exact `name_hmac`.
-      Several such rows (drift) give the lowest id, never two rows. Every
+      Only a note whose own chain moved answers by name (the output rule
+      below, so a drift row answers only at its stored path); several give
+      the lowest id, never two rows. Every
       qual compares a plain column to a bound value or an InitPlan result,
       so each drives its index under FORCE RLS
       (docs/context/rls-leakproof-index-quals.md). The caller decides
@@ -307,17 +309,18 @@ defmodule Engram.Notes.Location do
   it carries, else its `path_ciphertext` decrypted here. Rows are notes of
   one user, from any of their vaults.
   """
-  @spec paths(map(), [map()]) :: %{Ecto.UUID.t() => String.t() | nil}
-  def paths(_user, []), do: %{}
+  @spec paths(map(), [map()], boolean()) :: %{Ecto.UUID.t() => String.t() | nil}
+  def paths(user, rows, derive? \\ true)
+  def paths(_user, [], _derive?), do: %{}
 
-  def paths(user, rows) do
+  def paths(user, rows, derive?) do
     dek =
       case Crypto.get_dek(user) do
         {:ok, dek} -> dek
         _ -> nil
       end
 
-    named = Enum.filter(rows, &derivable?/1)
+    named = if derive?, do: Enum.filter(rows, &derivable?/1), else: []
 
     derived =
       if dek && named != [] and on?() do
@@ -330,12 +333,30 @@ defmodule Engram.Notes.Location do
             end)
           end)
 
-        derive(dek, named, &Rows.chain_paths(dek, chains, &1))
+        # The one rule (`put_paths/3`, the listings, the lookup's `here`):
+        # only a row whose OWN chain holds a folder moved without a cascade
+        # is shown at its chain plus name; any other row, drift included,
+        # at its stored path.
+        derive(dek, named, &Rows.moved_paths(dek, chains, &1))
       else
         %{}
       end
 
     Map.new(rows, &{&1.id, Map.get_lazy(derived, &1.id, fn -> stored(&1, dek) end)})
+  end
+
+  @doc """
+  THE shown path of one note row: what every write decides old and new
+  paths by (rename, relocate, re-create, the stale-key free). `paths/3`'s
+  rule; a row under no moved chain answers its stored path. Probes
+  `named?/2` only for a derivable row, so a vault holding no folder moved
+  without a cascade pays one probe and no chain read. nil when it does not
+  decrypt.
+  """
+  @spec shown_path(map(), map()) :: String.t() | nil
+  def shown_path(user, row) do
+    derive? = derivable?(row) and named?(user.id, row.vault_id)
+    Map.get(paths(user, [row], derive?), row.id)
   end
 
   @doc """
