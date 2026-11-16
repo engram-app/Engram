@@ -34,6 +34,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Making a route edge-cacheable, or adding a host/path to the Cloudflare Cache Rule (headers that vary by request poison a shared entry; `Vary` is ignored) → `docs/context/edge-cache-request-varying-headers.md`
 
 **Sync & CRDT**
+- Writing a delete/rename tombstone, broadcast or old path built from a note's stored `path_*` after folders can move without cascading (S5): use `Location.shown_path/3`, because the plugin applies catch-up deletes BY PATH and a stale path trashes an unrelated note → `docs/context/tombstone-shown-path-plugin-deletes-by-path.md`
 - Server-side sync protocol: seq change-log, `crdt_catchup_since` page builder, manifest, realtime channel (start here for sync work) → `docs/context/sync-protocol.md`
 - Phoenix Channel events, conflict flow, plugin integration → `docs/context/channel-event-contract.md`
 - Parallelising channel work (`Task.async_stream`) without starving the DB pool / killing the channel → `docs/context/channel-parallelism-db-pool.md`
