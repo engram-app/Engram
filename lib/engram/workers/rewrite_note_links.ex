@@ -121,7 +121,9 @@ defmodule Engram.Workers.RewriteNoteLinks do
     :version_conflict,
     :path_undecryptable,
     :decrypt_failed,
-    :old_path_unrecoverable
+    :old_path_unrecoverable,
+    # A folder entry whose HMACs are missing or not base64 (skipped).
+    :invalid_hmac_base64
   ]
 
   @impl Oban.Worker
@@ -236,7 +238,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
 
     with {:ok, user} <- load_user(args["user_id"]),
          {:ok, vault} <- load_vault(user, args["vault_id"]) do
-      by_hmac = entries |> decoded_entries() |> Enum.group_by(& &1.basename_hmac)
+      by_hmac = entries |> decoded_entries(cursor) |> Enum.group_by(& &1.basename_hmac)
       hmacs = Map.keys(by_hmac)
       ids = Rewriter.source_note_ids(user, vault, hmacs, cursor, batch_size)
       linked = Rewriter.linked_basenames(user, vault, ids, hmacs)
@@ -327,31 +329,32 @@ defmodule Engram.Workers.RewriteNoteLinks do
   end
 
   # Folder entries with both HMACs decoded. Entries are server-built, so a
-  # malformed one is a bug: it is logged (ids only) and counted, and skipped,
-  # never allowed to fail the page and, after retries, discard the chain.
-  defp decoded_entries(entries) do
-    Enum.flat_map(entries, fn e ->
-      with {:ok, path_hmac} <- Base.decode64(e["old_path_hmac"] || ""),
-           {:ok, basename_hmac} <- Base.decode64(e["old_basename_hmac"] || "") do
-        [
-          %{
-            kind: kind_from(e["target_kind"]),
-            id: e["target_id"],
-            path_hmac: path_hmac,
-            basename_hmac: basename_hmac
-          }
-        ]
-      else
-        :error ->
-          Logger.warning(
-            "link rewrite skipped a malformed folder entry",
-            Metadata.with_category(:warning, :sync, target_id: e["target_id"])
-          )
+  # malformed or keyless one is a bug: it is skipped, never allowed to fail the
+  # page and, after retries, discard the chain. Every page repeats the
+  # entries, so only a walk's first page (the chain head or its sweep) logs
+  # (ids only) and counts them.
+  defp decoded_entries(entries, cursor) do
+    {good, bad} =
+      Enum.reduce(entries, {[], []}, fn e, {good, bad} ->
+        with {:ok, path_hmac} <- decode_b64(e["old_path_hmac"]),
+             {:ok, basename_hmac} <- decode_b64(e["old_basename_hmac"]) do
+          entry = %{kind: kind_from(e["target_kind"]), id: e["target_id"]}
+          {[Map.merge(entry, %{path_hmac: path_hmac, basename_hmac: basename_hmac}) | good], bad}
+        else
+          {:discard, :invalid_hmac_base64} -> {good, [e["target_id"] | bad]}
+        end
+      end)
 
-          count_failed(telemetry_failure_reason(:invalid_hmac_base64), 1)
-          []
-      end
-    end)
+    if bad != [] and cursor == @start_cursor do
+      Logger.warning(
+        "link rewrite skipped a malformed folder entry",
+        Metadata.with_category(:warning, :sync, target_id: hd(bad), total_count: length(bad))
+      )
+
+      count_failed(:invalid_hmac_base64, length(bad))
+    end
+
+    Enum.reverse(good)
   end
 
   defp count_failed(_reason, 0), do: :ok
@@ -388,6 +391,9 @@ defmodule Engram.Workers.RewriteNoteLinks do
       :error -> {:discard, :invalid_hmac_base64}
     end
   end
+
+  # A missing key is as malformed as a bad encoding.
+  defp decode_b64(_missing), do: {:discard, :invalid_hmac_base64}
 
   defp load_user(user_id) do
     case Repo.get(Engram.Accounts.User, user_id) do
@@ -503,6 +509,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
           :decrypt_failed
           | :exception
           | :head_advanced
+          | :invalid_hmac_base64
           | :old_path_unrecoverable
           | :other
           | :path_undecryptable
