@@ -1,6 +1,6 @@
 # Tombstones must carry the SHOWN path: the plugin deletes by path
 
-_Last verified: 2026-11-16 (S5 readers #2610 @ c7441cf05, writer #2609, plugin origin/main @ 5d4917c4)_
+_Last verified: 2026-11-16 (S5 readers #2610 merged as e8b600b88, writer #2609 still an open draft, plugin origin/main @ 5d4917c4)_
 
 ## Trigger
 
@@ -10,7 +10,7 @@ a note's stored `path_*` once folders move without cascading (S5).
 ## Why it matters: the plugin never checks the id
 
 On catch-up the Obsidian plugin applies a delete by PATH. In
-`applyChange` (`src/sync.ts:11219`, engram-obsidian-sync) the delete branch
+`applyChange` (`src/sync.ts:11202`, delete branch at :11219, engram-obsidian-sync) the delete branch
 looks up `noteIdMap.get(normalized)` and `vault.getFileByPath(normalized)`
 (`:11233`) and trashes that file. It never compares the tombstone's `note_id`
 with the local note's id. The id is only passed to `forgetRemoteDelete`
