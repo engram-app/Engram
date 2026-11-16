@@ -114,6 +114,32 @@ defmodule Engram.Workers.OrphanSweepTest do
              ghost_id
   end
 
+  # Departed tenants found mostly through legacy points (no `u`), one of them
+  # spelled uppercase: each is deleted, and by the spelling its points carry.
+  test "a mostly-legacy departed set is swept", %{bypass: bypass} do
+    live = for _ <- 1..5, do: insert(:user)
+    v5_ghost = Ecto.UUID.generate()
+    legacy_ghost = Ecto.UUID.generate()
+    upper_ghost = String.upcase(Ecto.UUID.generate())
+
+    stub_qdrant(bypass, [FilterId.uuid(v5_ghost) | Enum.map(live, &FilterId.uuid(&1.id))], [
+      legacy_ghost,
+      upper_ghost,
+      hd(live).id
+    ])
+
+    stub_delete(bypass)
+
+    assert :ok = perform_job(OrphanSweep, %{})
+
+    deleted =
+      for {:qdrant_delete, body} <- drain(:qdrant_delete) do
+        get_in(hd(legacy_view(Jason.decode!(body)["filter"]["must"])), ["match", "value"])
+      end
+
+    assert Enum.sort(deleted) == Enum.sort([v5_ghost, legacy_ghost, upper_ghost])
+  end
+
   describe "the Qdrant tenant pass deletes nothing when" do
     test "the facet request fails", %{bypass: bypass} do
       stub_qdrant(bypass, [Ecto.UUID.generate()], [], facet_status: 500)
@@ -176,6 +202,20 @@ defmodule Engram.Workers.OrphanSweepTest do
       {_result, log} = with_log(fn -> perform_job(OrphanSweep, %{}) end)
       refute_received {:qdrant_delete, _}
       assert log =~ "orphan_sweep aborting"
+    end
+
+    # The re-read is the last word before a delete; failing it must not
+    # fall back to the stale snapshot. Renaming `users` inside the sandbox
+    # transaction (rolled back with the test) fails exactly that query.
+    test "the candidate re-read from users fails", %{bypass: bypass} do
+      stub_qdrant(bypass, [Ecto.UUID.generate()], [],
+        on_legacy: fn -> Repo.query!("ALTER TABLE users RENAME TO users_gone") end
+      )
+
+      stub_delete(bypass)
+
+      assert_raise Postgrex.Error, fn -> perform_job(OrphanSweep, %{}) end
+      refute_received {:qdrant_delete, _}
     end
 
     # A user who signs up after `users` was read but before the facet answers
@@ -266,11 +306,12 @@ defmodule Engram.Workers.OrphanSweepTest do
   # tenant facet on `u` answers `tenants`; the `is_empty(u)` scroll answers a
   # legacy-only point per id in `legacy`; the point pass's id-only scroll
   # finds nothing. Each request is sent to the test process. `opts`:
-  # `facet_status`/`legacy_status` fail that request, `on_facet` runs as the
-  # facet answers.
+  # `facet_status`/`legacy_status` fail that request, `on_facet`/`on_legacy`
+  # run as that request is answered.
   defp stub_qdrant(bypass, tenants, legacy \\ [], opts \\ []) do
     test_pid = self()
     on_facet = Keyword.get(opts, :on_facet, fn -> :ok end)
+    on_legacy = Keyword.get(opts, :on_legacy, fn -> :ok end)
 
     Bypass.expect(bypass, "POST", "/collections/test_col/facet", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -293,6 +334,7 @@ defmodule Engram.Workers.OrphanSweepTest do
       decoded = Jason.decode!(body)
       send(test_pid, {:scroll, decoded})
       legacy? = decoded["filter"] == @legacy_only
+      if legacy?, do: on_legacy.()
 
       points =
         if legacy?,

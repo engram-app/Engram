@@ -628,7 +628,7 @@ defmodule Engram.Workers.OrphanSweep do
         do: where(query, [u], u.id in ^Enum.filter(ids, &match?({:ok, _}, Ecto.UUID.cast(&1)))),
         else: query
 
-    query |> maintenance_repo().all() |> MapSet.new(&String.downcase/1)
+    query |> maintenance_repo().all() |> MapSet.new(&user_key/1)
   end
 
   # -- Qdrant --------------------------------------------------------------
@@ -649,13 +649,15 @@ defmodule Engram.Workers.OrphanSweep do
   end
 
   # The one gate for whole-user deletes (a tenant's vectors, an attachment
-  # prefix), which diff a store's ids `found` against `users`. Returns how
-  # many `delete_fun` removed (it answers 1 or 0 per id). The candidates are
+  # prefix), which diff a store's ids against `users`. `found` maps each
+  # `user_key/1` to the store's own spelling, which is what `delete_fun` is
+  # handed (S3 keys and a legacy keyword match are case-sensitive). Returns
+  # how many `delete_fun` removed (it answers 1 or 0 per id). The candidates are
   # re-read from `users` right before deleting, so a signup that committed
   # after the full read stays live.
   defp delete_departed(store, found, live_ids, delete_fun) do
-    departed = MapSet.difference(found, live_ids)
-    total = MapSet.size(found)
+    departed = found |> Map.keys() |> MapSet.new() |> MapSet.difference(live_ids)
+    total = map_size(found)
 
     cond do
       MapSet.size(departed) == 0 ->
@@ -675,7 +677,7 @@ defmodule Engram.Workers.OrphanSweep do
       true ->
         departed
         |> MapSet.difference(live_user_ids(MapSet.to_list(departed)))
-        |> Enum.reduce(0, &(delete_fun.(&1) + &2))
+        |> Enum.reduce(0, &(delete_fun.(Map.fetch!(found, &1)) + &2))
     end
   end
 
@@ -687,6 +689,11 @@ defmodule Engram.Workers.OrphanSweep do
     n = MapSet.size(departed)
     runaway?(departed, total) or (n >= 2 and n * 2 > total)
   end
+
+  # The one spelling every side of the diff is compared in: lowercase and
+  # dashed. Qdrant's `u` is undashed, a legacy `user_id` or an S3 prefix is
+  # whatever was written, `users.id` is Ecto's.
+  defp user_key(id), do: id |> String.downcase() |> FilterId.uuid() |> FilterId.dashed()
 
   defp delete_tenant(user_id) do
     case Qdrant.delete_by_user(user_id) do
@@ -720,8 +727,8 @@ defmodule Engram.Workers.OrphanSweep do
   # only them, so with none it is one empty page.
   defp discover_qdrant_user_ids do
     with {:ok, tenants} <- Qdrant.facet_values(PayloadKeys.short(:user_id)) do
-      ids =
-        MapSet.new(tenants, &(&1 |> FilterId.uuid() |> FilterId.dashed() |> String.downcase()))
+      # A uuid index matches any spelling, so the canonical one is its own.
+      ids = Map.new(tenants, &{user_key(&1), user_key(&1)})
 
       scroll_legacy_ids(nil, ids)
     end
@@ -740,10 +747,10 @@ defmodule Engram.Workers.OrphanSweep do
     case Qdrant.scroll(opts) do
       {:ok, %{points: points, next_page_offset: next}} ->
         acc =
-          Enum.reduce(points, acc, fn point, set ->
+          Enum.reduce(points, acc, fn point, ids ->
             case point["payload"] do
-              %{"user_id" => uid} when is_binary(uid) -> MapSet.put(set, String.downcase(uid))
-              _ -> set
+              %{"user_id" => uid} when is_binary(uid) -> Map.put_new(ids, user_key(uid), uid)
+              _ -> ids
             end
           end)
 
@@ -796,7 +803,7 @@ defmodule Engram.Workers.OrphanSweep do
 
   defp discover_s3_user_prefixes do
     case Storage.adapter().list_user_prefixes() do
-      {:ok, ids} -> {:ok, MapSet.new(ids)}
+      {:ok, ids} -> {:ok, Map.new(ids, &{user_key(&1), &1})}
       {:error, _} = err -> err
     end
   end
