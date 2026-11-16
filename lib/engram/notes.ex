@@ -8041,9 +8041,17 @@ defmodule Engram.Notes do
       # included (REST and MCP answer 404 for 0).
       {:ok, length(notes) + length(markers)}
     else
-      # A benign race (a folder appeared at the target, a note under this one
-      # was written after the scan): the cascade runs instead and re-claims.
-      {:ok, {:error, reason}} when reason in [:merge, :raced] ->
+      # A folder appeared at the target: the cascade runs instead and
+      # re-claims every note it scans.
+      {:ok, {:error, :merge}} ->
+        :cascade
+
+      # A note under this folder was written after the scan. The cascade
+      # re-claims what it scans, but a scanned note that moved out or died
+      # since keeps the entry this claim gave it: report it, so projection
+      # (queued in this transaction, which the cascade commits) repairs it.
+      {:ok, {:error, :raced}} ->
+        _ = orphan_claim(user, vault, length(claims), :raced)
         :cascade
 
       {:ok, {:error, reason}} ->
