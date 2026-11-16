@@ -424,7 +424,7 @@ async def test_folder_rename_flag_off_falls_back_per_file(
         else:
             assert wait_for_binary_delivery(vault_b, moved, api_sync) == TINY_PNG
     # Files, not the folder: the per-file path can leave the emptied folder
-    # on the peer (test_34 asserts files only too). Seen at plugin a1029bdd.
+    # on the peer (test_34 asserts files only too); measured on plugin main and a1029bdd.
     for path in rows:
         wait_for_file_gone(vault_b, path)
 
@@ -456,9 +456,15 @@ async def test_api_folder_rename_converges_with_flag_on(
 
     Against plugin main this is "an old plugin on a folder-ops server" (it
     ignores `folder_changed` and follows the per-note events); against #689 it
-    is the inbound `folder_changed` path. The claim is the same for both.
+    is the inbound `folder_changed` path. Convergence is the same claim for
+    both; only #689 also removes the emptied old folder (one `vault.rename`),
+    plugin main leaves it (measured on the first CI run), so that leg is
+    asserted per capability.
     """
     old, new = _layout(uuid.uuid4().hex[:12], "Api")
+    follows_folders = await cdp_a.evaluate(
+        f"typeof {ENGINE_PATH}.folderOps?.enabled === 'function'"
+    )
     async with _folder_ops_on(cdp_a, cdp_b):
         rows = await _seed_folder(vault_a, vault_b, api_sync, old, with_attachment=True)
         assert api_sync.rename_folder(old, new) == 200
@@ -471,7 +477,9 @@ async def test_api_folder_rename_converges_with_flag_on(
                     wait_for_content(vault, moved, "107")
                 else:
                     assert wait_for_binary_delivery(vault, moved, api_sync) == TINY_PNG
-            wait_for_folder_gone(vault, old)
+                wait_for_file_gone(vault, path)
+            if follows_folders:
+                wait_for_folder_gone(vault, old)
 
 
 # -- C: offline create / edit + offline folder rename ------------------------
