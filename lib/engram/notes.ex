@@ -1624,10 +1624,8 @@ defmodule Engram.Notes do
 
     holder =
       Repo.one(
-        from(n in Note,
-          where:
-            n.user_id == ^user.id and n.vault_id == ^vault_id and is_nil(n.deleted_at) and
-              n.kind == "note",
+        from(n in scoped_live(user, %{id: vault_id}),
+          where: n.kind == "note",
           where: ^Keys.eq(:path, Crypto.hmac_field(fk, path), Keys.ids?()),
           # Only in a vault holding a folder moved without a cascade: one
           # statement, no row read anywhere else.

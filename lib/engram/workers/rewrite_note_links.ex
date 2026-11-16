@@ -93,10 +93,8 @@ defmodule Engram.Workers.RewriteNoteLinks do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.RotationGate
-  alias Engram.Folders.Rows
   alias Engram.Links.Rewriter
   alias Engram.Logger.Metadata
-  alias Engram.Notes
   alias Engram.Repo
   alias Engram.Vaults
 
@@ -360,19 +358,8 @@ defmodule Engram.Workers.RewriteNoteLinks do
     open = Enum.reject(group, &Map.has_key?(paths, &1.path_hmac))
 
     with [_ | _] <- open,
-         {:ok, old_folder} <- old_folder(user, move),
-         {:ok, now} <- Repo.with_tenant!(user.id, fn -> Rows.path_by_id(user, vault.id, fid) end),
-         {:ok, fk} <- Crypto.dek_filter_key(user),
-         {:ok, by_id} <- Notes.get_note_meta_by_ids(user, vault, Enum.map(open, & &1.id)) do
-      prefix = now <> "/"
-
-      for e <- open,
-          %{path: path} when is_binary(path) <- [by_id[e.id]],
-          String.starts_with?(path, prefix),
-          old = old_folder <> "/" <> String.replace_prefix(path, prefix, ""),
-          Crypto.hmac_field(fk, old) == e.path_hmac,
-          into: %{},
-          do: {e.path_hmac, old}
+         {:ok, old_folder} <- old_folder(user, move) do
+      Rewriter.folder_move_old_paths(user, vault, fid, old_folder, open)
     else
       _ -> %{}
     end
