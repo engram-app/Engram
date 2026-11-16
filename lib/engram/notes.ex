@@ -4512,7 +4512,7 @@ defmodule Engram.Notes do
 
   Observed on staging the moment the app pool dropped to `engram_app`: the
   unscoped read below returned nil for notes that plainly exist, and
-  `EmbedNote`, `ExtractNoteLinks` and `RepathNoteIndex` all discarded with
+  `EmbedNote` and `ExtractNoteLinks` both discarded with
   "note not found" before reaching any of their own logic.
   """
   @spec fetch_note_for_worker(String.t(), String.t()) :: {:ok, Note.t()} | {:discard, String.t()}

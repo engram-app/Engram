@@ -65,12 +65,32 @@ defmodule Engram.Vector.PayloadKeys do
 
   @doc """
   The v5 payload indexes as `{field, schema}`: the identity keys `u`, `v`,
-  `n` (R3a: a point's whole payload) plus `p`, which the note belts
-  (`Qdrant.note_filter/3`) still match points written before `n` by. All on
-  disk. On Qdrant >= 1.19.2 `QdrantLayout.payload_indexes/2` adds `is_tenant`
-  to `u` and `enable_hnsw: false` to the rest. The other v5 keys are no longer
-  indexed on a new collection; an existing index is left alone.
+  `n` (R3a: a point's whole payload). All on disk. On Qdrant >= 1.19.2
+  `QdrantLayout.payload_indexes/2` adds `is_tenant` to `u` and
+  `enable_hnsw: false` to the rest.
   """
   @spec index_fields() :: [{String.t(), map()}]
-  def index_fields, do: Enum.map(~w(user_id vault_id note path_id)a, &{short(&1), @uuid})
+  def index_fields, do: Enum.map(~w(user_id vault_id note)a, &{short(&1), @uuid})
+
+  # The v5 keys indexed before R3a (`us`/`cs` never were), with the `fa`
+  # sub-keys as indexed.
+  @retired_v5 Enum.map(
+                ~w(path_id folder_id type_id tags_id status_id author_id rev_by_id src_id
+                   proj_id fm_timestamp fm_created fm_reviewed fm_expires fm_due fm_priority)a,
+                &Keyword.fetch!(@keys, &1)
+              ) ++ Enum.map(~w(k h n d), &"#{@keys[:fm_attrs]}[].#{&1}")
+
+  # The legacy (v3/v4) indexes, but the tenant `user_id`/`vault_id` that
+  # `Qdrant.match_filter/2` still reads while `:legacy_filter_fields` is on.
+  @retired_legacy ~w(path_hmac type_hmac folder_hmac tags_hmac note_id fm_timestamp fm_created)
+
+  @doc """
+  Payload indexes an earlier release created and no reader filters on any
+  more (R3b): every v5 key but `u`/`v`/`n` (the note belts match by `n`
+  alone, every other filter resolves in Postgres) and the legacy path,
+  folder, tag, type, date and `note_id` keys. `Qdrant.ensure_collection/2`
+  drops the ones an existing collection still has; none is ever created.
+  """
+  @spec retired_index_fields() :: [String.t()]
+  def retired_index_fields, do: @retired_v5 ++ @retired_legacy
 end

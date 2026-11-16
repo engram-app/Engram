@@ -1,10 +1,10 @@
 defmodule Engram.NotesWorkerFetchColumnsTest do
   # Guard: the worker note fetch does not read CRDT state.
   #
-  # `fetch_note_for_worker/1,2` feeds EmbedNote, RepathNoteIndex,
-  # RefreshKeywordVectors and ExtractNoteLinks' legacy (no-tenant) path.
+  # `fetch_note_for_worker/1,2` feeds EmbedNote, RefreshKeywordVectors
+  # and ExtractNoteLinks' legacy (no-tenant) path.
   # None of them reads `crdt_state_*`: embedding and keywords use the decrypted
-  # facade, repath uses ids and hashes, and the link worker's legacy path goes
+  # facade, and the link worker's legacy path goes
   # through `authoritative_content/2`, which re-reads the row with its state
   # and tail. The state is about half a note's stored bytes in prod
   # (2026-10-20 audit). ExtractNoteLinks' tenant path keeps the full row

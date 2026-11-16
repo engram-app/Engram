@@ -59,7 +59,7 @@ defmodule Engram.Vector.QdrantWaitTest do
 
     for delete <- [
           fn -> Qdrant.delete_points(@col, ["p1"]) end,
-          fn -> Qdrant.delete_by_note(@col, @user, @vault, Ecto.UUID.generate(), "hmac") end,
+          fn -> Qdrant.delete_by_note(@col, @user, @vault, Ecto.UUID.generate()) end,
           fn -> Qdrant.delete_by_vault(@col, @user, @vault) end,
           fn -> Qdrant.delete_by_user(@col, @user) end
         ] do
@@ -124,7 +124,7 @@ defmodule Engram.Vector.QdrantWaitTest do
       {"POST", "/points/payload/delete", fn -> Qdrant.delete_payload_keys(@col, ["k"]) end},
       {"POST", "/points/delete", fn -> Qdrant.delete_points(@col, ["p1"]) end},
       {"POST", "/points/delete",
-       fn -> Qdrant.delete_by_note(@col, @user, @vault, Ecto.UUID.generate(), "h") end},
+       fn -> Qdrant.delete_by_note(@col, @user, @vault, Ecto.UUID.generate()) end},
       {"POST", "/points/delete", fn -> Qdrant.delete_by_user(@col, @user) end},
       {"POST", "/points/delete", fn -> Qdrant.delete_by_vault(@col, @user, @vault) end}
     ]

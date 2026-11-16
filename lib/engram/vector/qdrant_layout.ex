@@ -90,11 +90,10 @@ defmodule Engram.Vector.QdrantLayout do
   # indexed only while `:legacy_filter_fields` is on (a collection that may
   # still hold v3/v4 points); the v5 short-key indexes come from
   # `PayloadKeys.index_fields/0`.
-  # R3a: the tenant and the path only. Every other filter resolves in
-  # Postgres; `path_hmac` stays while the note belts (`Qdrant.note_filter/3`)
-  # still match legacy points by it. An index already built is never dropped
-  # here (R3b drops the retired ones once no peer reads them).
-  @legacy_keyword ~w(user_id vault_id path_hmac)
+  # R3b: the tenant only. Every other filter resolves in Postgres, and the
+  # note belts match by `n` alone. The retired indexes an existing collection
+  # still has are `PayloadKeys.retired_index_fields/0`, dropped at boot.
+  @legacy_keyword ~w(user_id vault_id)
   # The tenant field of each format. Legacy `user_id` gets no `is_tenant`
   # (one tenant field per collection), but keeps `enable_hnsw` so copied
   # v3/v4 points still have a per-user graph while the pass runs.
@@ -292,9 +291,9 @@ defmodule Engram.Vector.QdrantLayout do
   edges.
 
   With `legacy?` off every filter is v5-only (`Qdrant.match_filter/2`), so no
-  legacy index is listed and a new collection never builds one. An existing
-  index is left alone: boot only creates missing indexes, it never deletes
-  one (so an old collection keeps a `note_id` index nothing reads).
+  legacy index is listed and a new collection never builds one. Boot drops
+  only the retired indexes (`PayloadKeys.retired_index_fields/0`); an index in
+  neither list is left alone.
   """
   @spec payload_indexes(Version.t() | nil, boolean()) :: [{String.t(), String.t() | map()}]
   def payload_indexes(version, legacy?) do

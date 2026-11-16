@@ -1,6 +1,7 @@
 defmodule Engram.Vector.QdrantLayoutTest do
   use ExUnit.Case, async: true
 
+  alias Engram.Vector.PayloadKeys
   alias Engram.Vector.QdrantLayout
 
   # GET /collections/engram_notes on prod (Qdrant Cloud 1.18.2), 2026-10-18.
@@ -513,13 +514,13 @@ defmodule Engram.Vector.QdrantLayoutTest do
       refute Map.has_key?(diff, "hnsw_config")
     end
 
-    # R3a: the tenant and the path only (the belts still match by it).
+    # R3b: the legacy tenant only (the note belts match by `n` alone).
     test "payload indexes below 1.19.2: bare legacy schemas, then the v5 set" do
-      legacy = ~w(user_id vault_id path_hmac)
+      legacy = ~w(user_id vault_id)
 
       want =
         Enum.map(legacy, &{&1, "keyword"}) ++
-          Engram.Vector.PayloadKeys.index_fields()
+          PayloadKeys.index_fields()
 
       for v <- [@v1182, Version.parse!("1.19.1"), nil] do
         assert QdrantLayout.payload_indexes(v, true) == want
@@ -529,14 +530,14 @@ defmodule Engram.Vector.QdrantLayoutTest do
     # A v3 (legacy-off) collection must not carry the legacy indexes: no
     # filter reads them there, and each costs disk on every point.
     test "legacy filters off: no legacy index; on: all of them, never note_id" do
-      legacy = ~w(user_id vault_id path_hmac)
+      legacy = ~w(user_id vault_id)
 
       for v <- [@v1182, @v1192, nil] do
         off = for {f, _} <- QdrantLayout.payload_indexes(v, false), do: f
         on = for {f, _} <- QdrantLayout.payload_indexes(v, true), do: f
 
         assert off -- legacy == off, "legacy index left in #{inspect(off)}"
-        assert Enum.all?(Engram.Vector.PayloadKeys.index_fields(), fn {f, _} -> f in off end)
+        assert Enum.all?(PayloadKeys.index_fields(), fn {f, _} -> f in off end)
         assert on -- off == legacy
         refute "note_id" in on
       end
@@ -552,7 +553,7 @@ defmodule Engram.Vector.QdrantLayoutTest do
       # the pass runs; everything else builds no extra edges.
       assert indexes["user_id"] == %{"type" => "keyword", "on_disk" => true}
 
-      for f <- ~w(vault_id path_hmac) do
+      for f <- ~w(vault_id) do
         assert indexes[f] == %{"type" => "keyword", "on_disk" => true, "enable_hnsw" => false}
       end
 
@@ -574,9 +575,23 @@ defmodule Engram.Vector.QdrantLayoutTest do
         assert Enum.all?(want, fn {k, v} -> have[k] == v end), "#{field}: #{inspect(have)}"
       end
 
-      # The fixture holds the pre-R3a indexes too: an existing index is never
-      # dropped, so a live collection keeps them until R3b.
-      assert map_size(schema) >= length(QdrantLayout.payload_indexes(@v1192, true))
+      # The fixture holds the pre-R3a indexes too. R3b: every one of them the
+      # desired list no longer names is a retired field, dropped at boot.
+      desired = for {f, _} <- QdrantLayout.payload_indexes(@v1192, true), do: f
+      retired = PayloadKeys.retired_index_fields()
+
+      for field <- Map.keys(schema) -- desired do
+        assert field in retired, "#{field} is indexed in prod but neither desired nor retired"
+      end
+    end
+
+    test "R3b: no desired index is a retired one, for any version or legacy setting" do
+      retired = PayloadKeys.retired_index_fields()
+
+      for v <- [@v1182, @v1192, nil], legacy? <- [true, false] do
+        fields = for {f, _} <- QdrantLayout.payload_indexes(v, legacy?), do: f
+        assert fields -- retired == fields, "retired field desired: #{inspect(fields)}"
+      end
     end
   end
 

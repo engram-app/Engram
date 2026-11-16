@@ -73,7 +73,6 @@ defmodule Engram.Vector.QdrantFilterTest do
     alias Engram.Vector.FilterId
 
     @uuid "6f9619ff-8b86-d011-b42d-00c04fc964ff"
-    @hmac :crypto.strong_rand_bytes(32)
 
     test "user and vault match the dashed legacy id or the undashed v5 id" do
       assert Qdrant.match_filter(:user, @uuid) == %{
@@ -90,24 +89,6 @@ defmodule Engram.Vector.QdrantFilterTest do
                ]
              } =
                Qdrant.match_filter(:vault, [@uuid])
-    end
-
-    test "an HMAC filter matches base64 or the 128-bit id" do
-      b64 = Base.encode64(@hmac)
-
-      assert Qdrant.match_filter(:path, b64) == %{
-               should: [
-                 %{key: "path_hmac", match: %{value: b64}},
-                 %{key: "p", match: %{value: FilterId.from_hmac(@hmac)}}
-               ]
-             }
-    end
-
-    test "a value with no v5 form keeps the legacy condition alone" do
-      assert Qdrant.match_filter(:path, "c2hvcnQ=") == %{
-               key: "path_hmac",
-               match: %{value: "c2hvcnQ="}
-             }
     end
 
     test "with legacy fields off only the v5 condition is sent" do

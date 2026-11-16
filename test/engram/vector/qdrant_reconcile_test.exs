@@ -2,6 +2,7 @@ defmodule Engram.Vector.QdrantReconcileTest do
   use ExUnit.Case, async: true
 
   alias Engram.ServiceConfig
+  alias Engram.Vector.PayloadKeys
   alias Engram.Vector.Qdrant
 
   @prod_info "test/support/fixtures/qdrant/collection_info_prod_2026_10_18.json"
@@ -31,7 +32,9 @@ defmodule Engram.Vector.QdrantReconcileTest do
   # A stateful fake: GET returns `info`, PATCH merges the body into it the way
   # Qdrant does (see collection_meta_ops.rs update_collection) and records it.
   # `dropped`: strict-mode fields the fake server accepts with 200 and then
-  # discards, the way Qdrant 1.19 treats `max_disk_usage_percent`.
+  # discards, the way Qdrant 1.19 treats `max_disk_usage_percent`. An index
+  # DELETE (R3b's boot drop of retired indexes) removes the field from
+  # `payload_schema` and is recorded as `{:drop, field}`.
   defp fake_collection(bypass, col, info, dropped \\ []) do
     test_pid = self()
     {:ok, agent} = Agent.start_link(fn -> info end)
@@ -45,6 +48,18 @@ defmodule Engram.Vector.QdrantReconcileTest do
       body = Jason.decode!(raw)
       send(test_pid, {:patch, body})
       Agent.update(agent, &apply_patch(&1, body, dropped))
+      json(conn, 200, %{result: true, status: "ok"})
+    end)
+
+    Bypass.stub(bypass, "DELETE", "/collections/#{col}/index/:field", fn conn ->
+      field = conn.request_path |> Path.basename() |> URI.decode()
+      send(test_pid, {:drop, field})
+
+      Agent.update(
+        agent,
+        &Map.update(&1, "payload_schema", %{}, fn s -> Map.delete(s, field) end)
+      )
+
       json(conn, 200, %{result: true, status: "ok"})
     end)
   end
@@ -848,7 +863,23 @@ defmodule Engram.Vector.QdrantReconcileTest do
       assert_received {:index, "n"}
       refute_received {:index, _}
 
-      for {:patch, %{"strict_mode_config" => strict}} <- flush() do
+      # R3b: every retired index prod still has is dropped, and only those.
+      retired = PayloadKeys.retired_index_fields()
+      want = prod_v3["payload_schema"] |> Map.keys() |> Enum.filter(&(&1 in retired))
+      assert want != []
+      msgs = flush()
+      dropped = for {:drop, f} <- msgs, do: f
+      assert Enum.sort(dropped) == Enum.sort(want)
+
+      # Independent of the list above: the tenant and identity keys are never
+      # retired and never dropped. Prod's v3 schema holds `u` and `v` (its
+      # legacy `user_id`/`vault_id` indexes are gone already).
+      identity = ~w(u v n user_id vault_id)
+      assert Enum.all?(~w(u v), &Map.has_key?(prod_v3["payload_schema"], &1))
+      assert Enum.filter(identity, &(&1 in retired)) == []
+      assert Enum.filter(identity, &(&1 in dropped)) == []
+
+      for {:patch, %{"strict_mode_config" => strict}} <- msgs do
         assert Map.get(strict, "unindexed_filtering_retrieve", false) == false
         refute Map.has_key?(strict, "unindexed_filtering_update")
       end
@@ -894,7 +925,21 @@ defmodule Engram.Vector.QdrantReconcileTest do
     # now adds to an existing collection.
     stub_index_creates(bypass, "engram_notes")
 
-    assert :ok = Qdrant.ensure_collection("engram_notes", 1024)
+    # The fixture still has retired indexes (R3b); their drops fail as well.
+    test_pid = self()
+
+    Bypass.stub(bypass, "DELETE", "/collections/engram_notes/index/:field", fn conn ->
+      send(test_pid, {:drop, Path.basename(conn.request_path)})
+      json(conn, 500, %{status: %{error: "nope"}})
+    end)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = Qdrant.ensure_collection("engram_notes", 1024)
+      end)
+
+    assert_received {:drop, "path_hmac"}
+    assert log =~ "qdrant_retired_index_drop_failed path_hmac"
   end
 
   test "a fresh create sends the desired storage params", %{bypass: bypass} do

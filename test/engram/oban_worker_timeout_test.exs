@@ -32,6 +32,12 @@ defmodule Engram.ObanWorkerTimeoutTest do
 
   defp oban_workers, do: Engram.Test.ObanWorkers.all()
 
+  # R3b: the no-op shim R3a left for jobs queued during its rolling deploy
+  # is gone; nothing has enqueued it since 0.82.0.
+  test "the retired RepathNoteIndex shim is gone" do
+    refute Code.ensure_loaded?(Engram.Workers.RepathNoteIndex)
+  end
+
   test "there are workers to check at all" do
     # Without this, a broken `oban_workers/0` would make every assertion below
     # vacuously pass over an empty list — the worst outcome for a guard test.

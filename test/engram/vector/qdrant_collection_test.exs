@@ -130,8 +130,9 @@ defmodule Engram.Vector.QdrantCollectionTest do
   # (idempotently) or every filtered op 400s on Cloud. See #626. Since R3a
   # the legacy set is the tenant and the path (the note belts); folder, tag,
   # type and date filters resolve in Postgres. `note_id` is gone: no read
-  # path filters on it (v5, spec 3.3b).
-  @indexed_fields ~w(user_id vault_id path_hmac)
+  # path filters on it (v5, spec 3.3b). R3b: the path is gone too (the note
+  # belts match by `n` alone).
+  @indexed_fields ~w(user_id vault_id)
   @integer_indexed_fields []
   # The v5 short-key indexes, on disk, with their typed schemas.
   @v5_fields Engram.Vector.PayloadKeys.index_fields()
@@ -333,7 +334,7 @@ defmodule Engram.Vector.QdrantCollectionTest do
 
   test "creates the payload indexes an existing collection is missing", %{bypass: bypass} do
     test_pid = self()
-    present = ~w(user_id vault_id note_id path_hmac)
+    present = ~w(user_id vault_id)
 
     expect_existing(bypass, "c1", schema_for(present, "keyword"))
 
@@ -379,7 +380,7 @@ defmodule Engram.Vector.QdrantCollectionTest do
 
   test "a failed index create on an existing collection is returned, not swallowed",
        %{bypass: bypass} do
-    expect_existing(bypass, "c1", schema_for(~w(user_id vault_id note_id path_hmac), "keyword"))
+    expect_existing(bypass, "c1", schema_for(~w(user_id vault_id), "keyword"))
 
     Bypass.expect_once(bypass, "PUT", "/collections/c1/index", fn conn ->
       conn
@@ -388,6 +389,79 @@ defmodule Engram.Vector.QdrantCollectionTest do
     end)
 
     assert {:error, {500, _}} = Qdrant.ensure_collection("c1", 1024)
+  end
+
+  # R3b: an index no reader filters on any more costs RAM and disk on every
+  # point. Boot drops the retired ones an existing collection still has, once
+  # per field, and a collection without them gets no DELETE at all.
+  describe "retired payload indexes (R3b)" do
+    @desired Map.new(@indexed_fields, &{&1, %{data_type: "keyword"}})
+             |> Map.merge(Map.new(@v5_fields, fn {f, s} -> {f, %{data_type: s["type"]}} end))
+
+    defp stub_drops(bypass, status) do
+      test_pid = self()
+
+      Bypass.stub(bypass, "DELETE", "/collections/c1/index/:field", fn conn ->
+        send(test_pid, {:drop, conn.request_path |> Path.basename() |> URI.decode()})
+        Plug.Conn.send_resp(conn, status, ~s({"status":"ok"}))
+      end)
+    end
+
+    test "an existing collection's retired indexes are dropped, then nothing the next time",
+         %{bypass: bypass} do
+      stub_indexes(bypass, "c1")
+      stub_drops(bypass, 200)
+      retired = ~w(p path_hmac note_id f fa[].k)
+
+      expect_existing(bypass, "c1", Map.merge(@desired, schema_for(retired, "keyword")))
+      assert :ok = Qdrant.ensure_collection("c1", 1024)
+      for field <- retired, do: assert_receive({:drop, ^field})
+      refute_received {:drop, _}
+
+      # The next boot reads a schema without them: no DELETE.
+      expect_existing(bypass, "c1", @desired)
+      assert :ok = Qdrant.ensure_collection("c1", 1024)
+      refute_receive {:drop, _}
+    end
+
+    test "a desired or unknown index is never dropped", %{bypass: bypass} do
+      stub_indexes(bypass, "c1")
+      stub_drops(bypass, 200)
+
+      expect_existing(bypass, "c1", Map.merge(@desired, schema_for(~w(operator_x), "keyword")))
+      assert :ok = Qdrant.ensure_collection("c1", 1024)
+      refute_receive {:drop, _}
+    end
+
+    test "a drop a peer node already made (404) is done, not logged", %{bypass: bypass} do
+      stub_indexes(bypass, "c1")
+      stub_drops(bypass, 404)
+
+      expect_existing(bypass, "c1", Map.merge(@desired, schema_for(~w(fa[].k), "keyword")))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok = Qdrant.ensure_collection("c1", 1024)
+        end)
+
+      assert_receive {:drop, "fa[].k"}
+      refute log =~ "qdrant_retired_index_drop_failed"
+    end
+
+    test "a failed drop is logged and does not fail the boot", %{bypass: bypass} do
+      stub_indexes(bypass, "c1")
+      stub_drops(bypass, 500)
+
+      expect_existing(bypass, "c1", Map.merge(@desired, schema_for(~w(p), "keyword")))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok = Qdrant.ensure_collection("c1", 1024)
+        end)
+
+      assert_receive {:drop, "p"}
+      assert log =~ "qdrant_retired_index_drop_failed"
+    end
   end
 
   # H2 — 409 "already exists" must verify the collection shape, not blindly

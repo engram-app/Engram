@@ -246,7 +246,7 @@ defmodule Engram.CheckpointInterleave do
     # `note_id`, RebindNoteLinks keyed by `user_id`. Those rows commit too, and
     # `oban_jobs` has no FK to users so nothing above removes them. Left behind
     # they break every suite that asserts on the job queue — 14 failures across
-    # EmbedNote/ExtractNoteLinks/ReconcileEmbeddings/RepathNoteIndex before this
+    # EmbedNote/ExtractNoteLinks/ReconcileEmbeddings before this
     # was added, none of which touch the checkpoint path.
     # Note-keyed jobs are found by SUBQUERY rather than from a caller-supplied
     # id list. An explicit list is only as complete as the caller's knowledge at

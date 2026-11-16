@@ -1418,7 +1418,6 @@ defmodule Engram.Indexing do
         to_string(note.user_id),
         to_string(note.vault_id),
         note.id,
-        encode_hmac(note.path_hmac),
         Enum.map(points, & &1.id) ++ reused
       )
     end
@@ -1527,7 +1526,7 @@ defmodule Engram.Indexing do
   defp element_json_bytes(e), do: byte_size(to_string(e)) + 4
 
   # Nothing reusable — every chunk is being rebuilt, so keep the belt-and-
-  # braces purge this path has always run: by point id, AND by the path_hmac
+  # braces purge this path has always run: by point id, AND by the note-id
   # filter, which is the only thing that reaches points whose chunk rows were
   # lost (a Postgres restore rolled back past the embed that wrote them).
   #
@@ -1585,10 +1584,9 @@ defmodule Engram.Indexing do
   end
 
   @doc """
-  Delete Qdrant points for a specific path-hmac (used after rename to clean
-  up old path's points). T3.2 — `path_hmac` is the base64-encoded HMAC of
-  the note path; carrying plaintext path through Oban args defeats Phase B
-  encryption for the rename window.
+  Delete the note's Qdrant points ahead of a re-index, for an `EmbedNote`
+  job queued with an `old_path_hmac` (nothing queues one since R3a). R3b:
+  the delete matches the note's id `n`, so `_path_hmac` is no longer read.
 
   Also drops the note's chunk-reuse markers. This filter deletes points that
   the note's chunk rows still name, and a same-folder rename of a note with a
@@ -1597,14 +1595,15 @@ defmodule Engram.Indexing do
   silently unsearchable. Forgetting the markers costs one full re-embed of a
   note that was about to pay for one anyway.
   """
-  def delete_points_by_path_hmac(note, path_hmac) do
+  # ponytail: the arg and name go with EmbedNote's `old_path_hmac` arg, once
+  # the rename-path cleanup lands (sql-lane, after #2600).
+  def delete_points_by_path_hmac(note, _path_hmac) do
     with :ok <-
            Qdrant.delete_by_note(
              collection(),
              to_string(note.user_id),
              to_string(note.vault_id),
-             note.id,
-             path_hmac
+             note.id
            ) do
       forget_chunk_reuse(note)
       :ok
@@ -1748,8 +1747,7 @@ defmodule Engram.Indexing do
 
   @doc """
   Remove all indexed data for a note (Qdrant points first, then Postgres
-  chunks). T3.2 — Qdrant filter keys off `path_hmac` (base64), not plaintext
-  `source_path`. The note row's `path_hmac` is the source of truth.
+  chunks). The Qdrant filter keys off the note id `n`, never a path.
   """
   def delete_note_index(note) do
     with :ok <- delete_note_points(note) do
@@ -1774,10 +1772,9 @@ defmodule Engram.Indexing do
 
   # Every Qdrant point a note could own, removed two ways.
   #
-  # By id first, while the chunk rows still name them — a rename can have
-  # retagged the note row, leaving the hmac filter below matching nothing and
-  # the old points stranded. See `delete_points_for_note/1`. The filter then
-  # catches the reverse case: points whose rows are already gone.
+  # By id first, while the chunk rows still name them (a point that predates
+  # `n` matches no filter). See `delete_points_for_note/1`. The note-id filter
+  # then catches the reverse case: points whose rows are already gone.
   defp delete_note_points(note) do
     with :ok <- delete_points_for_note(note), do: delete_points_by_filter(note)
   end
@@ -1787,23 +1784,20 @@ defmodule Engram.Indexing do
       collection(),
       to_string(note.user_id),
       to_string(note.vault_id),
-      note.id,
-      encode_hmac(note.path_hmac)
+      note.id
     )
   end
 
   # Delete a note's Qdrant points by the ids recorded on its chunk rows.
   #
   # Runs BEFORE the chunk rows are dropped — once they are gone, nothing names
-  # those points and no filter can find them again if the note's `path_hmac`
-  # has drifted (rename → debounced repath → delete inside the window). This is
-  # the delete that closes that hole; `delete_by_note/5` stays as the belt for
+  # those points, and one that predates `n` matches no filter. This is
+  # the delete that closes that hole; `delete_by_note/4` stays as the belt for
   # points whose rows were already lost.
   # Takes the note rather than an id because it needs the tenant. Unscoped this
   # read is filtered to [], so the by-id delete silently removes nothing and
   # the whole point of running it before the rows are dropped is lost — the
-  # hmac filter below is only the belt, and it misses points whose note has
-  # since been re-pathed.
+  # note-id filter is only the belt, and it misses points that predate `n`.
   #
   # Only the READ is scoped; the Qdrant call stays outside, so no transaction
   # is held across a network round trip.
@@ -4077,12 +4071,6 @@ defmodule Engram.Indexing do
   # `:deterministic` so equal maps hash equal.
   defp payload_hash(payload),
     do: :crypto.hash(:sha256, :erlang.term_to_binary(payload, [:deterministic]))
-
-  # Encodes a Phase B HMAC binary as base64 for JSON-safe Qdrant payload.
-  # Returns nil for nil — leaves the field absent so legacy/un-backfilled
-  # rows don't poison filters with a fake hmac.
-  defp encode_hmac(nil), do: nil
-  defp encode_hmac(bin) when is_binary(bin), do: Base.encode64(bin)
 
   defp detect_language(text), do: Engram.KeywordIndex.LangDetect.detect(text)
 end

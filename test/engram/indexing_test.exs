@@ -674,12 +674,12 @@ defmodule Engram.IndexingTest do
 
   describe "commit_index Qdrant delete filter" do
     @tag capture_log: true
-    test "filters by base64 path_hmac, not plaintext path (T3.2 / T3-audit C1)",
+    test "filters by the note id n, never a path (T3.2 / T3-audit C1, R3b)",
          %{bypass: bypass, user: user} do
-      # Regression: T3.2 changed Qdrant.delete_by_note/5 to match against the
-      # `path_hmac` payload key, but commit_index/1 was missed in the sweep
-      # and kept passing plaintext `note.path`. Result: zero points deleted on
-      # every re-index → orphaned ghost chunks accumulate per edit.
+      # Regression: T3.2 moved the delete filter off plaintext `note.path`,
+      # and commit_index/1 was once missed in the sweep (zero points deleted
+      # on every re-index, ghost chunks per edit). R3b: the filter is the
+      # note's id `n`; no path key, hashed or plaintext.
       DekCache.invalidate_all()
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
       vault = insert(:vault, user: user)
@@ -720,9 +720,12 @@ defmodule Engram.IndexingTest do
       assert_received {:delete_filter, body}
       must = legacy_view(body["filter"]["must"])
 
-      path_hmac_clause = Enum.find(must, fn c -> c["key"] == "path_hmac" end)
-      assert path_hmac_clause, "expected delete filter to key on path_hmac, got: #{inspect(must)}"
-      assert path_hmac_clause["match"]["value"] == Base.encode64(note.path_hmac)
+      n_clause = Enum.find(must, fn c -> c["key"] == "n" end)
+      assert n_clause, "expected delete filter to key on n, got: #{inspect(must)}"
+      assert n_clause["match"]["value"] == Engram.Vector.FilterId.uuid(note.id)
+
+      refute Enum.any?(must, fn c -> c["key"] in ~w(path_hmac p) end),
+             "delete filter must not key on a path post-R3b"
 
       refute Enum.any?(must, fn c -> c["key"] == "source_path" end),
              "delete filter must not key on plaintext source_path post-T3.2"
