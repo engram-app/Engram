@@ -78,14 +78,18 @@ defmodule Engram.Folders.MovedReadsTest do
       assert {:ok, %{content: "mcp"}} = Notes.get_note(u, v, "A/n2.md")
     end
 
-    test "a rename onto it takes it", %{user: u, vault: v} do
+    test "a rename onto it takes it", %{user: u, vault: v, notes: ns} do
+      before = row(u, ns[3].id)
       assert {:ok, _} = Notes.rename_note(u, v, "Other/o.md", "A/n3.md")
+      assert row(u, ns[3].id) == before
       assert {:ok, %{content: "other"}} = Notes.get_note(u, v, "A/n3.md")
       assert {:ok, %{content: "note 3"}} = Notes.get_note(u, v, "B/n3.md")
     end
 
-    test "a CRDT relocate onto it takes it", %{user: u, vault: v, other: other} do
+    test "a CRDT relocate onto it takes it", %{user: u, vault: v, other: other, notes: ns} do
+      before = row(u, ns[3].id)
       assert {:ok, %{id: id}} = Notes.genesis_crdt_note(u, v, other.id, "A/n3.md")
+      assert row(u, ns[3].id) == before
       assert id == other.id
       assert {:ok, %{id: ^id}} = Notes.get_note(u, v, "A/n3.md")
       assert {:ok, %{content: "note 3"}} = Notes.get_note(u, v, "B/n3.md")

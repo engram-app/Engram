@@ -1639,8 +1639,15 @@ defmodule Engram.Notes do
     with %Note{} = row <- holder,
          true <- Location.derivable?(row),
          shown when is_binary(shown) and shown != path <- Location.paths(user, [row])[row.id] do
+      # Fenced on what was read: a rename or cascade that moved the row in
+      # between changes its path key or folder reference, and wins.
       {freed, _} =
-        Repo.update_all(from(n in Note, where: n.id == ^row.id and is_nil(n.deleted_at)),
+        Repo.update_all(
+          from(n in Note,
+            where:
+              n.id == ^row.id and is_nil(n.deleted_at) and n.path_hmac == ^row.path_hmac and
+                n.folder_ref_id == ^row.folder_ref_id
+          ),
           set: phase_b_path_folder_for(user, row.id, shown, Helpers.extract_folder(shown))
         )
 
@@ -2744,6 +2751,10 @@ defmodule Engram.Notes do
     # caller that queues the revived notes' jobs itself (a trash restore, in
     # bulk); the rest goes to the write.
     {refs, opts} = Keyword.pop(opts, :folder_refs)
+    # `free_slot: false`: the caller already knows no stale key holds the
+    # target (a trash restore, whose plan skips held paths), so the probe
+    # statement below is skipped.
+    {free_slot?, opts} = Keyword.pop(opts, :free_slot, true)
     {outbox?, opts} = Keyword.pop(opts, :outbox, true)
     # The write's own opts (`actor`, MCP's agent settle), for a revived note's job.
     {write_opts, db_opts} = Keyword.pop(opts, :embed_opts, actor: actor)
@@ -2837,7 +2848,7 @@ defmodule Engram.Notes do
         # The target's key may still be held by a note moved away without a
         # cascade (S5): free it first. A refused write would abort a caller's
         # transaction that runs no savepoint (CRDT relocate, resurrect).
-        _ = free_stale_slot(user, prior.vault_id, sanitized_path)
+        _ = if free_slot?, do: free_stale_slot(user, prior.vault_id, sanitized_path)
 
         case fenced_update(snapshot_fenced(changeset, prior), db_opts) do
           {:ok, updated} ->
@@ -4342,12 +4353,16 @@ defmodule Engram.Notes do
           query =
             from(n in scoped_live(user, vault),
               where: n.kind == "note",
-              select: struct(n, @note_meta_fields)
+              select:
+                {struct(n, @note_meta_fields),
+                 fragment(WalkSql.moved(), type(^vault.id, Ecto.UUID))}
             )
             |> IdWindows.by_id(Map.keys(by_uuid))
 
           Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
         end
+
+      {rows, moved} = Enum.unzip(rows)
 
       # Where each note is (`Location.put_paths/3`): the index projection
       # compares these paths to the index room's, and a note under a folder
@@ -4355,7 +4370,7 @@ defmodule Engram.Notes do
       {:ok,
        rows
        |> decrypt_or_raise!(user)
-       |> then(&Location.put_paths(user, &1))
+       |> then(&if(Enum.any?(moved), do: Location.put_paths(user, &1), else: &1))
        |> Map.new(&{Map.fetch!(by_uuid, &1.id), &1})}
     end
   end
@@ -5493,18 +5508,22 @@ defmodule Engram.Notes do
           # nil path_hmac and their own delete API — a marker id here must
           # read as not_found, not tombstone the marker + crash on encode64.
           # Tombstones are read too: an already-deleted id is a no-op.
-          rows =
-            Repo.all(
-              from(n in scoped(user, vault),
-                where: n.id in ^ids and n.kind == "note",
-                select: struct(n, @note_meta_fields)
-              )
+          {rows, moved} =
+            from(n in scoped(user, vault),
+              where: n.id in ^ids and n.kind == "note",
+              select:
+                {struct(n, @note_meta_fields),
+                 fragment(WalkSql.moved(), type(^vault.id, Ecto.UUID))}
             )
+            |> Repo.all()
+            |> Enum.unzip()
+
+          moved? = Enum.any?(moved)
 
           found = MapSet.new(rows, & &1.id)
 
           case Enum.find(ids, &(not MapSet.member?(found, &1))) do
-            nil -> tombstone_batch(user, vault, Enum.filter(rows, &is_nil(&1.deleted_at)))
+            nil -> tombstone_batch(user, vault, Enum.filter(rows, &is_nil(&1.deleted_at)), moved?)
             missing -> {:error, {:not_found, missing}}
           end
         end)
@@ -5520,9 +5539,9 @@ defmodule Engram.Notes do
     end
   end
 
-  defp tombstone_batch(_user, _vault, []), do: {:ok, %{deleted: 0, notes: [], seq: nil}}
+  defp tombstone_batch(_user, _vault, [], _moved?), do: {:ok, %{deleted: 0, notes: [], seq: nil}}
 
-  defp tombstone_batch(user, vault, notes) do
+  defp tombstone_batch(user, vault, notes, moved?) do
     live_ids = Enum.map(notes, & &1.id)
 
     # Jobs insert inside the txn, so a failure rolls them back with the
@@ -5549,17 +5568,20 @@ defmodule Engram.Notes do
         ]
       )
 
-    # Their shown paths (`Location.put_paths/3`), written to the rows that
-    # sat under a folder moved without a cascade.
-    shown = notes |> decrypt_or_raise!(user) |> then(&Location.put_paths(user, &1))
-    path_of = Map.new(shown, &{&1.id, &1.path})
-
-    notes =
-      repath_shown!(user, Enum.map(notes, &%{&1 | path: path_of[&1.id]}), seq, now)
+    # In a vault holding a folder moved without a cascade only (the probe
+    # rode the read): their shown paths (`Location.put_paths/3`), written to
+    # the rows that sat under such a folder.
+    notes = if moved?, do: repath_batch!(user, notes, seq, now), else: notes
 
     # After the vault lock (canonical order: vaults, then usage_meters).
     :ok = UsageMeters.dec_notes_count(user.id, updated)
     {:ok, %{deleted: updated, notes: notes, seq: seq}}
+  end
+
+  defp repath_batch!(user, notes, seq, now) do
+    shown = notes |> decrypt_or_raise!(user) |> then(&Location.put_paths(user, &1))
+    path_of = Map.new(shown, &{&1.id, &1.path})
+    repath_shown!(user, Enum.map(notes, &%{&1 | path: path_of[&1.id]}), seq, now)
   end
 
   defp after_batch_delete(_user, _vault, [], _seq, _opts), do: :ok
@@ -9024,6 +9046,8 @@ defmodule Engram.Notes do
            false,
            mode: :savepoint,
            folder_refs: refs,
+           # The plan already skipped every held path, a stale holder too.
+           free_slot: false,
            # restore_notes queues every restored note's jobs in one bulk insert.
            outbox: false
          ) do

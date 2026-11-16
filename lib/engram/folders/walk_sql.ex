@@ -76,8 +76,10 @@ defmodule Engram.Folders.WalkSql do
     "EXISTS (WITH RECURSIVE up(parent_id, moved, d) AS (" <>
       "SELECT f.parent_id, NOT f.notes_cascaded, 0 FROM folders f WHERE f.id = " <>
       ref <>
+      " AND f.deleted_at IS NULL" <>
       " UNION ALL SELECT f.parent_id, NOT f.notes_cascaded, up.d + 1 FROM folders f " <>
       "JOIN up ON f.id = up.parent_id WHERE NOT up.moved AND up.d < 512" <>
+      " AND f.deleted_at IS NULL" <>
       ") SELECT 1 FROM up WHERE up.moved)"
   end
 
