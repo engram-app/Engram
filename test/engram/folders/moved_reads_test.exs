@@ -151,4 +151,118 @@ defmodule Engram.Folders.MovedReadsTest do
     assert {:error, :not_found} = Notes.get_note(u, v, "B/n1.md")
     assert {:error, :not_found} = Notes.get_note(u, v, "A/n1.md")
   end
+
+  # Second review of #2610: every write decision reads ONE shown path.
+  describe "writes decide by the shown path" do
+    test "a rename of a moved note tombstones its shown path", %{user: u, vault: v, notes: ns} do
+      assert {:ok, _} = Notes.rename_note(u, v, "B/n1.md", "Other/z.md")
+      {:ok, %{changes: changes}} = Notes.list_changes_by_seq(u, v, 0, limit: 500)
+
+      gone =
+        for c <- changes,
+            c.id != ns[1].id,
+            c[:deleted] == true or not is_nil(c[:deleted_at]),
+            do: c.path
+
+      assert "B/n1.md" in gone
+      refute "A/n1.md" in gone
+    end
+
+    test "a CRDT relocate of a moved note deletes its shown path on the wire",
+         %{user: u, vault: v, notes: ns} do
+      :ok = EngramWeb.Endpoint.subscribe("sync:#{u.id}:#{v.id}")
+      assert {:ok, _} = Notes.genesis_crdt_note(u, v, ns[2].id, "Other/z2.md")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "note_changed",
+                       payload: %{"event_type" => "delete", "path" => "B/n2.md"}
+                     },
+                     2_000
+
+      refute_received %Phoenix.Socket.Broadcast{
+        payload: %{"event_type" => "delete", "path" => "A/n2.md"}
+      }
+    end
+
+    test "a CRDT create of a moved note at its OLD path moves it there",
+         %{user: u, vault: v, notes: ns} do
+      assert {:ok, %{id: id}} = Notes.genesis_crdt_note(u, v, ns[3].id, "A/n3.md")
+      assert id == ns[3].id
+      assert {:ok, %{id: ^id}} = Notes.get_note(u, v, "A/n3.md")
+      assert {:error, :not_found} = Notes.get_note(u, v, "B/n3.md")
+    end
+
+    test "a free follows a chain of stale keys", %{user: u, vault: v} do
+      # X moved to Y, then A moved to X: n1 keys X/k (shown Y/k), n2 keys A/k
+      # (shown X/k). A save at A/k frees n2 onto X/k, which n1 still keys.
+      n1 = put!(u, v, "X/k.md", "one")
+      n2 = put!(u, v, "Q/k.md", "two")
+      FolderRows.move_uncascaded!(u, folder_id(u, v, "X"), "Y")
+      FolderRows.move_uncascaded!(u, folder_id(u, v, "Q"), "X")
+      fresh = put!(u, v, "Q/k.md", "three")
+      assert fresh.id not in [n1.id, n2.id]
+      assert {:ok, %{content: "one"}} = Notes.get_note(u, v, "Y/k.md")
+      assert {:ok, %{content: "two"}} = Notes.get_note(u, v, "X/k.md")
+      assert {:ok, %{content: "three"}} = Notes.get_note(u, v, "Q/k.md")
+    end
+
+    test "a REST rename takes the vault lock before freeing a holder", %{user: u, vault: v} do
+      {_, queries} =
+        Engram.QueryRecorder.record(fn ->
+          assert {:ok, _} = Notes.rename_note(u, v, "Other/o.md", "A/n1.md")
+        end)
+
+      me = self()
+      sqls = for %{pid: ^me, sql: sql} <- queries, do: sql
+
+      vault_lock =
+        Enum.find_index(
+          sqls,
+          &(&1 =~ ~r/FROM "?vaults"?.*FOR (NO KEY )?UPDATE|UPDATE "?vaults"?/s)
+        )
+
+      free = Enum.find_index(sqls, &(&1 =~ ~r/^UPDATE "notes".*"path_ciphertext"/s))
+      assert vault_lock && free && vault_lock < free, inspect(sqls, limit: :infinity)
+    end
+  end
+
+  describe "target occupancy reads the shown path" do
+    setup %{user: u} do
+      v = insert(:vault, user: u)
+      gone = put!(u, v, "B/x.md", "gone")
+      op = Ecto.UUID.generate()
+      {:ok, _} = Folders.delete(u, v, "B", recursive: true, op_id: op)
+      shown = put!(u, v, "A/x.md", "shown")
+      FolderRows.move_uncascaded!(u, folder_id(u, v, "A"), "B")
+      %{v2: v, gone: gone, op: op, shown: shown}
+    end
+
+    test "a restore onto a path shown by name is refused", %{user: u, v2: v, op: op, shown: s} do
+      _ = Folders.restore_op(u, v, op)
+      assert {:ok, %{id: id, content: "shown"}} = Notes.get_note(u, v, "B/x.md")
+      assert id == s.id
+      refute live_at_name?(u, v, s.id)
+    end
+
+    test "a resurrect onto a path shown by name is refused", %{user: u, v2: v, shown: s} do
+      # Deleted elsewhere, so the same-path delete-wins window is not what refuses it.
+      g = put!(u, v, "C/x.md", "elsewhere")
+      :deleted = Notes.delete_note_reporting(u, v, "C/x.md")
+      assert {:error, :id_conflict, _} = Notes.genesis_crdt_note(u, v, g.id, "B/x.md")
+      assert {:ok, %{id: id}} = Notes.get_note(u, v, "B/x.md")
+      assert id == s.id
+      refute live_at_name?(u, v, s.id)
+    end
+  end
+
+  # Another live note keyed or named where `id` is shown.
+  defp live_at_name?(user, vault, id) do
+    {:ok, %{changes: changes}} = Notes.list_changes_by_seq(user, vault, 0, limit: 500)
+    shown = Enum.find_value(changes, &(&1.id == id && &1.path))
+
+    Enum.any?(
+      changes,
+      &(&1.id != id and &1[:deleted] != true and is_nil(&1[:deleted_at]) and &1.path == shown)
+    )
+  end
 end

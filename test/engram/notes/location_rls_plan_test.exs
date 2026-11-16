@@ -245,10 +245,10 @@ defmodule Engram.Notes.LocationRlsPlanTest do
       assert custom =~ "notes_path_live", custom
       # The walk up, one probe of the `(vault_id, id)` key per level.
       assert custom =~ "folders_vault_id_id_key", custom
-      # Measured 30 (the name arm's walk and probe, the holder, and the walk
-      # up a two-level chain for the matched row and for the holder), flat
-      # in the vault's size.
-      assert QueryPlan.buffers(custom) <= @lookup_buffers + 26, custom
+      # Measured 35 (the name arm's walk and probe, the holder, and the walk
+      # up a two-level chain for the matched row, the holder and the name
+      # match), flat in the vault's size.
+      assert QueryPlan.buffers(custom) <= @lookup_buffers + 29, custom
     end
   end
 

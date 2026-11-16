@@ -108,12 +108,16 @@ defmodule Engram.Notes.LocationPlanTest do
   # The name arm's walk, not the S5 stale-holder check (its own recursive
   # CTE walks UP a matched row's chain, and runs only for such a row).
   defp walk_line(plan) do
-    plan
-    |> String.split("\n")
-    |> Enum.filter(&(&1 =~ "Recursive Union"))
-    |> Enum.find(&(not (&1 =~ "never executed")))
-    |> Kernel.||(plan |> String.split("\n") |> Enum.find(&(&1 =~ "Recursive Union")))
-    |> Kernel.||(flunk(plan))
+    # The name arm's walk: the recursive union whose probe reads
+    # `folders_live_name` (the S5 stale-holder walk up reads an id key).
+    lines = String.split(plan, "\n")
+
+    lines
+    |> Enum.with_index()
+    |> Enum.filter(fn {l, _} -> l =~ "Recursive Union" end)
+    |> Enum.find_value(fn {l, i} ->
+      if lines |> Enum.slice(i, 12) |> Enum.any?(&(&1 =~ "folders_live_name")), do: l
+    end) || flunk(plan)
   end
 
   test "an unmoved vault never sends the folder walk; a moved one runs it", ctx do
