@@ -238,7 +238,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
 
     with {:ok, user} <- load_user(args["user_id"]),
          {:ok, vault} <- load_vault(user, args["vault_id"]) do
-      by_hmac = entries |> decoded_entries(cursor) |> Enum.group_by(& &1.basename_hmac)
+      by_hmac = entries |> decoded_entries(args) |> Enum.group_by(& &1.basename_hmac)
       hmacs = Map.keys(by_hmac)
       ids = Rewriter.source_note_ids(user, vault, hmacs, cursor, batch_size)
       linked = Rewriter.linked_basenames(user, vault, ids, hmacs)
@@ -330,10 +330,10 @@ defmodule Engram.Workers.RewriteNoteLinks do
 
   # Folder entries with both HMACs decoded. Entries are server-built, so a
   # malformed or keyless one is a bug: it is skipped, never allowed to fail the
-  # page and, after retries, discard the chain. Every page repeats the
-  # entries, so only a walk's first page (the chain head or its sweep) logs
-  # (ids only) and counts them.
-  defp decoded_entries(entries, cursor) do
+  # page and, after retries, discard the chain. Every page and the sweep
+  # repeat the entries, so only the chain head's first page logs (ids only)
+  # and counts them. An Oban retry of that page counts them again.
+  defp decoded_entries(entries, args) do
     {good, bad} =
       Enum.reduce(entries, {[], []}, fn e, {good, bad} ->
         with {:ok, path_hmac} <- decode_b64(e["old_path_hmac"]),
@@ -345,7 +345,7 @@ defmodule Engram.Workers.RewriteNoteLinks do
         end
       end)
 
-    if bad != [] and cursor == @start_cursor do
+    if bad != [] and args["cursor"] in [nil, @start_cursor] and args["sweep"] != true do
       Logger.warning(
         "link rewrite skipped a malformed folder entry",
         Metadata.with_category(:warning, :sync, target_id: hd(bad), total_count: length(bad))
