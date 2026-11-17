@@ -94,12 +94,17 @@ inside one has its snapshot write rolled back with the caller while a live-room
 write survives. Same call, different durability, depending on whether the user
 has a socket open.
 
-No caller does this any more. `batch_move_folders/4` was the last, and it
-dropped its batch-wide transaction rather than keep it: that transaction could
-only revert ROWS, never the claims already committed, so it was not providing
-batch atomicity — it was concealing that batch atomicity is impossible once a
-claim is the commit. `Identity` still logs and counts `:in_transaction` as a
-tripwire for future call sites.
+`batch_move_folders/4` dropped its own batch-wide transaction for this
+reason, but its only production caller, `Folders.batch_move/4`, wrapped it in
+another one, and so did `Folders.rename/5` (REST, MCP `rename_folder`, the
+folder-op wire): the tripwire fired once per MCP `rename_folder` on staging.
+Both now claim BEFORE their transaction (`Notes.claim_folder_rename/4`,
+`Notes.claim_folder_batch_move/4`) and run it inside
+`Notes.with_folder_claims/4`: the cascade re-scans under the folder lock and
+must consume exactly the planned claims (else `:conflict`), and any failure
+unclaims them (`Identity.unclaim/3`, compare-and-set), so a rename the API
+reports as failed is not executed later by projection. `Identity` still logs
+and counts `:in_transaction` as a tripwire for future call sites.
 
 **Projection must never claim.** It is deriving FROM the map; a claim there is a
 feedback loop. `rename_note/5` takes `index: :skip` for that one caller, and

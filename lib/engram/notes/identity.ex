@@ -356,7 +356,10 @@ defmodule Engram.Notes.Identity do
   # transaction) plus both folder-DELETE paths, `Engram.Folders.delete/4` and
   # `batch_delete_folders/3`, whose releases now go through
   # `Engram.Workers.ReleaseIndexEntries` so they run after the commit instead of
-  # inside it.
+  # inside it. Two more were still live after that: `Engram.Folders.rename/5`
+  # (REST, MCP `rename_folder`, the folder-op wire) and `Folders.batch_move/4`
+  # claimed from inside their `atomic/2` transaction, once per call on staging.
+  # They now claim before it (`Engram.Notes.with_folder_claims/4`).
   #
   # It warns rather than refuses because a write reaching here has already been
   # validated by its caller; refusing would turn a durability question into a

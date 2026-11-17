@@ -7855,8 +7855,13 @@ defmodule Engram.Notes do
   # `Crypto.ensure_user_dek/1` already.
   defp rename_folder_gated(user, vault, old_folder, new_folder, rows, drift) do
     new_folder = String.trim_trailing(new_folder, "/")
-    old_prefix = old_folder <> "/"
 
+    with :ok <- gate_folder_rename(user, vault, old_folder, new_folder, drift) do
+      do_rename_folder(user, vault, old_folder, old_folder <> "/", new_folder, rows)
+    end
+  end
+
+  defp gate_folder_rename(user, vault, old_folder, new_folder, drift) do
     cond do
       # A folder cannot move into itself or its own subtree (it would become
       # its own ancestor), by path or by row. Refused before anything is read
@@ -7870,7 +7875,7 @@ defmodule Engram.Notes do
       # No-op rename: same folder. Skip the target conflict check so the
       # call is idempotent rather than colliding with itself.
       old_folder == new_folder ->
-        do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows)
+        :ok
 
       folder_target_exists?(user, vault, new_folder, drift) ->
         # Pre-check the unique (user, vault, path_hmac) constraint so
@@ -7882,9 +7887,180 @@ defmodule Engram.Notes do
         {:error, :conflict}
 
       true ->
-        do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows)
+        :ok
     end
   end
+
+  # ---- claiming a folder op BEFORE its transaction ---------------------------
+  #
+  # `Engram.Folders` runs a rename or batch move as ONE transaction (notes and
+  # attachments roll back together, under the folder-write lock). A claim
+  # cannot join it (docs/context/crdt-identity-authority.md): inside, the
+  # snapshot route rolled back with the caller while the live-room route did
+  # not, and the snapshot route held the index fold lock to the commit. So the
+  # caller claims first, outside (`claim_folder_rename/4`,
+  # `claim_folder_batch_move/4`), then runs its transaction inside
+  # `with_folder_claims/4`.
+  #
+  # Inside, the cascade re-scans under the lock as before and, instead of
+  # claiming, CONSUMES the plan: each cascade step's claims must equal the
+  # planned step's, and every planned step must be consumed before commit
+  # (`folder_claims_consumed/0`). A row that appeared or left between the plan
+  # and the lock fails the op as a `:conflict`, never a row the index did not
+  # claim. Any failure past the claim undoes it (`undo_claims/4`, the batch
+  # note move's compensation): an op the API reports as failed must not be
+  # executed later by projection.
+  #
+  # Cost: one more meta scan of the moved subtree, outside the transaction.
+  @preclaim_key :engram_folder_preclaim
+
+  @typedoc "A folder op's claims, made before its transaction."
+  @type folder_claims :: %{steps: [[{String.t(), String.t()}]], moves: [{map(), String.t()}]}
+
+  @doc """
+  Claims what `rename_folder/4` will move, outside any transaction. Run the
+  rename itself inside `with_folder_claims/4`.
+  """
+  @spec claim_folder_rename(map(), map(), String.t(), String.t()) ::
+          {:ok, folder_claims()} | {:error, term()}
+  def claim_folder_rename(user, vault, old_folder, new_folder) do
+    new_folder = String.trim_trailing(new_folder, "/")
+
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         :ok <- gate_folder_rename(user, vault, old_folder, new_folder, nil) do
+      rows = fetch_decrypted_live_rows(user, vault, [old_folder])
+      claim_planned(user, vault, rows, [{old_folder, new_folder}])
+    end
+  end
+
+  @doc """
+  Claims what `batch_move_folders/4` will move, outside any transaction. The
+  batch's later markers see its earlier moves (in memory, as the batch does).
+  """
+  @spec claim_folder_batch_move(map(), map(), [String.t()], term()) ::
+          {:ok, folder_claims()} | {:error, term()}
+  def claim_folder_batch_move(user, vault, marker_ids, target) do
+    with {:ok, user, target_folder, dek} <- resolve_move_target(user, vault, target),
+         {:ok, sources} <- resolve_move_folders(user, vault, marker_ids, target_folder, dek) do
+      # resolve_move_folders/5 prepends: back to marker order.
+      sources = Enum.reverse(sources)
+      {rows, _drift} = scan_with_drift(user, vault, sources)
+
+      # Each marker's folder as `move_folder_into/6` will read it, after the
+      # batch's earlier moves (its own row moves with an ancestor's).
+      {pairs, _done} =
+        Enum.map_reduce(sources, [], fn source, done ->
+          now = Enum.reduce(done, source, fn {o, n}, f -> moved_folder(f, o, n) end)
+
+          new =
+            if target_folder == "",
+              do: Path.basename(now),
+              else: target_folder <> "/" <> Path.basename(now)
+
+          {{now, new}, done ++ [{now, new}]}
+        end)
+
+      claim_planned(user, vault, rows, pairs)
+    end
+  end
+
+  @doc """
+  Runs `fun` (the caller's transaction) against the claims made by
+  `claim_folder_rename/4` or `claim_folder_batch_move/4`, and undoes them when
+  it fails, raises or exits.
+  """
+  @spec with_folder_claims(map(), map(), folder_claims(), (-> result)) :: result
+        when result: {:ok, term()} | {:error, term()}
+  def with_folder_claims(user, vault, %{steps: steps, moves: moves}, fun) do
+    Process.put(@preclaim_key, steps)
+
+    result =
+      try do
+        fun.()
+      catch
+        kind, reason ->
+          undo_claims(user, vault, moves, kind)
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      after
+        Process.delete(@preclaim_key)
+      end
+
+    with {:error, reason} <- result do
+      undo_claims(user, vault, moves, reason)
+      result
+    end
+  end
+
+  @doc "`:ok` when the cascade consumed every claimed step; call before commit."
+  @spec folder_claims_consumed() :: :ok | {:error, :conflict}
+  def folder_claims_consumed,
+    do: if(Process.get(@preclaim_key) == [], do: :ok, else: {:error, :conflict})
+
+  # One claim for the op's FINAL paths (a note an earlier step moved and a
+  # later one moves again claims only where it ends), validated against the
+  # rows like every cascade claim.
+  defp claim_planned(user, vault, rows, pairs) do
+    {steps, _rows} =
+      Enum.map_reduce(pairs, rows, fn {old, new}, rows ->
+        {step_claims(rows, old, new), advance_renamed_rows(rows, old, new)}
+      end)
+
+    steps = Enum.reject(steps, &(&1 == []))
+    final = steps |> List.flatten() |> Map.new(fn {path, id} -> {id, path} end)
+    claims = Enum.map(final, fn {id, path} -> {path, id} end)
+    from = Map.new(rows, &{&1.id, &1.path})
+
+    with :ok <- claim_cascade(user, vault, claims, MapSet.new(Map.keys(final))) do
+      {:ok,
+       %{
+         steps: steps,
+         moves: Enum.map(final, fn {id, path} -> {%{id: id, path: from[id]}, path} end)
+       }}
+    end
+  end
+
+  # What `do_rename_folder/6` claims for one step, from the same arithmetic
+  # (`advance_renamed_rows/3` mirrors it).
+  defp step_claims(rows, old, new) do
+    rows
+    |> Enum.filter(&folder_in?(&1.folder || "", [old]))
+    |> advance_renamed_rows(old, new)
+    |> Enum.reject(&(&1.kind == "folder"))
+    |> Enum.map(&{&1.path, &1.id})
+    |> Enum.sort()
+  end
+
+  defp moved_folder(folder, old, new) do
+    cond do
+      folder == old ->
+        new
+
+      String.starts_with?(folder, old <> "/") ->
+        new <> String.slice(folder, String.length(old)..-1//1)
+
+      true ->
+        folder
+    end
+  end
+
+  # Inside `with_folder_claims/4`, consume the next planned step instead of
+  # claiming; otherwise claim (a direct `rename_folder/4` call, outside any
+  # transaction).
+  defp claim_or_consume(user, vault, claims, movers) do
+    case Process.get(@preclaim_key) do
+      nil -> claim_cascade(user, vault, claims, movers)
+      _steps when claims == [] -> :ok
+      [step | rest] -> consume_step(step, Enum.sort(claims), rest)
+      [] -> {:error, :conflict}
+    end
+  end
+
+  defp consume_step(step, step, rest) do
+    Process.put(@preclaim_key, rest)
+    :ok
+  end
+
+  defp consume_step(_planned, _claims, _rest), do: {:error, :conflict}
 
   # True if any non-deleted row lives directly in `folder`: a note by its
   # reference (`directly_in/4`), a folder marker by its path hash (markers
@@ -8282,7 +8458,6 @@ defmodule Engram.Notes do
       {:ok, 0}
     else
       now = DateTime.utc_now()
-      old_len = String.length(old_folder)
       content_by_id = fetch_v1_contents(user, notes)
 
       # Build bulk updates — compute new paths/folders/titles in Elixir,
@@ -8295,12 +8470,7 @@ defmodule Engram.Notes do
       # can branch on kind.
       updates =
         Enum.map(notes, fn note ->
-          new_note_folder =
-            if note.folder == old_folder do
-              new_folder
-            else
-              new_folder <> String.slice(note.folder, old_len..-1//1)
-            end
+          new_note_folder = moved_folder(note.folder, old_folder, new_folder)
 
           {new_path, new_title} =
             case note.kind do
@@ -8355,7 +8525,11 @@ defmodule Engram.Notes do
       # a partial folder rename executing asynchronously after a 500.
       movers = MapSet.new(real_note_updates, fn {n, _o, _np, _f, _t} -> n.id end)
 
-      case claim_cascade(user, vault, claims, movers) do
+      # A caller holding claims made before its transaction (`Engram.Folders`)
+      # owns undoing them, so only a claim made HERE is reported as orphaned.
+      preclaimed? = Process.get(@preclaim_key) != nil
+
+      case claim_or_consume(user, vault, claims, movers) do
         {:error, reason} ->
           {:error, reason}
 
@@ -8533,11 +8707,11 @@ defmodule Engram.Notes do
             {:ok, length(notes)}
           rescue
             e ->
-              _ = orphan_claim(user, vault, length(claims), e)
+              _ = unless preclaimed?, do: orphan_claim(user, vault, length(claims), e)
               reraise e, __STACKTRACE__
           catch
             {:rename_refused, reason} ->
-              _ = orphan_claim(user, vault, length(claims), reason)
+              _ = unless preclaimed?, do: orphan_claim(user, vault, length(claims), reason)
               {:error, reason}
           end
       end
@@ -9445,26 +9619,28 @@ defmodule Engram.Notes do
 
   # Move folders under a parent given by PATH. No marker is required at the
   # target — a "derived" parent exists purely as a path. `folder == ""` is root.
-  def batch_move_folders(user, vault, marker_ids, {:path, folder})
-      when is_list(marker_ids) and is_binary(folder) do
-    with {:ok, folder} <- PathSanitizer.sanitize_target(folder),
-         {:ok, user} <- Crypto.ensure_user_dek(user),
-         {:ok, dek} <- Crypto.get_dek(user) do
-      reduce_move_folders(user, vault, marker_ids, folder, dek)
+  def batch_move_folders(user, vault, marker_ids, target) when is_list(marker_ids) do
+    with {:ok, user, target_folder, dek} <- resolve_move_target(user, vault, target) do
+      reduce_move_folders(user, vault, marker_ids, target_folder, dek)
     end
   end
 
-  def batch_move_folders(user, vault, marker_ids, "root") when is_list(marker_ids) do
-    batch_move_folders(user, vault, marker_ids, {:path, ""})
+  # The batch target as a folder path, with the user (dek ensured) and dek.
+  defp resolve_move_target(user, _vault, {:path, folder}) when is_binary(folder) do
+    with {:ok, folder} <- PathSanitizer.sanitize_target(folder),
+         {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, dek} <- Crypto.get_dek(user) do
+      {:ok, user, folder, dek}
+    end
   end
 
-  def batch_move_folders(user, vault, marker_ids, target_folder_id)
-      when is_list(marker_ids) and is_binary(target_folder_id) do
+  defp resolve_move_target(user, vault, "root"), do: resolve_move_target(user, vault, {:path, ""})
+
+  defp resolve_move_target(user, vault, target_folder_id) when is_binary(target_folder_id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, target_marker} <- get_folder_marker_by_id(user, vault, target_folder_id),
          {:ok, dek} <- Crypto.get_dek(user) do
-      target_folder = hydrate_folder_marker(target_marker, dek).folder
-      reduce_move_folders(user, vault, marker_ids, target_folder, dek)
+      {:ok, user, hydrate_folder_marker(target_marker, dek).folder, dek}
     else
       {:error, :not_found} -> {:error, {:not_found, target_folder_id}}
       {:error, reason} -> {:error, reason}
@@ -9559,16 +9735,12 @@ defmodule Engram.Notes do
   # re-scan. Filter + rewrite arithmetic MUST match do_rename_folder/6.
   defp advance_renamed_rows(rows, old_folder, new_folder) do
     old_prefix = old_folder <> "/"
-    old_len = String.length(old_folder)
 
     Enum.map(rows, fn n ->
       folder = n.folder || ""
 
       if folder == old_folder or String.starts_with?(folder, old_prefix) do
-        new_note_folder =
-          if folder == old_folder,
-            do: new_folder,
-            else: new_folder <> String.slice(folder, old_len..-1//1)
+        new_note_folder = moved_folder(folder, old_folder, new_folder)
 
         new_path =
           case n.kind do
