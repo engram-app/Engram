@@ -30,7 +30,7 @@ defmodule Engram.MCP.ParseGate do
   the caller's wait (slot wait plus parse), so a timed-out parse reports the
   timeout, not its true length. No content or paths.
 
-  Unlike `Engram.Sync.PageGate` (same monitor/withdraw design), this never
+  Unlike `Engram.Sync.PageGate` (same `Engram.ConcurrencyGate` server), this never
   runs the work ungated: a busy node refuses with a fixable error.
 
   Limits of the guarantee:
@@ -52,7 +52,7 @@ defmodule Engram.MCP.ParseGate do
   `Process.put(:engram_parse_gate_opts, opts)` apply to that process's runs
   and `call_opts/0` (process-local, never global env).
   """
-  use GenServer
+  alias Engram.ConcurrencyGate
 
   @defaults [acquire_timeout: 5_000, parse_timeout: 15_000, max_waiting: 16, deadline_ms: 20_000]
   @seam :engram_parse_gate_opts
@@ -62,13 +62,15 @@ defmodule Engram.MCP.ParseGate do
 
   def start_link(opts \\ []) do
     limit = opt(opts, :limit, fn -> default_limit(:erlang.system_info(:dirty_cpu_schedulers)) end)
-    init = {limit, opt(opts, :max_waiting)}
 
-    case Keyword.get(opts, :name, __MODULE__) do
-      nil -> GenServer.start_link(__MODULE__, init)
-      name -> GenServer.start_link(__MODULE__, init, name: name)
-    end
+    ConcurrencyGate.start_link(
+      limit: limit,
+      max_waiting: opt(opts, :max_waiting),
+      name: Keyword.get(opts, :name, __MODULE__)
+    )
   end
+
+  def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
 
   @doc """
   Slots for a node with `dirty` dirty CPU schedulers: all but one, never
@@ -112,7 +114,7 @@ defmodule Engram.MCP.ParseGate do
     task =
       Task.Supervisor.async_nolink(Engram.TaskSupervisor, fn ->
         started = System.monotonic_time()
-        status = acquire(gate, acquire_timeout)
+        status = ConcurrencyGate.acquire(gate, nil, acquire_timeout)
 
         cond do
           status != :ok ->
@@ -207,17 +209,6 @@ defmodule Engram.MCP.ParseGate do
     )
   end
 
-  defp acquire(gate, timeout) do
-    GenServer.call(gate, :acquire, timeout)
-  catch
-    :exit, _ ->
-      # Timed out or the gate is down. Withdraw first: a grant can race the
-      # timeout, and this task is still alive until it returns :busy.
-      # Cast, not call: a second blocking call on the failure path could hang.
-      GenServer.cast(gate, {:cancel, self()})
-      :busy
-  end
-
   defp opt(opts, key, default \\ nil) do
     Keyword.get_lazy(opts, key, fn ->
       case Keyword.fetch(Application.get_env(:engram, __MODULE__, []), key) do
@@ -225,60 +216,5 @@ defmodule Engram.MCP.ParseGate do
         :error -> if default, do: default.(), else: @defaults[key]
       end
     end)
-  end
-
-  @impl true
-  def init({limit, max_waiting}),
-    do: {:ok, %{limit: limit, max_waiting: max_waiting, active: %{}, waiting: :queue.new()}}
-
-  @impl true
-  def handle_call(:acquire, {pid, _} = from, state) do
-    cond do
-      map_size(state.active) < state.limit -> {:reply, :ok, grant(state, pid)}
-      :queue.len(state.waiting) >= state.max_waiting -> {:reply, :busy, state}
-      true -> {:noreply, %{state | waiting: :queue.in(from, state.waiting)}}
-    end
-  end
-
-  @impl true
-  def handle_cast({:cancel, pid}, state) do
-    waiting = :queue.filter(fn {waiter, _} -> waiter != pid end, state.waiting)
-    {:noreply, %{state | waiting: waiting} |> drop(pid) |> pump()}
-  end
-
-  @impl true
-  def handle_info({:DOWN, _ref, :process, pid, _reason}, state),
-    do: {:noreply, state |> drop(pid) |> pump()}
-
-  # One slot per task pid: each run/2 spawns a fresh task, so no re-entry.
-  defp grant(state, pid), do: %{state | active: Map.put(state.active, pid, Process.monitor(pid))}
-
-  defp drop(state, pid) do
-    case Map.pop(state.active, pid) do
-      {nil, _} ->
-        state
-
-      {ref, rest} ->
-        Process.demonitor(ref, [:flush])
-        %{state | active: rest}
-    end
-  end
-
-  # Hands a freed slot to the next live waiter (a dead one could never
-  # release it).
-  defp pump(state) do
-    with true <- map_size(state.active) < state.limit,
-         {{:value, {pid, _} = from}, rest} <- :queue.out(state.waiting) do
-      state = %{state | waiting: rest}
-
-      if Process.alive?(pid) do
-        GenServer.reply(from, :ok)
-        grant(state, pid)
-      else
-        pump(state)
-      end
-    else
-      _ -> state
-    end
   end
 end

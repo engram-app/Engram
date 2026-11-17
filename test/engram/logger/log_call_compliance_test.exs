@@ -212,6 +212,10 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # has to be put in scope or written down here with a reason. That turns an
   # omission into a decision.
   @out_of_scope [
+    # The counting semaphore behind the page, parse and search gates: holds
+    # pids, monitor refs and the callers' opaque keys (a user id at most). No
+    # Logger call, never touches content, a path, a title or a query.
+    "lib/engram/concurrency_gate.ex",
     # Persisted sweep cursors (row ids) and the shared batched-delete loop: no
     # Logger call, never touches content, a path, a title or a query.
     "lib/engram/maintenance/",
