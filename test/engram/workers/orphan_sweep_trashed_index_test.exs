@@ -183,10 +183,18 @@ defmodule Engram.Workers.OrphanSweepTrashedIndexTest do
             &(&1.sql =~ ~r/ORDER BY n0\."vault_id", n0\."path_id", n0\."seq"/)
           )
 
-        assert at, "no trashed-page statement recorded"
+        assert at && at > 0, "no trashed-page statement after a SET LOCAL"
         assert Enum.at(mine, at - 1).sql =~ "enable_incremental_sort"
         Enum.at(mine, at)
       end
+
+    # The SET LOCALs end with the page's own transaction. Without it they
+    # would last to the end of the job's (in prod, of that one statement,
+    # dropping the pin), and here they would leak into the test's sandbox.
+    assert %{rows: [["on", "on"]]} =
+             Repo.query!(
+               "SELECT current_setting('enable_sort'), current_setting('enable_incremental_sort')"
+             )
 
     assert [first, cursor] = pages
     refute first.sql =~ "> ("

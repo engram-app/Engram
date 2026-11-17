@@ -29,8 +29,11 @@ defmodule Engram.Workers.OrphanSweep do
   partial cleanup is fine, the next tick catches the rest.
 
   Kill switch: `:orphan_sweep` (`enabled?/0`, a runtime ServiceConfig
-  override, default on). Off, a run logs and returns before any pass.
-  `:orphan_sweep_trashed_page` 0 turns off only the trashed-note step.
+  override, default on). Off, a run logs and returns before any pass; a run
+  already going re-reads it before each pass and each delete batch (a cached
+  read), so it stops at the next one. The app env `:orphan_sweep_trashed_page`
+  set to 0 (config or a remote console, not a runtime override) turns off only
+  the trashed-note step.
   """
 
   use Oban.Worker, queue: :maintenance, max_attempts: 1
@@ -93,7 +96,7 @@ defmodule Engram.Workers.OrphanSweep do
 
   @doc "False while the `:orphan_sweep` kill switch (a runtime ServiceConfig override) is off."
   @spec enabled?() :: boolean()
-  def enabled?, do: Engram.ServiceConfig.get(:orphan_sweep, true) != false
+  def enabled?, do: Engram.ServiceConfig.get(:orphan_sweep, true) == true
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
@@ -135,14 +138,14 @@ defmodule Engram.Workers.OrphanSweep do
   defp do_perform(args) do
     live_ids = live_user_ids()
 
-    qdrant_deleted = sweep_qdrant(live_ids)
-    s3_deleted = sweep_s3(live_ids)
-    points_deleted = sweep_point_orphans()
-    notes_flagged = sweep_missing_points(force: Map.get(args, "force", false))
-    index_requeued = requeue_trashed_index()
+    qdrant_deleted = pass(fn -> sweep_qdrant(live_ids) end)
+    s3_deleted = pass(fn -> sweep_s3(live_ids) end)
+    points_deleted = pass(&sweep_point_orphans/0)
+    notes_flagged = pass(fn -> sweep_missing_points(force: Map.get(args, "force", false)) end)
+    index_requeued = pass(&requeue_trashed_index/0)
     # Frontmatter keys no note uses any more: frees per-user cap space (ids
     # are never reused, see `FrontmatterKeys.reap_unused/1`).
-    keys_reaped = Engram.Notes.FrontmatterKeys.reap_unused()
+    keys_reaped = pass(&Engram.Notes.FrontmatterKeys.reap_unused/0)
 
     :telemetry.execute(
       [:engram, :orphan_sweep, :result],
@@ -174,6 +177,9 @@ defmodule Engram.Workers.OrphanSweep do
 
     :ok
   end
+
+  # A pass's count, or 0 without running it once the kill switch is off.
+  defp pass(fun), do: if(enabled?(), do: fun.(), else: 0)
 
   # -- Point-level orphans -------------------------------------------------
 
@@ -345,25 +351,29 @@ defmodule Engram.Workers.OrphanSweep do
   defp delete_points(ids) do
     ids
     |> Enum.chunk_every(@point_delete_batch)
-    |> Enum.reduce(0, fn batch, acc ->
-      case Qdrant.delete_points(batch) do
-        :ok ->
-          Logger.info(
-            "orphan_sweep deleted stranded Qdrant points",
-            Metadata.with_category(:info, :oban, total_count: length(batch))
-          )
-
-          acc + length(batch)
-
-        other ->
-          Logger.error(
-            "orphan_sweep point delete failed",
-            Metadata.with_category(:error, :oban, reason: Metadata.safe_reason(other))
-          )
-
-          acc
-      end
+    |> Enum.reduce_while(0, fn batch, acc ->
+      if enabled?(), do: {:cont, delete_batch(batch, acc)}, else: {:halt, acc}
     end)
+  end
+
+  defp delete_batch(batch, acc) do
+    case Qdrant.delete_points(batch) do
+      :ok ->
+        Logger.info(
+          "orphan_sweep deleted stranded Qdrant points",
+          Metadata.with_category(:info, :oban, total_count: length(batch))
+        )
+
+        acc + length(batch)
+
+      other ->
+        Logger.error(
+          "orphan_sweep point delete failed",
+          Metadata.with_category(:error, :oban, reason: Metadata.safe_reason(other))
+        )
+
+        acc
+    end
   end
 
   # Which of these ids a chunk row names (`PointIds.known/1`, on the
@@ -720,18 +730,33 @@ defmodule Engram.Workers.OrphanSweep do
   # trigger and seq is NOT NULL, so only a note with no path_hmac (which
   # `DeleteNoteIndex` cannot clean anyway) falls there.
   #
-  # Pinned to `notes_path_tomb`: with sorts disabled for the transaction, the
-  # only plan with no Sort node is a scan of the one index in this exact order
-  # whose predicate the WHERE implies. Any other index (`notes_folder_ref`
-  # won a test plan on cost) needs a sort, so it would read every trashed
-  # note, or the whole table, to return one page. Postgres 18 ranks plans by
-  # disabled-node count before cost, so no statistics can flip it. Unnamed, so
-  # each run is planned under these settings rather than reusing a cached plan.
+  # Pinned to `notes_path_tomb` with a planner switch. The WHERE, the keyset
+  # comparison and the ORDER BY already match that index exactly (its key
+  # order and its partial predicate), so a mis-pick is costing alone: on a
+  # small table (tests, a small self-host) a scan plus a Sort of a few rows
+  # costs less than an ordered walk, and the planner took `notes_folder_ref`
+  # plus an incremental sort (CI, PR 2621) or a bitmap scan of this index plus
+  # a full Sort. At prod scale this index wins on cost (29.2k vs 53.6k for a
+  # full walk, 2026-11-17), but nothing guaranteed it, and a mis-pick there
+  # reads every trashed note after the cursor, or the table. No index shape
+  # changes that, since the Sort plans can use the same index. So sorts are
+  # off for the transaction: the only plan with no Sort node is this index.
+  #
+  # Depends on Postgres 18 (prod RDS and CI both run 18), which ranks plans by
+  # their count of disabled nodes before cost, so no statistics can flip it.
+  # On 16/17 a disabled Sort is only a large cost penalty and still loses to
+  # this index on any table where the choice matters. If the index is missing
+  # (a failed CONCURRENTLY build) the plan falls back to a Sort, as before.
+  #
+  # Unnamed, so each run is planned under these settings, not from a cached
+  # plan. Rolled back, not committed (it only reads): the SET LOCALs end with
+  # this transaction even inside an enclosing one, where a committed savepoint
+  # would leave them on for every later statement.
   defp trashed_page(cursor) do
     repo = maintenance_repo()
 
     Repo.cross_tenant(fn ->
-      {:ok, page} =
+      {:error, {:page, page}} =
         repo.transaction(fn ->
           repo.query!(@index_order_only)
 
@@ -742,6 +767,7 @@ defmodule Engram.Workers.OrphanSweep do
           |> limit(^trashed_page_size())
           |> select([n], map(n, [:id, :user_id, :vault_id, :path_id, :seq, :path_hmac]))
           |> repo.all(prepare: :unnamed)
+          |> then(&repo.rollback({:page, &1}))
         end)
 
       page
@@ -845,7 +871,11 @@ defmodule Engram.Workers.OrphanSweep do
       true ->
         departed
         |> MapSet.difference(live_user_ids(MapSet.to_list(departed)))
-        |> Enum.reduce(0, &(delete_fun.(Map.fetch!(found, &1)) + &2))
+        |> Enum.reduce_while(0, fn id, acc ->
+          if enabled?(),
+            do: {:cont, acc + delete_fun.(Map.fetch!(found, id))},
+            else: {:halt, acc}
+        end)
     end
   end
 
