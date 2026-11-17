@@ -41,7 +41,8 @@ case "$status" in
 esac
 
 [ -f "$contains" ] || exit 0
-while read -r sha why; do
+# `|| [ -n "$sha" ]`: a last line with no newline still counts (else it fails open).
+while read -r sha why || [ -n "$sha" ]; do
   [ -n "$sha" ] || continue
   case "${sha}" in "#"*) continue ;; esac
   # The commit behind (or at) the tag: the tag contains it.

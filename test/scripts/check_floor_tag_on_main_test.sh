@@ -58,6 +58,8 @@ printf 'bbbb newer than the tag\n' >"$TMP/contains"
 grep -q "::error::.*does not contain bbbb" "$TMP/out" || fail "no reason given: $(cat "$TMP/out")"
 printf 'cccc unknown\n' >"$TMP/contains"
 ! check release-v1.0.0 || fail "an unknown commit passed"
+printf 'aaaa ok\nbbbb last line, no newline' >"$TMP/contains"
+! check release-v1.0.0 || fail "a last line with no newline was skipped"
 rm -f "$TMP/contains"
 
 echo "check_floor_tag_on_main: all cases passed"
