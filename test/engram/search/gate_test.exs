@@ -196,6 +196,10 @@ defmodule Engram.Search.GateTest do
       wait_queued(g, 1)
       Process.exit(waiter, :kill)
 
+      # The gate drops a dead waiter on its DOWN, which arrives
+      # asynchronously; wait for it rather than race it.
+      wait_state(g, &(:queue.len(&1.waiting) == 0), "the dead waiter is still queued")
+
       # The dead waiter's queue place is gone, so b may queue again.
       attempt("b", :next)
       wait_queued(g, 1)
@@ -347,18 +351,18 @@ defmodule Engram.Search.GateTest do
     end
   end
 
-  defp wait_queued(g, n, deadline \\ nil) do
+  defp wait_queued(g, n),
+    do: wait_state(g, &(:queue.len(&1.waiting) >= n), "fewer than #{n} waiter(s) queued")
+
+  # Polls the gate's state (`:sys.get_state/1` runs after every message
+  # already in its mailbox) until `pred` holds, failing after 2 s.
+  defp wait_state(g, pred, message, deadline \\ nil) do
     deadline = deadline || System.monotonic_time(:millisecond) + 2_000
 
     cond do
-      :queue.len(:sys.get_state(g).waiting) >= n ->
-        :ok
-
-      System.monotonic_time(:millisecond) > deadline ->
-        flunk("fewer than #{n} waiter(s) queued after 2 s")
-
-      true ->
-        receive(after: (1 -> wait_queued(g, n, deadline)))
+      pred.(:sys.get_state(g)) -> :ok
+      System.monotonic_time(:millisecond) > deadline -> flunk("#{message} after 2 s")
+      true -> receive(after: (1 -> wait_state(g, pred, message, deadline)))
     end
   end
 end
