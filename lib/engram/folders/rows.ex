@@ -356,12 +356,28 @@ defmodule Engram.Folders.Rows do
       else: where(query, [f], is_nil(f.parent_id) and is_nil(f.deleted_at))
   end
 
+  # The probe selects only `id`, so it is index-only on
+  # `folders_live_name_ids`, never a read of every sibling (`WalkSql`); the
+  # row is then read by its primary key under the same live predicate, so a
+  # row tombstoned or moved between the two reads is not returned. Two
+  # statements, not an `IN (subquery)`: the planner joins that against the
+  # tenant's folders (`folders_user`, the average-tenant estimate). Only a
+  # conflicted insert gets here.
   defp live_child(vault_id, parent_id, name_h) do
-    Repo.one(
-      from(f in siblings(vault_id, parent_id, name_h),
-        select: %{id: f.id, full: f.full_path_hmac, explicit: f.explicit}
-      )
-    )
+    probe = siblings(vault_id, parent_id, name_h)
+
+    case Repo.one(select(probe, [f], f.id)) do
+      nil ->
+        nil
+
+      id ->
+        Repo.one(
+          from(f in probe,
+            where: f.id == ^id,
+            select: %{id: f.id, full: f.full_path_hmac, explicit: f.explicit}
+          )
+        )
+    end
   end
 
   # A row another writer made may lack `full_path_hmac` (the previous release's
@@ -528,7 +544,7 @@ defmodule Engram.Folders.Rows do
   A path is found by walking its segments down from the root, never by
   `full_path_hmac`, so a row under a dead or missing ancestor has no path.
   ONE statement (`WalkSql.walk_many/0`) for all of `paths`: one probe of
-  `folders_live_name` per distinct prefix (O(sum of depths), shared
+  `folders_live_name_ids` per distinct prefix (O(sum of depths), shared
   prefixes once), never a scan of a vault's or a tenant's folders. Sent
   unnamed, so each call is planned with the tenant's own statistics (see
   `WalkSql`). Runs inside the caller's tenant transaction.

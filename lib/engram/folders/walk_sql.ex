@@ -6,11 +6,12 @@ defmodule Engram.Folders.WalkSql do
   `require` this module, then `fragment(WalkSql.id_eq(), ...)`.
 
     * The walk: the live folder at the end of a path's segments (their
-      `name_hmac`s, root first, as a `bytea[]`), one probe of
-      `folders_live_name` per level (unique, so at most one row a level and
-      the scalar subquery never sees two; none gives NULL, which matches
-      nothing). Each level is a LATERAL probe keyed by the level above, so
-      the planner cannot hash-join a whole vault's folders per level.
+      `name_hmac`s, root first, as a `bytea[]`), one index-only probe of
+      `folders_live_name_ids` per level (its key is the unique
+      `folders_live_name`'s, so at most one row a level and the scalar
+      subquery never sees two; none gives NULL, which matches nothing).
+      Each level is a LATERAL probe keyed by the level above, so the
+      planner cannot hash-join a whole vault's folders per level.
       Uncorrelated, so it runs once (an InitPlan). Params: vault id, segment
       hashes, vault id, segment hashes, then the depth. It reads `folders`
       in the statement's own tenant (FORCE RLS).
@@ -25,6 +26,16 @@ defmodule Engram.Folders.WalkSql do
   So no predicate here applies one to a column: each compares a plain
   column to a bound value, a walk result or a subquery's (an InitPlan
   parameter).
+
+  Every probe keys `(vault_id, parent_id, name_hmac)` and reads only `id`
+  and `user_id`, which `folders_live_name_ids` INCLUDEs, so it is an
+  index-only scan. That margin (no heap page) is what keeps the planner off
+  `folders_live_parent_id` and `folders_parent`, which key only
+  `(vault_id, parent_id)` and read every sibling: the planner multiplies
+  the two keys' selectivities as independent, estimates about one row, and
+  ties them with a plain probe of the name index (staging 0.87.0 picked them;
+  `Engram.Folders.WalkIndexCondTest`). A probe that also selected another column would
+  lose the index-only scan and the tie would be back.
   """
 
   @walk """
@@ -106,7 +117,7 @@ defmodule Engram.Folders.WalkSql do
   # Many paths in one statement: their distinct prefixes as a trie, one row
   # each (`i`, its parent prefix `p`, 0 at the root, and its segment's
   # `name_hmac`), walked down level by level with the same LATERAL probe of
-  # `folders_live_name` per prefix. The recursion follows the trie, which
+  # `folders_live_name_ids` per prefix. The recursion follows the trie, which
   # is finite and acyclic whatever `parent_id` holds. A prefix with no live
   # row ends its branch. Each probe also names the tenant as a bound value
   # (`f.user_id = ?`, beside the policy's own): the planner then costs the
@@ -141,7 +152,7 @@ defmodule Engram.Folders.WalkSql do
   @doc """
   `(i, id)` for every prefix of a path trie that has a live folder row (see
   the comment above; params: prefix ids, parent ids, segment hashes, user
-  id, vault id, user id, vault id). One probe of `folders_live_name` per
+  id, vault id, user id, vault id). One probe of `folders_live_name_ids` per
   distinct prefix. Send it unnamed (`prepare: :unnamed`).
   """
   defmacro walk_many, do: @walk_many
