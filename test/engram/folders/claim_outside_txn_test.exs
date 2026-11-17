@@ -423,4 +423,55 @@ defmodule Engram.Folders.ClaimOutsideTxnTest do
     assert {:ok, %{path: "Archive/n.md"}} = Notes.get_note_by_id(ctx.user, ctx.vault, n.id)
     assert live_path(room, n.id) == "Archive/n.md"
   end
+
+  # A settle that raises (here at its seam) must not replace the op's own
+  # result, and must report the orphan so projection converges it.
+  test "a settle that raises reports an orphan and keeps the op's error", ctx do
+    {:ok, _room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+    _ = note(ctx, "Docs/n.md")
+    put_att(ctx, "Docs/a.png")
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      # After the precheck passed: the attachment leg conflicts in the txn.
+      :folder_claimed -> put_att(ctx, "Archive/a.png")
+      :claims_settle -> raise "settle down"
+      _ -> :ok
+    end)
+
+    flush_index_writes()
+    assert {:error, :conflict} = Folders.rename(ctx.user, ctx.vault, "Docs", "Archive")
+    assert_received {:index_write, :claim, :orphan_claim}
+  end
+
+  defp index_nonce(ctx) do
+    {:ok, row} =
+      Engram.Repo.with_tenant(ctx.user.id, fn ->
+        Engram.Repo.get_by(Engram.Notes.VaultIndexState, vault_id: ctx.vault.id)
+      end)
+
+    row.state_nonce
+  end
+
+  defp state_vector(room) do
+    test_pid = self()
+    :ok = SharedDoc.update_doc(room, &send(test_pid, {:sv, Yex.encode_state_vector!(&1)}))
+    assert_receive {:sv, sv}, 2_000
+    sv
+  end
+
+  test "a settle that matches the index writes nothing", ctx do
+    n = note(ctx, "Docs/n.md")
+    rows = fn -> [{n.id, "Docs/n.md"}] end
+
+    # No room: no snapshot persist (every persist re-encrypts under a new nonce).
+    nonce = index_nonce(ctx)
+    assert :ok = Identity.settle(ctx.user, ctx.vault.id, rows)
+    assert index_nonce(ctx) == nonce
+
+    # Live room: no Yjs update (any set advances the state vector).
+    {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+    sv = state_vector(room)
+    assert :ok = Identity.settle(ctx.user, ctx.vault.id, rows)
+    assert state_vector(room) == sv
+  end
 end
