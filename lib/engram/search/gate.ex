@@ -20,8 +20,9 @@ defmodule Engram.Search.Gate do
   The wait is per Qdrant request, not per search: a search makes at most 3
   (its first round, one widen round, one payload fallback retrieve), so it
   can wait up to 3 x `:acquire_timeout` (7.5 s) in the worst case, and a busy
-  refusal in a later request comes after its embed and budget token were
-  spent. Accepted: bounded, and it surfaces as an error, never a partial page.
+  refusal in a later request comes after its embed was paid for (never its
+  budget token: `Search.search/4` charges only a search that was not busy).
+  Accepted: bounded, and it surfaces as an error, never a partial page.
 
   A client that hangs up does not stop its search: Bandit keeps running the
   request process, so an abandoned type-ahead search keeps its slot until
@@ -37,12 +38,17 @@ defmodule Engram.Search.Gate do
   little when several nodes are busy at once; a cluster-wide count would need
   a cross-node round trip per search, which costs more than it saves here.
 
-  Each run emits `[:engram, :search, :gate]` with `%{wait: native}` (time to
-  a slot or to the refusal) and `%{outcome: :ok | :busy}`. No user id.
+  Each `run/2` and `admit/2` emits `[:engram, :search, :gate]` with
+  `%{wait: native}` (time to a slot or to the refusal) and `%{outcome: :ok |
+  :busy, gate: :qdrant | :admission, upstream: :none}`; a `pool_busy/2`
+  refusal emits it with `gate: :pool`, its `upstream` and `wait: 0`. No user
+  id.
 
   Around all of that, `admit/2` bounds WHOLE searches per user on a second
   gate (embed included), and `pool_busy/2` turns a saturated Finch pool on
-  any of a search's requests into the same busy error.
+  the query embed or a Qdrant request into the same busy error. A hybrid
+  search whose embed hits a busy pool still degrades to keyword-only, like
+  any embed failure; a vector-only one is refused busy.
 
   Test seam: `ServiceConfig.put_override(:search_gate, gate: pid, ...)` points
   a test's searches at its own unregistered gate (`admission_gate: pid` for
@@ -100,14 +106,7 @@ defmodule Engram.Search.Gate do
 
   @doc "Run ONE Qdrant request of a search in a slot (see the moduledoc)."
   @spec run(term(), (-> result)) :: result | {:error, :search_busy} when result: var
-  def run(user_id, fun) do
-    config = config()
-    gate = Keyword.get(config, :gate, __MODULE__)
-    start = System.monotonic_time()
-    status = ConcurrencyGate.acquire(gate, user_id, Keyword.fetch!(config, :acquire_timeout))
-    :telemetry.execute(@event, %{wait: System.monotonic_time() - start}, %{outcome: status})
-    hold(status, gate, fun)
-  end
+  def run(user_id, fun), do: through(:qdrant, :gate, __MODULE__, user_id, fun)
 
   @doc """
   Admit one WHOLE search (query embed, Postgres reads, every Qdrant request)
@@ -124,16 +123,8 @@ defmodule Engram.Search.Gate do
   exit or caller death. Same `admission_gate: pid` test seam as `gate:`.
   """
   @spec admit(term(), (-> result)) :: result | {:error, :search_busy} when result: var
-  def admit(user_id, fun) do
-    config = config()
-    gate = Keyword.get(config, :admission_gate, @admission)
-
-    hold(
-      ConcurrencyGate.acquire(gate, user_id, Keyword.fetch!(config, :acquire_timeout)),
-      gate,
-      fun
-    )
-  end
+  def admit(user_id, fun),
+    do: through(:admission, :admission_gate, @admission, user_id, fun)
 
   @doc """
   Run one outbound request of a search (`upstream` names it in the log) and
@@ -146,6 +137,12 @@ defmodule Engram.Search.Gate do
   rescue
     e in RuntimeError ->
       if String.starts_with?(e.message, @pool_busy) do
+        :telemetry.execute(@event, %{wait: 0}, %{
+          outcome: :busy,
+          gate: :pool,
+          upstream: upstream
+        })
+
         Logger.warning(
           "search upstream connection pool busy, refusing search_busy",
           Metadata.with_category(:warning, :search,
@@ -158,6 +155,23 @@ defmodule Engram.Search.Gate do
       else
         reraise e, __STACKTRACE__
       end
+  end
+
+  # Acquire on the gate named by `key` in config (a test seam) or `default`,
+  # emit `@event` tagged with `kind`, then run `fun` in the slot.
+  defp through(kind, key, default, user_id, fun) do
+    config = config()
+    gate = Keyword.get(config, key, default)
+    start = System.monotonic_time()
+    status = ConcurrencyGate.acquire(gate, user_id, Keyword.fetch!(config, :acquire_timeout))
+
+    :telemetry.execute(@event, %{wait: System.monotonic_time() - start}, %{
+      outcome: status,
+      gate: kind,
+      upstream: :none
+    })
+
+    hold(status, gate, fun)
   end
 
   defp config,

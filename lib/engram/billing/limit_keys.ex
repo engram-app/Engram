@@ -176,7 +176,7 @@ defmodule Engram.Billing.LimitKeys do
     # retrieval", which is how `external_ai_searches_per_day` went unenforced
     # on the entire MCP transport for months (#1527).
     #
-    # Fixed window, not rolling: `Engram.Search.spend_search_budget` hits a
+    # Fixed window, not rolling: `Engram.Search.charge_search_budget` hits a
     # Hammer bucket keyed by `div(now, 24h)`, so the window is epoch-aligned,
     # the allowance resets at 00:00 UTC for everyone, and a user can spend it
     # on both sides of that boundary.

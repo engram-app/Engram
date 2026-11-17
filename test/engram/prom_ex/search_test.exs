@@ -36,11 +36,15 @@ defmodule Engram.PromEx.SearchTest do
 
       gate = Enum.filter(metrics, &(&1.event_name == [:engram, :search, :gate]))
 
-      assert [%Telemetry.Metrics.Counter{tags: [:outcome]}] =
+      assert [%Telemetry.Metrics.Counter{tags: [:outcome, :gate, :upstream]}] =
                Enum.filter(gate, &match?(%Telemetry.Metrics.Counter{}, &1))
 
-      assert [%Telemetry.Metrics.Distribution{unit: :millisecond, tags: [:outcome]}] =
+      assert [%Telemetry.Metrics.Distribution{unit: :millisecond, tags: [:outcome, :gate]} = d] =
                Enum.filter(gate, &match?(%Telemetry.Metrics.Distribution{}, &1))
+
+      # A pool-busy refusal never waited on a gate: counted, not timed.
+      assert d.keep.(%{gate: :admission})
+      refute d.keep.(%{gate: :pool})
     end
 
     test "sums dropped hits from [:engram, :search, :hit_dropped]" do

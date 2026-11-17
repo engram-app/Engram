@@ -15,6 +15,8 @@ defmodule Engram.Search.AdmissionTest do
   alias Engram.ServiceConfig
 
   @wait 150
+  @pool_msg "Finch was unable to provide a connection within the timeout due to " <>
+              "excess queuing for connections."
 
   # Per-test admission and Qdrant gates, this process's searches pointed at both.
   defp gates(admission \\ [], qdrant \\ []) do
@@ -72,6 +74,20 @@ defmodule Engram.Search.AdmissionTest do
 
   defp counts(g), do: :sys.get_state(g).counts
 
+  # Polls the gate until its per-user queue matches, failing after 2 s.
+  defp wait_queued(g, queued, deadline \\ System.monotonic_time(:millisecond) + 2_000) do
+    cond do
+      :sys.get_state(g).queued == queued ->
+        :ok
+
+      System.monotonic_time(:millisecond) > deadline ->
+        flunk("queue never reached #{inspect(queued)}")
+
+      true ->
+        receive(after: (1 -> wait_queued(g, queued, deadline)))
+    end
+  end
+
   describe "admit/2" do
     test "a user over the admission limit is busy while another user is not" do
       gates()
@@ -100,6 +116,7 @@ defmodule Engram.Search.AdmissionTest do
       holder = admitted("a")
 
       waiter = Task.async(fn -> Gate.admit("a", fn -> :second end) end)
+      wait_queued(a, %{"a" => 1})
       send(holder, :go)
       assert Task.await(waiter, 2_000) == :second
     end
@@ -151,11 +168,57 @@ defmodule Engram.Search.AdmissionTest do
     end
   end
 
+  describe "telemetry" do
+    setup do
+      handler = "admission-#{inspect(self())}"
+      test = self()
+
+      :telemetry.attach(
+        handler,
+        [:engram, :search, :gate],
+        fn _e, m, meta, pid -> if self() == pid, do: send(pid, {:gate_event, m, meta}) end,
+        test
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+    end
+
+    test "an admission refusal emits the gate event tagged with its gate" do
+      gates(admission_max_waiting_per_user: 0)
+      holder = admitted("a")
+
+      assert Gate.admit("a", fn -> :ran end) == {:error, :search_busy}
+
+      assert_receive {:gate_event, %{wait: w},
+                      %{outcome: :busy, gate: :admission, upstream: :none}}
+
+      assert is_integer(w)
+      send(holder, :go)
+    end
+
+    test "an admission and a Qdrant slot each emit ok with their gate" do
+      gates()
+      assert Gate.admit("a", fn -> Gate.run("a", fn -> :ran end) end) == :ran
+      assert_receive {:gate_event, _, %{outcome: :ok, gate: :admission, upstream: :none}}
+      assert_receive {:gate_event, _, %{outcome: :ok, gate: :qdrant, upstream: :none}}
+    end
+
+    test "a pool-busy refusal emits busy tagged :pool with its upstream" do
+      assert Gate.pool_busy(:query_embed, fn -> raise RuntimeError, @pool_msg end) ==
+               {:error, :search_busy}
+
+      assert_receive {:gate_event, _, %{outcome: :busy, gate: :pool, upstream: :query_embed}}
+    end
+  end
+
   describe "pool_busy/2" do
     test "a real Finch pool checkout timeout becomes busy and is logged with its upstream" do
       bypass = Bypass.open()
 
+      test = self()
+
       Bypass.stub(bypass, "GET", "/", fn conn ->
+        send(test, :in_handler)
         Process.sleep(300)
         Plug.Conn.send_resp(conn, 200, "ok")
       end)
@@ -165,8 +228,9 @@ defmodule Engram.Search.AdmissionTest do
       url = "http://localhost:#{bypass.port}/"
       request = fn -> Req.get(url, finch: [name: finch, pool_timeout: 20], retry: false) end
 
+      # The first request holds the pool's one connection once its handler runs.
       busy = Task.async(request)
-      Process.sleep(50)
+      assert_receive :in_handler, 2_000
 
       log =
         capture_log([level: :warning], fn ->
@@ -218,9 +282,7 @@ defmodule Engram.Search.AdmissionTest do
           receive do: (:go -> {:ok, [[0.1, 0.2, 0.3]]})
 
         ["pool"], _opts ->
-          raise RuntimeError,
-                "Finch was unable to provide a connection within the timeout due to " <>
-                  "excess queuing for connections."
+          raise RuntimeError, @pool_msg
 
         texts, _opts ->
           {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
@@ -251,20 +313,43 @@ defmodule Engram.Search.AdmissionTest do
       assert counts(adm) == %{}
     end
 
-    test "a pool checkout timeout in the query embed is busy, not a raise or a keyword degrade",
+    test "a pool checkout timeout in a vector-only query embed is busy, not a raise",
          %{users: [{a, a_vault} | _]} do
       {adm, q} = gates()
 
       log =
         capture_log([level: :warning], fn ->
-          assert Search.search(a, a_vault, "pool") == {:error, :search_busy}
           assert Search.search(a, a_vault, "pool", mode: :vector) == {:error, :search_busy}
         end)
 
       assert log =~ "query_embed"
-      refute log =~ "degraded to keyword-only"
       assert counts(adm) == %{}
       assert counts(q) == %{}
+    end
+
+    test "a pool checkout timeout in a hybrid query embed degrades to keyword-only",
+         %{users: [{a, a_vault} | _]} do
+      gates()
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert Search.search(a, a_vault, "pool") == {:ok, []}
+        end)
+
+      assert log =~ "degraded to keyword-only"
+    end
+
+    test "a busy search costs no daily search token", %{users: [{a, a_vault} | _]} do
+      gates()
+      insert(:user_limit_override, user: a, key: "ai_searches_per_day", value: %{"v" => 1})
+
+      capture_log(fn ->
+        assert Search.search(a, a_vault, "pool", mode: :vector) == {:error, :search_busy}
+      end)
+
+      # The one token is still there: this search runs, the next is capped.
+      assert Search.search(a, a_vault, "served") == {:ok, []}
+      assert {:error, :search_cap_exceeded, 1} = Search.search(a, a_vault, "capped")
     end
   end
 end
