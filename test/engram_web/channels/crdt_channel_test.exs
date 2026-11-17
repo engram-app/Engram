@@ -1450,7 +1450,7 @@ defmodule EngramWeb.CrdtChannelTest do
       holder = hold_vault_gate(vault.id)
       started = System.monotonic_time(:millisecond)
       ref = push(socket, "crdt_delete", %{"doc_id" => note.id})
-      assert_reply ref, :error, %{reason: "busy"}, budget * 5
+      assert %{status: :error, payload: %{reason: "busy"}} = await_reply(ref, socket, budget * 5)
       assert System.monotonic_time(:millisecond) - started < budget * 5
 
       send(holder.pid, :release)
@@ -1458,8 +1458,68 @@ defmodule EngramWeb.CrdtChannelTest do
 
       assert Process.alive?(socket.channel_pid)
       ref2 = push(socket, "crdt_delete", %{"doc_id" => note.id})
-      assert_reply ref2, :ok, %{doc_id: _}
+      assert %{status: :ok, payload: %{doc_id: _}} = await_reply(ref2, socket, 2_000)
       refute Notes.note_in_vault?(user, vault.id, note.id)
+    end
+
+    # A delete task that dies without replying (an exit or a kill: its
+    # try/rescue catches only exceptions) used to free the channel's slot in
+    # silence, leaving the client to its 10 s push timeout (#2552).
+    test "a delete task that dies before replying still answers, and frees the slot", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/dies.md", "content" => "x"},
+          actor: "api"
+        )
+
+      channel_budget(60_000)
+      holder = hold_vault_gate(vault.id)
+      ref = push(socket, "crdt_delete", %{"doc_id" => note.id})
+      # Killed while it queues on the gate, where it holds no DB connection.
+      Process.exit(await_gate_waiter(vault.id), :kill)
+
+      assert %{status: :error, payload: %{reason: "delete_failed"}} =
+               await_reply(ref, socket, 5_000)
+
+      send(holder.pid, :release)
+      Task.await(holder)
+
+      ref2 = push(socket, "crdt_delete", %{"doc_id" => note.id})
+      assert %{status: :ok} = await_reply(ref2, socket, 5_000)
+    end
+
+    # The reply to `ref`, or a failure naming what the channel and its delete
+    # tasks were doing (#2552: a bare timeout said nothing about the slow step).
+    defp await_reply(ref, socket, timeout) do
+      receive do
+        %Phoenix.Socket.Reply{ref: ^ref} = reply -> reply
+      after
+        timeout -> flunk("no reply in #{timeout} ms\n" <> delete_stall_report(socket))
+      end
+    end
+
+    # Sync test: every Engram.TaskSupervisor child is this test's.
+    defp delete_stall_report(socket) do
+      info = &Process.info(&1, [:current_stacktrace, :status, :message_queue_len])
+      tasks = for pid <- Task.Supervisor.children(Engram.TaskSupervisor), do: {pid, info.(pid)}
+      inspect(%{channel: info.(socket.channel_pid), tasks: tasks}, pretty: true, limit: :infinity)
+    end
+
+    # The pid queued behind the holder of `vault_id`'s gate, once there is one.
+    defp await_gate_waiter(vault_id) do
+      gate = GenServer.whereis({:via, PartitionSupervisor, {Engram.Vaults.SeqGate, vault_id}})
+
+      case Map.keys(:sys.get_state(gate).locks[vault_id].waiters) do
+        [pid] ->
+          pid
+
+        [] ->
+          Process.sleep(5)
+          await_gate_waiter(vault_id)
+      end
     end
 
     # One delete in flight per channel. Clients never send a second before the

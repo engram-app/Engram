@@ -668,7 +668,11 @@ defmodule EngramWeb.CrdtChannel do
       # delete. A frame sent while it waits (a catch-up read, a crdt_create
       # sent outside the queue) can run first. `Task.Supervisor` propagates
       # `$callers`, which is what reaches the Repo (and the test sandbox).
-      {:noreply, assign(socket, :delete_in_flight, delete_off_channel(socket, note_id))}
+      {:noreply,
+       assign(socket,
+         delete_in_flight: delete_off_channel(socket, note_id),
+         delete_reply_to: socket_ref(socket)
+       )}
     else
       {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
       {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
@@ -1786,13 +1790,26 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  # The in-flight crdt_delete task ended, however it ended.
+  # The in-flight crdt_delete task ended, however it ended. A normal exit
+  # replied. Any other (an exit or throw its rescue does not catch, or a
+  # kill) ended it before its reply, so answer here, or the client hears
+  # nothing until its 10s push timeout (#2552).
   @impl true
   def handle_info(
-        {:DOWN, ref, :process, _pid, _reason},
+        {:DOWN, ref, :process, _pid, reason},
         %{assigns: %{delete_in_flight: ref}} = socket
-      ),
-      do: {:noreply, assign(socket, :delete_in_flight, nil)}
+      ) do
+    if reason != :normal do
+      Logger.error(
+        "crdt_delete task died before replying",
+        Metadata.with_category(:error, :sync, error_kind: Engram.Telemetry.error_kind(reason))
+      )
+
+      reply(socket.assigns.delete_reply_to, {:error, %{reason: "delete_failed"}})
+    end
+
+    {:noreply, assign(socket, delete_in_flight: nil, delete_reply_to: nil)}
+  end
 
   def handle_info({:DOWN, _ref, :process, pid, _reason}, socket) do
     # The index room dying must clear its cache too, or the next frame casts at
