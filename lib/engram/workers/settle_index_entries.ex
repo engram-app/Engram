@@ -15,7 +15,7 @@ defmodule Engram.Workers.SettleIndexEntries do
   """
   use Oban.Worker, queue: :crdt_checkpoint, max_attempts: 5
 
-  alias Engram.{Accounts, Crypto, Notes, Repo, Vaults}
+  alias Engram.{Accounts, Crypto, Jobs, Notes, Repo, Vaults}
   alias Engram.Crypto.RotationGate
   alias Engram.Notes.Enqueue
 
@@ -37,7 +37,7 @@ defmodule Engram.Workers.SettleIndexEntries do
         Map.new(entries, fn {id, pre, claimed} -> {id, [hmac(fk, pre), hmac(fk, claimed)]} end)
 
       allowed
-      |> Map.drop(merge_pending(allowed))
+      |> Map.drop(merge_pending(user, allowed))
       |> Enum.map(fn {id, paths} ->
         new(%{user_id: user.id, vault_id: vault_id, note_id: id, allowed: paths})
       end)
@@ -48,21 +48,27 @@ defmodule Engram.Workers.SettleIndexEntries do
   end
 
   # One statement for every note: append to each pending job's `allowed`, and
-  # return the notes it found one for. On the note_id index
-  # (`oban_jobs_pending_note_id_index`). A job that started executing in
-  # between is not matched, so its note gets a new job.
+  # return the notes it found one for. Pending is `Jobs.pending_states/0`,
+  # written in as SQL literals (a parameter would stop the planner matching
+  # `oban_jobs_pending_note_id_index`'s partial predicate). The user_id
+  # predicate is free and keeps the match to this user. A job that started
+  # executing in between is not matched, so its note gets a new job.
+  @pending_sql Enum.map_join(Jobs.pending_states(), ", ", &"'#{&1}'")
   @merge_sql """
   UPDATE oban_jobs AS j
      SET args = jsonb_set(j.args, '{allowed}', (j.args -> 'allowed') || v.value)
     FROM jsonb_each($1::jsonb) AS v
    WHERE j.worker = $2
-     AND j.state IN ('available', 'scheduled', 'retryable')
+     AND j.state IN (#{@pending_sql})
+     AND (j.args ->> 'user_id') = $3
      AND (j.args ->> 'note_id') = v.key
   RETURNING j.args ->> 'note_id'
   """
 
-  defp merge_pending(allowed) do
-    %{rows: rows} = Repo.query!(@merge_sql, [allowed, inspect(__MODULE__)])
+  defp merge_pending(user, allowed) do
+    %{rows: rows} =
+      Repo.query!(@merge_sql, [allowed, inspect(__MODULE__), user.id])
+
     List.flatten(rows)
   end
 
