@@ -49,7 +49,7 @@ defmodule Engram.MigrationRlsLintTest do
     "20261110130000_note_bodies_pre_nonce_heal_migrate.exs",
     # Same per-user tenant context; it only fills NULL file-time twins on
     # the owner's own rows, run as `engram_app` in `FileTimesFillTest`.
-    "20261117120000_file_times_fill_migrate.exs"
+    "20261117160000_file_times_fill_migrate.exs"
   ]
 
   test "tenant-table DML in migrations handles FORCE ROW LEVEL SECURITY" do

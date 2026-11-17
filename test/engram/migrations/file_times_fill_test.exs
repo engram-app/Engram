@@ -1,6 +1,6 @@
 defmodule Engram.Migrations.FileTimesFillTest do
   @moduledoc """
-  Migration 20261117120000 (R25 contract step (b)) fills the `*_at` twins
+  Migration 20261117160000 (R25 contract step (b)) fills the `*_at` twins
   still NULL over a double, with `Engram.FileTime.normalize/1`'s value in
   SQL, and never touches a set twin. Run as `engram_app` (RLS enforced):
   the suite's superuser would pass with an unscoped query too.
@@ -15,7 +15,7 @@ defmodule Engram.Migrations.FileTimesFillTest do
   @mod "Elixir.Engram.Repo.Migrations.FileTimesFillMigrate"
 
   setup_all do
-    Code.require_file("priv/repo/migrations/20261117120000_file_times_fill_migrate.exs")
+    Code.require_file("priv/repo/migrations/20261117160000_file_times_fill_migrate.exs")
     :ok
   end
 
@@ -109,6 +109,16 @@ defmodule Engram.Migrations.FileTimesFillTest do
 
     assert twins("notes", kept, [:mtime_at]) == before
     assert twins("notes", none, [:mtime_at]) == [nil]
+  end
+
+  # A migrator that sees every tenant (here the suite's superuser) takes
+  # the set-based path: one UPDATE per table that needs any.
+  test "the all-tenants path fills too", ctx do
+    s = note!(ctx, "s.md")
+    legacy!("notes", s, "mtime = 1776072500.928, mtime_at = NULL")
+
+    assert :ok = String.to_existing_atom(@mod).fill(Repo)
+    assert twins("notes", s, [:mtime_at]) == [~U[2026-04-13 09:28:20.928000Z]]
   end
 
   test "out of range is NULL" do
