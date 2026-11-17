@@ -306,13 +306,15 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
     # The compaction branch (text unchanged, crdt_state rewritten) has its own
     # fenced write; it must report the same lost race, not a plain skip.
     test "a trashed row's checkpoint fans nothing out", ctx do
-      %{user: user, vault: vault, room: room, timer: timer} = ctx
-      assert {:ok, _} = Notes.delete_note(user, vault, "Old/cp3.md")
+      %{user: user, vault: vault, room: room} = ctx
       EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
 
       edit!(room, "ROOM-")
-      send(timer, :tick)
-      _ = :sys.get_state(timer)
+      # The room's own live delta for the edit; only the checkpoint's is under test.
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 1_000
+
+      # Trashing ends the room, whose exit checkpoint then meets a trashed row.
+      assert :ok = Notes.delete_note(user, vault, "Old/cp3.md")
 
       refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 300
     end
@@ -350,7 +352,9 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
         end)
 
       assert log =~ "crdt checkpoint stale retries exhausted"
-      # Every attempt lost the fence and wrote nothing: no fan-out either.
+      # Every attempt lost the fence and wrote nothing: no fan-out beyond the
+      # room's own live delta for the edit.
+      assert_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 1_000
       refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200
       assert %{settle_timer: nil, stale_retries: 0} = :sys.get_state(timer)
       refute_receive {:row_read, 5}, 300
