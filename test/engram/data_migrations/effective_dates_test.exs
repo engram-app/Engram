@@ -161,7 +161,7 @@ defmodule Engram.DataMigrations.EffectiveDatesTest do
     note = write_indexed!(ctx.user, ctx.vault, "c.md", "x\n")
     assert run_until_done() == :done
 
-    set!(ctx.user, note, ctime: 1_510_897_528.861, ctime_at: ~U[2017-11-17 05:45:28.861000Z])
+    set!(ctx.user, note, ctime_at: ~U[2017-11-17 05:45:28.861000Z])
     assert elem(dates(note), 3) == nil
 
     assert run_until_done() == :done
