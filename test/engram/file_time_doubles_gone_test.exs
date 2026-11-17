@@ -54,9 +54,27 @@ defmodule Engram.FileTimeDoublesGoneTest do
 
   test "the scan sees heredoc SQL and quoted SQL, not docs" do
     src =
-      ~s|@doc """\nSET the mtime\n"""\nq = """\nUPDATE notes SET mtime = 1\n"""\nx = "SELECT ctime FROM notes"\ny = n.mtime\n|
+      Enum.join(
+        [
+          ~s(@doc """),
+          "SET the mtime",
+          ~s("""),
+          ~s(q = """),
+          "UPDATE notes SET mtime = 1",
+          ~s("""),
+          ~s(x = "SELECT ctime FROM notes"),
+          "y = n.mtime",
+          "Repo.query!(",
+          ~s(  """),
+          "  SELECT mtime FROM notes",
+          ~s(  """,),
+          "  [id]",
+          ")"
+        ],
+        "\n"
+      )
 
-    assert Enum.map(sql_lines(src), &elem(&1, 1)) == [5, 7, 8]
+    assert Enum.map(sql_lines(src), &elem(&1, 1)) == [5, 7, 8, 11]
   end
 
   # `{line, number}` for every line that can hold SQL or a query binding:
@@ -71,10 +89,13 @@ defmodule Engram.FileTimeDoublesGoneTest do
     |> Enum.with_index(1)
     |> Enum.map_reduce(:code, fn {line, n}, mode ->
       trimmed = String.trim(line)
-      opens? = String.ends_with?(trimmed, ~s(""")) and trimmed != ~s(""")
+      # A heredoc opens on a line ending in `"""` (`q = """`, or a bare
+      # `"""` as a call argument) and closes on one starting with it
+      # (`"""`, `""",`, `""")`).
+      opens? = String.ends_with?(trimmed, ~s("""))
 
       cond do
-        mode != :code and trimmed == ~s(""") -> {nil, :code}
+        mode != :code and String.starts_with?(trimmed, ~s(""")) -> {nil, :code}
         mode == :doc -> {nil, :doc}
         mode == :sql -> {{line, n}, :sql}
         opens? and Regex.match?(~r/@(module)?doc\b/, trimmed) -> {nil, :doc}
