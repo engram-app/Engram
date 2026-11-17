@@ -28,7 +28,8 @@ defmodule Engram.Sync.PageGate do
   Slots are released on normal completion AND on holder death (the holder is
   monitored), so a killed page-builder cannot shrink capacity until restart.
   """
-  use GenServer
+  alias Engram.ConcurrencyGate
+
   require Logger
 
   # Derived from the DB pool, never hardcoded. Every page build checks out a
@@ -54,13 +55,10 @@ defmodule Engram.Sync.PageGate do
   """
   def start_link(opts) do
     limit = Keyword.get(opts, :limit) || configured_limit()
-
-    case Keyword.fetch(opts, :name) do
-      {:ok, nil} -> GenServer.start_link(__MODULE__, limit)
-      {:ok, name} -> GenServer.start_link(__MODULE__, limit, name: name)
-      :error -> GenServer.start_link(__MODULE__, limit, name: __MODULE__)
-    end
+    ConcurrencyGate.start_link(limit: limit, name: Keyword.get(opts, :name, __MODULE__))
   end
+
+  def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
 
   @doc """
   Run `fun` holding one slot, waiting for a free one if necessary.
@@ -76,45 +74,37 @@ defmodule Engram.Sync.PageGate do
         try do
           fun.()
         after
-          GenServer.cast(gate, {:release, self()})
+          ConcurrencyGate.release(gate)
         end
 
-      :degraded ->
+      # Timed out, or the gate is not running (self-host boots without it,
+      # and tests may not start it). Either way the work still has to happen.
+      # `acquire/3` has already withdrawn this caller from the queue, so the
+      # next freed slot cannot be handed to a channel that stopped waiting.
+      :busy ->
+        Logger.warning("sync page gate unavailable or saturated, building page ungated",
+          category: :sync
+        )
+
+        fun.()
+
+      # This process already holds a slot (a nested page build). The shared
+      # gate refuses re-entry with a raise; crashing the channel would strand
+      # the sync, so the inner page runs ungated and, holding nothing,
+      # releases nothing (the outer slot stays the outer call's).
+      :nested ->
+        Logger.warning("sync page gate re-entered, building nested page ungated",
+          category: :sync
+        )
+
         fun.()
     end
   end
 
   defp acquire(gate, timeout) do
-    GenServer.call(gate, :acquire, timeout)
-  catch
-    :exit, _ ->
-      # Timed out, or the gate is not running (self-host boots without it, and
-      # tests may not start it). Either way the work still has to happen.
-      #
-      # WITHDRAW FIRST. A timed-out caller is still sitting in the waiting queue,
-      # and it is still alive — it is a channel process that merely gave up
-      # waiting. Without this, the next free slot gets handed to it, the reply
-      # goes nowhere, and the slot is held until that channel dies. Under exactly
-      # the sustained load this gate exists for, capacity leaks away one slot at
-      # a time and every later page runs ungated while the logs say nothing,
-      # because degrading open is the designed behaviour. Protection that can
-      # vanish without a signal is worse than none.
-      #
-      # Cast, not call: the gate may be down, and a second blocking call on the
-      # failure path is how a timeout becomes a hang.
-      catch_exit_cast(gate, {:cancel, self()})
-
-      Logger.warning("sync page gate unavailable or saturated — building page ungated",
-        category: :sync
-      )
-
-      :degraded
-  end
-
-  defp catch_exit_cast(gate, msg) do
-    GenServer.cast(gate, msg)
-  catch
-    :exit, _ -> :ok
+    ConcurrencyGate.acquire(gate, nil, timeout)
+  rescue
+    ArgumentError -> :nested
   end
 
   @doc """
@@ -130,75 +120,6 @@ defmodule Engram.Sync.PageGate do
       _ ->
         pool = Keyword.get(Application.get_env(:engram, Engram.Repo, []), :pool_size, 10)
         max(@min_limit, div(pool, @pool_divisor))
-    end
-  end
-
-  @impl true
-  def init(limit), do: {:ok, %{limit: limit, active: %{}, waiting: :queue.new()}}
-
-  @impl true
-  def handle_call(:acquire, {pid, _tag} = from, state) do
-    if map_size(state.active) < state.limit do
-      {:reply, :ok, grant(state, pid)}
-    else
-      {:noreply, %{state | waiting: :queue.in(from, state.waiting)}}
-    end
-  end
-
-  @impl true
-  def handle_cast({:release, pid}, state), do: {:noreply, state |> drop(pid) |> pump()}
-
-  # A caller that gave up waiting. Must clear BOTH queues: the grant can race
-  # the timeout, so by the time this arrives the waiter may already have been
-  # promoted into `active` and be holding a slot nobody will ever release.
-  @impl true
-  def handle_cast({:cancel, pid}, state) do
-    waiting = :queue.filter(fn {waiter, _tag} -> waiter != pid end, state.waiting)
-    {:noreply, %{state | waiting: waiting} |> drop(pid) |> pump()}
-  end
-
-  @impl true
-  def handle_info({:DOWN, _ref, :process, pid, _reason}, state),
-    do: {:noreply, state |> drop(pid) |> pump()}
-
-  # NOT re-entrant: `active` is keyed by pid, so the same process acquiring
-  # twice would overwrite its own monitor ref (leaking the first) and count as
-  # one slot, over-admitting by one. There is a single call site and it does not
-  # nest; if that ever changes, this needs a per-pid depth count rather than a
-  # bare map.
-  defp grant(state, pid) do
-    ref = Process.monitor(pid)
-    %{state | active: Map.put(state.active, pid, ref)}
-  end
-
-  defp drop(state, pid) do
-    case Map.pop(state.active, pid) do
-      {nil, _} ->
-        state
-
-      {ref, rest} ->
-        Process.demonitor(ref, [:flush])
-        %{state | active: rest}
-    end
-  end
-
-  # Hand the freed slot to the next waiter. Skips waiters that died while queued
-  # (their GenServer.call has no live receiver) so a dead waiter can't be granted
-  # a slot nobody will ever release.
-  defp pump(state) do
-    case :queue.out(state.waiting) do
-      {:empty, _} ->
-        state
-
-      {{:value, {pid, _tag} = from}, rest} ->
-        state = %{state | waiting: rest}
-
-        if Process.alive?(pid) do
-          GenServer.reply(from, :ok)
-          grant(state, pid)
-        else
-          pump(state)
-        end
     end
   end
 end

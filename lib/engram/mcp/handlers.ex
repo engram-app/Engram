@@ -311,6 +311,9 @@ defmodule Engram.MCP.Handlers do
       {:error, :search_cap_exceeded, cap} ->
         search_cap_error(cap)
 
+      {:error, :search_busy} ->
+        search_busy_error()
+
       {:ok, results} ->
         suggestions =
           results
@@ -1512,6 +1515,8 @@ defmodule Engram.MCP.Handlers do
   def render_search({:error, :search_cap_exceeded, limit}, _names),
     do: search_cap_error(limit)
 
+  def render_search({:error, :search_busy}, _names), do: search_busy_error()
+
   # Was `{:ok, "Search unavailable."}` — an outage reported as success, which
   # no client could distinguish from a genuine zero-hit search, and which a
   # retry loop would never retry.
@@ -1982,6 +1987,15 @@ defmodule Engram.MCP.Handlers do
   defp search_cap_error(cap),
     do: ToolError.error(:rate_limited, "ai_searches_per_day: daily limit of #{cap} reached")
 
+  # Too many of this user's searches (or this node's) in flight at once
+  # (`Engram.Search.Gate`). Retryable in seconds, unlike the daily cap.
+  defp search_busy_error,
+    do:
+      ToolError.error(
+        :rate_limited,
+        "Too many searches at once; run fewer in parallel and retry in a few seconds"
+      )
+
   # "end" stays byte-identical to the pre-position append (existing tests
   # pin the old behavior). "start" inserts right after the frontmatter
   # fence when present, so frontmatter bytes are never touched; with no
@@ -2087,18 +2101,27 @@ defmodule Engram.MCP.Handlers do
   end
 
   defp log_and_error(op, reason, message) do
-    require Logger
-
-    Logger.error(
-      "mcp #{op} failed",
-      Engram.Logger.Metadata.with_category(:error, :http,
-        tool: op,
-        reason_label: Engram.Telemetry.error_kind(reason)
-      )
-    )
-
+    log_failure(:error, op, reason)
     {:error, message}
   end
+
+  defp log_failure(level, op, reason) do
+    require Logger
+
+    Logger.log(
+      level,
+      "mcp #{op} failed",
+      Engram.Logger.Metadata.with_category(level, :http,
+        tool: op,
+        reason_label: Engram.Telemetry.error_kind(reason),
+        http_status: http_status(reason)
+      )
+    )
+  end
+
+  # The status of an upstream HTTP error, never its body (bounded, safe).
+  defp http_status({status, _body}) when is_integer(status), do: status
+  defp http_status(_reason), do: nil
 
   # Search hits → `{folder, count}` sorted by descending count. Shared by
   # suggest_folder (which takes the top N) and auto_place_folder (the head).
@@ -2196,6 +2219,14 @@ defmodule Engram.MCP.Handlers do
             [{folder, _} | _] -> folder
             _ -> ""
           end
+
+        # A failed search (Qdrant down or timed out) must not fail the create
+        # either, but it is logged: the default folder is a plausible answer,
+        # so without the line this would be the one silent search failure.
+        # Busy and a spent budget are already counted where they happen.
+        {:error, reason} when reason != :search_busy ->
+          log_failure(:warning, "auto_place_folder", reason)
+          ""
 
         # Also the `{:error, :search_cap_exceeded, _}` path, deliberately.
         # `""` means "no suggestion", so a spent budget drops the note in the

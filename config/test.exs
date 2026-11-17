@@ -294,3 +294,12 @@ config :engram, Engram.Crypto.UserDekRotation, qdrant_retry_ms: 0
 # sandbox does not own and no test sees another's cached override. Its own
 # tests opt in per-process via `ServiceConfig.put_override/2`.
 config :engram, :service_overrides_enabled, false
+
+# The app-supervised search gate is shared by every async test, and a suite
+# runs far more searches at once than one user would. Gate behaviour is
+# tested on per-test gates (`Engram.Search.GateTest`), so here it never binds.
+config :engram, :search_gate,
+  limit: 10_000,
+  per_user: 10_000,
+  max_waiting: 10_000,
+  max_waiting_per_user: 10_000

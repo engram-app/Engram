@@ -113,6 +113,17 @@ defmodule Engram.PromEx.FixedBucketsTest do
       1_000,
       5_000
     ],
+    "engram_prom_ex_search_gate_wait_milliseconds" => [
+      1,
+      10,
+      50,
+      100,
+      250,
+      500,
+      1_000,
+      2_500,
+      5_000
+    ],
     "engram_prom_ex_voyage_embed_tokens_per_chunk" => [
       25,
       50,

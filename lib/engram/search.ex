@@ -14,6 +14,7 @@ defmodule Engram.Search do
   alias Engram.Logger.Metadata
   alias Engram.Notes.Helpers
   alias Engram.Search.FieldFilters
+  alias Engram.Search.Gate
   alias Engram.Search.MMR
   alias Engram.Search.NameTerms
   alias Engram.Search.PhraseCheck
@@ -909,17 +910,20 @@ defmodule Engram.Search do
   defp ceiling_mode(mode, _user), do: mode
 
   # Vector leg: embed query → dense Qdrant search (existing behavior preserved).
-  defp run_legs(:vector, _user, query, search_opts, profile) do
+  defp run_legs(:vector, user, query, search_opts, profile) do
     with {:ok, [vector]} <- query_embedding(query, search_opts, profile) do
-      Qdrant.search(collection(), vector, search_opts)
+      qdrant(user, fn -> Qdrant.search(collection(), vector, search_opts) end)
     end
   end
 
   # Keyword leg: HMAC the query tokens → sparse Qdrant search. No DEK → empty.
   defp run_legs(:keyword, user, query, search_opts, _profile) do
     case sparse_query(user, query) do
-      {:ok, sparse} -> Qdrant.sparse_search(collection(), sparse, search_opts)
-      :no_vault -> {:ok, []}
+      {:ok, sparse} ->
+        qdrant(user, fn -> Qdrant.sparse_search(collection(), sparse, search_opts) end)
+
+      :no_vault ->
+        {:ok, []}
     end
   end
 
@@ -930,8 +934,11 @@ defmodule Engram.Search do
     case query_embedding(query, search_opts, profile) do
       {:ok, [vector]} ->
         case sparse_query(user, query) do
-          {:ok, sparse} -> Qdrant.hybrid_search(collection(), vector, sparse, search_opts)
-          :no_vault -> Qdrant.search(collection(), vector, search_opts)
+          {:ok, sparse} ->
+            qdrant(user, fn -> Qdrant.hybrid_search(collection(), vector, sparse, search_opts) end)
+
+          :no_vault ->
+            qdrant(user, fn -> Qdrant.search(collection(), vector, search_opts) end)
         end
 
       {:error, reason} = err ->
@@ -973,7 +980,7 @@ defmodule Engram.Search do
               %{leg: :keyword, reason: error_label(reason)}
             )
 
-            Qdrant.sparse_search(collection(), sparse, search_opts)
+            qdrant(user, fn -> Qdrant.sparse_search(collection(), sparse, search_opts) end)
 
           :no_vault ->
             err
@@ -982,13 +989,20 @@ defmodule Engram.Search do
   end
 
   # similar_to: the source note's stored dense vectors, averaged by Qdrant.
-  defp run_legs(:similar, _user, {:similar, point_ids}, search_opts, _profile),
-    do: Qdrant.recommend(collection(), point_ids, search_opts)
+  defp run_legs(:similar, user, {:similar, point_ids}, search_opts, _profile),
+    do: qdrant(user, fn -> Qdrant.recommend(collection(), point_ids, search_opts) end)
 
   # Caller-supplied :mode is external input (MCP/API) — an unknown mode must
   # return an error tuple, not raise FunctionClauseError mid-pipeline.
   defp run_legs(_invalid_mode, _user, _query, _search_opts, _profile),
     do: {:error, :invalid_mode}
+
+  # Every Qdrant request of a search holds a slot of `Engram.Search.Gate`
+  # (per user, per node) for that request only. The query embed and the
+  # Postgres reads around it hold none: a slow embedder must degrade search,
+  # never turn it into busy refusals for everyone. A busy refusal comes after
+  # the budget was spent, as the embed it meters may already have run.
+  defp qdrant(user, fun), do: Gate.run(user.id, fun)
 
   # Bounded label for telemetry AND for the degradation log — the raw reason can
   # carry a whole provider response body, and metric tags must stay
@@ -1162,7 +1176,8 @@ defmodule Engram.Search do
   defp merge_fallback(candidates, ids, user) do
     keys = Qdrant.fallback_payload()
 
-    with {:ok, points} <- Qdrant.retrieve(collection(), ids, with_payload: keys) do
+    with {:ok, points} <-
+           qdrant(user, fn -> Qdrant.retrieve(collection(), ids, with_payload: keys) end) do
       by_id = Map.new(points, &{&1.qdrant_id, &1})
       wanted = MapSet.new(ids)
 

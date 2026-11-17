@@ -17,6 +17,9 @@ defmodule Engram.PromEx.Search do
     * `engram_prom_ex_search_request_total` — tags `[:status,
       :cross_vault, :rerank]`. Latency is read from Tempo spans, not a
       histogram here.
+    * `engram_prom_ex_search_gate_total` (tag `[:outcome]`, `ok` or
+      `busy`) and `engram_prom_ex_search_gate_wait_milliseconds`: every
+      search through `Engram.Search.Gate`, `[:engram, :search, :gate]`.
     * `engram_prom_ex_search_hits_dropped_total`: sum of `count` from
       `[:engram, :search, :hit_dropped]`, tag `[:reason]`.
     * `engram_prom_ex_search_text_missing_total`: sum of `count` from
@@ -61,6 +64,7 @@ defmodule Engram.PromEx.Search do
   @phrase_check_event [:engram, :search, :phrase_check]
   @post_filter_event [:engram, :search, :post_filter]
   @name_terms_capped_event [:engram, :search, :name_terms, :scan_capped]
+  @gate_event [:engram, :search, :gate]
 
   # Self-heal outcomes of the name indexes, one sum per event, tag `reason`:
   # `{metric, event, description}`. Add a name index's pair here.
@@ -88,6 +92,25 @@ defmodule Engram.PromEx.Search do
           event_name: @stop_event,
           description: "Search requests by status, cross-vault, rerank.",
           tags: [:status, :cross_vault, :rerank]
+        ),
+        # The per-node search concurrency cap (`Engram.Search.Gate`): every
+        # search by `outcome` (`ok` got a slot, `busy` was refused), and how
+        # long it waited. A busy rate is callers turned away; a rising ok wait
+        # is the queue doing its job before it starts refusing.
+        counter(
+          metric_prefix ++ [:gate, :total],
+          event_name: @gate_event,
+          description: "Searches through the concurrency gate, by outcome (ok or busy).",
+          tags: [:outcome]
+        ),
+        distribution(
+          metric_prefix ++ [:gate, :wait, :milliseconds],
+          event_name: @gate_event,
+          measurement: :wait,
+          description: "Time a search waited for a concurrency slot (or until refused).",
+          reporter_options: Engram.PromEx.Buckets.opts(Engram.PromEx.Search.GateWaitBuckets),
+          tags: [:outcome],
+          unit: {:native, :millisecond}
         ),
         # Search silently fell back to keyword-only because the query embed
         # failed. This is invisible in the metrics above — a degraded search is
@@ -188,4 +211,9 @@ defmodule Engram.PromEx.Search do
       )
     end
   end
+end
+
+defmodule Engram.PromEx.Search.GateWaitBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [1, 10, 50, 100, 250, 500, 1_000, 2_500, 5_000]
 end

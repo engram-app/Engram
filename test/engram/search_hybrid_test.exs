@@ -52,6 +52,69 @@ defmodule Engram.SearchHybridTest do
     assert hit.score == QdrantStub.rrf(0)
   end
 
+  # Prod 2026-11-17: Qdrant answered a hybrid batch 500 at its 4 s server
+  # timeout. That must reach the caller as an error and count as a Qdrant
+  # error, never as an empty page.
+  describe "a failed hybrid query is an error, never an empty page" do
+    setup do
+      test = self()
+      handler = "qdrant-stop-#{inspect(test)}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :qdrant, :request, :stop],
+        fn _e, _m, meta, pid -> if self() == pid, do: send(pid, {:qdrant_stop, meta}) end,
+        test
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      Engram.MockEmbedder
+      |> stub(:embed_texts, fn _texts, _opts -> {:ok, [[0.1, 0.2, 0.3]]} end)
+
+      :ok
+    end
+
+    test "a Qdrant 500 (server timeout)", %{bypass: bypass, user: user, vault: vault} do
+      Bypass.expect_once(
+        bypass,
+        "POST",
+        "/collections/engram_notes/points/query/batch",
+        fn conn ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(500, ~s({"status":{"error":"Timeout error: Search timed out"}}))
+        end
+      )
+
+      assert {:error, {500, _}} = Search.search(user, vault, "iron", mode: :hybrid)
+      assert_receive {:qdrant_stop, %{op: :hybrid_search, status: :error}}
+    end
+
+    test "a client-side receive timeout", %{user: user, vault: vault} do
+      # A Qdrant that accepts the request and never answers.
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+
+      acceptor =
+        spawn(fn ->
+          {:ok, _sock} = :gen_tcp.accept(listen)
+          Process.sleep(:infinity)
+        end)
+
+      :ok = :gen_tcp.controlling_process(listen, acceptor)
+      on_exit(fn -> Process.exit(acceptor, :kill) end)
+
+      ServiceConfig.put_override(:qdrant_url, "http://127.0.0.1:#{port}")
+      ServiceConfig.put_override(:qdrant_search_timeout, 100)
+
+      assert {:error, %Req.TransportError{reason: :timeout}} =
+               Search.search(user, vault, "iron", mode: :hybrid)
+
+      assert_receive {:qdrant_stop, %{op: :hybrid_search, status: :error}}
+    end
+  end
+
   # A point on its own note `<name>.md`: the chunk row holds the text, the
   # note row the title.
   defp hit_point(user, vault, name, id, score, text \\ nil) do
