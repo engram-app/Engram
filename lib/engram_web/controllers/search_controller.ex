@@ -34,7 +34,10 @@ defmodule EngramWeb.SearchController do
     responses: [
       ok: {"Results", "application/json", Schemas.SearchResponse},
       forbidden: {"cross_vault requires Pro", "application/json", Schemas.Error},
-      unprocessable_entity: {"Missing query", "application/json", Schemas.Error}
+      unprocessable_entity: {"Missing query", "application/json", Schemas.Error},
+      too_many_requests:
+        {"Too many of your searches in flight at once (`search_busy`); retry after " <>
+           "`retry-after` seconds", "application/json", Schemas.Error}
     ]
   )
 
@@ -271,6 +274,13 @@ defmodule EngramWeb.SearchController do
           end)
 
         json(conn, %{results: notes})
+
+      # Too many of this user's searches in flight (`Engram.Search.Gate`).
+      {:error, :search_busy} ->
+        conn
+        |> put_resp_header("retry-after", "2")
+        |> put_status(429)
+        |> json(%{error: "search_busy"})
 
       {:error, :feature_not_available} ->
         conn

@@ -14,6 +14,7 @@ defmodule Engram.Search do
   alias Engram.Logger.Metadata
   alias Engram.Notes.Helpers
   alias Engram.Search.FieldFilters
+  alias Engram.Search.Gate
   alias Engram.Search.MMR
   alias Engram.Search.NameTerms
   alias Engram.Search.PhraseCheck
@@ -53,12 +54,14 @@ defmodule Engram.Search do
   def similar(user, vault, point_ids, opts \\ []) when is_list(point_ids) and point_ids != [] do
     with :ok <- vault_ids_present?(vault, opts),
          :ok <- cross_vault_entitlement(user, opts) do
-      do_search_instrumented(
-        user,
-        vault,
-        {:similar, point_ids},
-        Keyword.merge(opts, mode: :similar, group_by_note: true)
-      )
+      Gate.run(user.id, fn ->
+        do_search_instrumented(
+          user,
+          vault,
+          {:similar, point_ids},
+          Keyword.merge(opts, mode: :similar, group_by_note: true)
+        )
+      end)
     end
   end
 
@@ -95,12 +98,17 @@ defmodule Engram.Search do
     # must never happen is treating that as "no filter" and running an
     # unfiltered cross-vault search (#729). Refuse before billing/budget even
     # look at the request, and long before a Qdrant query could be built.
+    #
+    # The concurrency slot (`Engram.Search.Gate`) is taken before the budget
+    # too: a search refused as busy never ran, so it must not cost a token.
     with :ok <- vault_ids_present?(vault, opts),
          :ok <- validate_input(query, opts),
          :ok <- cross_vault_entitlement(user, opts),
-         {:ok, opts} <- resolve_field_filters(user, opts),
-         :ok <- spend_search_budget(user, opts) do
-      do_search_instrumented(user, vault, query, opts)
+         {:ok, opts} <- resolve_field_filters(user, opts) do
+      Gate.run(user.id, fn ->
+        with :ok <- spend_search_budget(user, opts),
+             do: do_search_instrumented(user, vault, query, opts)
+      end)
     end
   end
 

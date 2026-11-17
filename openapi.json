@@ -6767,6 +6767,16 @@
               }
             },
             "description": "Missing query"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Too many of your searches in flight at once (`search_busy`); retry after `retry-after` seconds"
           }
         },
         "summary": "Search notes (vector / keyword / hybrid)",

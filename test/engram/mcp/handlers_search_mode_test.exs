@@ -58,6 +58,13 @@ defmodule Engram.MCP.HandlersSearchModeTest do
                Handlers.render_search({:ok, []}, %{"v1" => "Health"})
     end
 
+    test "a busy search is a retryable rate_limited error, not an outage" do
+      assert {:error, {:rate_limited, message}} =
+               Handlers.render_search({:error, :search_busy}, %{})
+
+      assert message =~ "retry"
+    end
+
     test "an outage is an error, not a success carrying an excuse" do
       # Was `{:ok, "Search unavailable."}`, which no client could tell apart
       # from a genuine zero-hit search, and which no retry loop would retry.

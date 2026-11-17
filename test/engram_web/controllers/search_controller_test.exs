@@ -29,6 +29,35 @@ defmodule EngramWeb.SearchControllerTest do
     %{conn: authed, user: user, vault: vault, bypass: bypass}
   end
 
+  test "a search past the user's concurrency cap is a 429 with retry-after", %{
+    conn: conn,
+    user: user
+  } do
+    gate =
+      start_supervised!(
+        {Engram.Search.Gate,
+         limit: 4, per_user: 1, max_waiting: 4, max_waiting_per_user: 4, name: nil}
+      )
+
+    Engram.ServiceConfig.put_override(:search_gate, gate: gate, acquire_timeout: 50)
+    test = self()
+
+    {:ok, holder} =
+      Task.start(fn ->
+        Engram.Search.Gate.run(user.id, fn ->
+          send(test, :holding)
+          receive do: (:go -> :ok)
+        end)
+      end)
+
+    assert_receive :holding, 2_000
+    conn = post(conn, ~p"/api/search", %{"query" => "anything"})
+
+    assert json_response(conn, 429) == %{"error" => "search_busy"}
+    assert get_resp_header(conn, "retry-after") == ["2"]
+    send(holder, :go)
+  end
+
   describe "input limits" do
     test "an over-long query is a 422 naming the limit", %{conn: conn} do
       long = String.duplicate("a", Engram.Search.max_query_bytes() + 1)

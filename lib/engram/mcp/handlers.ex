@@ -311,6 +311,9 @@ defmodule Engram.MCP.Handlers do
       {:error, :search_cap_exceeded, cap} ->
         search_cap_error(cap)
 
+      {:error, :search_busy} ->
+        search_busy_error()
+
       {:ok, results} ->
         suggestions =
           results
@@ -1512,6 +1515,8 @@ defmodule Engram.MCP.Handlers do
   def render_search({:error, :search_cap_exceeded, limit}, _names),
     do: search_cap_error(limit)
 
+  def render_search({:error, :search_busy}, _names), do: search_busy_error()
+
   # Was `{:ok, "Search unavailable."}` — an outage reported as success, which
   # no client could distinguish from a genuine zero-hit search, and which a
   # retry loop would never retry.
@@ -1981,6 +1986,15 @@ defmodule Engram.MCP.Handlers do
   # by search_notes and suggest_folder so the copy and code cannot drift.
   defp search_cap_error(cap),
     do: ToolError.error(:rate_limited, "ai_searches_per_day: daily limit of #{cap} reached")
+
+  # Too many of this user's searches (or this node's) in flight at once
+  # (`Engram.Search.Gate`). Retryable in seconds, unlike the daily cap.
+  defp search_busy_error,
+    do:
+      ToolError.error(
+        :rate_limited,
+        "Too many searches at once; run fewer in parallel and retry in a few seconds"
+      )
 
   # "end" stays byte-identical to the pre-position append (existing tests
   # pin the old behavior). "start" inserts right after the frontmatter

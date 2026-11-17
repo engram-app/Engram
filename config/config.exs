@@ -678,6 +678,18 @@ config :engram, Engram.MCP.ParseGate,
   max_waiting: 16,
   deadline_ms: 20_000
 
+# Search concurrency (Engram.Search.Gate), PER NODE: at most `per_user`
+# searches in flight per user and `limit` in total, sized to Qdrant's ~4
+# search threads. A caller waits up to `acquire_timeout` ms for a slot (at
+# most `max_waiting` queued, `max_waiting_per_user` per user), then gets a
+# busy error (MCP `rate_limited`, REST 429 with retry-after).
+config :engram, :search_gate,
+  limit: 4,
+  per_user: 2,
+  acquire_timeout: 2_500,
+  max_waiting: 32,
+  max_waiting_per_user: 8
+
 # Self-host install census ping: prod builds only, so a dev `mix phx.server` or a
 # source run never pings the real collector and pollutes the install count.
 config :engram, :census_ping, config_env() == :prod

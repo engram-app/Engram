@@ -30,6 +30,19 @@ defmodule Engram.PromEx.SearchTest do
                Enum.filter(metrics, &(&1.event_name == [:engram, :search, :request, :stop]))
     end
 
+    test "counts gate outcomes and times the wait on [:engram, :search, :gate]" do
+      metrics =
+        PromExMetrics.of(SearchPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
+      gate = Enum.filter(metrics, &(&1.event_name == [:engram, :search, :gate]))
+
+      assert [%Telemetry.Metrics.Counter{tags: [:outcome]}] =
+               Enum.filter(gate, &match?(%Telemetry.Metrics.Counter{}, &1))
+
+      assert [%Telemetry.Metrics.Distribution{unit: :millisecond, tags: [:outcome]}] =
+               Enum.filter(gate, &match?(%Telemetry.Metrics.Distribution{}, &1))
+    end
+
     test "sums dropped hits from [:engram, :search, :hit_dropped]" do
       metrics =
         PromExMetrics.of(SearchPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
