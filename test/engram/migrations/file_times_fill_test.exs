@@ -153,6 +153,35 @@ defmodule Engram.Migrations.FileTimesFillTest do
     assert twins("notes", ok, [:mtime_at]) == [~U[2026-04-13 09:28:20.928000Z]]
   end
 
+  # Review of #2626: Postgres must cancel a slow window (57014) before the
+  # client's checkout deadline fires, or the halving below never runs.
+  test "the statement timeout is under the Repo's client timeout" do
+    client_ms = Repo.config() |> Keyword.get(:timeout, 15_000)
+    assert String.to_existing_atom(@mod).statement_timeout_ms() < client_ms
+  end
+
+  # A window Postgres cancels at its statement_timeout is halved and run
+  # again, not raised.
+  test "a canceled window is halved and retried", ctx do
+    id = note!(ctx, "slow.md")
+    legacy!("notes", id, "mtime = 1776072500.928, mtime_at = NULL")
+    sizes = :ets.new(:sizes, [:duplicate_bag, :public])
+
+    slow_once = fn size ->
+      :ets.insert(sizes, {:size, size})
+
+      if size == 400,
+        do: raise(%Postgrex.Error{postgres: %{code: :query_canceled}})
+    end
+
+    assert :ok = fill!(window: 400, before_window: slow_once)
+    # Every window first tries 400 rows, is canceled, and runs at 200.
+    seen = Enum.map(:ets.lookup(sizes, :size), &elem(&1, 1))
+    assert Enum.take(seen, 2) == [400, 200]
+    assert seen |> Enum.chunk_every(2) |> Enum.uniq() == [[400, 200]]
+    assert twins("notes", id, [:mtime_at]) == [~U[2026-04-13 09:28:20.928000Z]]
+  end
+
   # A window locked out is retried twice, the user once more after the
   # others, and only then does the run raise (not recorded).
   test "lock contention: retried, then the run raises", ctx do
@@ -160,7 +189,7 @@ defmodule Engram.Migrations.FileTimesFillTest do
     legacy!("notes", id, "mtime = 1776072500.928, mtime_at = NULL")
     calls = :counters.new(1, [])
 
-    locked = fn ->
+    locked = fn _size ->
       :counters.add(calls, 1, 1)
       raise %Postgrex.Error{postgres: %{code: :lock_not_available}}
     end
