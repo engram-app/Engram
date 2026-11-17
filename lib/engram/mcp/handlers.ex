@@ -2101,17 +2101,21 @@ defmodule Engram.MCP.Handlers do
   end
 
   defp log_and_error(op, reason, message) do
+    log_failure(:error, op, reason)
+    {:error, message}
+  end
+
+  defp log_failure(level, op, reason) do
     require Logger
 
-    Logger.error(
+    Logger.log(
+      level,
       "mcp #{op} failed",
-      Engram.Logger.Metadata.with_category(:error, :http,
+      Engram.Logger.Metadata.with_category(level, :http,
         tool: op,
         reason_label: Engram.Telemetry.error_kind(reason)
       )
     )
-
-    {:error, message}
   end
 
   # Search hits → `{folder, count}` sorted by descending count. Shared by
@@ -2210,6 +2214,14 @@ defmodule Engram.MCP.Handlers do
             [{folder, _} | _] -> folder
             _ -> ""
           end
+
+        # A failed search (Qdrant down or timed out) must not fail the create
+        # either, but it is logged: the default folder is a plausible answer,
+        # so without the line this would be the one silent search failure.
+        # Busy and a spent budget are already counted where they happen.
+        {:error, reason} when reason != :search_busy ->
+          log_failure(:warning, "auto_place_folder", reason)
+          ""
 
         # Also the `{:error, :search_cap_exceeded, _}` path, deliberately.
         # `""` means "no suggestion", so a spent budget drops the note in the
