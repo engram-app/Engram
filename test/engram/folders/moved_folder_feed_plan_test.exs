@@ -1,5 +1,5 @@
 defmodule Engram.Folders.MovedFolderFeedPlanTest do
-  # The moved-folder feed's leg (`Engram.Notes.moved_ids_sql/2`, O(1) folder
+  # The moved-folder feed's leg (`Engram.Notes.MovedFeedSql.sql/2`, O(1) folder
   # rename plan S5, Engram#2523) is a lazy Merge Append: one `ORDER BY id
   # LIMIT k` child per subfolder on `notes_folder_ref_live_id` (or
   # `notes_folder_ref_dead_id`), so a page reads about `k` entries plus one
@@ -14,6 +14,7 @@ defmodule Engram.Folders.MovedFolderFeedPlanTest do
 
   alias Engram.{Crypto, Folders, Notes, QueryPlan, Repo, ServiceConfig}
   alias Engram.Folders.Folder
+  alias Engram.Notes.MovedFeedSql
 
   setup :authed_api_conn
 
@@ -122,9 +123,9 @@ defmodule Engram.Folders.MovedFolderFeedPlanTest do
     params = [Ecto.UUID.dump!(v.id), Enum.map(refs, &Ecto.UUID.dump!/1), seq, zero, 3]
 
     %{custom: custom} =
-      QueryPlan.rls_plans(u.id, Notes.moved_ids_sql(:dead, length(refs)), params)
+      QueryPlan.rls_plans(u.id, MovedFeedSql.sql(:dead, length(refs)), params)
 
-    %{generic: generic} = QueryPlan.rls_plans(u.id, Notes.moved_ids_sql(:dead, 8), params)
+    %{generic: generic} = QueryPlan.rls_plans(u.id, MovedFeedSql.sql(:dead, 8), params)
 
     for plan <- [custom, generic] do
       # Index-only: `seq` and `user_id` are INCLUDEd, so the tenant qual and
@@ -255,11 +256,11 @@ defmodule Engram.Folders.MovedFolderFeedPlanTest do
     for which <- [:live, :dead] do
       # The custom plan folds a padded (NULL) slot to an empty child, so it is
       # read at the subtree's own width; the generic plan, which prod reuses,
-      # at the padded width `moved_ids/6` sends.
+      # at the padded width `MovedFeedSql.ids/6` sends.
       %{custom: custom} =
-        QueryPlan.rls_plans(u.id, Notes.moved_ids_sql(which, length(refs)), params)
+        QueryPlan.rls_plans(u.id, MovedFeedSql.sql(which, length(refs)), params)
 
-      %{generic: generic} = QueryPlan.rls_plans(u.id, Notes.moved_ids_sql(which, 8), params)
+      %{generic: generic} = QueryPlan.rls_plans(u.id, MovedFeedSql.sql(which, 8), params)
 
       for plan <- [custom, generic] do
         assert plan =~ "Merge Append", plan

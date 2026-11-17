@@ -60,6 +60,12 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # Lives in its own file (moved out of notes.ex) so notes.ex needs no
     # exemption at all.
     "engram/notes/bulk_rename.ex",
+    # Notes.MovedFeedSql.ids/6: the moved-folder feed's id leg, a `UNION
+    # ALL` of one `ORDER BY id LIMIT k` child per subfolder (a lazy Merge
+    # Append Ecto cannot build). Runs inside list_moved_changes/moved_head's
+    # `Repo.with_tenant/2` transaction, so RLS tenant context is active; its
+    # own file so notes.ex needs no exemption.
+    "engram/notes/moved_feed_sql.ex",
     # Indexing.ChunkRows.update!/2: a note's changed chunk rows in one
     # `UPDATE chunks ... FROM unnest(...)`, each row its own values. Runs
     # inside commit_index's `Repo.with_tenant/2` transaction, so RLS tenant
