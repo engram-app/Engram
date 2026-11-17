@@ -54,4 +54,33 @@ defmodule Engram.Folders.ResurrectRaceTest do
     assert {:ok, %{id: id}} = Notes.get_note(u, v, "D/x.md")
     assert id == shown.id
   end
+
+  # The occupancy probe runs after `move_note` takes the vault seq lock, and
+  # only it: the CRDT merge, encrypt and NoteCommitted insert stay before the
+  # lock (#1710). The insert is the last of them, so it must precede the
+  # first statement that locks the vault row.
+  test "a resurrect queues its job before it takes the vault lock", ctx do
+    %{user: u, vault: v} = ctx
+    dead = put!(u, v, "T/t.md")
+    :ok = Notes.delete_note(u, v, "T/t.md")
+
+    me = self()
+
+    {result, queries} =
+      Engram.QueryRecorder.record(fn -> Notes.genesis_crdt_note(u, v, dead.id, "D/x.md") end)
+
+    assert {:ok, _} = result
+
+    sqls = for %{sql: sql, pid: ^me} <- queries, do: sql
+    job = Enum.find_index(sqls, &(&1 =~ ~r/INSERT INTO "public"."oban_jobs"/))
+
+    lock =
+      Enum.find_index(
+        sqls,
+        &(&1 =~ ~r/FROM vaults .*FOR NO KEY UPDATE|UPDATE vaults SET change_seq/)
+      )
+
+    assert job && lock, inspect(sqls, pretty: true)
+    assert job < lock
+  end
 end

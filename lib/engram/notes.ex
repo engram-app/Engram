@@ -2395,8 +2395,6 @@ defmodule Engram.Notes do
   end
 
   defp shown_by_other?(user, vault, path, id) do
-    :ok = Engram.Vaults.lock_seq!(vault.id)
-
     case located_ids_at(user, vault, [path]) do
       {%{^path => other}, _named?} -> other != id
       _ -> false
@@ -2417,46 +2415,33 @@ defmodule Engram.Notes do
     # deleted. Mirror the REST upsert_pathless guard EXACTLY — refuse so the
     # delete stands; the client trashes its local copy on `recently_deleted`.
     # A rename (different path) lands outside this guard and resurrects below.
-    cond do
-      recent_same_path_tombstone?(prior, sanitized_path, user) ->
-        {:error, :recently_deleted}
-
-      true ->
-        # A live note SHOWN at the target (by name under a moved folder,
-        # which no unique key holds) is a conflict, as a keyed holder is.
-        # Only in a vault holding such a folder, under the vault seq lock so
-        # no uncascaded move lands between check and write.
-        moved? = moved_under_lock?(moved?, user, vault)
-
-        if moved? and shown_by_other?(user, vault, sanitized_path, prior.id),
-          do: {:error, :id_conflict, prior},
-          else:
-            resurrect_move(
-              {prior, moved?},
-              user,
-              vault,
-              sanitized_path,
-              folder,
-              origin,
-              recording
-            )
+    if recent_same_path_tombstone?(prior, sanitized_path, user) do
+      {:error, :recently_deleted}
+    else
+      # Test seam: where a stale `moved?` used to decide (`ResurrectRaceTest`).
+      interleave_hook(:resurrect_before_lock)
+      resurrect_move({prior, moved?}, user, vault, sanitized_path, folder, origin, recording)
     end
   end
 
-  # The vault's moved-folder bit as of the vault seq lock. `moved?` was read
-  # with the row, before the lock: the vault's FIRST uncascaded move can
-  # commit in between (S5), and a resurrect deciding on the stale `false`
-  # would skip the occupancy check and land a second note at a path shown by
-  # name. So a `false` is re-read once the lock is held (the write takes it
-  # next anyway, `next_seq!`; re-entrant in one transaction). One index
-  # probe (`folders_moved_live`). `true` never goes back to false.
-  defp moved_under_lock?(true, _user, _vault), do: true
+  # A live note SHOWN at the target (by name under a moved folder, which no
+  # unique key holds) is a conflict, as a keyed holder is. Run by `move_note`
+  # right after its `next_seq!` takes the vault seq lock, so no uncascaded
+  # move (S5) lands between check and write, and the merge, encrypt and
+  # NoteCommitted insert stay outside the lock (#1710). `moved?` (read with
+  # the row) can be a stale `false`: the vault's FIRST move may commit before
+  # the lock, so the bit is re-read here. One index probe
+  # (`folders_moved_live`) in a vault that never moved a folder.
+  defp shown_check(moved?, user, vault, path, id) do
+    fn ->
+      moved? = moved? or Location.named?(user.id, vault.id)
 
-  defp moved_under_lock?(false, user, vault) do
-    # Test seam: where the stale read used to decide (`ResurrectRaceTest`).
-    interleave_hook(:resurrect_before_lock)
-    :ok = Engram.Vaults.lock_seq!(vault.id)
-    Location.named?(user.id, vault.id)
+      cond do
+        not moved? -> {:ok, false}
+        shown_by_other?(user, vault, path, id) -> :conflict
+        true -> {:ok, true}
+      end
+    end
   end
 
   defp resurrect_move({prior, moved?}, user, vault, sanitized_path, folder, origin, recording) do
@@ -2474,7 +2459,8 @@ defmodule Engram.Notes do
     }
 
     case move_note(prior, base_attrs, user, sanitized_path, folder, "sync", recording,
-           free_slot: moved?
+           free_slot: moved?,
+           check: shown_check(moved?, user, vault, sanitized_path, prior.id)
          ) do
       {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
         case Crypto.maybe_decrypt_note_fields(updated, user) do
@@ -2501,6 +2487,10 @@ defmodule Engram.Notes do
         end
 
       {:error, _} = err ->
+        err
+
+      # `shown_check/5` under the lock: a note is shown at the target.
+      {:error, :id_conflict, _} = err ->
         err
 
       # See genesis_relocate_live: move_note can now lose its snapshot fence.
@@ -2860,6 +2850,10 @@ defmodule Engram.Notes do
     # statement below is skipped.
     {free_slot?, opts} = Keyword.pop(opts, :free_slot, true)
     {outbox?, opts} = Keyword.pop(opts, :outbox, true)
+    # `check:` a probe run under the vault seq lock, right after `next_seq!`:
+    # `:conflict` refuses the write, `{:ok, moved?}` frees a stale key too
+    # when the vault turned out to hold a moved folder (a resurrect).
+    {check, opts} = Keyword.pop(opts, :check, fn -> {:ok, false} end)
     # The write's own opts (`actor`, MCP's agent settle), for a revived note's job.
     {write_opts, db_opts} = Keyword.pop(opts, :embed_opts, actor: actor)
 
@@ -2927,68 +2921,88 @@ defmodule Engram.Notes do
               )
 
         seq = Engram.Vaults.next_seq!(prior.vault_id)
-        folder_ref = folder_ref_for(refs, user, prior.vault_id, folder)
 
-        changeset =
-          prior
-          |> Note.changeset(Map.put(phase_b, :version, prior.version + 1))
-          |> Ecto.Changeset.put_change(:seq, seq)
-          # Every leg names its live row, a restore or resurrect included.
-          |> Ecto.Changeset.put_change(:folder_ref_id, folder_ref)
-          |> Ecto.Changeset.put_change(:deleted_at, nil)
-          # Any undelete leaves the op that deleted it (#609), so a later
-          # restore of that op cannot reach a row that has lived since.
-          |> Ecto.Changeset.put_change(:delete_op_id, nil)
-
-        # Same snapshot fence as do_rewrite_note, for the same reason: this
-        # merges CRDT state from `prior.crdt_state` and then writes both
-        # `content` and `crdt_state`, so a checkpoint committing in the gap
-        # would be rolled back to the pre-checkpoint snapshot with its tail
-        # already pruned. Fixing only do_rewrite_note left the rename and
-        # id-keyed-move path clobbering checkpoints. #1335.
-        #
-        # `put_change(:deleted_at, nil)` means this can also resurrect a
-        # tombstone, so the fence carries the whole pre-image, not just the id.
-        # The target's key may still be held by a note moved away without a
-        # cascade (S5): free it first. A refused write would abort a caller's
-        # transaction that runs no savepoint (CRDT relocate, resurrect).
-        _ = if free_slot?, do: free_stale_slot(user, prior.vault_id, sanitized_path, prior.id)
-
-        case fenced_update(snapshot_fenced(changeset, prior), db_opts) do
-          {:ok, updated} ->
-            _ =
-              if was_tombstoned do
-                :ok = UsageMeters.inc_notes_count(user.id, 1)
-              end
-
-            # #1710. AFTER the fenced write, same transaction: a lost fence
-            # returns :stale_snapshot below and must record nothing. `prior` is
-            # the PRE-write row. The hash check keeps a pure rename out of history.
-            _ =
-              if prior.content_hash != crdt.content_hash,
-                do: Revisions.record_write(prior, actor, recording)
-
-            # A queued job means the returned prev hash is the new one, so a
-            # caller that queues on a hash change does not queue twice.
-            prev_hash = if queue?, do: crdt.content_hash, else: prior.content_hash
-
-            # Tagged `:moved` (not the plain 4-tuple do_rewrite_note returns) so
-            # the caller broadcasts unconditionally: a rename keeps the same
-            # content_hash but persisted a new path/seq/version, and the plain
-            # `prev_hash != content_hash` broadcast guard would skip it — leaving
-            # peers with the old-path delete but no new-path upsert (the note
-            # vanishes on them until their next pull).
-            {:ok, {:moved, prev_hash, updated, crdt.merged_text, crdt.content_hash}}
-
-          {:error, changeset} ->
+        case check.() do
+          :conflict ->
             :ok = discard_job(job)
-            {:error, changeset}
+            {:error, :id_conflict, prior}
 
-          :stale_snapshot ->
-            :ok = discard_job(job)
-            :stale_snapshot
+          {:ok, moved_now?} ->
+            write_moved(
+              {prior, phase_b, crdt, job, queue?, was_tombstoned},
+              {seq, refs, user, folder, sanitized_path, free_slot? or moved_now?},
+              {actor, recording, db_opts}
+            )
         end
       end
+    end
+  end
+
+  defp write_moved(
+         {prior, phase_b, crdt, job, queue?, was_tombstoned},
+         {seq, refs, user, folder, sanitized_path, free_slot?},
+         {actor, recording, db_opts}
+       ) do
+    folder_ref = folder_ref_for(refs, user, prior.vault_id, folder)
+
+    changeset =
+      prior
+      |> Note.changeset(Map.put(phase_b, :version, prior.version + 1))
+      |> Ecto.Changeset.put_change(:seq, seq)
+      # Every leg names its live row, a restore or resurrect included.
+      |> Ecto.Changeset.put_change(:folder_ref_id, folder_ref)
+      |> Ecto.Changeset.put_change(:deleted_at, nil)
+      # Any undelete leaves the op that deleted it (#609), so a later
+      # restore of that op cannot reach a row that has lived since.
+      |> Ecto.Changeset.put_change(:delete_op_id, nil)
+
+    # Same snapshot fence as do_rewrite_note, for the same reason: this
+    # merges CRDT state from `prior.crdt_state` and then writes both
+    # `content` and `crdt_state`, so a checkpoint committing in the gap
+    # would be rolled back to the pre-checkpoint snapshot with its tail
+    # already pruned. Fixing only do_rewrite_note left the rename and
+    # id-keyed-move path clobbering checkpoints. #1335.
+    #
+    # `put_change(:deleted_at, nil)` means this can also resurrect a
+    # tombstone, so the fence carries the whole pre-image, not just the id.
+    # The target's key may still be held by a note moved away without a
+    # cascade (S5): free it first. A refused write would abort a caller's
+    # transaction that runs no savepoint (CRDT relocate, resurrect).
+    _ = if free_slot?, do: free_stale_slot(user, prior.vault_id, sanitized_path, prior.id)
+
+    case fenced_update(snapshot_fenced(changeset, prior), db_opts) do
+      {:ok, updated} ->
+        _ =
+          if was_tombstoned do
+            :ok = UsageMeters.inc_notes_count(user.id, 1)
+          end
+
+        # #1710. AFTER the fenced write, same transaction: a lost fence
+        # returns :stale_snapshot below and must record nothing. `prior` is
+        # the PRE-write row. The hash check keeps a pure rename out of history.
+        _ =
+          if prior.content_hash != crdt.content_hash,
+            do: Revisions.record_write(prior, actor, recording)
+
+        # A queued job means the returned prev hash is the new one, so a
+        # caller that queues on a hash change does not queue twice.
+        prev_hash = if queue?, do: crdt.content_hash, else: prior.content_hash
+
+        # Tagged `:moved` (not the plain 4-tuple do_rewrite_note returns) so
+        # the caller broadcasts unconditionally: a rename keeps the same
+        # content_hash but persisted a new path/seq/version, and the plain
+        # `prev_hash != content_hash` broadcast guard would skip it — leaving
+        # peers with the old-path delete but no new-path upsert (the note
+        # vanishes on them until their next pull).
+        {:ok, {:moved, prev_hash, updated, crdt.merged_text, crdt.content_hash}}
+
+      {:error, changeset} ->
+        :ok = discard_job(job)
+        {:error, changeset}
+
+      :stale_snapshot ->
+        :ok = discard_job(job)
+        :stale_snapshot
     end
   end
 
