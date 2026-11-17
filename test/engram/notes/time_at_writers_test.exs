@@ -25,18 +25,14 @@ defmodule Engram.Notes.TimeAtWritersTest do
     Repo.with_tenant!(ctx.user.id, fn -> Engram.Fixtures.raw_note!(id) end)
   end
 
-  # Every row of the vault, live, tombstoned and folder markers alike: the
-  # double columns are never written (they exist until the contract drop).
-  defp assert_no_doubles!(ctx) do
-    %{rows: [[rows, doubles]]} =
-      Repo.query!(
-        "SELECT count(*), count(*) FILTER (WHERE mtime IS NOT NULL OR ctime IS NOT NULL) " <>
-          "FROM notes WHERE vault_id = $1",
-        [Ecto.UUID.dump!(ctx.vault.id)]
-      )
+  # Every row of the vault, live, tombstoned and folder markers alike.
+  defp vault_rows(ctx) do
+    %{rows: [[rows]]} =
+      Repo.query!("SELECT count(*) FROM notes WHERE vault_id = $1", [
+        Ecto.UUID.dump!(ctx.vault.id)
+      ])
 
     assert rows > 0
-    assert doubles == 0
     rows
   end
 
@@ -84,37 +80,10 @@ defmodule Engram.Notes.TimeAtWritersTest do
 
     assert row(ctx, a.id).ctime_at == ~U[2017-11-17 05:45:28.861000Z]
     assert row(ctx, b.id).ctime_at == ~U[2017-11-17 05:45:28.861000Z]
-    assert_no_doubles!(ctx)
+    vault_rows(ctx)
   end
 
-  # Contract step (a): a step (b) node stops writing the doubles, so a row
-  # it wrote holds a stale (or NULL) double beside a fresh twin. No write
-  # here may copy that double over the twin.
-  test "a stale double never overwrites a fresh twin", ctx do
-    {:ok, n} = put(ctx, "h.md", %{"mtime" => 1_776_072_500.5, "ctime" => 1_510_897_528.0})
-    before = row(ctx, n.id)
-
-    # Raw SQL: the schema no longer maps the double columns.
-    Repo.query!("UPDATE notes SET mtime = 1000000000.0, ctime = NULL WHERE id = $1", [
-      Ecto.UUID.dump!(n.id)
-    ])
-
-    # The ctime batch fills only a note with no ctime: this one has one.
-    assert {:ok, 0} =
-             Notes.set_client_ctimes(ctx.user, ctx.vault, [
-               %{path: "h.md", ctime: 1_600_000_000.0}
-             ])
-
-    # An edit with no ctime keeps the stored one; a rename sends no mtime.
-    {:ok, _} = put(ctx, "h.md", %{"mtime" => 1_776_072_500.5}, "y\n")
-    {:ok, _} = Notes.rename_note(ctx.user, ctx.vault, "h.md", "i.md")
-
-    n = row(ctx, n.id)
-    assert {n.mtime_at, n.ctime_at} == {before.mtime_at, before.ctime_at}
-    assert {n.eff_updated, n.eff_created} == {before.eff_updated, before.eff_created}
-  end
-
-  test "rename, folder rename and edit keep the timestamps, write no double", ctx do
+  test "rename, folder rename and edit keep the timestamps, and keep them", ctx do
     {:ok, _} = put(ctx, "F/a.md", %{"mtime" => 1_776_072_500_928.0, "ctime" => 1_510_897_528.0})
     {:ok, _} = put(ctx, "F/b.md", %{"mtime" => 1_776_072_500.5})
 
@@ -125,12 +94,12 @@ defmodule Engram.Notes.TimeAtWritersTest do
              Notes.rmw_note(ctx.user, ctx.vault, "G/a.md", &(&1 <> "y"), actor: "api")
 
     # Live notes, rename tombstones and folder markers.
-    assert assert_no_doubles!(ctx) >= 5
+    assert vault_rows(ctx) >= 5
     assert served(ctx, "G/a.md") === {1_776_072_500.928, 1_510_897_528.0}
     assert served(ctx, "G/c.md") === {1_776_072_500.5, nil}
   end
 
-  test "delete and restore keep the timestamps, write no double", ctx do
+  test "delete and restore keep the timestamps, and keep them", ctx do
     {:ok, _} = put(ctx, "D/a.md", %{"mtime" => 1_776_072_500_928.0, "ctime" => 1_510_897_528.0})
     op = Ecto.UUID.generate()
     {:ok, _} = Engram.Folders.delete(ctx.user, ctx.vault, "D", recursive: true, op_id: op)
@@ -139,7 +108,7 @@ defmodule Engram.Notes.TimeAtWritersTest do
       Notes.plan_restore(ctx.user, ctx.vault, op, DateTime.add(DateTime.utc_now(), -1, :day))
 
     {:ok, %{restored: [_]}} = Notes.restore_notes(ctx.user, ctx.vault, op, plan.notes)
-    assert_no_doubles!(ctx)
+    vault_rows(ctx)
     assert served(ctx, "D/a.md") === {1_776_072_500.928, 1_510_897_528.0}
   end
 end

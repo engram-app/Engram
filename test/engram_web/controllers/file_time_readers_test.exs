@@ -122,10 +122,9 @@ defmodule EngramWeb.FileTimeReadersTest do
     end
   end
 
-  # Contract step (a) pin: the wire serves what 0.87.0 served for a stored
-  # 0 (0, never nil: old plugins parse it), a NULL (nil) and a normal value
-  # (bit-identical), and keeps serving it once the doubles are no longer
-  # written (step (b), simulated by NULLing them).
+  # R25 pin: the wire serves what 0.87.0 served for a stored 0 (0, never
+  # nil: old plugins parse it), a NULL (nil) and a normal value
+  # (bit-identical), from the timestamps alone (the doubles are dropped).
   describe "served values without the doubles" do
     setup %{conn: conn} do
       post_note(conn, "zero.md", %{mtime: 0})
@@ -133,12 +132,6 @@ defmodule EngramWeb.FileTimeReadersTest do
       post_att(conn, "zero.png", 0)
       post_att(conn, "s.png", @s)
       :ok
-    end
-
-    # Raw SQL: the schemas no longer map the double columns.
-    defp drop_doubles(_user) do
-      Repo.query!("UPDATE notes SET mtime = NULL, ctime = NULL", [])
-      Repo.query!("UPDATE attachments SET mtime = NULL", [])
     end
 
     defp served(conn) do
@@ -154,9 +147,7 @@ defmodule EngramWeb.FileTimeReadersTest do
 
     @today {{0.0, nil}, {@s, 1_510_897_528.861}, {0.0, @s}, ["0.0"]}
 
-    test "0 stays 0, NULL stays nil, a normal value is bit-identical", %{conn: conn, user: user} do
-      assert served(conn) === @today
-      drop_doubles(user)
+    test "0 stays 0, NULL stays nil, a normal value is bit-identical", %{conn: conn} do
       assert served(conn) === @today
     end
   end

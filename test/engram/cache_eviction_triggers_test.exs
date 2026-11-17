@@ -216,9 +216,12 @@ defmodule Engram.CacheEvictionTriggersTest do
       assert_receive {:notification, _, _, "note_counts_changed", ^user_id}, 1_000
       flush()
 
-      sql("UPDATE notes SET version = version + 1, seq = seq + 1, mtime = 2.0 WHERE id = $1", [
-        note_id
-      ])
+      sql(
+        "UPDATE notes SET version = version + 1, seq = seq + 1, mtime_at = now() WHERE id = $1",
+        [
+          note_id
+        ]
+      )
 
       refute_receive {:notification, _, _, "note_counts_changed", _}, 300
 
