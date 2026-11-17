@@ -465,7 +465,28 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # post-commit probe. Add it if the plugin still corrupts its id map there.
   defp reresolve(_user, nil, path, _announce?), do: path
   defp reresolve(_user, _row, path, false), do: path
-  defp reresolve(user, row, path, true), do: Location.shown_path(user, row, true) || path
+
+  # A failed re-read (a DB error after the commit) falls back to the path
+  # read before the lock, so the announces still go out.
+  defp reresolve(user, row, path, true) do
+    # Test seam (nil outside tests): the re-read is about to run.
+    interleave_hook(:reresolve)
+    Location.shown_path(user, row, true) || path
+  rescue
+    err -> reresolve_failed(row.id, Metadata.safe_reason(err), path)
+  catch
+    :exit, reason -> reresolve_failed(row.id, Metadata.safe_exit_reason(reason), path)
+  end
+
+  defp reresolve_failed(note_id, reason, path) do
+    Logger.warning(
+      "crdt checkpoint announce path re-read failed; announcing the pre-commit path " <>
+        "note_id=#{note_id} error=#{reason}",
+      Metadata.with_category(:warning, :sync, note_id: note_id)
+    )
+
+    path
+  end
 
   defp finalize?(note, recording, prev_hash, new_hash),
     do: note.content not in [nil, ""] and Revisions.finalize?(recording, prev_hash, new_hash)
