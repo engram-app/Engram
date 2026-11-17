@@ -237,7 +237,15 @@ defmodule Engram.Folders do
          {:ok, att_pairs} <-
            Attachments.folder_rename_pairs(user, vault, old_folder, new_folder) do
       expect = opts[:expect]
-      claim = fn -> Notes.claim_folder_rename(user, vault, old_folder, new_folder) end
+
+      # The cheap refusals run before the claim too, so a refused rename claims
+      # nothing; the transaction re-checks them under the lock.
+      precheck = fn _pairs ->
+        with :ok <- check_expected(user, vault, old_folder, new_folder, expect),
+             do: Attachments.check_move_targets(user, vault, att_pairs)
+      end
+
+      claim = fn -> Notes.claim_folder_rename(user, vault, old_folder, new_folder, precheck) end
 
       claimed_atomic(user, vault, claim, fn ->
         with :ok <- check_expected(user, vault, old_folder, new_folder, expect),
@@ -529,7 +537,11 @@ defmodule Engram.Folders do
     # moved folders' attachments are read.
     with {:ok, folders} <- Notes.resolve_folder_markers(user, vault, marker_ids),
          {:ok, %{metas: metas}} <- Attachments.scan_under(user, vault, folders) do
-      claim = fn -> Notes.claim_folder_batch_move(user, vault, marker_ids, target) end
+      precheck = fn pairs ->
+        Attachments.check_move_targets(user, vault, attachment_move_pairs(metas, pairs))
+      end
+
+      claim = fn -> Notes.claim_folder_batch_move(user, vault, marker_ids, target, precheck) end
 
       claimed_atomic(user, vault, claim, fn ->
         with {:ok, %{moved: notes, pairs: pairs}} <-
@@ -568,16 +580,16 @@ defmodule Engram.Folders do
 
   defp rename_attachments_for(_user, _vault, _metas, []), do: {:ok, 0}
 
-  defp rename_attachments_for(user, vault, metas, pairs) do
-    move_pairs =
-      Enum.flat_map(metas, fn %{path: old_path} ->
-        case rename_target(old_path, pairs) do
-          {:ok, new_path} -> [{old_path, new_path}]
-          :no_match -> []
-        end
-      end)
+  defp rename_attachments_for(user, vault, metas, pairs),
+    do: Attachments.move_folder_pairs(user, vault, attachment_move_pairs(metas, pairs))
 
-    Attachments.move_folder_pairs(user, vault, move_pairs)
+  defp attachment_move_pairs(metas, pairs) do
+    Enum.flat_map(metas, fn %{path: old_path} ->
+      case rename_target(old_path, pairs) do
+        {:ok, new_path} -> [{old_path, new_path}]
+        :no_match -> []
+      end
+    end)
   end
 
   # Maps a decrypted attachment path to its new path under whichever {old, new}

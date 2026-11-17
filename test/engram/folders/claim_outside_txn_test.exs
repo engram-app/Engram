@@ -13,7 +13,7 @@ defmodule Engram.Folders.ClaimOutsideTxnTest do
 
   alias Engram.{Attachments, Crypto, Folders, Notes, Vaults}
   alias Engram.MCP.Handlers
-  alias Engram.Notes.{CrdtIndexDoc, CrdtIndexRegistry}
+  alias Engram.Notes.{CrdtIndexDoc, CrdtIndexRegistry, Identity}
   alias Yex.Sync.SharedDoc
 
   setup do
@@ -38,14 +38,29 @@ defmodule Engram.Folders.ClaimOutsideTxnTest do
       nil
     )
 
-    on_exit(fn -> :telemetry.detach(handler) end)
+    :telemetry.attach(
+      handler <> "-claims",
+      [:engram, :crdt, :index_claim],
+      fn _event, _m, meta, _ -> send(test_pid, {:index_write, meta.op, meta[:phase]}) end,
+      nil
+    )
+
+    on_exit(fn ->
+      :telemetry.detach(handler)
+      :telemetry.detach(handler <> "-claims")
+      Application.delete_env(:engram, :checkpoint_interleave_hook)
+    end)
+
     %{user: user, vault: vault}
   end
 
+  # A server create writes no index entry (clients do), so each note claims its
+  # own path here: "unchanged" is then an exact path, and a release reads nil.
   defp note(ctx, path) do
     {:ok, note} =
       Notes.upsert_note(ctx.user, ctx.vault, %{"path" => path, "content" => "x"}, actor: "api")
 
+    :ok = Identity.claim(ctx.user, ctx.vault.id, [{path, note.id}])
     note
   end
 
@@ -122,10 +137,13 @@ defmodule Engram.Folders.ClaimOutsideTxnTest do
     put_att(ctx, "Docs/a.png")
     put_att(ctx, "Archive/a.png")
 
+    flush_index_writes()
     assert {:error, :conflict} = Folders.rename(ctx.user, ctx.vault, "Docs", "Archive")
 
+    # Refused before any claim: no client sees a move and a revert.
+    refute_received {:index_write, :claim, :ok}
     assert {:ok, %{path: "Docs/n.md"}} = Notes.get_note_by_id(ctx.user, ctx.vault, n.id)
-    assert live_path(room, n.id) in [nil, "Docs/n.md"]
+    assert live_path(room, n.id) == "Docs/n.md"
   end
 
   # Writes a note into `Docs` each time a claim is made and the transaction is
@@ -173,6 +191,129 @@ defmodule Engram.Folders.ClaimOutsideTxnTest do
     assert_received {:raced, _}
     assert_received {:raced, _}
     assert {:ok, %{path: "Docs/n.md"}} = Notes.get_note_by_id(ctx.user, ctx.vault, n.id)
-    assert live_path(room, n.id) in [nil, "Docs/n.md"]
+    assert live_path(room, n.id) == "Docs/n.md"
+  end
+
+  defp flush_index_writes do
+    receive do
+      {:index_write, _, _} -> flush_index_writes()
+    after
+      0 -> :ok
+    end
+  end
+
+  # Two identical renames (a client retry): B claims, then A runs to commit
+  # before B takes the folder lock. B goes stale, and its undo must not move
+  # the index back under A's committed rows (ABA on the claimed value).
+  test "a duplicate concurrent rename does not revert the committed one", ctx do
+    {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+    n = note(ctx, "Docs/n.md")
+    counter = :counters.new(1, [])
+    test_pid = self()
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :folder_claimed ->
+        if :counters.get(counter, 1) == 0 do
+          :counters.add(counter, 1, 1)
+          send(test_pid, {:a, Folders.rename(ctx.user, ctx.vault, "Docs", "Archive")})
+        end
+
+        :ok
+
+      _ ->
+        :ok
+    end)
+
+    _b = Folders.rename(ctx.user, ctx.vault, "Docs", "Archive")
+    assert_received {:a, {:ok, _}}
+    assert {:ok, %{path: "Archive/n.md"}} = Notes.get_note_by_id(ctx.user, ctx.vault, n.id)
+    assert live_path(room, n.id) == "Archive/n.md"
+  end
+
+  test "the wire's stale id refuses before any claim", ctx do
+    {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+    n = note(ctx, "Docs/n.md")
+    flush_index_writes()
+
+    assert {:error, :not_found} =
+             Folders.rename(ctx.user, ctx.vault, "Docs", "Archive",
+               expect: {Ecto.UUID.generate(), nil}
+             )
+
+    refute_received {:index_write, :claim, :ok}
+    assert live_path(room, n.id) == "Docs/n.md"
+  end
+
+  test "a batch move races a note into its second folder and one retry takes it", ctx do
+    {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+    {:ok, m1} = Notes.create_folder_marker(ctx.user, ctx.vault, "Docs")
+    {:ok, m2} = Notes.create_folder_marker(ctx.user, ctx.vault, "Other")
+    {:ok, _} = Notes.create_folder_marker(ctx.user, ctx.vault, "Dest")
+    a = note(ctx, "Docs/a.md")
+    _ = note(ctx, "Other/x.md")
+    counter = :counters.new(1, [])
+    test_pid = self()
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :folder_claimed ->
+        if :counters.get(counter, 1) == 0 do
+          :counters.add(counter, 1, 1)
+          send(test_pid, {:raced, note(ctx, "Other/late.md").id})
+        end
+
+        :ok
+
+      _ ->
+        :ok
+    end)
+
+    assert {:ok, _} = Folders.batch_move(ctx.user, ctx.vault, [m1.id, m2.id], {:path, "Dest"})
+
+    assert_received {:raced, late_id}
+
+    assert {:ok, %{path: "Dest/Other/late.md"}} =
+             Notes.get_note_by_id(ctx.user, ctx.vault, late_id)
+
+    assert live_path(room, late_id) == "Dest/Other/late.md"
+    assert live_path(room, a.id) == "Dest/Docs/a.md"
+  end
+
+  test "a batch whose later folder has a known target conflict claims nothing", ctx do
+    {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+    {:ok, m1} = Notes.create_folder_marker(ctx.user, ctx.vault, "Docs")
+    {:ok, m2} = Notes.create_folder_marker(ctx.user, ctx.vault, "Other")
+    a = note(ctx, "Docs/a.md")
+    x = note(ctx, "Other/x.md")
+    _ = note(ctx, "Dest/Other/y.md")
+    flush_index_writes()
+
+    assert {:error, {:conflict, _}} =
+             Folders.batch_move(ctx.user, ctx.vault, [m1.id, m2.id], {:path, "Dest"})
+
+    refute_received {:index_write, :claim, :ok}
+    assert live_path(room, a.id) == "Docs/a.md"
+    assert live_path(room, x.id) == "Other/x.md"
+  end
+
+  # The conflict appears only after the claim (a race), so the first folder's
+  # rows move inside the transaction, roll back, and every claim is reconciled.
+  test "a batch that fails on a later folder reconciles every claim", ctx do
+    {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+    {:ok, m1} = Notes.create_folder_marker(ctx.user, ctx.vault, "Docs")
+    {:ok, m2} = Notes.create_folder_marker(ctx.user, ctx.vault, "Other")
+    a = note(ctx, "Docs/a.md")
+    x = note(ctx, "Other/x.md")
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :folder_claimed -> _ = note(ctx, "Dest/Other/y.md")
+      _ -> :ok
+    end)
+
+    assert {:error, {:conflict, _}} =
+             Folders.batch_move(ctx.user, ctx.vault, [m1.id, m2.id], {:path, "Dest"})
+
+    assert {:ok, %{path: "Docs/a.md"}} = Notes.get_note_by_id(ctx.user, ctx.vault, a.id)
+    assert live_path(room, a.id) == "Docs/a.md"
+    assert live_path(room, x.id) == "Other/x.md"
   end
 end
