@@ -306,23 +306,30 @@ defmodule Engram.DataMigrations.FileTimes do
     written
   end
 
-  # Compare-and-set on the doubles: a writer that moved one since the read
-  # wins, and its row counts as left. Returns the written ids.
+  # Compare-and-set on the doubles AND the twins this window read: a writer
+  # that moved either since the read wins, and its row counts as left. A
+  # step (b) node moves the twin alone (its double stays stale), so a CAS on
+  # the double only would let this walk write the stale value over it.
+  # Returns the written ids.
   defp update_query(Engram.Notes.Note = schema, locked, ids, col, want) do
     from(r in schema,
       join:
         v in fragment(
-          "SELECT * FROM unnest(?::uuid[], ?::float8[], ?::timestamptz[], ?::float8[], ?::timestamptz[]) AS t(id, m, ma, c, ca)",
+          "SELECT * FROM unnest(?::uuid[], ?::float8[], ?::timestamptz[], ?::timestamptz[], ?::float8[], ?::timestamptz[], ?::timestamptz[]) AS t(id, m, ma0, ma, c, ca0, ca)",
           type(^ids, {:array, Ecto.UUID}),
           ^col.(:mtime),
+          ^col.(:mtime_at),
           ^want.(:mtime_at),
           ^col.(:ctime),
+          ^col.(:ctime_at),
           ^want.(:ctime_at)
         ),
       on: r.id == field(v, :id),
       where: r.id in subquery(locked),
       where: fragment("? IS NOT DISTINCT FROM ?", r.mtime, field(v, :m)),
       where: fragment("? IS NOT DISTINCT FROM ?", r.ctime, field(v, :c)),
+      where: fragment("? IS NOT DISTINCT FROM ?", r.mtime_at, field(v, :ma0)),
+      where: fragment("? IS NOT DISTINCT FROM ?", r.ctime_at, field(v, :ca0)),
       update: [set: [mtime_at: field(v, :ma), ctime_at: field(v, :ca)]],
       select: r.id
     )
@@ -332,14 +339,16 @@ defmodule Engram.DataMigrations.FileTimes do
     from(r in schema,
       join:
         v in fragment(
-          "SELECT * FROM unnest(?::uuid[], ?::float8[], ?::timestamptz[]) AS t(id, m, ma)",
+          "SELECT * FROM unnest(?::uuid[], ?::float8[], ?::timestamptz[], ?::timestamptz[]) AS t(id, m, ma0, ma)",
           type(^ids, {:array, Ecto.UUID}),
           ^col.(:mtime),
+          ^col.(:mtime_at),
           ^want.(:mtime_at)
         ),
       on: r.id == field(v, :id),
       where: r.id in subquery(locked),
       where: fragment("? IS NOT DISTINCT FROM ?", r.mtime, field(v, :m)),
+      where: fragment("? IS NOT DISTINCT FROM ?", r.mtime_at, field(v, :ma0)),
       update: [set: [mtime_at: field(v, :ma)]],
       select: r.id
     )

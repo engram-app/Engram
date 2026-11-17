@@ -359,7 +359,11 @@ defmodule Engram.Notes.Note do
   `FileTime.mtime/1` / `ctime/1` so the twin wins): what `changeset/2`
   stores, for a writer that sets the frontmatter dates without it.
   """
-  @spec effective_dates(map()) :: %{eff_updated: integer() | nil, eff_created: integer() | nil}
+  @spec effective_dates(%{
+          required(:fm_updated) => integer() | nil,
+          required(:fm_created_s) => integer() | nil,
+          optional(atom()) => any()
+        }) :: %{eff_updated: integer() | nil, eff_created: integer() | nil}
   def effective_dates(fields) do
     %{
       eff_updated: EffectiveDates.stored(fields.fm_updated, FileTime.mtime(fields)),
