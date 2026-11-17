@@ -38,7 +38,9 @@ defmodule Engram.Repo.Migrations.FileTimesFillMigrate do
       windows: O(rows) in total, about 200 windows for 1M rows.
     * Otherwise (prod: `engram_admin`) one tenanted `EXISTS` per user, #{200}
       users per transaction, finds the users with work, and each is filled
-      in its own tenant context, a window of matching rows at a time. Prod
+      in its own tenant context, a window of its matching rows at a time by
+      id keyset (a row the fill leaves NULL, an out-of-range double, is
+      stepped over). Prod
       had 0 such rows on 2026-11-17 (all 1,852 tenants), so it runs the
       probe only.
 
@@ -127,7 +129,7 @@ defmodule Engram.Repo.Migrations.FileTimesFillMigrate do
 
   defp walk_ids(ctx, table, pairs, after_id, size, filled) do
     sql = """
-    WITH w AS (SELECT id FROM #{table} WHERE id > $1::uuid ORDER BY id LIMIT $2),
+    WITH w AS (SELECT id FROM #{table} WHERE id > $1::text::uuid ORDER BY id LIMIT $2),
     u AS (UPDATE #{table} t SET #{sets(pairs)} FROM w WHERE t.id = w.id AND (#{need(pairs)}) RETURNING 1)
     SELECT (SELECT id::text FROM w ORDER BY id DESC LIMIT 1), (SELECT count(*) FROM u)
     """
@@ -174,7 +176,7 @@ defmodule Engram.Repo.Migrations.FileTimesFillMigrate do
                  ctx.repo.query!(
                    "SELECT " <>
                      Enum.map_join(@tables, " OR ", fn {t, p} ->
-                       "EXISTS (SELECT 1 FROM #{t} WHERE user_id = $1::uuid AND (#{need(p)}))"
+                       "EXISTS (SELECT 1 FROM #{t} WHERE user_id = $1::text::uuid AND (#{need(p)}))"
                      end),
                    [user]
                  )
@@ -190,35 +192,42 @@ defmodule Engram.Repo.Migrations.FileTimesFillMigrate do
 
   defp fill_user(ctx, user) do
     Enum.reduce_while(@tables, :ok, fn {table, pairs}, :ok ->
-      case walk_user(ctx, user, table, pairs, ctx.window) do
+      case walk_user(ctx, user, table, pairs, @zero_id, ctx.window) do
         :ok -> {:cont, :ok}
         :contention -> {:halt, :contention}
       end
     end)
   end
 
-  # Matching rows only, a window at a time: filled rows stop matching.
-  defp walk_user(ctx, user, table, pairs, size) do
+  # The user's matching rows by id keyset, a window at a time: a row whose
+  # double normalizes to NULL (out of range) still matches, so the cursor,
+  # not "filled rows stop matching", is what moves the walk on.
+  defp walk_user(ctx, user, table, pairs, after_id, size) do
     sql = """
-    WITH w AS (SELECT id FROM #{table} WHERE user_id = $1::uuid AND (#{need(pairs)}) LIMIT $2)
-    UPDATE #{table} t SET #{sets(pairs)} FROM w WHERE t.id = w.id
+    WITH w AS (
+      SELECT id FROM #{table}
+      WHERE user_id = $1::text::uuid AND id > $2::text::uuid AND (#{need(pairs)})
+      ORDER BY id LIMIT $3
+    ),
+    u AS (UPDATE #{table} t SET #{sets(pairs)} FROM w WHERE t.id = w.id RETURNING 1)
+    SELECT (SELECT id::text FROM w ORDER BY id DESC LIMIT 1), (SELECT count(*) FROM u)
     """
 
-    case window(ctx, user, sql, [user, size], size, :num_rows) do
-      {:ok, n} when n < size -> :ok
-      {:ok, _} -> walk_user(ctx, user, table, pairs, ctx.window)
-      {:smaller, half} -> walk_user(ctx, user, table, pairs, half)
+    case window(ctx, user, sql, [user, after_id, size], size) do
+      {:ok, [[nil, _]]} -> :ok
+      {:ok, [[last, _]]} -> walk_user(ctx, user, table, pairs, last, ctx.window)
+      {:smaller, half} -> walk_user(ctx, user, table, pairs, after_id, half)
       :contention -> :contention
     end
   end
 
   # ── one window: its own transaction, retried on contention, halved on a timeout ──
 
-  defp window(ctx, user, sql, params, size, result \\ :rows) do
+  defp window(ctx, user, sql, params, size) do
     attempt(fn ->
       tx(ctx, user, fn ->
         ctx.hook.()
-        Map.fetch!(ctx.repo.query!(sql, params), result)
+        ctx.repo.query!(sql, params).rows
       end)
     end)
     |> case do
