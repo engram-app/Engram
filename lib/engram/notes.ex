@@ -1740,7 +1740,7 @@ defmodule Engram.Notes do
            seed: Keyword.get(opts, :seed),
            body: Keyword.get(opts, :body)
          },
-         {:ran, result, claimed?} <- run_genesis(genesis, initial_claim(opts)) do
+         {:ran, result, _claimed?} <- run_genesis(genesis, initial_claim(opts)) do
       {result, seed_outcome} = take_seed(result)
 
       announced =
@@ -1797,11 +1797,12 @@ defmodule Engram.Notes do
             # path", because only the former means the caller's frame was applied.
             {:adopted, note}
 
+          # A claimed relocate that failed was settled in `run_genesis/2`.
           {:ok, inner} ->
-            report_genesis_orphan(inner, user, vault, claimed?)
+            inner
 
           {:error, _} = err ->
-            report_genesis_orphan(err, user, vault, claimed?)
+            err
         end
 
       with_seed(announced, seed_outcome)
@@ -1827,8 +1828,16 @@ defmodule Engram.Notes do
          end) do
       {:ok, {:claim_first, live}} ->
         case claim_crdt_relocate(g, live) do
-          {:ok, claimed?} -> run_genesis(g, {:done, claimed?})
-          {:error, _} = err -> err
+          {:ok, false} ->
+            run_genesis(g, {:done, false})
+
+          # Claimed: the relocate's row transaction settles like every other
+          # claimant's (`with_settle/4`).
+          {:ok, entry} ->
+            with_settle(g.user, g.vault, [entry], fn -> run_genesis(g, {:done, true}) end)
+
+          {:error, _} = err ->
+            err
         end
 
       result ->
@@ -1990,7 +1999,13 @@ defmodule Engram.Notes do
   #     name a row that never exists.
   #   * an OCCUPIED target is `:id_conflict` below, and claiming for a relocate
   #     that is about to be refused is the same permanent-unclaimability bug.
-  defp claim_crdt_relocate(g, live), do: claim_free_target(g.user, g.vault, live.id, g.path)
+  # `{:ok, {note_id, pre_path, claimed_path}}` once claimed, for the settle.
+  defp claim_crdt_relocate(g, live) do
+    case claim_free_target(g.user, g.vault, live.id, g.path) do
+      {:ok, id} when is_binary(id) -> {:ok, {id, decrypt_or_raise!(live, g.user).path, g.path}}
+      other -> other
+    end
+  end
 
   # The same row check `decide_claim/5` makes, load-bearing for the same reason:
   # `Identity.claim/3` sees only collisions recorded IN THE MAP, and in a vault
@@ -2013,30 +2028,6 @@ defmodule Engram.Notes do
         end
     end
   end
-
-  # A claim is durable and cannot join the row transaction, so a relocate that
-  # claimed and then failed leaves the authority naming a path the row never
-  # reached. Rare (the row check above closes all but a genuine race), but not
-  # eliminable — so it is counted the way `rename_note` counts it rather than
-  # silently dropped.
-  # Calls `orphan_claim/4` directly rather than reusing `report_orphan_claim/5`.
-  # That helper returns whatever `err` it was handed, so feeding it this path's
-  # `{:error, :id_conflict, note}` widened its inferred return type to include a
-  # 3-tuple — and `rename_note/5`, which shares it, then had a spec dialyzer
-  # called incomplete for a shape it cannot actually return. Widening that spec
-  # to silence the warning would have documented a return value that does not
-  # exist, so the narrow helper stays narrow.
-  defp report_genesis_orphan({:error, reason, _note} = err, user, vault, true) do
-    _ = orphan_claim(user, vault, 1, reason)
-    err
-  end
-
-  defp report_genesis_orphan({:error, reason} = err, user, vault, true) do
-    _ = orphan_claim(user, vault, 1, reason)
-    err
-  end
-
-  defp report_genesis_orphan(result, _user, _vault, _claimed?), do: result
 
   # :none-branch of genesis_crdt_note/4: no row by client id, so route by PATH.
   # note_by_path_query is computed HERE (its only consumer), not at the top of
@@ -5024,26 +5015,14 @@ defmodule Engram.Notes do
     now = DateTime.utc_now()
 
     with {:ok, user} <- Crypto.ensure_user_dek(user),
-         {:ok, claimed?, named?} <- claim_rename(user, vault, old_path, new_path, opts) do
-      try do
-        do_rename_note(user, vault, {old_path, new_path, new_folder}, now, opts, named?)
-      rescue
-        # Shed by the vault's SeqGate AFTER the claim committed: the same
-        # orphan as a failed rename, so projection converges the row.
-        e in SeqGate.BusyError ->
-          _ = report_orphan_claim(user, vault, claimed?, :busy, {:error, :busy})
-          reraise e, __STACKTRACE__
-      else
-        {:ok, note} = ok ->
-          # After the commit, onto the committed row (`settle_claims/4`): a
-          # concurrent folder op's settle may have read this note's row before
-          # it moved.
-          _ = if claimed?, do: settle_claims(user, vault, [note.id], :committed)
-          ok
+         {:ok, claimed, named?} <- claim_rename(user, vault, old_path, new_path, opts) do
+      # Settled onto the committed row after the transaction, success, failure
+      # or a SeqGate shed alike (`with_settle/4`).
+      entries = if claimed, do: [{claimed, old_path, new_path}], else: []
 
-        {:error, reason} = err ->
-          report_orphan_claim(user, vault, claimed?, reason, err)
-      end
+      with_settle(user, vault, entries, fn ->
+        do_rename_note(user, vault, {old_path, new_path, new_folder}, now, opts, named?)
+      end)
     end
   end
 
@@ -5057,7 +5036,7 @@ defmodule Engram.Notes do
   # deriving rows FROM the map and would otherwise feed itself. Claiming is the
   # DEFAULT so that a new call site is fail-safe rather than fail-silent.
   #
-  # Returns `{:ok, claimed?, named?}` so the caller can tell a rename that
+  # Returns `{:ok, claimed, named?}` (`claimed` is the note id, or false) so the caller can tell a rename that
   # failed having committed a claim from one that failed before committing
   # anything. `named?` is the claim lookup's moved-folder answer
   # (`Location.named?/2`, nil when nothing was looked up): the row checks
@@ -5109,25 +5088,9 @@ defmodule Engram.Notes do
     end
   end
 
+  # `{:ok, note_id}` once claimed: the caller settles that note afterwards.
   defp claim_one(user, vault, new_path, note_id) do
-    with :ok <- Identity.claim(user, vault.id, [{new_path, note_id}]), do: {:ok, true}
-  end
-
-  # A claim committed for a rename that then failed. The row check above makes
-  # this rare (a race, or a lost fence in rename_with_retry), but it cannot be
-  # eliminated: a CRDT op cannot join the row transaction, so there is nothing
-  # to roll back with.
-  #
-  # Counted and enqueued rather than hidden. Projection is what converges the
-  # divergence, and NOTHING else would enqueue it — `Identity` deliberately does
-  # not, and a room checkpoint might not happen for hours — so without this the
-  # design's "the row catches up" promise is unimplemented on exactly the path
-  # that breaks it.
-  defp report_orphan_claim(_user, _vault, false, _reason, err), do: err
-
-  defp report_orphan_claim(user, vault, true, reason, err) do
-    _ = orphan_claim(user, vault, 1, reason)
-    err
+    with :ok <- Identity.claim(user, vault.id, [{new_path, note_id}]), do: {:ok, note_id}
   end
 
   @doc false
@@ -5886,50 +5849,96 @@ defmodule Engram.Notes do
 
   # Runs `fun` (a transaction whose claims `moves`, `[{note, claimed_path}]`,
   # were made before it), then settles the moved notes' index entries onto
-  # their committed rows, whatever `fun` did: returned, failed, raised or
-  # exited. The one after-transaction step of every claim-before-transaction
-  # caller (`Identity.settle/3` has the argument for why it is enough).
+  # their committed rows (`with_settle/4`).
   defp with_claim_undo(user, vault, moves, fun) do
-    ids = for {note, path} <- moves, note.path != path, do: note.id
+    entries = for {note, path} <- moves, note.path != path, do: {note.id, note.path, path}
+    with_settle(user, vault, entries, fun)
+  end
 
+  # Runs `fun` (a row transaction whose claims were made before it), then
+  # settles each `{note_id, pre_path, claimed_path}` onto its committed row,
+  # whatever `fun` did: returned, failed, raised, exited or threw. The one
+  # after-transaction step of every server claimant (folder ops, batch note
+  # move, `rename_note/5`, the crdt_create relocate); `Identity.settle/4` has
+  # the argument for why it is enough.
+  defp with_settle(_user, _vault, [], fun), do: fun.()
+
+  defp with_settle(user, vault, entries, fun) do
     result =
       try do
         fun.()
       catch
         kind, reason ->
-          settle_claims(user, vault, ids, kind)
+          settle_claims(user, vault, entries, kind)
           :erlang.raise(kind, reason, __STACKTRACE__)
       end
 
-    settle_claims(user, vault, ids, settle_why(result))
+    settle_claims(user, vault, entries, settle_why(result))
     result
   end
 
   defp settle_why({:error, reason}), do: reason
   defp settle_why(_ok), do: :committed
 
-  # Never raises and never changes the caller's result: a settle that fails
-  # (DB down, rotation gate, room exit) is reported as an orphan claim, which
-  # enqueues projection, and the caller's own result or exception goes on.
-  defp settle_claims(_user, _vault, [], _why), do: :ok
+  # Bounds one serialized index step (its row read and path decrypts run inside
+  # it, holding the room's queue).
+  @settle_chunk 500
 
-  defp settle_claims(user, vault, ids, why) do
+  # Never raises and never changes the caller's result. A chunk whose settle
+  # fails is retried by a job (`SettleIndexEntries`), NOT by projection:
+  # projection converges rows to the index, so after a failed op it would
+  # execute the move the API just refused.
+  defp settle_claims(user, vault, entries, why) do
+    entries
+    |> Enum.chunk_every(@settle_chunk)
+    |> Enum.each(&settle_chunk(user, vault, &1, why))
+  end
+
+  defp settle_chunk(user, vault, entries, why) do
     # Test seam (nil outside tests): the transaction is done, not yet settled.
     :ok = interleave_hook(:claims_settle)
+    allowed = Map.new(entries, fn {id, pre, claimed} -> {id, [pre, claimed]} end)
 
+    case settle_index(user, vault, Map.keys(allowed), &(&2 in Map.fetch!(allowed, &1))) do
+      :ok -> :ok
+      error -> settle_later(user, vault, entries, {why, error})
+    end
+  rescue
+    _ -> settle_later(user, vault, entries, {why, :settle_raised})
+  catch
+    kind, _ -> settle_later(user, vault, entries, {why, kind})
+  end
+
+  @doc """
+  `Identity.settle/4` for `note_ids`, reading their committed rows inside the
+  index step. Shared by the inline settle and `SettleIndexEntries`.
+  """
+  @spec settle_index(map(), map(), [String.t()], (String.t(), String.t() -> boolean())) ::
+          :ok | {:error, term()}
+  def settle_index(user, vault, note_ids, allowed?) do
     rows = fn ->
-      {:ok, by_id} = get_note_meta_by_ids(user, vault, ids)
+      {:ok, by_id} = get_note_meta_by_ids(user, vault, note_ids)
       for {id, note} <- by_id, do: {id, note.path}
     end
 
-    case Identity.settle(user, vault.id, rows) do
-      :ok -> :ok
-      error -> orphan_claim(user, vault, length(ids), {why, error})
-    end
+    Identity.settle(user, vault.id, rows, allowed?)
+  end
+
+  defp settle_later(user, vault, entries, reason) do
+    :telemetry.execute(
+      [:engram, :crdt, :index_claim],
+      %{count: 1, entries: length(entries)},
+      %{op: :claim, route: :orphan, phase: :orphan_claim}
+    )
+
+    Logger.error(
+      "crdt index settle failed, retrying by job: #{Metadata.safe_reason(reason)}",
+      Metadata.with_category(:error, :sync, user_id: user.id, vault_id: vault.id)
+    )
+
+    Engram.Workers.SettleIndexEntries.enqueue(user, vault.id, entries)
   rescue
-    _ -> orphan_claim(user, vault, length(ids), {why, :settle_raised})
-  catch
-    :exit, _ -> orphan_claim(user, vault, length(ids), {why, :settle_exited})
+    _ -> :ok
   end
 
   # One meta read for the whole batch (was one transaction per id).

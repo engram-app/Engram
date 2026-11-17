@@ -462,16 +462,87 @@ defmodule Engram.Folders.ClaimOutsideTxnTest do
   test "a settle that matches the index writes nothing", ctx do
     n = note(ctx, "Docs/n.md")
     rows = fn -> [{n.id, "Docs/n.md"}] end
+    owned = fn _id, _path -> true end
 
     # No room: no snapshot persist (every persist re-encrypts under a new nonce).
     nonce = index_nonce(ctx)
-    assert :ok = Identity.settle(ctx.user, ctx.vault.id, rows)
+    assert :ok = Identity.settle(ctx.user, ctx.vault.id, rows, owned)
     assert index_nonce(ctx) == nonce
 
     # Live room: no Yjs update (any set advances the state vector).
     {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
     sv = state_vector(room)
-    assert :ok = Identity.settle(ctx.user, ctx.vault.id, rows)
+    assert :ok = Identity.settle(ctx.user, ctx.vault.id, rows, owned)
     assert state_vector(room) == sv
+  end
+
+  # Review 3, blocker 1: the crdt_create relocate (web rename, plugin push of a
+  # rename) claims before its row transaction. Its claim lands before a folder
+  # op's settle and its commit after; it must settle too, so the index ends on
+  # its row.
+  test "a crdt_create relocate straddling a folder op's settle keeps its path", ctx do
+    {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+    n = note(ctx, "Docs/n.md")
+    counter = :counters.new(1, [])
+
+    # The relocate's claim step (`claim_free_target`), exactly, before the
+    # folder op's settle.
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :claims_settle ->
+        if :counters.get(counter, 1) == 0 do
+          :counters.add(counter, 1, 1)
+          :ok = Identity.claim(ctx.user, ctx.vault.id, [{"C/n.md", n.id}])
+        end
+
+        :ok
+
+      _ ->
+        :ok
+    end)
+
+    assert {:ok, _} = Folders.rename(ctx.user, ctx.vault, "Docs", "Archive")
+    Application.delete_env(:engram, :checkpoint_interleave_hook)
+
+    # The relocate's row transaction, after the settle (it writes no index).
+    assert {:ok, _} =
+             Notes.rename_note(ctx.user, ctx.vault, "Archive/n.md", "C/n.md", index: :skip)
+
+    assert {:ok, %{path: "C/n.md"}} = Notes.get_note_by_id(ctx.user, ctx.vault, n.id)
+    assert live_path(room, n.id) == "C/n.md"
+  end
+
+  # Review 3, blocker 2: a client renames the note in the index after the
+  # folder op committed. Settle must leave a client's entry alone (projection
+  # moves the row to it).
+  test "a client index rename between a folder op's commit and its settle is kept", ctx do
+    {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+    n = note(ctx, "Docs/n.md")
+    counter = :counters.new(1, [])
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :claims_settle ->
+        if :counters.get(counter, 1) == 0 do
+          :counters.add(counter, 1, 1)
+
+          :ok =
+            SharedDoc.update_doc(room, fn doc ->
+              map = Yex.Doc.get_map(doc, CrdtIndexDoc.map_name())
+              v = Yex.Map.to_map(map)["Archive/n.md"]
+
+              Yex.Doc.transaction(doc, "client", fn ->
+                Yex.Map.delete(map, "Archive/n.md")
+                Yex.Map.set(map, "Archive/m.md", v)
+              end)
+            end)
+        end
+
+        :ok
+
+      _ ->
+        :ok
+    end)
+
+    assert {:ok, _} = Folders.rename(ctx.user, ctx.vault, "Docs", "Archive")
+    assert live_path(room, n.id) == "Archive/m.md"
   end
 end

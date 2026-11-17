@@ -137,21 +137,27 @@ defmodule Engram.Notes.Identity do
   end
 
   @doc """
-  Point each note's entry at its COMMITTED row path. `rows_fun` returns
-  `[{note_id, path}]` for the live rows and is called INSIDE the index's
-  serialized step (the room's `update_doc`, or `fold_roomless/3`'s lock), so
-  its row read is ordered with every other index write.
+  Point each note's entry at its COMMITTED row path, but only where this op
+  still owns it. `rows_fun` returns `[{note_id, path}]` for the live rows and
+  is called INSIDE the index's serialized step (the room's `update_doc`, or
+  `fold_roomless/3`'s lock), so its row read is ordered with every other index
+  write. `allowed?.(note_id, entry_path)` says whether an entry at that path
+  is this op's to move (its claimed path or its pre-op path); an absent entry
+  always is.
 
   Every server claimant runs it after its row transaction, success or failure.
-  The last row commit for a note is then always followed by a settle that
-  reads it, and nothing that writes the index after that settle can leave it
-  elsewhere: no value is compared, so an identical concurrent claim cannot
-  fool it (ABA). An entry whose path another note holds in the map is skipped
-  (projection reports it). A note whose entry already matches writes nothing.
+  An entry anywhere else was written by another writer since: a client (whose
+  rename projection will move the row) or another server op (which settles
+  itself). Leaving it alone is what keeps settle from overwriting a newer
+  rename. An entry whose path another note holds in the map is skipped, and
+  one that already matches writes nothing.
   """
-  @spec settle(map(), String.t(), (-> [{String.t(), String.t()}])) :: :ok | {:error, term()}
-  def settle(user, vault_id, rows_fun) when is_map(user) and is_function(rows_fun, 0) do
-    apply_targets(user, vault_id, [{:settle, rows_fun}], :settle)
+  @spec settle(map(), String.t(), (-> [{String.t(), String.t()}]), (String.t(), String.t() ->
+                                                                      boolean())) ::
+          :ok | {:error, term()}
+  def settle(user, vault_id, rows_fun, allowed?)
+      when is_map(user) and is_function(rows_fun, 0) and is_function(allowed?, 2) do
+    apply_targets(user, vault_id, [{:settle, rows_fun, allowed?}], :settle)
   end
 
   @doc """
@@ -459,7 +465,7 @@ defmodule Engram.Notes.Identity do
     map = Yex.Doc.get_map(doc, CrdtIndexDoc.map_name())
     current = Yex.Map.to_map(map)
     by_note = entries_by_note(current)
-    targets = Enum.flat_map(targets, &resolve(&1, current))
+    targets = Enum.flat_map(targets, &resolve(&1, current, by_note))
 
     case refusal(current, targets) do
       nil ->
@@ -488,23 +494,32 @@ defmodule Engram.Notes.Identity do
 
   # unclaim/3's compare-and-set, read inside the same room transaction as the
   # write: kept only while the note's entry is still at the held path.
-  defp resolve({note_id, path, {:if_at, held}}, current) do
+  defp resolve({note_id, path, {:if_at, held}}, current, _by_note) do
     case Map.get(current, held) do
       %{"note_id" => ^note_id} -> [{note_id, path}]
       _ -> []
     end
   end
 
-  # settle/3: the committed rows, read here, inside the serialized step. A path
-  # another note holds in the map is skipped rather than refusing the rest.
-  defp resolve({:settle, rows_fun}, current) do
+  # settle/4: the committed rows, read here, inside the serialized step. Only
+  # entries this op still owns move; a path another note holds in the map is
+  # skipped rather than refusing the rest.
+  defp resolve({:settle, rows_fun, allowed?}, current, by_note) do
     for {note_id, path} <- rows_fun.(),
+        owned?(by_note, note_id, allowed?),
         match?(%{"note_id" => ^note_id}, Map.get(current, path)) or
           not Map.has_key?(current, path),
         do: {note_id, path}
   end
 
-  defp resolve(target, _current), do: [target]
+  defp resolve(target, _current, _by_note), do: [target]
+
+  defp owned?(by_note, note_id, allowed?) do
+    case Map.get(by_note, note_id, []) do
+      [] -> true
+      entries -> Enum.all?(entries, fn {key, _value} -> allowed?.(note_id, key) end)
+    end
+  end
 
   # A claim is refused when the path is held by a note OUTSIDE this batch, or
   # when two entries INSIDE it name the same path. Both produce the same
