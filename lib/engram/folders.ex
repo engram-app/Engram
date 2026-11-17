@@ -59,8 +59,8 @@ defmodule Engram.Folders do
   # BEFORE the transaction (a claim cannot join one: see
   # `Notes.with_folder_claims/4`). The cascade consumes them under the lock,
   # and a failure undoes them.
-  defp claimed_atomic(user, vault, claims, fun) do
-    Notes.with_folder_claims(user, vault, claims, fn ->
+  defp claimed_atomic(user, vault, claim_fun, fun) do
+    Notes.with_folder_claims(user, vault, claim_fun, fn ->
       atomic(vault, fn ->
         with {:ok, result} <- fun.(), :ok <- Notes.folder_claims_consumed(), do: {:ok, result}
       end)
@@ -235,11 +235,11 @@ defmodule Engram.Folders do
          # Never into its own subtree: refused before any scan or write.
          :ok <- refuse_own_subtree(String.trim_trailing(old_folder, "/"), new_folder),
          {:ok, att_pairs} <-
-           Attachments.folder_rename_pairs(user, vault, old_folder, new_folder),
-         {:ok, claims} <- Notes.claim_folder_rename(user, vault, old_folder, new_folder) do
+           Attachments.folder_rename_pairs(user, vault, old_folder, new_folder) do
       expect = opts[:expect]
+      claim = fn -> Notes.claim_folder_rename(user, vault, old_folder, new_folder) end
 
-      claimed_atomic(user, vault, claims, fn ->
+      claimed_atomic(user, vault, claim, fn ->
         with :ok <- check_expected(user, vault, old_folder, new_folder, expect),
              {:ok, notes} <- Notes.rename_folder(user, vault, old_folder, new_folder),
              :ok <- move_bare_row(user, vault, old_folder, new_folder, notes, expect),
@@ -528,9 +528,10 @@ defmodule Engram.Folders do
     # Attachment scan before the transaction (#2159), like `rename/4`; only the
     # moved folders' attachments are read.
     with {:ok, folders} <- Notes.resolve_folder_markers(user, vault, marker_ids),
-         {:ok, %{metas: metas}} <- Attachments.scan_under(user, vault, folders),
-         {:ok, claims} <- Notes.claim_folder_batch_move(user, vault, marker_ids, target) do
-      claimed_atomic(user, vault, claims, fn ->
+         {:ok, %{metas: metas}} <- Attachments.scan_under(user, vault, folders) do
+      claim = fn -> Notes.claim_folder_batch_move(user, vault, marker_ids, target) end
+
+      claimed_atomic(user, vault, claim, fn ->
         with {:ok, %{moved: notes, pairs: pairs}} <-
                Notes.batch_move_folders(user, vault, marker_ids, target),
              {:ok, atts} <- rename_attachments_for(user, vault, metas, pairs) do

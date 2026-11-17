@@ -127,4 +127,52 @@ defmodule Engram.Folders.ClaimOutsideTxnTest do
     assert {:ok, %{path: "Docs/n.md"}} = Notes.get_note_by_id(ctx.user, ctx.vault, n.id)
     assert live_path(room, n.id) in [nil, "Docs/n.md"]
   end
+
+  # Writes a note into `Docs` each time a claim is made and the transaction is
+  # not yet open (`:folder_claimed`), up to `times` times.
+  defp race_notes_into_docs(ctx, times) do
+    counter = :counters.new(1, [])
+    test_pid = self()
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :folder_claimed ->
+        if :counters.get(counter, 1) < times do
+          :counters.add(counter, 1, 1)
+          n = note(ctx, "Docs/late#{:counters.get(counter, 1)}.md")
+          send(test_pid, {:raced, n.id})
+        end
+
+      _ ->
+        :ok
+    end)
+
+    on_exit(fn -> Application.delete_env(:engram, :checkpoint_interleave_hook) end)
+  end
+
+  test "a note written between the claim and the lock is picked up by one retry", ctx do
+    {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+    n = note(ctx, "Docs/n.md")
+    race_notes_into_docs(ctx, 1)
+
+    assert {:ok, %{notes: _}} = Folders.rename(ctx.user, ctx.vault, "Docs", "Archive")
+
+    assert_received {:raced, late_id}
+    assert {:ok, %{path: "Archive/late1.md"}} = Notes.get_note_by_id(ctx.user, ctx.vault, late_id)
+    assert live_path(room, late_id) == "Archive/late1.md"
+    assert live_path(room, n.id) == "Archive/n.md"
+    refute_received {:claim_in_txn, _}
+  end
+
+  test "a race on both attempts is a conflict and leaves the index unmoved", ctx do
+    {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+    n = note(ctx, "Docs/n.md")
+    race_notes_into_docs(ctx, 2)
+
+    assert {:error, :conflict} = Folders.rename(ctx.user, ctx.vault, "Docs", "Archive")
+
+    assert_received {:raced, _}
+    assert_received {:raced, _}
+    assert {:ok, %{path: "Docs/n.md"}} = Notes.get_note_by_id(ctx.user, ctx.vault, n.id)
+    assert live_path(room, n.id) in [nil, "Docs/n.md"]
+  end
 end

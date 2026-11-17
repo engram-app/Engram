@@ -7906,8 +7906,9 @@ defmodule Engram.Notes do
   # claiming, CONSUMES the plan: each cascade step's claims must equal the
   # planned step's, and every planned step must be consumed before commit
   # (`folder_claims_consumed/0`). A row that appeared or left between the plan
-  # and the lock fails the op as a `:conflict`, never a row the index did not
-  # claim. Any failure past the claim undoes it (`undo_claims/4`, the batch
+  # and the lock makes the attempt `:claims_stale`: it is undone, re-planned
+  # and re-claimed ONCE, and a second disagreement is a `:conflict`. Never a
+  # moved row the index did not claim. Any failure past the claim undoes it (`undo_claims/4`, the batch
   # note move's compensation): an op the API reports as failed must not be
   # executed later by projection.
   #
@@ -7965,13 +7966,40 @@ defmodule Engram.Notes do
   end
 
   @doc """
-  Runs `fun` (the caller's transaction) against the claims made by
-  `claim_folder_rename/4` or `claim_folder_batch_move/4`, and undoes them when
-  it fails, raises or exits.
+  Claims with `claim_fun` (`claim_folder_rename/4` or
+  `claim_folder_batch_move/4`), then runs `fun` (the caller's transaction)
+  against those claims, undoing them when it fails, raises or exits.
+
+  A cascade whose locked re-scan disagrees with the plan (a row appeared or
+  left in between) is retried ONCE: unclaim, re-plan, re-claim, run again. A
+  second disagreement is `{:error, :conflict}`.
   """
-  @spec with_folder_claims(map(), map(), folder_claims(), (-> result)) :: result
+  @spec with_folder_claims(
+          map(),
+          map(),
+          (-> {:ok, folder_claims()} | {:error, term()}),
+          (-> result)
+        ) ::
+          result
         when result: {:ok, term()} | {:error, term()}
-  def with_folder_claims(user, vault, %{steps: steps, moves: moves}, fun) do
+  def with_folder_claims(user, vault, claim_fun, fun, attempts \\ 2) do
+    with {:ok, claims} <- claim_fun.() do
+      case run_claimed(user, vault, claims, fun) do
+        {:error, :claims_stale} when attempts > 1 ->
+          with_folder_claims(user, vault, claim_fun, fun, attempts - 1)
+
+        {:error, :claims_stale} ->
+          {:error, :conflict}
+
+        result ->
+          result
+      end
+    end
+  end
+
+  defp run_claimed(user, vault, %{steps: steps, moves: moves}, fun) do
+    # Test seam (nil outside tests): claimed, transaction not yet open.
+    :ok = interleave_hook(:folder_claimed)
     Process.put(@preclaim_key, steps)
 
     result =
@@ -7992,9 +8020,9 @@ defmodule Engram.Notes do
   end
 
   @doc "`:ok` when the cascade consumed every claimed step; call before commit."
-  @spec folder_claims_consumed() :: :ok | {:error, :conflict}
+  @spec folder_claims_consumed() :: :ok | {:error, :claims_stale}
   def folder_claims_consumed,
-    do: if(Process.get(@preclaim_key) == [], do: :ok, else: {:error, :conflict})
+    do: if(Process.get(@preclaim_key) == [], do: :ok, else: {:error, :claims_stale})
 
   # One claim for the op's FINAL paths (a note an earlier step moved and a
   # later one moves again claims only where it ends), validated against the
@@ -8051,7 +8079,7 @@ defmodule Engram.Notes do
       nil -> claim_cascade(user, vault, claims, movers)
       _steps when claims == [] -> :ok
       [step | rest] -> consume_step(step, Enum.sort(claims), rest)
-      [] -> {:error, :conflict}
+      [] -> {:error, :claims_stale}
     end
   end
 
@@ -8060,7 +8088,7 @@ defmodule Engram.Notes do
     :ok
   end
 
-  defp consume_step(_planned, _claims, _rest), do: {:error, :conflict}
+  defp consume_step(_planned, _claims, _rest), do: {:error, :claims_stale}
 
   # True if any non-deleted row lives directly in `folder`: a note by its
   # reference (`directly_in/4`), a folder marker by its path hash (markers
@@ -9720,6 +9748,10 @@ defmodule Engram.Notes do
 
         {:error, :cycle} ->
           {:halt, {:rollback, {:cycle, id}}}
+
+        # The plan disagreed with the locked scan: `with_folder_claims/5` retries.
+        {:error, :claims_stale} ->
+          {:halt, {:rollback, :claims_stale}}
       end
     end)
     |> case do
@@ -9792,6 +9824,7 @@ defmodule Engram.Notes do
           case rename_folder_gated(user, vault, source_folder, new_folder, rows, drift) do
             {:ok, _count} -> {:ok, {source_folder, new_folder}}
             {:error, :conflict} -> {:error, :conflict}
+            {:error, :claims_stale} = stale -> stale
             {:error, :invalid_path} -> {:error, :cycle}
           end
         end

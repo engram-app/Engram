@@ -101,7 +101,8 @@ folder-op wire): the tripwire fired once per MCP `rename_folder` on staging.
 Both now claim BEFORE their transaction (`Notes.claim_folder_rename/4`,
 `Notes.claim_folder_batch_move/4`) and run it inside
 `Notes.with_folder_claims/4`: the cascade re-scans under the folder lock and
-must consume exactly the planned claims (else `:conflict`), and any failure
+must consume exactly the planned claims (else it unclaims, re-plans and
+retries once, then `:conflict`), and any failure
 unclaims them (`Identity.unclaim/3`, compare-and-set), so a rename the API
 reports as failed is not executed later by projection. `Identity` still logs
 and counts `:in_transaction` as a tripwire for future call sites.
