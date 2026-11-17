@@ -1,41 +1,34 @@
 defmodule Engram.Folders.WriteStopFloorTest do
   # S5 (Engram#2523) is a write stop: from it, a note under a renamed folder
-  # keeps its old stored path, and only a reader that derives paths from the
-  # folder chain (Gap A, PR 2606) plus a plugin that learns folder moves from
-  # `folder_changed` (S4, plugin PR 689) sees the new one. So this release may
-  # ship only once both floors cover them. RED BY DESIGN until the S4.5
-  # release raises them (`docs/context/rollback-floor.md`,
-  # `docs/context/plugin-version-floor.md`): an owner decision, after the S4
-  # plugin's adoption check. If the S4 plugin ships under another version,
-  # change `@s4_plugin` to it.
-  use EngramWeb.ConnCase, async: true
+  # keeps its old stored path. Release A ships the moved-folder feed and the
+  # shown-path announces with the writer inert; release B raises the rollback
+  # floor to A, which switches it on (`docs/context/rollback-floor.md`). The
+  # first test flips there, in the floor PR.
+  #
+  # No plugin floor: plugins older than S4 learn such a move from the
+  # moved-folder feed (`Engram.Sync.moved_feed?/1`), so they keep syncing.
+  use ExUnit.Case, async: true
 
   alias Engram.Folders.WriteStop
   alias Engram.PluginVersion
   alias Engram.Release.Floor
+  alias Engram.Sync
 
-  # One source of truth: the constants the gate itself reads.
-  test "a rollback cannot land below the S5 readers release" do
-    assert Floor.at_least?(WriteStop.reads_release())
+  test "the write stop is inert until the rollback floor reaches the feed release" do
+    refute Floor.at_least?(WriteStop.reads_release())
+    refute WriteStop.floors?(:enforce)
   end
 
-  test "plugins without folder ops are refused, the S4 plugin is not" do
-    refute PluginVersion.supported?("1.39.3")
-    assert PluginVersion.supported?(WriteStop.s4_plugin())
+  test "plugins older than S4 still sync, and get the moved-folder feed" do
+    assert PluginVersion.supported?("1.39.3")
+    assert Sync.moved_feed?("1.39.3")
+    assert Sync.moved_feed?("1.39.4-pr.689.g23b5eee")
+    refute Sync.moved_feed?(WriteStop.s4_plugin())
+    refute Sync.moved_feed?("1.41.0")
   end
 
-  test "the write stop's floor check passes as prod runs it" do
-    assert WriteStop.floors?(:enforce)
-  end
-
-  describe "the HTTP seam" do
-    setup :authed_api_conn
-
-    test "an old plugin gets 426", %{conn: conn} do
-      conn
-      |> put_req_header("x-plugin-version", "1.39.3")
-      |> get(~p"/api/sync/manifest")
-      |> json_response(426)
-    end
+  test "a client with no readable version gets the moved-folder feed" do
+    assert Sync.moved_feed?(nil)
+    assert Sync.moved_feed?("not-a-version")
   end
 end
