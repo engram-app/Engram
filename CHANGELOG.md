@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.87.1](https://github.com/engram-app/Engram/compare/0.87.0...0.87.1) (2026-11-17)
+
+
+### Bug Fixes
+
+* **crdt:** retry a checkpoint that lost the stale-write race ([#2618](https://github.com/engram-app/Engram/issues/2618)) ([9bd34be](https://github.com/engram-app/Engram/commit/9bd34bed9d235f862ad20c852e835c86ed83df2c))
+
 ## [0.87.0](https://github.com/engram-app/Engram/compare/0.86.0...0.87.0) (2026-11-17)
 
 
