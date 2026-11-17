@@ -98,13 +98,15 @@ defmodule Engram.Notes.CrdtCheckpoint do
   @doc """
   `checkpoint/5`, telling the caller whether the doc's state was committed:
   `{:written, pruned_ids}` (the tail rows it pruned, `[]` for a `:watermark`
-  prune) or `:skipped` (skipped, aborted, or lost the snapshot fence). `live`
+  prune), `:stale` (lost the snapshot fence: a newer write committed between
+  the row read and the write, so retrying re-reads, merges and lands it), or
+  `:skipped` (skipped or aborted; retrying would not help). `live`
   is the doc or its already-encoded state, so a caller that encoded the doc
   inside its room (the checkpoint timer) need not rebuild one. A room uses the
   answer to stop offering pruned rows and to learn its doc is durable.
   """
   @spec checkpoint_pruning(String.t(), String.t(), String.t(), Yex.Doc.t() | binary(), keyword()) ::
-          {:written, [Ecto.UUID.t()]} | :skipped
+          {:written, [Ecto.UUID.t()]} | :stale | :skipped
   def checkpoint_pruning(user_id, vault_id, note_id, live, opts \\ [])
       when is_binary(live) or is_struct(live, Yex.Doc) do
     # Deleted user/note are EXPECTED lifecycle states here (vault force-purge
@@ -301,7 +303,11 @@ defmodule Engram.Notes.CrdtCheckpoint do
                 end
               end)
 
-            if pruned == :not_written, do: :skipped, else: {:written, pruned}
+            case pruned do
+              :not_written -> :stale
+              :deleted -> :skipped
+              ids -> {:written, ids}
+            end
 
           {:skip, reason} ->
             Logger.warning(
@@ -492,7 +498,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
            prune_tail(note_id, vault_id, prune)}
 
         {0, _} ->
-          {:skip, :stale_snapshot}
+          fence_missed(note, note_id)
       end
     else
       err -> {:abort, err}
@@ -554,7 +560,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
             {prev, content_hash, note.path, nil, prune_tail(note_id, vault_id, prune)}
 
           {0, _} ->
-            {:skip, :stale_snapshot}
+            fence_missed(note, note_id)
         end
 
       true ->
@@ -648,19 +654,31 @@ defmodule Engram.Notes.CrdtCheckpoint do
           {0, _} ->
             # The row advanced since our snapshot — a newer write is already
             # committed. Do NOT prune (its tail rows may be unmerged) and do NOT
-            # revert. Discard this write's job and return equal hashes; the
-            # next debounce tick re-captures the now-merged doc and
-            # checkpoints that.
+            # revert. Discard this write's job and return equal hashes. The
+            # caller sees `:stale`; the room timer re-arms a tick on it, which
+            # re-reads this row, merges and writes. Nothing else would: a
+            # folder rename bumps seq without touching the room, so no edit,
+            # and so no tick, follows.
             :ok = NoteCommitted.discard!(job)
-
-            Logger.info(
-              "crdt checkpoint skipped stale write note_id=#{note_id} captured_version=#{fence_version}",
-              Metadata.with_category(:info, :sync, note_id: note_id)
-            )
-
-            {content_hash, content_hash, note.path, nil, :not_written}
+            fence_missed(note, note_id)
         end
     end
+  end
+
+  # Every fenced write that matched no row ends here (the materialize,
+  # compaction and structural/`.canvas` branches), so `checkpoint_pruning/5`
+  # maps them to one result. Equal hashes: nothing to embed or announce.
+  # `:not_written` becomes `:stale` (lost a race; the room timer retries). A
+  # trashed row misses the fence by design (`deleted_at IS NULL`): that is not a
+  # lost race and a retry would only miss again, so it reports `:skipped`.
+  defp fence_missed(note, note_id) do
+    Logger.info(
+      "crdt checkpoint skipped stale write note_id=#{note_id} captured_seq=#{note.seq}",
+      Metadata.with_category(:info, :sync, note_id: note_id)
+    )
+
+    {note.content_hash, note.content_hash, note.path, nil,
+     if(note.deleted_at, do: :deleted, else: :not_written)}
   end
 
   defp encode(doc) do
@@ -890,7 +908,8 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # On a miss we skip WITHOUT pruning. That is the whole safety property: the
   # tail is the only durable copy of anything this doc holds that the newer row
   # does not, so a checkpoint that cannot prove it read the current row must not
-  # delete it. The next debounce tick re-reads and checkpoints normally.
+  # delete it. The caller gets `:stale` and the room timer retries (re-read,
+  # merge, write).
   # `deleted_at IS NULL`: a tick in flight when a delete commits reads the row
   # AFTER the delete's seq bump, so seq alone matches and the checkpoint would
   # materialize, bump seq and enqueue jobs for the trashed note.

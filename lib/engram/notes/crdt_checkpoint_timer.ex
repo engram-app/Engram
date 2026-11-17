@@ -97,6 +97,12 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   # next keystroke. See the resolution in init/1 for why this defaults ON.
   @default_idle_exit_ms 300_000
 
+  # Back-to-back retries of a checkpoint that lost its snapshot fence (see
+  # after_checkpoint/2). A few, because each loss means some other writer just
+  # committed this row; a row that keeps moving will get another tick from the
+  # next edit, unbind or overflow anyway.
+  @max_stale_retries 3
+
   # Cap on the idle-drain re-ask multiplier (see drain_delay/1).
   @max_drain_backoff 8
 
@@ -199,7 +205,9 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
       # Consecutive drains broadcast with nobody acting on them. Backs the
       # re-ask off so an unreachable observer (netsplit, wedged channel) cannot
       # broadcast at a fixed rate forever. Reset by any activity.
-      drain_attempts: 0
+      drain_attempts: 0,
+      # Consecutive `:stale` checkpoints retried since the last edit or success.
+      stale_retries: 0
     }
 
     # Armed at init, not only on activity: a room that spins for a handshake and
@@ -226,7 +234,8 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
          | first_dirty_at: first_dirty_at,
            last_activity_at: now,
            settle_timer: timer,
-           drain_attempts: 0
+           drain_attempts: 0,
+           stale_retries: 0
        })
      )}
   end
@@ -286,10 +295,10 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
 
   @impl true
   def handle_info(:tick, state) do
-    do_checkpoint(state)
+    result = do_checkpoint(state)
 
     # Reset dirty anchor — we just flushed.
-    {:noreply, %{state | first_dirty_at: nil, settle_timer: nil}}
+    {:noreply, after_checkpoint(result, %{state | first_dirty_at: nil, settle_timer: nil})}
   end
 
   # Room exited — we trap exits (Process.flag(:trap_exit, true) is set in init/1),
@@ -515,6 +524,33 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
 
       :ok
   end
+
+  # `:stale`: a newer write (a folder rename's seq bump, a REST/MCP commit)
+  # landed between the checkpoint's row read and its write, so it wrote nothing.
+  # The edit is still only in the room, and nothing else ticks: a rename touches
+  # no room, so without this it waits for the next edit, the idle unbind or an
+  # overflow job. Retry at the eager interval; the retry re-reads the row, merges
+  # and writes (and announces crdt_doc_ready). Costs one extra checkpoint
+  # transaction, only when the race is lost.
+  defp after_checkpoint(:stale, %{stale_retries: n} = state) when n < @max_stale_retries do
+    %{
+      state
+      | stale_retries: n + 1,
+        settle_timer: Process.send_after(self(), :tick, state.eager_ms)
+    }
+  end
+
+  defp after_checkpoint(:stale, state) do
+    Logger.warning(
+      "crdt checkpoint stale retries exhausted room_key=#{state.room_key} " <>
+        "retries=#{state.stale_retries}",
+      Metadata.with_category(:warning, :sync, room_key: state.room_key)
+    )
+
+    %{state | stale_retries: 0}
+  end
+
+  defp after_checkpoint(_result, state), do: Map.put(state, :stale_retries, 0)
 
   # Test-only seam (`Engram.CheckpointInterleave`): nil outside those tests.
   defp interleave_hook(point), do: Engram.InterleaveHook.run(point)
