@@ -69,12 +69,19 @@ defmodule Engram.FileTimeDoublesGoneTest do
           "  SELECT mtime FROM notes",
           ~s(  """,),
           "  [id]",
-          ")"
+          ")",
+          ~s(  @doc """),
+          ~s(      q = """),
+          "      SELECT mtime FROM notes",
+          ~s(      """),
+          "  mtime in prose",
+          ~s(  """)
         ],
         "\n"
       )
 
     assert Enum.map(sql_lines(src), &elem(&1, 1)) == [5, 7, 8, 11]
+    # Lines 15-20: a `@doc` holding a heredoc example yields nothing.
   end
 
   # `{line, number}` for every line that can hold SQL or a query binding:
@@ -89,21 +96,30 @@ defmodule Engram.FileTimeDoublesGoneTest do
     |> Enum.with_index(1)
     |> Enum.map_reduce(:code, fn {line, n}, mode ->
       trimmed = String.trim(line)
+      indent = String.length(line) - String.length(String.trim_leading(line))
       # A heredoc opens on a line ending in `"""` (`q = """`, or a bare
       # `"""` as a call argument) and closes on one starting with it
-      # (`"""`, `""",`, `""")`).
+      # (`"""`, `""",`, `""")`) at no deeper indent than the opener's:
+      # a `"""` example nested in a `@doc` is indented further.
       opens? = String.ends_with?(trimmed, ~s("""))
 
-      cond do
-        mode != :code and String.starts_with?(trimmed, ~s(""")) -> {nil, :code}
-        mode == :doc -> {nil, :doc}
-        mode == :sql -> {{line, n}, :sql}
-        opens? and Regex.match?(~r/@(module)?doc\b/, trimmed) -> {nil, :doc}
-        opens? -> {nil, :sql}
-        String.starts_with?(trimmed, "#") -> {nil, :code}
-        String.contains?(line, ~s(")) and Regex.match?(sql_word, line) -> {{line, n}, :code}
-        Regex.match?(~r/(?<![A-Za-z_.])[a-z]\.(mtime|ctime)\b/, line) -> {{line, n}, :code}
-        true -> {nil, :code}
+      case mode do
+        {kind, open_indent} ->
+          cond do
+            String.starts_with?(trimmed, ~s(""")) and indent <= open_indent -> {nil, :code}
+            kind == :doc -> {nil, mode}
+            true -> {{line, n}, mode}
+          end
+
+        :code ->
+          cond do
+            opens? and Regex.match?(~r/@(module)?doc\b/, trimmed) -> {nil, {:doc, indent}}
+            opens? -> {nil, {:sql, indent}}
+            String.starts_with?(trimmed, "#") -> {nil, :code}
+            String.contains?(line, ~s(")) and Regex.match?(sql_word, line) -> {{line, n}, :code}
+            Regex.match?(~r/(?<![A-Za-z_.])[a-z]\.(mtime|ctime)\b/, line) -> {{line, n}, :code}
+            true -> {nil, :code}
+          end
       end
     end)
     |> elem(0)

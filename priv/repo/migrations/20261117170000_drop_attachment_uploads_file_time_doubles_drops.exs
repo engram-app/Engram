@@ -25,8 +25,10 @@ defmodule Engram.Repo.Migrations.DropAttachmentUploadsMtimeDrops do
   Ships in the release after step (b), which stopped reading and writing
   the doubles and whose boot migration 20261117160000 filled every NULL
   twin from them, so no release that can run or be rolled back to touches
-  the column. Skip-release safe: a jump from before (b) applies that fill
-  first, in the same batch.
+  the column. Skip-release safe on a single-node install: a jump from
+  before (b) applies that fill first, in the same batch. A multi-node
+  install must not run a pre-(b) node beside this release (it would read
+  the dropped column).
 
   DROP COLUMN is a catalog change (no rewrite; no index, trigger or view
   names the column) under ACCESS EXCLUSIVE, held for milliseconds, in its
