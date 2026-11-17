@@ -17,7 +17,6 @@ defmodule EngramWeb.FileTimeWriterEntryPointsTest do
   alias Engram.Attachments.Attachment
   alias Engram.Attachments.Upload
   alias Engram.Attachments.Uploads
-  alias Engram.FileTime
   alias Engram.FileTimeFixtures
   alias Engram.MCP.Handlers
   alias Engram.Notes.Note

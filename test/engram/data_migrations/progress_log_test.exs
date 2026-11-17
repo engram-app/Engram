@@ -25,13 +25,6 @@ defmodule Engram.DataMigrations.ProgressLogTest do
     %{user: user, vault: insert(:vault, user: user)}
   end
 
-  defp shipped?(events, text) do
-    case Enum.filter(events, &(IO.chardata_to_string(message(&1)) =~ text)) do
-      [] -> flunk("no #{inspect(text)} line in #{length(events)} events")
-      found -> Enum.all?(found, &(&1.meta[:loki_ship] == true and &1.meta[:ship] == "loki"))
-    end
-  end
-
   defp message(%{msg: {:string, s}}), do: s
   defp message(%{msg: {:report, r}}), do: inspect(r)
   defp message(%{msg: {f, a}}), do: :io_lib.format(f, a)
