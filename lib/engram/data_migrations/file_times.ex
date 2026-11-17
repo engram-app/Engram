@@ -284,9 +284,11 @@ defmodule Engram.DataMigrations.FileTimes do
         do: (counts -> Map.update!(counts, "#{table}.#{d}", &(&1 + 1)))
   end
 
-  defp write(_repo, _schema, []), do: []
+  @doc false
+  # Writes `[{row_read, wanted_twins}]`; the written ids (tests drive it).
+  def write(_repo, _schema, []), do: []
 
-  defp write(repo, schema, drift) do
+  def write(repo, schema, drift) do
     rows = Enum.map(drift, &elem(&1, 0))
     ids = Enum.map(rows, & &1.id)
     col = fn key -> Enum.map(rows, & &1[key]) end

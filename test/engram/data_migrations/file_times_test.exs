@@ -149,6 +149,28 @@ defmodule Engram.DataMigrations.FileTimesTest do
              rows(ctx, Attachment, mtime: :mtime_at)
   end
 
+  # Review of #2625: a step (b) node moves the twin alone (its double stays
+  # stale). A window that read the row before that write must not land.
+  test "the write guards on the twin it read, not only the double", ctx do
+    id = note!(ctx, "race.md", %{"mtime" => 1_700_000_000.5})
+    set!(ctx, Note, id, mtime_at: nil)
+
+    [read] =
+      Repo.with_tenant!(ctx.user.id, fn ->
+        Repo.all(from(n in Note, select: map(n, [:id, :mtime, :mtime_at, :ctime, :ctime_at])))
+      end)
+
+    # The (b) write: a new twin, the double left as it was.
+    set!(ctx, Note, id, mtime_at: ~U[2030-01-01 00:00:00.000000Z])
+
+    wanted = %{mtime_at: FileTime.normalize(read.mtime), ctime_at: read.ctime_at}
+
+    assert Repo.with_tenant!(ctx.user.id, fn -> FileTimes.write(Repo, Note, [{read, wanted}]) end) ==
+             []
+
+    assert [%{mtime_at: ~U[2030-01-01 00:00:00.000000Z]}] = rows(ctx, Note, mtime: :mtime_at)
+  end
+
   test "wanted/2: fill a NULL twin, refine within 1 us, else keep the twin" do
     t = 2_147_484_020.404
     want = FileTime.normalize(t)
