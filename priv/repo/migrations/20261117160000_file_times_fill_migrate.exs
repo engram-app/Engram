@@ -44,8 +44,9 @@ defmodule Engram.Repo.Migrations.FileTimesFillMigrate do
       had 0 such rows on 2026-11-17 (all 1,852 tenants), so it runs the
       probe only.
 
-  Each statement runs under a 5s `lock_timeout` and a 30s
-  `statement_timeout`. A window locked out is retried twice; a user still
+  Each statement runs under a 5s `lock_timeout` and a 10s
+  `statement_timeout` (under the Repo's 15s client timeout, so Postgres
+  cancels first). A window locked out is retried twice; a user still
   locked out is retried once more after the others, and only then does the
   run raise (not recorded; the next boot resumes). A window past its
   timeout is halved, down to #{100} rows, before it raises.
@@ -55,7 +56,10 @@ defmodule Engram.Repo.Migrations.FileTimesFillMigrate do
   @min_window 100
   @probe_batch 200
   @retries 2
-  @statement_timeout "30s"
+  # Under the Repo's 15 s client timeout: Postgres cancels a slow window
+  # (57014, rescued and halved) before the checkout deadline fires (a
+  # DBConnection.ConnectionError, which would not be halved).
+  @statement_timeout_ms 10_000
   @lock_timeout "5s"
   @contention [:lock_not_available, :deadlock_detected]
   @zero_id "00000000-0000-0000-0000-000000000000"
@@ -83,16 +87,19 @@ defmodule Engram.Repo.Migrations.FileTimesFillMigrate do
 
   def up, do: fill(repo())
 
+  @doc false
+  def statement_timeout_ms, do: @statement_timeout_ms
+
   def down, do: :ok
 
   @doc false
-  # The whole migration on `repo`. Tests pass `:before_window` (run inside
-  # each window's transaction) and `:window`.
+  # The whole migration on `repo`. Tests pass `:before_window` (a fun of the
+  # window size, run inside each window's transaction) and `:window`.
   def fill(repo, opts \\ []) do
     ctx = %{
       repo: repo,
       window: Keyword.get(opts, :window, @window),
-      hook: Keyword.get(opts, :before_window, fn -> :ok end)
+      hook: Keyword.get(opts, :before_window, fn _size -> :ok end)
     }
 
     case repo.query!(@visibility).rows do
@@ -226,7 +233,7 @@ defmodule Engram.Repo.Migrations.FileTimesFillMigrate do
   defp window(ctx, user, sql, params, size) do
     attempt(fn ->
       tx(ctx, user, fn ->
-        ctx.hook.()
+        ctx.hook.(size)
         ctx.repo.query!(sql, params).rows
       end)
     end)
@@ -264,23 +271,20 @@ defmodule Engram.Repo.Migrations.FileTimesFillMigrate do
   # in a sandbox, where they would outlive a savepoint).
   defp tx(ctx, user, fun) do
     {:ok, result} =
-      ctx.repo.transaction(
-        fn ->
-          ctx.repo.query!(
-            "SELECT set_config('lock_timeout', '#{@lock_timeout}', true), " <>
-              "set_config('statement_timeout', '#{@statement_timeout}', true), " <>
-              "set_config('extra_float_digits', '1', true)"
-          )
+      ctx.repo.transaction(fn ->
+        ctx.repo.query!(
+          "SELECT set_config('lock_timeout', '#{@lock_timeout}', true), " <>
+            "set_config('statement_timeout', '#{@statement_timeout_ms}ms', true), " <>
+            "set_config('extra_float_digits', '1', true)"
+        )
 
-          if ctx.role, do: ctx.repo.query!("SET LOCAL ROLE #{ctx.role}")
-          if user, do: set_tenant(ctx, user)
-          result = fun.()
-          ctx.repo.query!("SELECT set_config('app.current_tenant', '', true)")
-          if ctx.role, do: ctx.repo.query!("SELECT set_config('role', 'none', true)")
-          result
-        end,
-        timeout: 60_000
-      )
+        if ctx.role, do: ctx.repo.query!("SET LOCAL ROLE #{ctx.role}")
+        if user, do: set_tenant(ctx, user)
+        result = fun.()
+        ctx.repo.query!("SELECT set_config('app.current_tenant', '', true)")
+        if ctx.role, do: ctx.repo.query!("SELECT set_config('role', 'none', true)")
+        result
+      end)
 
     result
   end
