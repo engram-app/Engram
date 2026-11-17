@@ -679,8 +679,10 @@ config :engram, Engram.MCP.ParseGate,
   deadline_ms: 20_000
 
 # Search concurrency (Engram.Search.Gate), PER NODE: at most `per_user`
-# searches in flight per user and `limit` in total, sized to Qdrant's ~4
-# search threads. A caller waits up to `acquire_timeout` ms for a slot (at
+# Qdrant search requests in flight per user and `limit` in total, sized to
+# Qdrant's ~4 search threads. Per node, so the cluster allows nodes x these:
+# prod's 2 web nodes let one user reach 4 in flight, and all users 8 against
+# Qdrant's 4 threads (plus the worker's). A caller waits up to `acquire_timeout` ms for a slot (at
 # most `max_waiting` queued, `max_waiting_per_user` per user), then gets a
 # busy error (MCP `rate_limited`, REST 429 with retry-after).
 config :engram, :search_gate,

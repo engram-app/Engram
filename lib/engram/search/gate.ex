@@ -8,13 +8,23 @@ defmodule Engram.Search.Gate do
   median search from a few ms to hundreds, and some to Qdrant's server
   timeout. This queue lives in the BEAM, is fair per user, and fails fast.
 
-  `run/3` holds a slot of the `Engram.ConcurrencyGate` server in the CALLING
-  process for the whole of `fun` (the search's Qdrant rounds, its Postgres
-  reads and its query embed), released when `fun` returns, raises or exits,
+  `run/2` holds a slot of the `Engram.ConcurrencyGate` server in the CALLING
+  process for ONE Qdrant request (`Engram.Search` wraps each of a search's
+  Qdrant calls, never its query embed or Postgres reads, so a slow embedder
+  costs no slot). The slot is released when `fun` returns, raises or exits,
   and when the caller dies (the gate monitors it). A caller that gets no
   slot within `:acquire_timeout` ms, or finds the queue full (`:max_waiting`
   in total, `:max_waiting_per_user` for its user), gets `{:error, :search_busy}`
   without running `fun`.
+
+  A client that hangs up does not stop its search: Bandit keeps running the
+  request process, so an abandoned type-ahead search keeps its slot until
+  its Qdrant request ends, at most the search receive timeout (5 s; Qdrant
+  gives up at 4 s).
+
+  If the gate process is down (restarting), every search is refused busy
+  until it is back (fail closed). A restarted gate starts empty while the old
+  holders finish, so for a moment up to twice the limit can run.
 
   The cap is PER NODE (prod runs 2 web nodes and 1 worker), so the cluster
   allows up to nodes x `:limit`. Sized for Qdrant's pool, that over-admits a

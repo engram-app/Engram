@@ -40,6 +40,8 @@ defmodule EngramWeb.SearchControllerTest do
       )
 
     Engram.ServiceConfig.put_override(:search_gate, gate: gate, acquire_timeout: 50)
+    # The query embed runs before the gate (it holds no slot).
+    stub(Engram.MockEmbedder, :embed_texts, fn _, _ -> {:ok, [[0.1, 0.2, 0.3]]} end)
     test = self()
 
     {:ok, holder} =

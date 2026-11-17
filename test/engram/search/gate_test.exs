@@ -7,6 +7,7 @@ defmodule Engram.Search.GateTest do
   use Engram.DataCase, async: true
 
   import Engram.Factory
+  import ExUnit.CaptureLog
 
   alias Engram.Search
   alias Engram.Search.Gate
@@ -41,6 +42,7 @@ defmodule Engram.Search.GateTest do
         end)
       end)
 
+    on_exit(fn -> Process.exit(pid, :kill) end)
     assert_receive {:holding, ^pid}, 2_000
     pid
   end
@@ -50,16 +52,20 @@ defmodule Engram.Search.GateTest do
   defp attempt(user, tag) do
     test = self()
 
-    Task.start(fn ->
-      send(
-        test,
-        {:ran, tag,
-         Gate.run(user, fn ->
-           send(test, {:started, tag})
-           :ok
-         end)}
-      )
-    end)
+    {:ok, pid} =
+      Task.start(fn ->
+        send(
+          test,
+          {:ran, tag,
+           Gate.run(user, fn ->
+             send(test, {:started, tag})
+             :ok
+           end)}
+        )
+      end)
+
+    on_exit(fn -> Process.exit(pid, :kill) end)
+    {:ok, pid}
   end
 
   test "a third concurrent search of one user waits, then gets the busy error" do
@@ -237,17 +243,28 @@ defmodule Engram.Search.GateTest do
       %{user: user, vault: insert(:vault, user: user)}
     end
 
-    test "a busy search is refused before it spends the daily budget",
+    test "a search whose Qdrant request finds no slot is refused busy",
          %{user: user, vault: vault} do
-      insert(:user_limit_override, user: user, key: "ai_searches_per_day", value: %{"v" => 1})
       gate(per_user: 1)
       holder = hold(user.id)
 
       assert Search.search(user, vault, "anything") == {:error, :search_busy}
       send(holder, :go)
+    end
 
-      # The one token survived: the next search is not refused for budget.
-      refute match?({:error, :search_cap_exceeded, _}, Search.search(user, vault, "anything"))
+    test "auto-placement logs a failed search and still places the note", %{
+      user: user,
+      vault: vault
+    } do
+      args = %{"title" => "Placed", "content" => "body"}
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert %{placed_folder: ""} =
+                   Engram.MCP.Handlers.before_txn("create_note", user, vault, args)
+        end)
+
+      assert log =~ "mcp auto_place_folder failed"
     end
 
     test "similar_to searches go through the same gate", %{user: user, vault: vault} do
@@ -259,9 +276,89 @@ defmodule Engram.Search.GateTest do
     end
   end
 
-  defp wait_queued(g, n) do
-    if :queue.len(:sys.get_state(g).waiting) >= n,
-      do: :ok,
-      else: receive(after: (1 -> wait_queued(g, n)))
+  test "a second acquire from a holder is refused loudly and leaves the counts intact" do
+    g = gate(limit: 4, per_user: 2)
+    assert Engram.ConcurrencyGate.acquire(g, "a", 100) == :ok
+
+    assert_raise ArgumentError, ~r/already holds a slot/, fn ->
+      Engram.ConcurrencyGate.acquire(g, "a", 100)
+    end
+
+    assert :sys.get_state(g).counts == %{"a" => 1}
+    Engram.ConcurrencyGate.release(g)
+    assert :sys.get_state(g).counts == %{}
+  end
+
+  describe "the query embed holds no slot" do
+    setup do
+      bypass = Bypass.open()
+      ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+      ServiceConfig.put_override(:qdrant_search_timeout, 30_000)
+
+      empty = fn conn, body ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, body)
+      end
+
+      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
+        empty.(conn, ~s({"result":[{"points":[]},{"points":[]}]}))
+      end)
+
+      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+        empty.(conn, ~s({"result":{"points":[]}}))
+      end)
+
+      # "slow" stands in for a Voyage brownout: the embed hangs past the
+      # gate's wait, then fails.
+      test = self()
+
+      Mox.stub(Engram.MockEmbedder, :embed_texts, fn
+        ["slow"], _opts ->
+          send(test, :embedding)
+          Process.sleep(@wait * 4)
+          {:error, :timeout}
+
+        texts, _opts ->
+          {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      users =
+        for _ <- 1..2 do
+          {:ok, user} = insert(:user) |> Engram.Crypto.ensure_user_dek()
+          {user, insert(:vault, user: user)}
+        end
+
+      %{users: users}
+    end
+
+    test "a slow embed for one user does not stop another user's search; the slow one " <>
+           "still degrades to keyword-only",
+         %{users: [{a, a_vault}, {b, b_vault}]} do
+      gate(limit: 1, per_user: 1)
+      slow = Task.async(fn -> Search.search(a, a_vault, "slow", mode: :hybrid) end)
+      assert_receive :embedding, 2_000
+
+      # A is inside its embed. With the slot around the whole search this
+      # was {:error, :search_busy}.
+      assert Search.search(b, b_vault, "fast", mode: :hybrid) == {:ok, []}
+
+      assert Task.await(slow, 5_000) == {:ok, []}
+    end
+  end
+
+  defp wait_queued(g, n, deadline \\ nil) do
+    deadline = deadline || System.monotonic_time(:millisecond) + 2_000
+
+    cond do
+      :queue.len(:sys.get_state(g).waiting) >= n ->
+        :ok
+
+      System.monotonic_time(:millisecond) > deadline ->
+        flunk("fewer than #{n} waiter(s) queued after 2 s")
+
+      true ->
+        receive(after: (1 -> wait_queued(g, n, deadline)))
+    end
   end
 end
