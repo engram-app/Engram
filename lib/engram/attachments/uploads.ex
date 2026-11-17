@@ -562,7 +562,7 @@ defmodule Engram.Attachments.Uploads do
                  content_hash: hash,
                  mime_type: up.mime_type,
                  size_bytes: up.size_bytes,
-                 mtime: up.mtime,
+                 mtime: Engram.FileTime.mtime(up),
                  user_id: user.id,
                  vault_id: vault.id,
                  storage_key: up.storage_key,

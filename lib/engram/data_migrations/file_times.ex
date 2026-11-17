@@ -4,15 +4,15 @@ defmodule Engram.DataMigrations.FileTimes do
   20261105140000) from the epoch doubles: `notes.mtime_at` / `ctime_at`,
   `attachments.mtime_at`, `attachment_uploads.mtime_at`.
 
-  A row is work when its `*_at` differs from `Engram.FileTime.normalize/1`
-  of its double, NULL or not: a release before expand, running during a
-  rollout or after a rollback, moves a double without its twin and leaves a
-  stale non-NULL value. Values come from `FileTime` (never `to_timestamp`,
-  which rounds), the same normalizer every writer uses. Readers serve the
-  twin since the R25 read switch (`FileTime.epoch/2`, the double only while
-  the twin is NULL), so this backfill and `FileTime.put_at/3` (which heals
-  the twin on every write) are what make the served value right. It was
-  confirmed done in prod before the switch shipped.
+  Since v4 (contract step (a)) the twin is the authority: a row is work
+  only when its twin is NULL and the double gives one, or the twin is
+  within 1 us of `Engram.FileTime.normalize/1` of its double but not equal
+  (a floored or float-rounded twin). A twin further off is left alone: a
+  step (b) node stops writing the doubles, so a far-off double is the stale
+  value. Values come from `FileTime` (never `to_timestamp`, which rounds),
+  the same normalizer every writer uses. Through v3 every drifted twin was
+  rewritten from its double; that was confirmed done in prod before the
+  read switch shipped.
 
   Each table is its own `IdWindows.heal_pass/4` walk (cursor
   `file_times:<table>`). A table whose walk came back clean is not walked
@@ -25,20 +25,21 @@ defmodule Engram.DataMigrations.FileTimes do
 
   Per table per pass it logs `file times repaired` (the guard against a
   writer that skips the twin: after the first full walk it should stay
-  silent) and `file_time_out_of_range` with the count of legacy
-  out-of-range doubles it set NULL (written once, so a later walk is quiet).
+  silent). An out-of-range legacy double is never written (its twin is
+  NULL already, or kept).
   Only `*_at` columns are written: no trigger fires (every `notes` trigger
   is `UPDATE OF` other columns), `updated_at`/`seq` never move, no fan-out.
 
-  v2 re-walked for the rounding fix, v3 for exact rounding (`version/0`).
+  v2 re-walked for the rounding fix, v3 for exact rounding, v4 to fill a
+  `0`'s epoch twin (`version/0`).
   A pass first asks every cluster node for `FileTime.twin_rounding/0`
   (`Readiness.peers_report/4`, the gate `CompressionGate` uses) and needs
-  2 (exact); while any node is older (it floors, or rounds the float
+  3 (exact, and `0` as the epoch); while any node is older (it floors, or rounds the float
   product) or unreachable, the pass walks nothing, resets the walks and stays open. `enabled?/0` is the
   `file_times_backfill` service override (default on). Re-verified daily
   (`reverify?/0`): a 0.75-or-older node that joins after close floors
-  twins again, and nothing else finds a 1 us drift. Contract bumps
-  `version/0` to take one last clean walk before dropping the doubles.
+  twins again, and nothing else finds a 1 us drift. The contract drop
+  retires it with the doubles.
   """
   @behaviour Engram.DataMigration
 
@@ -47,7 +48,6 @@ defmodule Engram.DataMigrations.FileTimes do
   alias Engram.Backfill.IdWindows
   alias Engram.Cluster.Readiness
   alias Engram.FileTime
-  alias Engram.Logger.Metadata
 
   require Logger
 
@@ -74,8 +74,14 @@ defmodule Engram.DataMigrations.FileTimes do
   # double is exactly ...2113964557...). Against the exact rounding, 0.75's
   # floor is 1 us low on 4 of 12 sampled prod desktop values and v2 1 us
   # off on 1 of them. The re-walk rewrites every twin that differs.
+  # v4 (contract step (a)): a `0` double's twin is the epoch, not NULL
+  # (`FileTime` twin rounding 3), so the walk fills those. From v4 the walk
+  # never overwrites a twin more than 1 us from its double: the twin is the
+  # authority, and beside a step (b) node (which stops writing the doubles)
+  # a far-off double is the stale one. It fills a NULL twin and refines a
+  # floored one (within 1 us), nothing else.
   @impl true
-  def version, do: 3
+  def version, do: 4
 
   @impl true
   def reverify?, do: true
@@ -174,10 +180,7 @@ defmodule Engram.DataMigrations.FileTimes do
   end
 
   defp walk(schema, table, pairs, opts) do
-    tally = %{
-      fixed: :counters.new(1, []),
-      oor: :counters.new(1, [])
-    }
+    tally = %{fixed: :counters.new(1, [])}
 
     result =
       try do
@@ -201,7 +204,6 @@ defmodule Engram.DataMigrations.FileTimes do
   # fixed twin rewrites no payload.
   defp report(table, tally) do
     fixed = :counters.get(tally.fixed, 1)
-    oor = :counters.get(tally.oor, 1)
 
     if fixed > 0,
       do:
@@ -209,40 +211,30 @@ defmodule Engram.DataMigrations.FileTimes do
           "file times repaired",
           Engram.DataMigration.progress_metadata(table: table, total_count: fixed)
         )
-
-    if oor > 0,
-      do:
-        Logger.warning(
-          "file_time_out_of_range",
-          Metadata.with_category(:warning, :data, table: table, total_count: oor)
-        )
   end
 
   # One window: read the rows' doubles and twins by primary key, compute the
-  # wanted twins with `FileTime.normalize/1`, write only the drifted rows.
+  # wanted twins (`wanted/2`), write only the rows where one changes.
   defp heal(ids, %{repo: repo}, schema, pairs, tally) do
     drift =
       for row <- read_rows(repo, schema, pairs, ids),
-          wanted = Map.new(pairs, fn {d, at} -> {at, FileTime.normalize(row[d])} end),
+          wanted = Map.new(pairs, fn {d, at} -> {at, wanted(row[at], row[d])} end),
           not Enum.all?(pairs, fn {_, at} -> FileTime.same_at?(row[at], wanted[at]) end),
           do: {row, wanted}
 
     written = write(repo, schema, drift)
-    done = MapSet.new(written)
-    fixed = Enum.filter(drift, fn {row, _} -> MapSet.member?(done, row.id) end)
-
     :counters.add(tally.fixed, 1, length(written))
-
-    :counters.add(
-      tally.oor,
-      1,
-      Enum.count(fixed, fn {row, _} ->
-        Enum.any?(pairs, fn {d, _} -> match?({:error, _}, FileTime.to_at(row[d])) end)
-      end)
-    )
-
     {length(written), length(written) < length(drift)}
   end
+
+  @doc """
+  The twin a walk leaves, given the stored twin `at` and double `t`: the
+  normalized double when the twin is NULL or within 1 us of it (a fill or a
+  rounding fix), else the stored twin, untouched (the double is stale).
+  """
+  @spec wanted(DateTime.t() | nil, number() | nil) :: DateTime.t() | nil
+  def wanted(nil, t), do: FileTime.normalize(t)
+  def wanted(at, t), do: if(FileTime.twin?(at, t), do: FileTime.normalize(t), else: at)
 
   # The window's id, user, doubles and twins, by primary key.
   defp read_rows(repo, schema, pairs, ids) do
@@ -287,7 +279,7 @@ defmodule Engram.DataMigrations.FileTimes do
   defp tally_drift(rows, table, pairs, counts) do
     for row <- rows,
         {d, at} <- pairs,
-        not FileTime.same_at?(row[at], FileTime.normalize(row[d])),
+        not FileTime.same_at?(row[at], wanted(row[at], row[d])),
         reduce: counts,
         do: (counts -> Map.update!(counts, "#{table}.#{d}", &(&1 + 1)))
   end

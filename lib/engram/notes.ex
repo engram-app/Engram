@@ -1294,7 +1294,7 @@ defmodule Engram.Notes do
               ^effs
             ),
           on: n.path_hmac == field(v, :h),
-          where: is_nil(n.ctime) and n.kind == "note",
+          where: is_nil(n.ctime_at) and n.kind == "note",
           update: [
             set: [
               ctime: field(v, :c),
@@ -1323,8 +1323,12 @@ defmodule Engram.Notes do
   # ctime is the file's creation time, and another device's copy has its own
   # (when that device synced the file down). The first ctime stored wins, as
   # in set_client_ctimes/3; an edit only fills one the note never had.
-  defp keep_stored_ctime(attrs, %Note{ctime: nil}), do: attrs
-  defp keep_stored_ctime(attrs, %Note{ctime: ctime}), do: Map.put(attrs, :ctime, ctime)
+  defp keep_stored_ctime(attrs, %Note{} = note) do
+    case FileTime.ctime(note) do
+      nil -> attrs
+      ctime -> Map.put(attrs, :ctime, ctime)
+    end
+  end
 
   defp insert_new_note(base_attrs, user, sanitized_path, folder, client_id, lookup_query) do
     # Pricing v2 §G — server-side notes_cap enforcement. Free tier defaults
@@ -2266,7 +2270,7 @@ defmodule Engram.Notes do
             title: decrypted.title,
             tags: decrypted.tags,
             content_hash: decrypted.content_hash,
-            mtime: decrypted.mtime
+            mtime: FileTime.mtime(decrypted)
           }
 
           case move_note(decrypted, base_attrs, user, sanitized_path, folder, "sync", recording,
@@ -2457,7 +2461,7 @@ defmodule Engram.Notes do
       title: prior.title,
       tags: prior.tags,
       content_hash: prior.content_hash,
-      mtime: prior.mtime
+      mtime: FileTime.mtime(prior)
     }
 
     case move_note(prior, base_attrs, user, sanitized_path, folder, "sync", recording,
@@ -4240,7 +4244,7 @@ defmodule Engram.Notes do
     case rebuild_result(rebuilt) do
       {:ok, content, meta} ->
         {mtime, opts} = Keyword.pop(opts, :mtime)
-        attrs = %{"path" => path, "content" => content, "mtime" => mtime || note.mtime}
+        attrs = %{"path" => path, "content" => content, "mtime" => mtime || FileTime.mtime(note)}
         {upsert_note(user, vault, attrs, opts), meta}
 
       {:error, _} = refused ->
@@ -9962,7 +9966,7 @@ defmodule Engram.Notes do
       title: prior.title,
       tags: prior.tags,
       content_hash: prior.content_hash,
-      mtime: prior.mtime
+      mtime: FileTime.mtime(prior)
     }
 
     folder = Helpers.extract_folder(prior.path)

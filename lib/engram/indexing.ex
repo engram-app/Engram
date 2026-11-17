@@ -4027,15 +4027,17 @@ defmodule Engram.Indexing do
 
   defp stamp_effective_dates(note, %{fm_updated: up, fm_created_s: cr} = dates) do
     %{eff_updated: eu, eff_created: ec} =
-      Note.effective_dates(Map.merge(dates, %{mtime: note.mtime, ctime: note.ctime}))
+      Note.effective_dates(
+        Map.merge(dates, Map.take(note, [:mtime, :ctime, :mtime_at, :ctime_at]))
+      )
 
     {_, _} =
       Repo.update_all(
         from(n in Note,
           where:
             n.kind == "note" and n.id == ^note.id and n.content_hash == ^note.content_hash and
-              fragment("? IS NOT DISTINCT FROM ?", n.mtime, ^note.mtime) and
-              fragment("? IS NOT DISTINCT FROM ?", n.ctime, ^note.ctime) and
+              fragment("? IS NOT DISTINCT FROM ?", n.mtime_at, ^note.mtime_at) and
+              fragment("? IS NOT DISTINCT FROM ?", n.ctime_at, ^note.ctime_at) and
               (fragment("? IS DISTINCT FROM ?", n.fm_updated, ^up) or
                  fragment("? IS DISTINCT FROM ?", n.fm_created_s, ^cr) or
                  fragment("? IS DISTINCT FROM ?", n.eff_updated, ^eu) or
