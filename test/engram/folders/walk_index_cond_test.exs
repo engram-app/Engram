@@ -132,6 +132,19 @@ defmodule Engram.Folders.WalkIndexCondTest do
        %{user: u, vault: v} do
     big = Repo.with_tenant!(u.id, fn -> Rows.id_by_walk(u, v.id, "Big") end)
 
+    # The FK is composite, (vault_id, parent_id) -> folders (vault_id, id),
+    # so its child lookup binds both columns and a vault_id-led index serves it.
+    %{rows: [[cols]]} =
+      Repo.query!("""
+      SELECT array_agg(a.attname::text ORDER BY k.ord)
+      FROM pg_constraint c
+      CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+      WHERE c.conname = 'folders_parent_fk'
+      """)
+
+    assert cols == ["vault_id", "parent_id"]
+
     {:ok, plan} =
       Repo.transaction(fn ->
         Repo.query!("SET LOCAL plan_cache_mode = force_generic_plan")
