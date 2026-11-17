@@ -1818,7 +1818,7 @@ defmodule Engram.Notes do
 
   # One row transaction for every create that claims nothing, which is all of
   # them except a live id moving to a new path. That one leg classifies inside
-  # the transaction, returns `{:claim_first, live}` before writing anything,
+  # the transaction, returns `{:claim_first, live, shown}` before writing anything,
   # claims OUTSIDE it, and re-runs with the claim settled. The re-run
   # classifies afresh, so a row that changed in between is handled exactly as
   # the old claim-then-transaction order handled it.
@@ -1826,15 +1826,19 @@ defmodule Engram.Notes do
     case Repo.with_tenant(g.user.id, fn ->
            g |> genesis_txn(claim) |> probe_vault_populated(g) |> seed_in_txn(g)
          end) do
-      {:ok, {:claim_first, live}} ->
-        case claim_crdt_relocate(g, live) do
+      {:ok, {:claim_first, live, shown}} ->
+        case claim_crdt_relocate(g, live, shown) do
           {:ok, false} ->
             run_genesis(g, {:done, false})
 
           # Claimed: the relocate's row transaction settles like every other
           # claimant's (`with_settle/4`).
           {:ok, entry} ->
-            with_settle(g.user, g.vault, [entry], fn -> run_genesis(g, {:done, true}) end)
+            with_settle(g.user, g.vault, [entry], fn ->
+              # Test seam (nil outside tests): claimed, row not yet moved.
+              :ok = interleave_hook(:relocate_claimed)
+              run_genesis(g, {:done, true})
+            end)
 
           {:error, _} = err ->
             err
@@ -1920,11 +1924,12 @@ defmodule Engram.Notes do
           {:ok, true, shown} ->
             {:ok, live |> decrypt_or_raise!(user) |> found_at(shown)}
 
-          {:ok, false, _shown} when claim == :pending ->
+          {:ok, false, shown} when claim == :pending ->
             # A relocate claims BEFORE the row moves (see
             # claim_crdt_relocate/2), so back out of this read-only
-            # transaction, claim, and re-run with the claim settled.
-            {:claim_first, live}
+            # transaction, claim, and re-run with the claim settled. `shown`
+            # (where the readers place the note) is the settle's pre-op path.
+            {:claim_first, live, shown || decrypt_or_raise!(live, user).path}
 
           {:ok, false, shown} ->
             # Phase E2 (rename-as-move): a crdt_create for a KNOWN live
@@ -2000,9 +2005,11 @@ defmodule Engram.Notes do
   #   * an OCCUPIED target is `:id_conflict` below, and claiming for a relocate
   #     that is about to be refused is the same permanent-unclaimability bug.
   # `{:ok, {note_id, pre_path, claimed_path}}` once claimed, for the settle.
-  defp claim_crdt_relocate(g, live) do
+  # `shown` was read before the claim, so nothing between the claim and the
+  # settle can fail.
+  defp claim_crdt_relocate(g, live, shown) do
     case claim_free_target(g.user, g.vault, live.id, g.path) do
-      {:ok, id} when is_binary(id) -> {:ok, {id, decrypt_or_raise!(live, g.user).path, g.path}}
+      {:ok, id} when is_binary(id) -> {:ok, {id, shown, g.path}}
       other -> other
     end
   end

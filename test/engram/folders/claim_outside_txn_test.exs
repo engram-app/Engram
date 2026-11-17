@@ -545,4 +545,30 @@ defmodule Engram.Folders.ClaimOutsideTxnTest do
     assert {:ok, _} = Folders.rename(ctx.user, ctx.vault, "Docs", "Archive")
     assert live_path(room, n.id) == "Archive/m.md"
   end
+
+  # The real crdt_create relocate (not a simulation): it claims, then its row
+  # move is refused because another note took the target in between. Its
+  # settle must put the entry back on the row, at the path readers show.
+  test "a crdt_create relocate refused after its claim settles back onto the row", ctx do
+    {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+    n = note(ctx, "Docs/n.md")
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :relocate_claimed ->
+        {:ok, _} =
+          Notes.upsert_note(ctx.user, ctx.vault, %{"path" => "C/n.md", "content" => "y"},
+            actor: "api"
+          )
+
+        :ok
+
+      _ ->
+        :ok
+    end)
+
+    result = Notes.genesis_crdt_note(ctx.user, ctx.vault, n.id, "C/n.md")
+    refute match?({:ok, _}, result)
+    assert {:ok, %{path: "Docs/n.md"}} = Notes.get_note_by_id(ctx.user, ctx.vault, n.id)
+    assert live_path(room, n.id) == "Docs/n.md"
+  end
 end
