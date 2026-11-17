@@ -266,16 +266,49 @@ same owner, or a NULL `content_ct` / `crdt_ct` while the `notes` column is set.
 Nothing was dropped and the version is not recorded, so every boot retries and
 fails the same way until the rows are fixed. The message names up to 5 note ids.
 
-The two earlier migrations that fill bodies from those columns are rerun-safe:
-`20261107120000` (every note gets its body row, owner repair) and
-`20261110130000` (pre-nonce notes with a NULL body). Rerun them by deleting
-their versions; Ecto then runs them before the drop on the next boot:
+What each case needs:
+
+| Case | Fixed by |
+|---|---|
+| No `note_bodies` row of the same owner | Rerunning `20261107120000` (inserts the row, repairs a foreign owner) |
+| NULL body column, `notes` copy set, `notes` nonce NULL (pre-nonce note) | Rerunning `20261110130000` |
+| NULL body column, `notes` copy set, `notes` nonce **set** | **Neither migration.** `20261107120000` inserts with `ON CONFLICT DO NOTHING`, so it never touches an existing row, and `20261110130000` only takes pre-nonce notes. Use the manual fix below. |
+
+Rerun the two migrations by deleting their versions; Ecto then runs them before
+the drop on the next boot:
 
 ```sql
 -- Back up first. As the migration role, with the app stopped.
 DELETE FROM schema_migrations WHERE version IN (20261107120000, 20261110130000);
 ```
 
-Restart. If the drop still refuses, the listed notes need a look by hand
-(compare `notes` and `note_bodies` for those ids as a role that bypasses RLS);
-do not delete the rows, the `notes` copy is the only one.
+Manual fix for the nonce-set case: rebuild the body column from the `notes`
+copy in the merged layout (nonce field, then ciphertext; a 12-byte nonce gets a
+`\x00` format byte), the same mapping 20261107120000 uses. Run it as a role
+that sees every tenant (superuser, BYPASSRLS, or `SET ROLE engram_maintenance`),
+with the app stopped, and check the row counts match the error's count:
+
+```sql
+BEGIN;
+UPDATE note_bodies b SET content_ct =
+  CASE WHEN length(n.content_nonce) = 13 THEN n.content_nonce || n.content_ciphertext
+       ELSE '\x00'::bytea || n.content_nonce || n.content_ciphertext END
+FROM notes n
+WHERE b.note_id = n.id AND b.user_id = n.user_id AND n.kind = 'note'
+  AND b.content_ct IS NULL AND n.content_ciphertext IS NOT NULL
+  AND n.content_nonce IS NOT NULL;
+
+UPDATE note_bodies b SET crdt_ct =
+  CASE WHEN length(n.crdt_state_nonce) = 13 THEN n.crdt_state_nonce || n.crdt_state_ciphertext
+       ELSE '\x00'::bytea || n.crdt_state_nonce || n.crdt_state_ciphertext END,
+  crdt_head = NULL
+FROM notes n
+WHERE b.note_id = n.id AND b.user_id = n.user_id AND n.kind = 'note'
+  AND b.crdt_ct IS NULL AND n.crdt_state_ciphertext IS NOT NULL
+  AND n.crdt_state_nonce IS NOT NULL;
+COMMIT;
+```
+
+Then restart. If the drop still refuses, the listed notes need a look by hand
+(compare `notes` and `note_bodies` for those ids as a role that sees every
+tenant). Do not delete the rows: the `notes` copy is the only one.
