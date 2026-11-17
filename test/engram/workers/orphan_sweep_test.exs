@@ -317,6 +317,47 @@ defmodule Engram.Workers.OrphanSweepTest do
     assert log =~ "orphan_sweep aborting s3"
   end
 
+  # The kill switch stops a run already going: it is re-read before each
+  # delete and each pass, so flipping it mid-run leaves the rest alone.
+  test "turning the kill switch off mid-run stops at the next delete", %{bypass: bypass} do
+    live = for _ <- 1..3, do: insert(:user)
+    ghosts = for _ <- 1..2, do: Ecto.UUID.generate()
+    for g <- ghosts, do: Storage.adapter().put("#{g}/1/orphan.bin", "orphan data")
+    test_pid = self()
+    on_exit(fn -> Application.delete_env(:engram, :orphan_sweep) end)
+    # The stop line is :info; the test env logger level is :warning.
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    stub_qdrant(
+      bypass,
+      Enum.map(live, &FilterId.uuid(&1.id)) ++ Enum.map(ghosts, &FilterId.uuid/1)
+    )
+
+    Bypass.expect(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
+      send(test_pid, :qdrant_delete)
+      Application.put_env(:engram, :orphan_sweep, false)
+      Plug.Conn.resp(conn, 200, ~s({"result":{}}))
+    end)
+
+    {result, events} = LogCapture.with_events(fn -> perform_job(OrphanSweep, %{}) end)
+    assert result == :ok
+
+    assert_received :qdrant_delete
+    refute_received :qdrant_delete
+
+    assert [stop] =
+             Enum.filter(
+               events,
+               &match?({:string, "orphan_sweep stopped: kill switch off"}, &1.msg)
+             )
+
+    assert stop.level == :info
+    assert stop.meta[:result] == %{pass: :qdrant}
+    for g <- ghosts, do: assert({:ok, "orphan data"} = Storage.adapter().get("#{g}/1/orphan.bin"))
+  end
+
   test "no-op when both stores are clean", %{bypass: bypass} do
     user = insert(:user)
     Storage.adapter().put("#{user.id}/1/keep.bin", "live")
