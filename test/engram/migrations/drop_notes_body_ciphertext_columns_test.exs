@@ -1,6 +1,6 @@
 defmodule Engram.Migrations.DropNotesBodyCiphertextColumnsTest do
   @moduledoc """
-  Migration 20261117180000 (R8(e)) drops `notes.content_ciphertext` and
+  Migration 20261118100000 (R8(e)) drops `notes.content_ciphertext` and
   `notes.crdt_state_ciphertext`, gated on no note holding its only body
   copy there (#2402). The suite's database already ran it, so each test
   puts the columns back inside its sandbox transaction (`run_down/1`) and
@@ -26,7 +26,7 @@ defmodule Engram.Migrations.DropNotesBodyCiphertextColumnsTest do
   end
 
   defp mod,
-    do: Engram.MigrationFile.load!("20261117180000_drop_notes_body_ciphertext_columns_drops.exs")
+    do: Engram.MigrationFile.load!("20261118100000_drop_notes_body_ciphertext_columns_drops.exs")
 
   setup do
     :ok = Engram.Fixtures.legacy_body_columns!()

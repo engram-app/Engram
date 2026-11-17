@@ -259,7 +259,7 @@ identically.
 
 ## Recovery: the R8(e) notes body columns drop refused
 
-Migration `20261117180000_drop_notes_body_ciphertext_columns_drops` raises at
+Migration `20261118100000_drop_notes_body_ciphertext_columns_drops` raises at
 boot, before dropping `notes.content_ciphertext` / `notes.crdt_state_ciphertext`,
 when a note still holds its only body copy there: no `note_bodies` row of the
 same owner, or a NULL `content_ct` / `crdt_ct` while the `notes` column is set.

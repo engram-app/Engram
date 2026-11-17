@@ -645,7 +645,7 @@ defmodule Engram.Fixtures do
   inserting rows.
   """
   def legacy_body_columns! do
-    Engram.MigrationFile.load!("20261117180000_drop_notes_body_ciphertext_columns_drops.exs").run_down(
+    Engram.MigrationFile.load!("20261118100000_drop_notes_body_ciphertext_columns_drops.exs").run_down(
       Engram.Repo
     )
 
