@@ -5,8 +5,6 @@ defmodule Engram.Repo.CiphertextStorageTest do
   use Engram.DataCase, async: true
 
   @external [
-    {"notes", "content_ciphertext"},
-    {"notes", "crdt_state_ciphertext"},
     {"note_revisions", "pending_ciphertext"},
     {"vault_index_states", "state_ciphertext"},
     {"vault_index_update_log", "update_ciphertext"}

@@ -26,6 +26,8 @@ defmodule Engram.Notes.NoteBodyReadTest do
   @content "# Body\n\nthe real text\n"
 
   setup do
+    # R8(e) dropped the columns this file's legacy rows need.
+    :ok = Engram.Fixtures.legacy_body_columns!()
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)

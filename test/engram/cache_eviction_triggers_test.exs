@@ -197,9 +197,9 @@ defmodule Engram.CacheEvictionTriggersTest do
       sql(
         """
         INSERT INTO notes (user_id, vault_id, path_hmac, mtime, created_at, updated_at, seq,
-                           folder_ciphertext, folder_nonce, folder_hmac, content_ciphertext,
+                           folder_ciphertext, folder_nonce, folder_hmac,
                            title_ciphertext, tags_ciphertext)
-        VALUES ($1, $2, $3, 1.0, now(), now(), 1, '\\x00', '\\x00', '\\x00', '\\x00', '\\x00',
+        VALUES ($1, $2, $3, 1.0, now(), now(), 1, '\\x00', '\\x00', '\\x00', '\\x00',
                 '\\x00')
         RETURNING id
         """,
@@ -228,7 +228,7 @@ defmodule Engram.CacheEvictionTriggersTest do
       for {set, params} <- [
             {"path_hmac = $2", [:crypto.strong_rand_bytes(32)]},
             {"vault_id = $2", [other_vault]},
-            {"kind = 'folder', path_hmac = NULL, content_ciphertext = NULL, " <>
+            {"kind = 'folder', path_hmac = NULL, " <>
                "title_ciphertext = NULL, tags_ciphertext = NULL", []},
             {"deleted_at = now()", []}
           ] do

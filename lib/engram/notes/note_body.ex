@@ -12,10 +12,9 @@ defmodule Engram.Notes.NoteBody do
   `notes.content_ciphertext` / `crdt_state_ciphertext` (those `Note` fields
   are virtual, a raw write drops them, `notes_row/1`), R8(c) stopped
   reading them (migration 20261107120000 gives every note its body row
-  before boot), and R8(d) (this release) removed the last database objects
-  and code that named them (migration 20261111000100; the null batch is
-  retired, so an install may keep dead copies there). R8(e) drops the two
-  columns. The nonces and `crdt_head` are still written on `notes` (the
+  before boot), R8(d) removed the last database objects and code that
+  named them (migration 20261111000100), and R8(e) dropped the two columns
+  (20261117120000). The nonces and `crdt_head` are still written on `notes` (the
   fences below).
   Needs the rollback floor (`Engram.Release.Floor`) at 0.76 or later, the
   first release that reads bodies from here.

@@ -13,6 +13,8 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedTest do
   alias Engram.Repo
 
   setup do
+    # R8(e) dropped the columns this file's legacy rows need.
+    :ok = Engram.Fixtures.legacy_body_columns!()
     {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user)
 

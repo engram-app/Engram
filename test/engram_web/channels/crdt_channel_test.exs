@@ -1729,12 +1729,9 @@ defmodule EngramWeb.CrdtChannelTest do
         )
 
       # Corrupt the persisted snapshot: ciphertext that cannot decrypt.
-      Repo.with_tenant(user.id, fn ->
-        from(n in "notes", where: n.id == type(^note.id, Ecto.UUID))
-        |> Repo.update_all(set: [crdt_state_ciphertext: :crypto.strong_rand_bytes(64)])
-      end)
-
-      Engram.Fixtures.mirror_body!(note.id)
+      Engram.Fixtures.write_note_body!(note.id,
+        crdt_state_ciphertext: :crypto.strong_rand_bytes(64)
+      )
 
       ref = push(socket, "crdt_doc_state", %{"doc_id" => note.id})
       assert_reply ref, :error, reply
