@@ -217,6 +217,33 @@ defmodule Engram.Folders.WriteStopOldPluginTest do
 
       assert id == note.id
     end
+
+    # The shown-path probe runs outside the window from the write's vault seq
+    # lock (`next_seq!`) to its commit, so the lock is held no longer than
+    # before (#1710).
+    test "resolves the shown path outside the vault lock", ctx do
+      %{user: u, vault: v} = ctx
+      note = Notes.get_note(u, v, "A/n1.md") |> elem(1)
+      assert {:ok, _} = Folders.rename(u, v, "A", "B")
+
+      {:ok, raw} = Repo.with_tenant(u.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
+      {:ok, state} = Crypto.decrypt_crdt_state(raw, u)
+      {:ok, doc} = CrdtBridge.doc_from_state(state)
+      :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "edited")
+
+      me = self()
+
+      {:ok, queries} =
+        Engram.QueryRecorder.record(fn -> CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc) end)
+
+      sqls = for %{sql: sql, pid: ^me} <- queries, do: sql
+      lock = Enum.find_index(sqls, &(&1 =~ "UPDATE vaults SET change_seq"))
+      commit = lock && Enum.find_index(Enum.drop(sqls, lock), &(&1 == "commit"))
+      probe = Enum.find_index(sqls, &(&1 =~ "NOT m.notes_cascaded"))
+
+      assert lock && commit && probe, inspect(sqls, pretty: true)
+      assert probe < lock or probe > lock + commit
+    end
   end
 
   describe "paging the moved-folder feed" do

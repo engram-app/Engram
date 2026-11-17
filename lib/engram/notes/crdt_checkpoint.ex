@@ -255,6 +255,10 @@ defmodule Engram.Notes.CrdtCheckpoint do
                 # all of them outside test/support/checkpoint_interleave.ex.
                 interleave_hook(:after_row_read)
 
+                # Before the write takes the vault seq lock (`next_seq!`), so
+                # the probe adds nothing under it (#1710).
+                shown = shown_path(user, note)
+
                 result =
                   if CrdtBridge.markdown_path?(note.path) do
                     do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user)
@@ -272,7 +276,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
                 # #1710: the finalize decision rides out the same way. A
                 # CRDT-created row holds the hash of empty text, not nil, so its
                 # first checkpoint is the create and has no old text to finalize.
-                carry_out(result, note, recording, user)
+                carry_out(result, note, recording, shown)
             end
           end)
 
@@ -410,18 +414,22 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # path, the PRE-write embed priority, the finalize decision, and the title
   # the checkpoint re-derived when it differs from the stored one (for the
   # post-commit name-index announce). Anything else passes through.
-  # `path` out is the one the note is SHOWN at, for the post-commit announces:
-  # under a folder moved without a cascade (S5) the stored path is the old
-  # one, and a plugin handed it re-maps the id there and moves the file back
-  # (`discoverAnnouncedNote`). One index probe (`Location.shown_path/3`),
-  # plus the chain read only in a vault holding such a folder.
-  defp carry_out({prev_hash, new_hash, path, title, pruned}, note, recording, user) do
-    {prev_hash, new_hash, Location.shown_path(user, note) || path, EmbedNote.priority_for(note),
+  # `path` out is `shown` (read before the lock) when it resolved.
+  defp carry_out({prev_hash, new_hash, path, title, pruned}, note, recording, shown) do
+    {prev_hash, new_hash, shown || path, EmbedNote.priority_for(note),
      finalize?(note, recording, prev_hash, new_hash), if(title && title != note.title, do: title),
      pruned}
   end
 
-  defp carry_out(other, _note, _recording, _user), do: other
+  defp carry_out(other, _note, _recording, _shown), do: other
+
+  # The path the post-commit announces carry: the one the note is SHOWN at.
+  # Under a folder moved without a cascade (S5) the stored path is the old
+  # one, and a plugin handed it re-maps the id there and moves the file back
+  # (`discoverAnnouncedNote`). One index probe (`Location.shown_path/3`),
+  # plus the chain read only in a vault holding such a folder. In the
+  # checkpoint's transaction (no extra BEGIN/COMMIT), before its lock.
+  defp shown_path(user, row), do: Location.shown_path(user, row)
 
   defp finalize?(note, recording, prev_hash, new_hash),
     do: note.content not in [nil, ""] and Revisions.finalize?(recording, prev_hash, new_hash)

@@ -79,7 +79,8 @@ defmodule Engram.Notes.MovedFeedSql do
 
   @doc "The statement `ids/6` sends for `n` subfolders (also the plan test's)."
   @spec sql(:live | :dead, pos_integer()) :: String.t()
-  def sql(which, n) do
+  # Only fixed predicates and integers are ever spliced into the text.
+  def sql(which, n) when which in [:live, :dead] and is_integer(n) and n in 1..@moved_children do
     pred = Map.fetch!(@moved_preds, which)
 
     children =
