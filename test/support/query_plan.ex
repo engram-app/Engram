@@ -202,19 +202,36 @@ defmodule Engram.QueryPlan do
   index condition and the scan falls back to the tenant's index
   (`docs/context/rls-leakproof-index-quals.md`). Read-only statements only:
   the run rolls back, but an EXPLAIN ANALYZE executes the statement.
+
+  `role:` plans as another role (`engram_maintenance`, the cross-tenant
+  sweeps' login, whose `maintenance_all` policy is `USING (true)`; the
+  tenant setting is then inert). `sort: false` plans with both sort methods
+  off, as a statement the app runs under those `SET LOCAL`s
+  (`OrphanSweep`'s trashed page).
   """
-  @spec rls_plans(Ecto.UUID.t(), String.t(), list()) :: %{custom: String.t(), generic: String.t()}
-  def rls_plans(user_id, sql, params) do
+  @spec rls_plans(Ecto.UUID.t(), String.t(), list(), keyword()) :: %{
+          custom: String.t(),
+          generic: String.t()
+        }
+  def rls_plans(user_id, sql, params, opts \\ []) do
     name = "rls_plan_#{System.unique_integer([:positive])}"
     explain = "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF) "
 
     rolled_back(fn ->
-      Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+      Repo.query!("SET LOCAL SESSION AUTHORIZATION #{Keyword.get(opts, :role, "engram_app")}")
       Repo.query!("SELECT set_config('app.current_tenant', $1, true)", [user_id])
       Repo.query!("DISCARD PLANS")
       # A test table is a page or two, where a seq scan wins on cost alone.
       # Off, a Seq Scan still in the plan means no index can serve it.
       Repo.query!("SET LOCAL enable_seqscan = off")
+
+      unless Keyword.get(opts, :sort, true),
+        do:
+          Repo.query!(
+            "SELECT set_config('enable_sort', 'off', true), " <>
+              "set_config('enable_incremental_sort', 'off', true)"
+          )
+
       custom = plan_text(Repo.query!(explain <> sql, params))
 
       Repo.query!("SET LOCAL plan_cache_mode = force_generic_plan")

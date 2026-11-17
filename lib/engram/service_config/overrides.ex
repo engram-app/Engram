@@ -96,7 +96,10 @@ defmodule Engram.ServiceConfig.Overrides do
     embed_daily_ceiling: :boolean,
     # Rename link rewrites (`RewriteNoteLinks.enabled?/0`), default on: off,
     # queued rewrites snooze, none is dropped.
-    link_rewrite: :boolean
+    link_rewrite: :boolean,
+    # `Engram.Workers.OrphanSweep.enabled?/0`, default on: off, the daily
+    # sweep returns before any pass (no Qdrant, S3 or DB deletes).
+    orphan_sweep: :boolean
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})

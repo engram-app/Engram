@@ -150,33 +150,83 @@ defmodule Engram.Workers.OrphanSweepTrashedIndexTest do
     assert length(open_jobs(a) ++ open_jobs(b)) == 2
   end
 
-  # The page must be an index walk, not a scan of every trashed note: both
-  # shapes (first page, and after a cursor) read `notes_path_tomb`, planned
-  # as `engram_maintenance` (the sweep's prod login) under FORCE RLS.
+  # The page must be an index walk, not a scan of every trashed note (or of
+  # the table). On cost alone the planner drew `notes_folder_ref` plus an
+  # incremental sort for a small table (CI, PR 2621), so the statement runs
+  # with sorts off, where only `notes_path_tomb` gives its order. Checked as
+  # the sweep runs in prod: as `engram_maintenance` under FORCE RLS, after
+  # DISCARD PLANS, custom AND generic plans, first page and after a cursor,
+  # over enough live and trashed rows that the statistics mean something.
   test "both trashed-page statements read notes_path_tomb", %{user: user} do
-    Application.put_env(:engram, :orphan_sweep_trashed_page, 1)
+    Application.put_env(:engram, :orphan_sweep_trashed_page, 5)
     on_exit(fn -> Application.delete_env(:engram, :orphan_sweep_trashed_page) end)
-    for _ <- 1..3, do: trashed_note_with_chunk(user)
 
-    statements =
-      for _ <- 1..2,
-          {_, queries} = Engram.QueryRecorder.record(fn -> perform_job(OrphanSweep, %{}) end),
-          %{sql: sql} <- queries,
-          sql =~ ~r/ORDER BY n0\."vault_id", n0\."path_id", n0\."seq"/,
-          uniq: true,
-          do: sql
+    for _ <- 1..4 do
+      vault = insert(:vault, user: user)
+      for _ <- 1..40, do: insert(:note, user: user, vault: vault)
 
-    assert length(statements) == 2, inspect(statements)
-
-    for sql <- statements do
-      plan =
-        Engram.QueryPlan.generic_plan(sql,
-          analyze: ["notes"],
-          bitmapscan: false,
-          role: "engram_maintenance"
-        )
-
-      assert plan =~ "notes_path_tomb", plan
+      for _ <- 1..4,
+          do: insert(:note, user: user, vault: vault, deleted_at: DateTime.utc_now())
     end
+
+    Engram.QueryPlan.fresh!("notes")
+    me = self()
+
+    pages =
+      for _ <- 1..2 do
+        {_, queries} = Engram.QueryRecorder.record(fn -> perform_job(OrphanSweep, %{}) end)
+        mine = for %{pid: ^me} = q <- queries, do: q
+
+        at =
+          Enum.find_index(
+            mine,
+            &(&1.sql =~ ~r/ORDER BY n0\."vault_id", n0\."path_id", n0\."seq"/)
+          )
+
+        assert at, "no trashed-page statement recorded"
+        assert Enum.at(mine, at - 1).sql =~ "enable_incremental_sort"
+        Enum.at(mine, at)
+      end
+
+    assert [first, cursor] = pages
+    refute first.sql =~ "> ("
+    assert cursor.sql =~ "> ("
+
+    for %{sql: sql, params: params} <- pages,
+        {kind, plan} <-
+          Engram.QueryPlan.rls_plans(user.id, sql, params,
+            role: "engram_maintenance",
+            sort: false
+          ) do
+      assert plan =~ "Index Scan using notes_path_tomb", "#{kind}:\n#{plan}"
+      refute plan =~ "Sort", "#{kind}:\n#{plan}"
+    end
+  end
+
+  test "the kill switch off skips every pass", %{user: user} do
+    Engram.ServiceConfig.put_override(:orphan_sweep, false)
+    note = trashed_note_with_chunk(user)
+    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :orphan_sweep, :result]])
+
+    {_, queries} =
+      Engram.QueryRecorder.record(fn -> assert :ok = perform_job(OrphanSweep, %{}) end)
+
+    refute_received {[:engram, :orphan_sweep, :result], ^ref, _, _}
+    assert open_jobs(note) == []
+    assert chunk_count(note) == 1
+    me = self()
+    assert for(%{pid: ^me, sql: sql} <- queries, sql =~ ~r/^(DELETE|UPDATE)/, do: sql) == []
+  end
+
+  test "a trashed page size of 0 turns that step off", %{user: user} do
+    Application.put_env(:engram, :orphan_sweep_trashed_page, 0)
+    on_exit(fn -> Application.delete_env(:engram, :orphan_sweep_trashed_page) end)
+    note = trashed_note_with_chunk(user)
+    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :orphan_sweep, :result]])
+
+    assert :ok = perform_job(OrphanSweep, %{})
+
+    assert_received {[:engram, :orphan_sweep, :result], ^ref, %{trashed_index_requeued: 0}, _}
+    assert open_jobs(note) == []
   end
 end

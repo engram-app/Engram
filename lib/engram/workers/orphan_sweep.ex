@@ -27,6 +27,10 @@ defmodule Engram.Workers.OrphanSweep do
   Telemetry: emits `[:engram, :orphan_sweep, :result]` with counts per
   store. Failures inside a store are logged + counted but do not raise —
   partial cleanup is fine, the next tick catches the rest.
+
+  Kill switch: `:orphan_sweep` (`enabled?/0`, a runtime ServiceConfig
+  override, default on). Off, a run logs and returns before any pass.
+  `:orphan_sweep_trashed_page` 0 turns off only the trashed-note step.
   """
 
   use Oban.Worker, queue: :maintenance, max_attempts: 1
@@ -72,6 +76,9 @@ defmodule Engram.Workers.OrphanSweep do
   @trashed_cursor "orphan_sweep:trashed"
   # Trashed notes examined per run: one `notes_path_tomb` page.
   @trashed_page 1000
+  # `SET LOCAL` of both sort methods off: see `trashed_page/1`.
+  @index_order_only "SELECT set_config('enable_sort', 'off', true), " <>
+                      "set_config('enable_incremental_sort', 'off', true)"
   # Above this share of the scanned collection, the diff is telling us the
   # authority is wrong, not that the points are strays. See `runaway?/2`.
   @max_candidate_ratio 0.10
@@ -84,8 +91,21 @@ defmodule Engram.Workers.OrphanSweep do
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(15)
 
+  @doc "False while the `:orphan_sweep` kill switch (a runtime ServiceConfig override) is off."
+  @spec enabled?() :: boolean()
+  def enabled?, do: Engram.ServiceConfig.get(:orphan_sweep, true) != false
+
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
+    if enabled?() do
+      sweep(args)
+    else
+      Logger.info("orphan_sweep skipped: kill switch off", Metadata.with_category(:info, :oban))
+      :ok
+    end
+  end
+
+  defp sweep(args) do
     # REFUSE rather than sweep blind. This worker diffs Qdrant against
     # `chunks`, and `chunks` carries FORCE ROW LEVEL SECURITY — so where RLS
     # is enforced and no maintenance pool is configured, `chunk_point_ids/1`
@@ -657,6 +677,19 @@ defmodule Engram.Workers.OrphanSweep do
   # A re-queued delete of an old trashed note never reaches a newer note at
   # the same path: per-note deletes match by note id `n` only (R3b).
   defp requeue_trashed_index do
+    if trashed_page_size() == 0 do
+      Logger.info(
+        "orphan_sweep trashed index step skipped: page size 0",
+        Metadata.with_category(:info, :oban)
+      )
+
+      0
+    else
+      requeue_trashed_page()
+    end
+  end
+
+  defp requeue_trashed_page do
     page = trashed_page(Cursor.get(@trashed_cursor))
 
     if length(page) < trashed_page_size() do
@@ -686,17 +719,32 @@ defmodule Engram.Workers.OrphanSweep do
   # the cursor, so it is skipped. path_id is derived from path_hmac by
   # trigger and seq is NOT NULL, so only a note with no path_hmac (which
   # `DeleteNoteIndex` cannot clean anyway) falls there.
+  #
+  # Pinned to `notes_path_tomb`: with sorts disabled for the transaction, the
+  # only plan with no Sort node is a scan of the one index in this exact order
+  # whose predicate the WHERE implies. Any other index (`notes_folder_ref`
+  # won a test plan on cost) needs a sort, so it would read every trashed
+  # note, or the whole table, to return one page. Postgres 18 ranks plans by
+  # disabled-node count before cost, so no statistics can flip it. Unnamed, so
+  # each run is planned under these settings rather than reusing a cached plan.
   defp trashed_page(cursor) do
     repo = maintenance_repo()
 
     Repo.cross_tenant(fn ->
-      Note
-      |> where([n], not is_nil(n.deleted_at) and n.kind == "note")
-      |> after_trashed(cursor)
-      |> order_by([n], asc: n.vault_id, asc: n.path_id, asc: n.seq)
-      |> limit(^trashed_page_size())
-      |> select([n], map(n, [:id, :user_id, :vault_id, :path_id, :seq, :path_hmac]))
-      |> repo.all()
+      {:ok, page} =
+        repo.transaction(fn ->
+          repo.query!(@index_order_only)
+
+          Note
+          |> where([n], not is_nil(n.deleted_at) and n.kind == "note")
+          |> after_trashed(cursor)
+          |> order_by([n], asc: n.vault_id, asc: n.path_id, asc: n.seq)
+          |> limit(^trashed_page_size())
+          |> select([n], map(n, [:id, :user_id, :vault_id, :path_id, :seq, :path_hmac]))
+          |> repo.all(prepare: :unnamed)
+        end)
+
+      page
     end)
   end
 

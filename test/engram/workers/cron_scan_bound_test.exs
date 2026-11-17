@@ -31,7 +31,7 @@ defmodule Engram.Workers.CronScanBoundTest do
     Engram.Workers.ReconcileEmbeddings =>
       "partial index notes_reconcile_due, 1,000-row pages; daily budget sweep reads note_index_state",
     Engram.Workers.OrphanSweep =>
-      "250 scroll pages and 250 chunk pages per run, plus one 1,000-row notes_path_tomb page of trashed notes (partial index), each resuming at a persisted cursor; tenants from one facet request",
+      "250 scroll pages and 250 chunk pages per run, plus one 1,000-row notes_path_tomb page of trashed notes (partial index, pinned: sorts off so no other plan serves the order), each resuming at a persisted cursor; tenants from one facet request",
     Engram.Workers.DailySnapshot =>
       "copies vaults whose change_seq is unchanged; note counts and bytes from note_index_state",
     Engram.Workers.PostHogPersonSync =>
