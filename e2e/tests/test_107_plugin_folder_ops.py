@@ -122,15 +122,49 @@ async def _folder_ops_on(cdp_a, cdp_b):
             f"test_107 flips the stack-global folder_ops switch; under {workers} xdist "
             "workers it would change every concurrently running test"
         )
+    body_failed = False
     try:
         _set_switch(True)
         for cdp in (cdp_a, cdp_b):
             await _rejoin(cdp, True)
         yield
+    except BaseException:
+        body_failed = True
+        raise
     finally:
-        _set_switch(False)
-        for cdp in (cdp_a, cdp_b):
-            await _rejoin(cdp, False)
+        await _cleanup(
+            body_failed,
+            ("switch off", lambda: _set_switch(False)),
+            ("rejoin A", lambda: _rejoin(cdp_a, False)),
+            ("rejoin B", lambda: _rejoin(cdp_b, False)),
+        )
+
+
+async def _cleanup(body_failed: bool, *steps) -> None:
+    """Run every cleanup step even when one fails. A failure is logged; the
+    first one is raised only when the test body passed, so a cleanup error
+    never replaces the test's own failure in the report."""
+    first: BaseException | None = None
+    for name, step in steps:
+        try:
+            result = step()
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception as e:  # noqa: BLE001 - every step must run
+            logger.exception("test_107 cleanup step %r failed", name)
+            first = first or e
+    if first is not None and not body_failed:
+        raise first
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _folder_ops_off_around_module():
+    """Backstop: the switch is a database row, so a killed or timed-out run
+    skips every `finally` and would leave it on for a reused stack. Clear it
+    before and after the module."""
+    _set_switch(False)
+    yield
+    _set_switch(False)
 
 
 async def _wait_folders_known(cdp, *paths: str, teach: bool = False) -> None:
@@ -205,6 +239,14 @@ def _events_under(
         if e["event"] in kinds
         and (e["path"].startswith(prefix) or (e.get("old") or "").startswith(prefix))
     ]
+
+
+def _assert_spy_saw_rename(events: list[dict], who: str, old: str) -> None:
+    """Positive control: the spy recorded the device's own rename, so an
+    empty create/delete list is not a dead listener."""
+    assert any(e["event"] == "rename" and e.get("old") == old for e in events), (
+        f"{who}'s vault spy never saw its own rename of {old}: {events}"
+    )
 
 
 def _layout(suffix: str, tag: str):
@@ -287,9 +329,9 @@ async def test_plugin_attachment_rename_moves_the_row(
         )
         assert after[new]["id"] == rows[old]["id"], "the move must keep the row's id"
         assert after[new].get("content_hash") == rows[old].get("content_hash")
-        stray = _events_under(
-            await cdp_a.disarm_vault_spy(), root, ("create", "delete")
-        )
+        a_events = await cdp_a.disarm_vault_spy()
+        _assert_spy_saw_rename(a_events, "A", old)
+        stray = _events_under(a_events, root, ("create", "delete"))
         assert not stray, (
             f"A trashed or re-created files around its own rename: {stray}"
         )
@@ -332,7 +374,7 @@ async def test_plugin_folder_rename_is_one_folder_op(
 
         routes = read_routes()
         logger.info("test_107 folder rename (flag on): %s", routes)
-        assert routes.folder_op >= 1, f"no folder_op reached the server: {routes}"
+        assert routes.folder_op == 1, f"want exactly 1 folder_op: {routes}"
         assert routes.crdt_create == 0, f"children were re-pushed per note: {routes}"
         assert routes.rest_upsert == 0, f"children were re-pushed over REST: {routes}"
         assert routes.attachment_upload == 0, (
@@ -347,6 +389,7 @@ async def test_plugin_folder_rename_is_one_folder_op(
 
         a_events = await cdp_a.disarm_vault_spy()
         b_events = await cdp_b.disarm_vault_spy()
+        _assert_spy_saw_rename(a_events, "A", old)
         for who, events in (("A", a_events), ("B", b_events)):
             stray = _events_under(events, old, ("create", "delete"))
             assert not stray, (
@@ -458,6 +501,24 @@ async def _wait_queued(cdp, path: str) -> None:
     )
 
 
+async def _wait_edit_held(cdp, path: str) -> None:
+    """Poll until an offline edit of `path` sits in either outbound queue (the
+    REST offline queue or the CRDT op queue, whichever the plugin chose)."""
+    deadline = time.monotonic() + 20
+    rest: list = []
+    crdt: list = []
+    while time.monotonic() < deadline:
+        rest = await cdp.get_queue_entries()
+        crdt = await cdp.get_crdt_queue_ops()
+        if any(o.get("path") == path for o in rest + crdt):
+            return
+        await asyncio.sleep(0.5)
+    raise AssertionError(
+        f"precondition: the offline edit of {path} must be queued before the rename; "
+        f"offline queue={rest}, crdt queue={crdt}"
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("order", ["create_then_rename", "rename_then_create"])
 async def test_offline_create_and_folder_rename_converge(
@@ -499,12 +560,14 @@ async def test_offline_create_and_folder_rename_converge(
 
         routes = read_routes()
         logger.info("test_107 offline %s: %s", order, routes)
-        assert routes.folder_op >= 1, f"no folder_op reached the server: {routes}"
+        assert routes.folder_op == 1, f"want exactly 1 folder_op: {routes}"
         assert routes.crdt_create == 1, f"want exactly the new note's create: {routes}"
         assert routes.rest_upsert == 0, f"notes went over REST: {routes}"
         folders = _folder_paths(manifest)
         assert old not in folders, f"the old folder row survived: {sorted(folders)}"
-        stray = _events_under(await cdp_a.disarm_vault_spy(), old, ("delete",))
+        a_events = await cdp_a.disarm_vault_spy()
+        _assert_spy_saw_rename(a_events, "A", old)
+        stray = _events_under(a_events, old, ("delete",))
         assert not stray, f"A trashed files around its offline rename: {stray}"
 
 
@@ -525,9 +588,10 @@ async def test_offline_edit_then_folder_rename_lands_at_new_path(
         arm_routes(old)
         async with _socket_down(cdp_a, rest_too=True):
             write_note(vault_a, f"{old}/a.md", f"# A\n\nalpha 107\n\n{marker}\n")
-            await asyncio.sleep(
-                3
-            )  # past the push debounce, so the edit is queued first
+            # The edit must be HELD before the rename, or this covers the
+            # other order (rename, then edit at the new path) and the replay
+            # hold goes unchecked.
+            await _wait_edit_held(cdp_a, f"{old}/a.md")
             await cdp_a.rename_file(old, new)
 
         after, _ = _wait_server_paths(api_sync, old, _moved(rows, old, new))
@@ -539,7 +603,7 @@ async def test_offline_edit_then_folder_rename_lands_at_new_path(
         wait_for_folder_gone(vault_b, old)
         routes = read_routes()
         logger.info("test_107 offline edit + rename: %s", routes)
-        assert routes.folder_op >= 1, f"no folder_op reached the server: {routes}"
+        assert routes.folder_op == 1, f"want exactly 1 folder_op: {routes}"
 
 
 # -- D: restart mid-op ---------------------------------------------------------
@@ -563,25 +627,35 @@ async def test_restart_with_folder_op_pending(
 
         arm_routes(old)
         # Hold the op on this channel instance: "held" = never sent, spends no
-        # attempt. The reload builds a new channel, which drops the override.
+        # attempt. The reload builds a new channel, which drops the override
+        # and replays the persisted op (still flag-on here, so it is acked).
+        # Any failure before the reload reloads anyway: the stub and the
+        # pending op must never outlive this test on the session's device A.
         await cdp_a.evaluate(
             f"{PLUGIN_PATH}.noteStream.folderOp = async () => ({{ kind: 'held' }}); true"
         )
-        await cdp_a.rename_file(old, new)
-        await cdp_a.persist_plugin_data()
-        pending = obsidian_a.read_data_json().get("folderOps") or []
-        assert any(o.get("to") == new for o in pending), (
-            f"precondition: the pending op must be persisted, data.json folderOps={pending}"
-        )
+        try:
+            await cdp_a.rename_file(old, new)
+            await cdp_a.persist_plugin_data()
+            pending = obsidian_a.read_data_json().get("folderOps") or []
+            assert any(o.get("to") == new for o in pending), (
+                "precondition: the pending op must be persisted, "
+                f"data.json folderOps={pending}"
+            )
 
-        # B edits a child at the path the server still has.
-        write_note(vault_b, f"{old}/a.md", f"# A\n\nalpha 107\n\n{marker}\n")
-        api_sync.wait_for_note_content(f"{old}/a.md", marker)
+            # B edits a child at the path the server still has.
+            write_note(vault_b, f"{old}/a.md", f"# A\n\nalpha 107\n\n{marker}\n")
+            api_sync.wait_for_note_content(f"{old}/a.md", marker)
 
-        # Attribution: a move-back BEFORE the reload is the pending-op fence,
-        # not the restart.
-        back = [p for p in rows if (vault_a / p).exists()]
-        assert not back, f"A moved files back before the reload (op pending): {back}"
+            # Attribution: a move-back BEFORE the reload is the pending-op
+            # fence, not the restart.
+            back = [p for p in rows if (vault_a / p).exists()]
+            assert not back, (
+                f"A moved files back before the reload (op pending): {back}"
+            )
+        except BaseException:
+            await _cleanup(True, ("reload A", cdp_a.reload_plugin))
+            raise
 
         await cdp_a.reload_plugin()
 
@@ -615,7 +689,9 @@ async def test_restart_with_folder_op_pending(
 
         routes = read_routes()
         logger.info("test_107 restart mid-op: %s", routes)
-        assert routes.folder_op >= 1, f"the persisted op was never sent: {routes}"
+        assert routes.folder_op == 1, (
+            f"want exactly 1 folder_op (the persisted op, sent once): {routes}"
+        )
         assert routes.crdt_create == 0, (
             f"the restart re-pushed children per note: {routes}"
         )
