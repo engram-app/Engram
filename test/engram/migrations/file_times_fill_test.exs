@@ -49,11 +49,11 @@ defmodule Engram.Migrations.FileTimesFillTest do
     row
   end
 
-  defp fill! do
+  defp fill!(opts \\ []) do
     Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
 
     try do
-      String.to_existing_atom(@mod).fill(Repo)
+      String.to_existing_atom(@mod).fill(Repo, opts)
     after
       Repo.query!("SET LOCAL SESSION AUTHORIZATION DEFAULT")
     end
@@ -119,6 +119,44 @@ defmodule Engram.Migrations.FileTimesFillTest do
 
     assert :ok = String.to_existing_atom(@mod).fill(Repo)
     assert twins("notes", s, [:mtime_at]) == [~U[2026-04-13 09:28:20.928000Z]]
+  end
+
+  # Review of #2626: every write is a window in its own transaction, so a
+  # cancel keeps the windows done. One-row windows walk both paths.
+  test "fills in windows on both paths, committing each", ctx do
+    ids = for i <- 1..3, do: note!(ctx, "w#{i}.md")
+    for id <- ids, do: legacy!("notes", id, "mtime = 1776072500.928, mtime_at = NULL")
+
+    assert :ok = fill!(window: 1)
+
+    for id <- ids,
+        do: assert(twins("notes", id, [:mtime_at]) == [~U[2026-04-13 09:28:20.928000Z]])
+
+    for id <- ids, do: legacy!("notes", id, "mtime_at = NULL")
+    assert :ok = String.to_existing_atom(@mod).fill(Repo, window: 1)
+
+    for id <- ids,
+        do: assert(twins("notes", id, [:mtime_at]) == [~U[2026-04-13 09:28:20.928000Z]])
+  end
+
+  # A window locked out is retried twice, the user once more after the
+  # others, and only then does the run raise (not recorded).
+  test "lock contention: retried, then the run raises", ctx do
+    id = note!(ctx, "locked.md")
+    legacy!("notes", id, "mtime = 1776072500.928, mtime_at = NULL")
+    calls = :counters.new(1, [])
+
+    locked = fn ->
+      :counters.add(calls, 1, 1)
+      raise %Postgrex.Error{postgres: %{code: :lock_not_available}}
+    end
+
+    assert_raise RuntimeError, ~r/locked out after retries/, fn ->
+      fill!(before_window: locked)
+    end
+
+    assert :counters.get(calls, 1) == 6
+    assert twins("notes", id, [:mtime_at]) == [nil]
   end
 
   test "out of range is NULL" do
