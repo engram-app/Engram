@@ -26,4 +26,11 @@ defmodule Engram.Release.FloorTest do
   test "the floor covers R8's requirement" do
     assert Floor.at_least?("release-v0.76.0")
   end
+
+  # 0.87.0 dropped the legacy Qdrant payload indexes, `p` included. 0.82.0
+  # to 0.86.0 filter note deletes and counts on `p`, which prod's strict mode
+  # (unindexed_filtering_update=false) refuses until a ~1.35M point rebuild.
+  test "the floor covers the Qdrant legacy index drop" do
+    assert Floor.at_least?("release-v0.87.0")
+  end
 end
