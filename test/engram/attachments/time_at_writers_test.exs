@@ -93,6 +93,7 @@ defmodule Engram.Attachments.TimeAtWritersTest do
     {:ok, _} = Uploads.put_part(ctx.user, ctx.vault, up.id, 1, "abc")
     {:ok, %Attachment{} = att} = Uploads.complete(ctx.user, ctx.vault, up.id)
     assert att.mtime_at == ~U[2026-04-13 09:28:20.928000Z]
+
     assert Enum.uniq(rows(ctx) ++ rows(ctx, "attachment_uploads")) == [
              {nil, ~U[2026-04-13 09:28:20.928000Z]}
            ]

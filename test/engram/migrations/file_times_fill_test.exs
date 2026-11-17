@@ -26,7 +26,10 @@ defmodule Engram.Migrations.FileTimesFillTest do
 
   defp note!(ctx, path) do
     {:ok, n} =
-      Notes.upsert_note(ctx.user, ctx.vault, %{"path" => path, "content" => "x\n", "mtime" => 1.0},
+      Notes.upsert_note(
+        ctx.user,
+        ctx.vault,
+        %{"path" => path, "content" => "x\n", "mtime" => 1.0},
         actor: "api"
       )
 

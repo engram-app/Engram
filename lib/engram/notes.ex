@@ -9119,7 +9119,6 @@ defmodule Engram.Notes do
           {note, note.path, new_path, new_note_folder, new_title}
         end)
 
-
       real_note_updates =
         Enum.reject(updates, fn {note, _, _, _, _} -> note.kind == "folder" end)
 

@@ -31,7 +31,8 @@ defmodule Engram.NotesTest do
   defp stored_ctime(id),
     do:
       Engram.FileTime.ctime(
-        Repo.one(from(n in Engram.Notes.Note, where: n.id == ^id, select: %{ctime_at: n.ctime_at}),
+        Repo.one(
+          from(n in Engram.Notes.Note, where: n.id == ^id, select: %{ctime_at: n.ctime_at}),
           skip_tenant_check: true
         )
       )

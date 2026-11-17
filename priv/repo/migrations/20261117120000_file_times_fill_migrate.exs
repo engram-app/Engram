@@ -62,7 +62,9 @@ defmodule Engram.Repo.Migrations.FileTimesFillMigrate do
   end
 
   defp fill_sql(table, pairs) do
-    sets = Enum.map_join(pairs, ", ", fn {d, at} -> "#{at} = COALESCE(#{at}, #{normalized_sql(d)})" end)
+    sets =
+      Enum.map_join(pairs, ", ", fn {d, at} -> "#{at} = COALESCE(#{at}, #{normalized_sql(d)})" end)
+
     need = Enum.map_join(pairs, " OR ", fn {d, at} -> "(#{at} IS NULL AND #{d} IS NOT NULL)" end)
     "UPDATE #{table} SET #{sets} WHERE user_id = $1 AND (#{need})"
   end
@@ -70,8 +72,11 @@ defmodule Engram.Repo.Migrations.FileTimesFillMigrate do
   @doc false
   # The column `x` normalized: the twin `Engram.FileTime.normalize/1` gives.
   def normalized_sql(x) do
-    s = "(CASE WHEN abs(#{x}) < 1e11 THEN #{x}::text::numeric ELSE #{x}::text::numeric / 1000 END)"
-    us = "LEAST(GREATEST(round(#{s} * 1000000), floor(#{s}) * 1000000), floor(#{s}) * 1000000 + 999999)"
+    s =
+      "(CASE WHEN abs(#{x}) < 1e11 THEN #{x}::text::numeric ELSE #{x}::text::numeric / 1000 END)"
+
+    us =
+      "LEAST(GREATEST(round(#{s} * 1000000), floor(#{s}) * 1000000), floor(#{s}) * 1000000 + 999999)"
 
     """
     CASE
