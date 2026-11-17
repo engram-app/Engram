@@ -498,7 +498,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
            prune_tail(note_id, vault_id, prune)}
 
         {0, _} ->
-          {:skip, :stale_snapshot}
+          fence_missed(note, note_id)
       end
     else
       err -> {:abort, err}
@@ -560,7 +560,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
             {prev, content_hash, note.path, nil, prune_tail(note_id, vault_id, prune)}
 
           {0, _} ->
-            {:skip, :stale_snapshot}
+            fence_missed(note, note_id)
         end
 
       true ->
@@ -660,18 +660,25 @@ defmodule Engram.Notes.CrdtCheckpoint do
             # folder rename bumps seq without touching the room, so no edit,
             # and so no tick, follows.
             :ok = NoteCommitted.discard!(job)
-
-            Logger.info(
-              "crdt checkpoint skipped stale write note_id=#{note_id} captured_version=#{fence_version}",
-              Metadata.with_category(:info, :sync, note_id: note_id)
-            )
-
-            # A trashed row misses the fence by design (`deleted_at IS NULL`):
-            # that is not a lost race, and a retry would only miss again.
-            {content_hash, content_hash, note.path, nil,
-             if(note.deleted_at, do: :deleted, else: :not_written)}
+            fence_missed(note, note_id)
         end
     end
+  end
+
+  # Every fenced write that matched no row ends here (the materialize,
+  # compaction and structural/`.canvas` branches), so `checkpoint_pruning/5`
+  # maps them to one result. Equal hashes: nothing to embed or announce.
+  # `:not_written` becomes `:stale` (lost a race; the room timer retries). A
+  # trashed row misses the fence by design (`deleted_at IS NULL`): that is not a
+  # lost race and a retry would only miss again, so it reports `:skipped`.
+  defp fence_missed(note, note_id) do
+    Logger.info(
+      "crdt checkpoint skipped stale write note_id=#{note_id} captured_seq=#{note.seq}",
+      Metadata.with_category(:info, :sync, note_id: note_id)
+    )
+
+    {note.content_hash, note.content_hash, note.path, nil,
+     if(note.deleted_at, do: :deleted, else: :not_written)}
   end
 
   defp encode(doc) do

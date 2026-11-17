@@ -254,45 +254,76 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
       assert fresh.content == "ROOM-base"
     end
 
-    test "a checkpoint that keeps losing the race stops retrying", ctx do
-      %{room: room, timer: timer, note: note} = ctx
-      attempts = :counters.new(1, [])
+    # Reports each checkpoint row read to the test as {:row_read, n}, and bumps
+    # the note's seq on another connection right after the reads `lose?` picks,
+    # so that attempt misses the snapshot fence exactly as a folder rename does.
+    defp row_reads(note_id, lose?) do
+      test_pid = self()
+      reads = :counters.new(1, [])
 
-      # Every attempt loses: another connection bumps seq after each row read.
       CheckpointInterleave.put_hook(fn
         :after_row_read ->
-          :counters.add(attempts, 1, 1)
-
-          # Monitored, not linked: the timer traps exits and stops on any
-          # {:EXIT, _, _}, so a Task.async here would end the room.
-          {_, ref} =
-            spawn_monitor(fn ->
-              CheckpointInterleave.checkout_real!()
-              seq = Engram.Fixtures.raw_note!(note.id).seq
-              Engram.Fixtures.write_note_body!(note.id, seq: seq + 1)
-            end)
-
-          receive do
-            {:DOWN, ^ref, :process, _, :normal} -> :ok
-          after
-            15_000 -> raise "seq bump never finished"
-          end
+          :counters.add(reads, 1, 1)
+          n = :counters.get(reads, 1)
+          if lose?.(n), do: bump_seq!(note_id)
+          send(test_pid, {:row_read, n})
+          :ok
 
         _ ->
           :ok
       end)
+    end
+
+    # Monitored, not linked: the timer traps exits and stops on any
+    # {:EXIT, _, _}, so a Task.async here would end the room.
+    defp bump_seq!(note_id) do
+      {_, ref} =
+        spawn_monitor(fn ->
+          CheckpointInterleave.checkout_real!()
+          seq = Engram.Fixtures.raw_note!(note_id).seq
+          Engram.Fixtures.write_note_body!(note_id, seq: seq + 1)
+        end)
+
+      receive do
+        {:DOWN, ^ref, :process, _, :normal} -> :ok
+      after
+        15_000 -> raise "seq bump never finished"
+      end
+    end
+
+    # The compaction branch (text unchanged, crdt_state rewritten) has its own
+    # fenced write; it must report the same lost race, not a plain skip.
+    test "a compaction checkpoint that loses the race is retried", ctx do
+      %{timer: timer, note: note} = ctx
+      row_reads(note.id, &(&1 == 1))
+      before = Engram.Fixtures.raw_note!(note.id)
+
+      # No edit: the room's text equals the row's, so this tick compacts.
+      send(timer, :tick)
+      assert_receive {:row_read, 1}, 1_000
+      assert_receive {:row_read, 2}, 1_000
+      _ = :sys.get_state(timer)
+
+      assert %{stale_retries: 0} = :sys.get_state(timer)
+      assert Engram.Fixtures.raw_note!(note.id).crdt_state_nonce != before.crdt_state_nonce
+    end
+
+    test "a checkpoint that keeps losing the race stops retrying", ctx do
+      %{room: room, timer: timer, note: note} = ctx
+      row_reads(note.id, fn _ -> true end)
 
       log =
         capture_log(fn ->
           edit!(room, "ROOM-")
-          # 1 tick + 3 retries at 50 ms each, with room to spare.
-          Process.sleep(600)
+          # The first tick and its 3 retries, then the cap.
+          for n <- 1..4, do: assert_receive({:row_read, ^n}, 1_000)
+          # The cap is logged in the same handle_info as the 4th attempt.
           _ = :sys.get_state(timer)
         end)
 
-      assert :counters.get(attempts, 1) == 4
       assert log =~ "crdt checkpoint stale retries exhausted"
       assert %{settle_timer: nil, stale_retries: 0} = :sys.get_state(timer)
+      refute_receive {:row_read, 5}, 300
     end
   end
 end

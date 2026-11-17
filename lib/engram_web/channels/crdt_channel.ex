@@ -1343,7 +1343,7 @@ defmodule EngramWeb.CrdtChannel do
     # A CONFIRMED write, not merely an attempted one (#1409 M2). `wrote?` alone
     # is "we took the write clause" — `checkpoint/5` can still silently no-op
     # inside it (a DEK rotation skip, `{:skip, :no_crdt_state}`,
-    # `{:skip, :stale_snapshot}`, `{:abort, _}`), and evicting on the attempt
+    # a lost snapshot fence, `{:abort, _}`), and evicting on the attempt
     # kills a room that is still perfectly consistent with the row. That is not
     # free: `handle_info({:DOWN, ...})` only clears server-side assigns, so no
     # frame reaches the socket and an open-but-idle editor stays bound to a dead
