@@ -156,7 +156,7 @@ defmodule Engram.Folders.MovedFolderFeedPlanTest do
   # `descendant_ids/4` runs unnamed (a custom plan per call), the LIVE walk
   # too (the folder rename and delete paths). Its planning time, measured as
   # `engram_app` under RLS on this fixture (300 sibling folders), printed for
-  # the PR and bounded loosely so a regression shows.
+  # the PR and bounded at 2 ms (about 4x the measured median) so a regression shows.
   test "the live walk's custom plan is cheap to plan", ctx do
     %{user: u, vault: v, seq: seq} = ctx
     folders_fresh!()
@@ -202,7 +202,7 @@ defmodule Engram.Folders.MovedFolderFeedPlanTest do
       "live descendant walk planning time: median #{median} ms over 20 (#{inspect(Enum.min_max(times))})"
     )
 
-    assert median < 20
+    assert median < 2
   end
 
   test "X2: the dead-row subtree walk is index reads, no seq scan", ctx do

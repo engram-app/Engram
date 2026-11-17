@@ -8345,6 +8345,9 @@ defmodule Engram.Notes do
     end)
   end
 
+  # The planned claims of the folder op in flight (`with_folder_claims/4`).
+  @preclaim_key :engram_folder_preclaim
+
   defp move_folder_row(user, vault, folder_id, {old_folder, new_folder}, notes, markers) do
     old_len = String.length(old_folder)
     relocate = fn path -> new_folder <> String.slice(path, old_len..-1//1) end
@@ -8362,28 +8365,37 @@ defmodule Engram.Notes do
          Base.encode64(Links.basename_hmac(user, Links.basename_key(n.path)))}
       end)
 
-    # C5: the index room's path-keyed map is re-keyed in one transaction
-    # (old plugins hold it as their path authority), before the row moves,
-    # as the cascade does.
-    claimed = if claims == [], do: :ok, else: Identity.claim(user, vault.id, claims)
+    # C5: the index room's path-keyed map is re-keyed before the row moves,
+    # as the cascade does. Inside `with_folder_claims/4` (`Folders.rename/5`)
+    # that claim was made before the transaction: this leg consumes the
+    # planned step once the row moved (a mismatch is `:claims_stale`, which
+    # re-plans), and leaves it for the cascade when it falls back. The caller
+    # undoes the claim on any failure, so only a claim made here is reported.
+    preclaimed? = Process.get(@preclaim_key) != nil
+
+    claimed =
+      if claims == [] or preclaimed?, do: :ok, else: Identity.claim(user, vault.id, claims)
+
+    orphan = fn reason ->
+      _ = unless preclaimed?, do: orphan_claim(user, vault, length(claims), reason)
+    end
 
     with :ok <- claimed,
          {:ok, :ok} <-
            write_claimed(
-             user,
-             vault,
-             folder_id,
+             {user, vault, folder_id},
              {old_folder, new_folder},
              notes,
              {marker_rows, links},
-             claims
-           ) do
+             orphan
+           ),
+         :ok <- if(preclaimed?, do: claim_or_consume(user, vault, claims, nil), else: :ok) do
       # Counted as the cascade counts: every row under the folder, markers
       # included (REST and MCP answer 404 for 0).
       {:ok, length(notes) + length(markers)}
     else
       # A folder appeared at the target: the cascade runs instead and
-      # re-claims every note it scans.
+      # consumes (or, called directly, re-claims) every note it scans.
       {:ok, {:error, :merge}} ->
         :cascade
 
@@ -8391,14 +8403,15 @@ defmodule Engram.Notes do
       # re-claims what it scans, but a scanned note that moved out or died
       # since keeps the entry this claim gave it: report it, so projection
       # (queued in this transaction, which the cascade commits) repairs it.
+      # Preclaimed, the cascade's consume finds the plan stale and re-plans.
       {:ok, {:error, :raced}} ->
-        _ = orphan_claim(user, vault, length(claims), :raced)
+        orphan.(:raced)
         :cascade
 
       {:ok, {:error, reason}} ->
         # The claim committed but no row moved: report it, as the cascade
         # does (projection converges the map back to the rows).
-        _ = orphan_claim(user, vault, length(claims), reason)
+        orphan.(reason)
         {:error, reason}
 
       {:error, _} = err ->
@@ -8408,11 +8421,11 @@ defmodule Engram.Notes do
 
   # The row write after a committed claim, reported like the cascade's if it
   # raises (`orphan_claim/4`).
-  defp write_claimed(user, vault, folder_id, folders, notes, {marker_rows, links}, claims) do
+  defp write_claimed({user, vault, folder_id}, folders, notes, {marker_rows, links}, orphan) do
     write_folder_row(user, vault, folder_id, folders, notes, marker_rows, links)
   rescue
     e ->
-      _ = orphan_claim(user, vault, length(claims), e)
+      orphan.(e)
       reraise e, __STACKTRACE__
   end
 
@@ -8549,7 +8562,7 @@ defmodule Engram.Notes do
   # committed move.
   #
   # Cost: one more meta scan of the moved subtree, outside the transaction.
-  @preclaim_key :engram_folder_preclaim
+  # (`@preclaim_key` is set above `move_folder_row/6`, its first reader.)
 
   @typedoc "A folder op's claims, made before its transaction."
   @type folder_claims :: %{steps: [[{String.t(), String.t()}]], moves: [{map(), String.t()}]}
