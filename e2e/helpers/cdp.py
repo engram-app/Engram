@@ -695,28 +695,41 @@ class CdpClient:
         """The active editor's text, or None when no editor is open."""
         return await self.evaluate("app.workspace.activeEditor?.editor?.getValue() ?? null")
 
-    async def arm_create_spy(self) -> None:
-        """Record every path Obsidian CREATES from now on, until disarmed.
+    async def arm_vault_spy(self) -> None:
+        """Record every vault create, delete and rename from now on, until disarmed.
 
         A conflict copy cannot be found by scanning disk afterwards: the copy is
         stamped as synced but never pushed, so the next manifest reconcile reads
-        it as server-deleted and trashes it within a second (Engram#1931). Only
-        a live `vault.on('create')` listener sees it. The expression ends in
-        `true` because CDP cannot serialize the returned EventRef.
+        it as server-deleted and trashes it within a second (Engram#1931). A
+        trash-then-redownload is invisible on disk for the same reason. Only
+        live `vault.on(...)` listeners see them (`fileManager.trashFile`
+        dispatches `delete`). The expression ends in `true` because CDP cannot
+        serialize the returned EventRefs.
         """
         await self.evaluate(
-            "window.__e2eCreates = [];"
-            "window.__e2eCreatesRef && app.vault.offref(window.__e2eCreatesRef);"
-            "window.__e2eCreatesRef = app.vault.on('create', f => window.__e2eCreates.push(f.path)); true"
+            "(window.__e2eVaultRefs || []).forEach(r => app.vault.offref(r));"
+            "window.__e2eVaultEvents = [];"
+            "window.__e2eVaultRefs = ['create', 'delete', 'rename'].map(ev => app.vault.on(ev,"
+            " (f, old) => window.__e2eVaultEvents.push({event: ev, path: f.path, old: old ?? null})));"
+            " true"
         )
+
+    async def disarm_vault_spy(self) -> list[dict]:
+        """Stop recording; every `{event, path, old}` since `arm_vault_spy`."""
+        raw = await self.evaluate(
+            "(window.__e2eVaultRefs || []).forEach(r => app.vault.offref(r));"
+            "window.__e2eVaultRefs = null;"
+            "JSON.stringify(window.__e2eVaultEvents || [])"
+        )
+        return json.loads(raw or "[]")
+
+    async def arm_create_spy(self) -> None:
+        """`arm_vault_spy`, for callers that only need the created paths."""
+        await self.arm_vault_spy()
 
     async def disarm_create_spy(self) -> list[str]:
         """Stop recording and return every path created since `arm_create_spy`."""
-        raw = await self.evaluate(
-            "app.vault.offref(window.__e2eCreatesRef); window.__e2eCreatesRef = null;"
-            "JSON.stringify(window.__e2eCreates || [])"
-        )
-        return json.loads(raw or "[]")
+        return [e["path"] for e in await self.disarm_vault_spy() if e["event"] == "create"]
 
     async def is_sync_blocked(self) -> bool:
         """Read the engine's syncBlocked flag. False when plugin lacks gate."""
@@ -1528,22 +1541,21 @@ class CdpClient:
         js = f"""
         (function() {{
             const se = {ENGINE_PATH};
-            se._origPushNote = se.api.pushNote.bind(se.api);
-            se._origPushNotesBatch = se.api.pushNotesBatch.bind(se.api);
-            se._origDeleteNote = se.api.deleteNote.bind(se.api);
-            se._origPushAttachment = se.api.pushAttachment.bind(se.api);
-            se._origDeleteAttachment = se.api.deleteAttachment.bind(se.api);
-            se._origHealth = se.api.health.bind(se.api);
             const fail = async () => {{ throw new Error('simulated offline'); }};
-            se.api.pushNote = fail;
-            // pushNotesBatch (POST /notes/batch, protocol rev #557) is a SEPARATE
-            // method — without overriding it too, multi-file pushes that coalesce
-            // into a batch bypass the simulation, the real call succeeds, and the
-            // engine flips back online (goOnline) so it never goes offline (#635).
-            se.api.pushNotesBatch = fail;
-            se.api.deleteNote = fail;
-            se.api.pushAttachment = fail;
-            se.api.deleteAttachment = fail;
+            // Every REST write the plugin has. Each is stubbed only if this
+            // build has it: `pushNotesBatch` (POST /notes/batch, #557) is gone
+            // from the plugin, and `.bind` on it threw, so this helper failed
+            // on every build. While it exists it must be stubbed too, or a
+            // coalesced batch push bypasses the simulation and flips the
+            // engine back online (#635). `renameAttachment` is Engram-obsidian#689.
+            se._origApi = {{}};
+            for (const m of ['pushNote', 'pushNotesBatch', 'deleteNote', 'pushAttachment',
+                             'deleteAttachment', 'renameAttachment']) {{
+                if (typeof se.api[m] !== 'function') continue;
+                se._origApi[m] = se.api[m].bind(se.api);
+                se.api[m] = fail;
+            }}
+            se._origHealth = se.api.health.bind(se.api);
             se.api.health = async () => false;
             // Drive the REAL offline transition deterministically instead of
             // waiting for the engine to react to a failed push. The engine
@@ -1572,17 +1584,9 @@ class CdpClient:
         js = f"""
         (function() {{
             const se = {ENGINE_PATH};
-            if (se._origPushNote) se.api.pushNote = se._origPushNote;
-            if (se._origPushNotesBatch) se.api.pushNotesBatch = se._origPushNotesBatch;
-            if (se._origDeleteNote) se.api.deleteNote = se._origDeleteNote;
-            if (se._origPushAttachment) se.api.pushAttachment = se._origPushAttachment;
-            if (se._origDeleteAttachment) se.api.deleteAttachment = se._origDeleteAttachment;
+            for (const [m, f] of Object.entries(se._origApi || {{}})) se.api[m] = f;
             if (se._origHealth) se.api.health = se._origHealth;
-            delete se._origPushNote;
-            delete se._origPushNotesBatch;
-            delete se._origDeleteNote;
-            delete se._origPushAttachment;
-            delete se._origDeleteAttachment;
+            delete se._origApi;
             delete se._origHealth;
             // Drive the REAL online transition: clears `offline` (so file
             // events stop being re-enqueued mid-flush), stops the health-check
