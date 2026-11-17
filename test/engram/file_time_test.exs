@@ -223,7 +223,7 @@ defmodule Engram.FileTimeTest do
   test "normalize/1 is to_at/1 with out of range as NULL; same_at?/2 compares instants" do
     assert FileTime.normalize(1_776_072_500_928.0) == ~U[2026-04-13 09:28:20.928000Z]
     assert FileTime.normalize(1.0e19) == nil
-    assert FileTime.normalize(0) == nil
+    assert FileTime.normalize(0) == ~U[1970-01-01 00:00:00.000000Z]
     assert FileTime.same_at?(nil, nil)
     assert FileTime.same_at?(~U[2026-01-01 00:00:00Z], ~U[2026-01-01 00:00:00.000000Z])
     refute FileTime.same_at?(nil, ~U[2026-01-01 00:00:00Z])

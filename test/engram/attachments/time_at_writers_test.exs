@@ -51,13 +51,14 @@ defmodule Engram.Attachments.TimeAtWritersTest do
            ]
   end
 
-  test "the plugin's 0 for an unknown time is a NULL timestamp", ctx do
+  test "the plugin's 0 for an unknown time is the epoch timestamp", ctx do
     {:ok, _} = put(ctx, "z.png", 0)
-    assert rows(ctx) == [{0.0, nil}]
+    assert rows(ctx) == [{0.0, ~U[1970-01-01 00:00:00.000000Z]}]
   end
 
   # A legacy out-of-range double (REST refuses new ones with a 422) never
-  # blocks a server-side copy: the move's tombstone gets a NULL timestamp.
+  # blocks a server-side copy, and is not copied: the copy carries the
+  # twin, the authority since R25 contract step (a).
   test "a move copies a legacy out-of-range time instead of failing", ctx do
     {:ok, att} = put(ctx, "old.png", 1.0)
 
@@ -66,7 +67,7 @@ defmodule Engram.Attachments.TimeAtWritersTest do
     end)
 
     assert {:ok, _} = Attachments.move_attachment(ctx.user, ctx.vault, "old.png", "new.png")
-    assert {1.0e19, nil} in rows(ctx)
+    assert {1.0, ~U[1970-01-01 00:00:01.000000Z]} in rows(ctx)
   end
 
   test "a move's tombstone, a delete and a restore keep the timestamp with the double", ctx do
@@ -94,6 +95,7 @@ defmodule Engram.Attachments.TimeAtWritersTest do
 
     {:ok, _} = Uploads.put_part(ctx.user, ctx.vault, up.id, 1, "abc")
     {:ok, %Attachment{} = att} = Uploads.complete(ctx.user, ctx.vault, up.id)
-    assert {att.mtime, att.mtime_at} == {1_776_072_500_928.0, ~U[2026-04-13 09:28:20.928000Z]}
+    # The finalize copies the session's time from its twin (as seconds).
+    assert {att.mtime, att.mtime_at} == {1_776_072_500.928, ~U[2026-04-13 09:28:20.928000Z]}
   end
 end
