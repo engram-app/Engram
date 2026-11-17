@@ -284,9 +284,12 @@ DELETE FROM schema_migrations WHERE version IN (20261107120000, 20261110130000);
 
 Manual fix for the nonce-set case: rebuild the body column from the `notes`
 copy in the merged layout (nonce field, then ciphertext; a 12-byte nonce gets a
-`\x00` format byte), the same mapping 20261107120000 uses. Run it as a role
-that sees every tenant (superuser, BYPASSRLS, or `SET ROLE engram_maintenance`),
-with the app stopped, and check the row counts match the error's count:
+`\x00` format byte) and the head decoded from `notes.crdt_head`, the same
+mapping 20261107120000 and 20261110130000 use. Run it as a role that sees every
+tenant (superuser, BYPASSRLS, or `SET ROLE engram_maintenance`), with the app
+stopped. Run each `WHERE` as a `SELECT b.note_id ...` first: every id it returns
+should be one the error lists (the error counts notes across all three cases,
+these count columns of the nonce-set case only, so the numbers need not match).
 
 ```sql
 BEGIN;
@@ -301,7 +304,8 @@ WHERE b.note_id = n.id AND b.user_id = n.user_id AND n.kind = 'note'
 UPDATE note_bodies b SET crdt_ct =
   CASE WHEN length(n.crdt_state_nonce) = 13 THEN n.crdt_state_nonce || n.crdt_state_ciphertext
        ELSE '\x00'::bytea || n.crdt_state_nonce || n.crdt_state_ciphertext END,
-  crdt_head = NULL
+  crdt_head = CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$'
+    THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END
 FROM notes n
 WHERE b.note_id = n.id AND b.user_id = n.user_id AND n.kind = 'note'
   AND b.crdt_ct IS NULL AND n.crdt_state_ciphertext IS NOT NULL
