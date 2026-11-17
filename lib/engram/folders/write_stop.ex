@@ -43,14 +43,13 @@ defmodule Engram.Folders.WriteStop do
   alias Engram.Notes.Location
   alias Engram.Release.Floor
 
-  # The release with the moved-folder feed (release A, this PR set). A
-  # SENTINEL that no floor can reach, so the writer is inert in A whatever
-  # tag release-please cuts: release B (its own PR, Todd's approval) sets
-  # this and `priv/release_floor` to A's real tag together, with a check that
-  # the tag contains this code. Then no rollback can land on a release
-  # without the moved-folder feed or the shown-path announces. S4 plugin:
+  # The release with the moved-folder feed and the shown-path announces
+  # (release A, Engram#2609). The rollback floor reaching it (release B,
+  # `priv/release_floor`, which also requires the tag to contain 2609's merge
+  # commit, `priv/release_floor_contains`) is what switches the writer on:
+  # no rollback can then land on a release without them. S4 plugin:
   # Engram-obsidian#689, cut as 1.40.0 by its release PR 706.
-  @reads_release "release-v999.0.0"
+  @reads_release "release-v0.88.0"
   @s4_plugin "1.40.0"
   # `Location.s5_reads/0` level a node needs: the readers plus the moved-folder feed.
   @fleet_level 2

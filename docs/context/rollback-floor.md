@@ -6,10 +6,11 @@ When to read this: shipping a change an older release cannot read (a write stop,
 
 ## What it is
 
-The rollback floor is the oldest release prod may run. It is one line in `priv/release_floor` (`release-vX.Y.Z`, today `release-v0.87.0`), the single source of truth for `Engram.Release.Floor` and for both deploy checks below.
+The rollback floor is the oldest release prod may run. It is one line in `priv/release_floor` (`release-vX.Y.Z`, today `release-v0.88.0`), the single source of truth for `Engram.Release.Floor` and for both deploy checks below.
 
 - **Raising the floor** is a PR changing that line, the one source of truth (tests read the file). It is Todd's decision, because it removes rollback targets. The tag must exist first: the floor names a released tag, never a commit on main. `scripts/check_floor_tag_on_main.sh` (verify.yml static checks) fails a floor whose tag does not exist or is not on main, because such a floor refuses every deploy and the override cannot pass a missing tag.
 - **Code that needs a floor** states it with a test, `assert Floor.at_least?("release-vX.Y.Z")`. That test is red while the file says less, so the code cannot merge before the floor is raised. Example: R9 release E's note folder hash write stop needs the floor at the release that ships C, because 0.76 matches folder search by the hash and 0.78.1 matches folder deletes by it.
+- **A floor can require commits.** `priv/release_floor_contains` lists `<sha> <why>` lines; `scripts/check_floor_tag_on_main.sh` fails unless the floor tag contains each one. The S5 write stop (Engram#2523) lists 2609's merge commit, so a floor raised to a tag cut before the moved-folder feed merged cannot pass.
 - **Nothing reads the floor at runtime.** A self-host install that jumps several releases is made correct by each release's own runtime gates (data-migration ledgers, fleet gates). The floor only limits where prod may be rolled back to. A self-hoster downgrading below it is unsupported.
 
 ## The checks

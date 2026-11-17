@@ -25,13 +25,15 @@ case "$2" in
   */compare/refs/tags/release-v1.1.0...main) echo identical ;;
   */compare/refs/tags/release-v0.9.0...main) echo diverged ;;
   */compare/refs/tags/release-v2.0.0...main) echo behind ;;
+  */compare/refs/tags/release-v1.0.0...aaaa) echo behind ;;
+  */compare/refs/tags/release-v1.0.0...bbbb) echo ahead ;;
   *) echo '{"message":"Not Found"}'; exit 1 ;;
 esac
 SH
 chmod +x "$TMP/bin/gh"
 export PATH="$TMP/bin:$PATH" GH_REPO=o/r FLOOR_RETRY_SLEEP=0 FAKE_COUNT="$TMP/count"
 
-check() { printf '%s\n' "$1" >"$TMP/floor"; bash "$SCRIPT" "$TMP/floor" >"$TMP/out" 2>&1; }
+check() { printf '%s\n' "$1" >"$TMP/floor"; bash "$SCRIPT" "$TMP/floor" "$TMP/contains" >"$TMP/out" 2>&1; }
 
 check release-v1.0.0 || fail "a tag behind main failed: $(cat "$TMP/out")"
 check release-v1.1.0 || fail "main's own tag failed: $(cat "$TMP/out")"
@@ -47,5 +49,15 @@ grep -q "::error::.*not on main" "$TMP/out" || fail "no off-main reason: $(cat "
 FAKE_FLAKY=2 check release-v1.0.0 || fail "a transient error was not retried: $(cat "$TMP/out")"
 rm -f "$TMP/count"
 ! FAKE_FLAKY=9 check release-v1.0.0 || fail "an API outage passed"
+
+# Required commits (priv/release_floor_contains).
+printf 'aaaa the feed\n# a comment\n' >"$TMP/contains"
+check release-v1.0.0 || fail "a contained commit failed: $(cat "$TMP/out")"
+printf 'bbbb newer than the tag\n' >"$TMP/contains"
+! check release-v1.0.0 || fail "a commit the tag lacks passed"
+grep -q "::error::.*does not contain bbbb" "$TMP/out" || fail "no reason given: $(cat "$TMP/out")"
+printf 'cccc unknown\n' >"$TMP/contains"
+! check release-v1.0.0 || fail "an unknown commit passed"
+rm -f "$TMP/contains"
 
 echo "check_floor_tag_on_main: all cases passed"

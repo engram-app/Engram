@@ -3,7 +3,7 @@ defmodule Engram.Folders.WriteStopFloorTest do
   # keeps its old stored path. Release A ships the moved-folder feed and the
   # shown-path announces with the writer inert; release B raises the rollback
   # floor to A, which switches it on (`docs/context/rollback-floor.md`). The
-  # first test flips there, in the floor PR.
+  # first test pins it.
   #
   # No plugin floor: plugins older than S4 learn such a move from the
   # moved-folder feed (`Engram.Sync.moved_feed?/1`), so they keep syncing.
@@ -14,9 +14,9 @@ defmodule Engram.Folders.WriteStopFloorTest do
   alias Engram.Release.Floor
   alias Engram.Sync
 
-  test "the write stop is inert until the rollback floor reaches the feed release" do
-    refute Floor.at_least?(WriteStop.reads_release())
-    refute WriteStop.floors?(:enforce)
+  test "the rollback floor reaches the moved-folder feed release" do
+    assert Floor.at_least?(WriteStop.reads_release())
+    assert WriteStop.floors?(:enforce)
   end
 
   test "plugins older than S4 still sync, and get the moved-folder feed" do
