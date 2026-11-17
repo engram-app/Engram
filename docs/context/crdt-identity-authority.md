@@ -101,10 +101,21 @@ folder-op wire): the tripwire fired once per MCP `rename_folder` on staging.
 Both now claim BEFORE their transaction (`Notes.claim_folder_rename/4`,
 `Notes.claim_folder_batch_move/4`) and run it inside
 `Notes.with_folder_claims/4`: the cascade re-scans under the folder lock and
-must consume exactly the planned claims (else it unclaims, re-plans and
-retries once, then `:conflict`), and any failure
-unclaims them (`Identity.unclaim/3`, compare-and-set), so a rename the API
-reports as failed is not executed later by projection. `Identity` still logs
+must consume exactly the planned claims (else it re-plans and retries once,
+then `:conflict`).
+
+**Settle after every claimant's transaction.** A claim made before the row
+transaction cannot be undone by comparing values: an identical concurrent op
+(a client retry) claims the same value, so a compare-and-set undo reverts the
+twin's committed move (ABA), and a re-claim after commit overwrites a later
+rename. Instead every server claimant (folder ops, batch note move,
+`rename_note/5`) calls `Identity.settle/3` once its transaction returns,
+success or failure: it reads the notes' COMMITTED row paths inside the index's
+serialized step (the room's `update_doc`, or `fold_roomless/3`'s lock) and
+writes them. The last row commit for a note is followed by a settle that reads
+it, and every later index write is a settle or a claim whose op settles after
+it, so the index ends on the committed rows under any interleaving. A settle
+that matches writes nothing. `Identity` still logs
 and counts `:in_transaction` as a tripwire for future call sites.
 
 **Projection must never claim.** It is deriving FROM the map; a claim there is a

@@ -358,4 +358,69 @@ defmodule Engram.Folders.ClaimOutsideTxnTest do
     assert {:ok, %{path: "Archive/n.md"}} = Notes.get_note_by_id(ctx.user, ctx.vault, n.id)
     assert live_path(room, n.id) == "Archive/n.md"
   end
+
+  # Review 2, blocker 1: a later rename of the same note lands between the
+  # folder op's commit and its index write that follows; the folder op must not
+  # put the index back on its own path. `:claims_settle` is the point just
+  # before a claimant's after-transaction index write.
+  test "a later rename between a folder op's commit and its settle is kept", ctx do
+    {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+    n = note(ctx, "Docs/n.md")
+    counter = :counters.new(1, [])
+    test_pid = self()
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :claims_settle ->
+        if :counters.get(counter, 1) == 0 do
+          :counters.add(counter, 1, 1)
+          send(test_pid, {:r, Notes.rename_note(ctx.user, ctx.vault, "Archive/n.md", "C/n.md")})
+        end
+
+        :ok
+
+      _ ->
+        :ok
+    end)
+
+    assert {:ok, _} = Folders.rename(ctx.user, ctx.vault, "Docs", "Archive")
+    assert_received {:r, {:ok, _}}
+    assert {:ok, %{path: "C/n.md"}} = Notes.get_note_by_id(ctx.user, ctx.vault, n.id)
+    assert live_path(room, n.id) == "C/n.md"
+  end
+
+  # Review 2, blocker 2: B fails and has read the rows for its compensation;
+  # an identical A then commits before B's index write. B must not write the
+  # stale path. (With settle the row read happens inside the index step, so
+  # the closest the test can get is just before that step.)
+  test "an identical rename committing during a failed op's compensation is kept", ctx do
+    {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+    n = note(ctx, "Docs/n.md")
+    put_att(ctx, "Docs/a.png")
+    counter = :counters.new(1, [])
+    test_pid = self()
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :folder_claimed ->
+        :counters.add(counter, 1, 1)
+        if :counters.get(counter, 1) == 1, do: put_att(ctx, "Archive/a.png")
+        :ok
+
+      :claims_settle ->
+        if :counters.get(counter, 1) == 1 do
+          :counters.add(counter, 1, 1)
+          :ok = Attachments.delete_attachment(ctx.user, ctx.vault, "Archive/a.png")
+          send(test_pid, {:a, Folders.rename(ctx.user, ctx.vault, "Docs", "Archive")})
+        end
+
+        :ok
+
+      _ ->
+        :ok
+    end)
+
+    assert {:error, :conflict} = Folders.rename(ctx.user, ctx.vault, "Docs", "Archive")
+    assert_received {:a, {:ok, _}}
+    assert {:ok, %{path: "Archive/n.md"}} = Notes.get_note_by_id(ctx.user, ctx.vault, n.id)
+    assert live_path(room, n.id) == "Archive/n.md"
+  end
 end

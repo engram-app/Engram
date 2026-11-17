@@ -5034,8 +5034,15 @@ defmodule Engram.Notes do
           _ = report_orphan_claim(user, vault, claimed?, :busy, {:error, :busy})
           reraise e, __STACKTRACE__
       else
-        {:ok, _} = ok -> ok
-        {:error, reason} = err -> report_orphan_claim(user, vault, claimed?, reason, err)
+        {:ok, note} = ok ->
+          # After the commit, onto the committed row (`settle_claims/4`): a
+          # concurrent folder op's settle may have read this note's row before
+          # it moved.
+          _ = if claimed?, do: settle_claims(user, vault, [note.id], :committed)
+          ok
+
+        {:error, reason} = err ->
+          report_orphan_claim(user, vault, claimed?, reason, err)
       end
     end
   end
@@ -5878,67 +5885,51 @@ defmodule Engram.Notes do
   end
 
   # Runs `fun` (a transaction whose claims `moves`, `[{note, claimed_path}]`,
-  # were made before it) and, when it fails, raises or exits, reconciles them.
-  # The one compensation for every claim-before-transaction caller.
-  #
-  # On success the claims are asserted AGAIN, after the commit. While this op
-  # waited for its lock, an identical op (a client retry claiming the same
-  # values) may have failed and reconciled the shared entries back to the
-  # then-committed rows; without this the index would trail the rows this op
-  # just committed, and projection, which converges rows to the index, would
-  # move them back. One more index write per op; it never fails the committed
-  # op (a refusal is reported for projection like any orphan).
+  # were made before it), then settles the moved notes' index entries onto
+  # their committed rows, whatever `fun` did: returned, failed, raised or
+  # exited. The one after-transaction step of every claim-before-transaction
+  # caller (`Identity.settle/3` has the argument for why it is enough).
   defp with_claim_undo(user, vault, moves, fun) do
+    ids = for {note, path} <- moves, note.path != path, do: note.id
+
     result =
       try do
         fun.()
       catch
         kind, reason ->
-          reconcile_claims(user, vault, moves, kind)
+          settle_claims(user, vault, ids, kind)
           :erlang.raise(kind, reason, __STACKTRACE__)
       end
 
-    case result do
-      {:ok, _} ->
-        reassert_claims(user, vault, moves)
-        result
-
-      {:error, reason} ->
-        reconcile_claims(user, vault, moves, reason)
-        result
-    end
+    settle_claims(user, vault, ids, settle_why(result))
+    result
   end
 
-  defp reassert_claims(user, vault, moves) do
-    claims = for {note, path} <- moves, note.path != path, do: {path, note.id}
+  defp settle_why({:error, reason}), do: reason
+  defp settle_why(_ok), do: :committed
 
-    case Identity.claim(user, vault.id, claims) do
+  # Never raises and never changes the caller's result: a settle that fails
+  # (DB down, rotation gate, room exit) is reported as an orphan claim, which
+  # enqueues projection, and the caller's own result or exception goes on.
+  defp settle_claims(_user, _vault, [], _why), do: :ok
+
+  defp settle_claims(user, vault, ids, why) do
+    # Test seam (nil outside tests): the transaction is done, not yet settled.
+    :ok = interleave_hook(:claims_settle)
+
+    rows = fn ->
+      {:ok, by_id} = get_note_meta_by_ids(user, vault, ids)
+      for {id, note} <- by_id, do: {id, note.path}
+    end
+
+    case Identity.settle(user, vault.id, rows) do
       :ok -> :ok
-      error -> orphan_claim(user, vault, length(claims), {:reassert, error})
+      error -> orphan_claim(user, vault, length(ids), {why, error})
     end
-  end
-
-  # Brings each claimed entry to where the note's COMMITTED row is, not to
-  # where it was before the claim: an identical concurrent op (a client retry)
-  # claims the same value and may have committed it, and restoring the old path
-  # would revert that committed move under its rows (ABA on the claimed value).
-  # Compare-and-set on our claimed path, so an entry another op has since moved
-  # elsewhere is left alone; a note whose row already sits at the claimed path,
-  # or whose row is gone, is skipped. If the reconcile fails, the claim is
-  # reported for projection to converge.
-  defp reconcile_claims(user, vault, moves, why) do
-    claimed = for {note, path} <- moves, note.path != path, do: {note.id, path}
-
-    with [_ | _] <- claimed,
-         {:ok, rows} <- get_note_meta_by_ids(user, vault, Enum.map(claimed, &elem(&1, 0))),
-         undo =
-           for({id, path} <- claimed, row = rows[id], row.path != path, do: {id, path, row.path}),
-         {:error, _} = error <- Identity.unclaim(user, vault.id, undo) do
-      orphan_claim(user, vault, length(undo), {why, error})
-    else
-      {:error, _} = error -> orphan_claim(user, vault, length(claimed), {why, error})
-      _ -> :ok
-    end
+  rescue
+    _ -> orphan_claim(user, vault, length(ids), {why, :settle_raised})
+  catch
+    :exit, _ -> orphan_claim(user, vault, length(ids), {why, :settle_exited})
   end
 
   # One meta read for the whole batch (was one transaction per id).
@@ -7947,12 +7938,13 @@ defmodule Engram.Notes do
   # claiming, CONSUMES the plan: each cascade step's claims must equal the
   # planned step's, and every planned step must be consumed before commit
   # (`folder_claims_consumed/0`). A row that appeared or left between the plan
-  # and the lock makes the attempt `:claims_stale`: it is undone, re-planned
+  # and the lock makes the attempt `:claims_stale`: it is settled, re-planned
   # and re-claimed ONCE, and a second disagreement is a `:conflict`. Never a
-  # moved row the index did not claim. Any failure past the claim reconciles
-  # it to the committed rows (`reconcile_claims/4`, shared with the batch note
-  # move): an op the API reports as failed must not be executed later by
-  # projection, nor revert an identical op that committed.
+  # moved row the index did not claim. After the transaction, whatever it did,
+  # the moved notes are settled onto their committed rows (`settle_claims/4`,
+  # shared with the batch note move and `rename_note/5`): an op the API reports
+  # as failed is not executed later by projection, and no op reverts another's
+  # committed move.
   #
   # Cost: one more meta scan of the moved subtree, outside the transaction.
   @preclaim_key :engram_folder_preclaim

@@ -71,7 +71,7 @@ defmodule Engram.Notes.Identity do
 
       [:engram, :crdt, :index_claim]
         measurements: %{count: 1, entries: n}
-        metadata:     %{op: :claim | :release,
+        metadata:     %{op: :claim | :release | :settle,
                         route: :room | :snapshot | :recheck,
                         phase: :ok | :conflict | :rotation | :room_exit |
                                :load_failed | :persist_failed}
@@ -134,6 +134,24 @@ defmodule Engram.Notes.Identity do
   def unclaim(user, vault_id, entries) when is_map(user) do
     targets = Enum.map(entries, fn {id, held, path} -> {id, path, {:if_at, held}} end)
     apply_targets(user, vault_id, targets, :claim)
+  end
+
+  @doc """
+  Point each note's entry at its COMMITTED row path. `rows_fun` returns
+  `[{note_id, path}]` for the live rows and is called INSIDE the index's
+  serialized step (the room's `update_doc`, or `fold_roomless/3`'s lock), so
+  its row read is ordered with every other index write.
+
+  Every server claimant runs it after its row transaction, success or failure.
+  The last row commit for a note is then always followed by a settle that
+  reads it, and nothing that writes the index after that settle can leave it
+  elsewhere: no value is compared, so an identical concurrent claim cannot
+  fool it (ABA). An entry whose path another note holds in the map is skipped
+  (projection reports it). A note whose entry already matches writes nothing.
+  """
+  @spec settle(map(), String.t(), (-> [{String.t(), String.t()}])) :: :ok | {:error, term()}
+  def settle(user, vault_id, rows_fun) when is_map(user) and is_function(rows_fun, 0) do
+    apply_targets(user, vault_id, [{:settle, rows_fun}], :settle)
   end
 
   @doc """
@@ -258,7 +276,7 @@ defmodule Engram.Notes.Identity do
     caller = self()
     ref = make_ref()
 
-    write = fn doc -> send(caller, {ref, mutate(doc, targets)}) end
+    write = fn doc -> send(caller, {ref, written(mutate(doc, targets))}) end
 
     case CrdtRoom.update_doc(room, write, metadata: [vault_id: vault_id]) do
       :ok ->
@@ -333,7 +351,7 @@ defmodule Engram.Notes.Identity do
     # fold_roomless owns the load -> mutate -> persist -> PRUNE contract. Doing
     # the first three by hand here is what left folded tail rows behind.
     case CrdtIndexPersistence.fold_roomless(user, vault_id, &mutate(&1, targets)) do
-      :ok ->
+      done when done in [:ok, :unchanged] ->
         emit(op, :snapshot, :ok, targets)
         recheck_room(user, vault_id, targets, op)
 
@@ -435,40 +453,58 @@ defmodule Engram.Notes.Identity do
   # `target_ops/3`): stopping between the two leaves the note claimed at both
   # paths, a duplicate the next claim's `stale_entries/3` removes, rather than
   # claimed nowhere.
+  # `:unchanged` when nothing differs: `fold_roomless/3` then persists nothing,
+  # and the room writes no Yjs update (`written/1` reports it as `:ok`).
   defp mutate(doc, targets) do
     map = Yex.Doc.get_map(doc, CrdtIndexDoc.map_name())
     current = Yex.Map.to_map(map)
     by_note = entries_by_note(current)
-    targets = Enum.flat_map(targets, &still_held(&1, current))
+    targets = Enum.flat_map(targets, &resolve(&1, current))
 
     case refusal(current, targets) do
       nil ->
-        ops = Enum.flat_map(targets, &target_ops(&1, current, by_note))
+        case Enum.flat_map(targets, &target_ops(&1, current, by_note)) do
+          [] ->
+            :unchanged
 
-        Yex.Doc.transaction(doc, @origin, fn ->
-          Enum.each(ops, fn
-            {:delete, key} -> Yex.Map.delete(map, key)
-            {:set, key, value} -> Yex.Map.set(map, key, value)
-          end)
-        end)
+          ops ->
+            Yex.Doc.transaction(doc, @origin, fn ->
+              Enum.each(ops, fn
+                {:delete, key} -> Yex.Map.delete(map, key)
+                {:set, key, value} -> Yex.Map.set(map, key, value)
+              end)
+            end)
 
-        :ok
+            :ok
+        end
 
       _path ->
         {:error, :conflict}
     end
   end
 
+  defp written(:unchanged), do: :ok
+  defp written(result), do: result
+
   # unclaim/3's compare-and-set, read inside the same room transaction as the
   # write: kept only while the note's entry is still at the held path.
-  defp still_held({note_id, path, {:if_at, held}}, current) do
+  defp resolve({note_id, path, {:if_at, held}}, current) do
     case Map.get(current, held) do
       %{"note_id" => ^note_id} -> [{note_id, path}]
       _ -> []
     end
   end
 
-  defp still_held(target, _current), do: [target]
+  # settle/3: the committed rows, read here, inside the serialized step. A path
+  # another note holds in the map is skipped rather than refusing the rest.
+  defp resolve({:settle, rows_fun}, current) do
+    for {note_id, path} <- rows_fun.(),
+        match?(%{"note_id" => ^note_id}, Map.get(current, path)) or
+          not Map.has_key?(current, path),
+        do: {note_id, path}
+  end
+
+  defp resolve(target, _current), do: [target]
 
   # A claim is refused when the path is held by a note OUTSIDE this batch, or
   # when two entries INSIDE it name the same path. Both produce the same
@@ -529,9 +565,15 @@ defmodule Engram.Notes.Identity do
 
     # Set FIRST (see `mutate/2`). Same final state either way: `stale` never
     # contains `path`, so no delete below can remove the entry just set.
-    if path == :gone,
-      do: deletes,
-      else: [{:set, path, entry(current, stale, path, note_id)} | deletes]
+    value = path != :gone && entry(current, stale, path, note_id)
+
+    cond do
+      path == :gone -> deletes
+      # Already there with the same fields: no write (a settle in the common,
+      # non-racing case, or a repeated claim).
+      Map.get(current, path) == value -> deletes
+      true -> [{:set, path, value} | deletes]
+    end
   end
 
   defp stale_entries(by_note, note_id, path) do
