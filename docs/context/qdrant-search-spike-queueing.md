@@ -1,6 +1,6 @@
 # Context Doc: Prod Qdrant search latency spikes (search-pool queueing)
 
-_Last verified: 2026-11-17_
+_Last verified: 2026-11-16_
 
 ## Status
 Mechanism proven (queueing, not CPU). Per-search cost driver (page-cache-miss disk IO) likely, NOT proven: there is no disk IO / iowait metric for the Qdrant pod. No fix shipped yet.
@@ -12,12 +12,12 @@ Why prod Qdrant search p99 jumps from ~100 ms to ~4-4.7 s in short bursts, and h
 - Prod Qdrant Cloud, package mx1: 500m CPU / 4 GiB (`engram-infra` `envs/prod/qdrant.tf`, $34.08/mo). Pod CPU limit 0.46 cores, memory limit ~3.8 GB.
 - Qdrant 1.19.2, ARM, `system.cores = 1`.
 - `search_pool = {mode: high_io, high_io_threads: 4, high_cpu_threads: 1}`: about 4 searches run at once, the rest queue.
-- Collection: dense float16 on_disk (3.0 GB, 0.55 GB cached), sparse `keyword` index on_disk (2.43 GB index, 0.75 GB cached; sparse storage 2.5 GB, 0.02 GB cached), on_disk_payload (1.1 GB, 0.55 GB cached), BQ always_ram (0.19 GB). Total 9.7 GB on disk vs 2.0 GB page cache. `hnsw m=0, payload_m=16` (per-tenant graphs). The hot set does not fit in RAM.
+- Collection: dense float16 on_disk (3.0 GB, 0.55 GB cached), sparse `keyword` index on_disk (2.43 GB index, 0.75 GB cached; sparse storage 2.5 GB, 0.02 GB cached), on_disk_payload (1.1 GB, 0.55 GB cached), BQ always_ram (0.19 GB). Total 9.7 GB on disk vs 2.0 GB cached (Qdrant's own per-component cached counters from the collection memory telemetry). `hnsw m=0, payload_m=16` (per-tenant graphs). The hot set does not fit in RAM.
 
 ## What the spikes are
 - **Queueing in the 4-thread search pool.** During a burst every request type slows together: p50 rises 50-200x (3 ms to 200-650 ms) and even by-id retrieve `POST /points` (no search) hit 4.39 s p99. One heavy query would not do that.
-- **Source: bursty parallel hybrid searches from ONE MCP client** (~40 `search_notes` per minute, issued in parallel across both web tasks), recurring near :40 each hour (looks scheduled; cadence inferred, not verified). Find the client with the Tempo queries below; do not record user ids in docs.
-- **Hybrid bursts hit the timeout; sparse-only bursts do not.** A burst of ~130 light sparse-only queries queued (p50 0.25 s) but p99 stayed under 0.5 s.
+- **Source: bursts of hybrid searches from ONE MCP client** (~40 `search_notes` per minute, split across both web tasks; in-flight concurrency not measured), recurring near :40 each hour (looks scheduled; cadence inferred, not verified). Find the client with the Tempo queries below; do not record user ids in docs.
+- **Hybrid bursts hit the timeout; the one sparse-only burst checked did not.** In the 03:15Z burst, ~130 light sparse-only queries queued (p50 0.25 s) but p99 stayed under 0.5 s. One sample, not a general rule.
 - **Not CPU.** Worst spike minute: ~80 searches, CPU 0.013-0.017 cores (~25 ms CPU per search vs seconds of wall time). Night-long 5-min CPU 0.005-0.033 of 0.46 cores. Peak minute (0.073 cores) lined up with an upsert burst, not a search spike.
 - **Not the optimizer, set_payload, or update queue** (`collection_running_optimizations` 0-1, update_queue 0, set_payload 0). Upsert bursts of ~400 per 10 min did not spike search on their own.
 - Per-search wall time is LIKELY mmap page faults: BQ dense leg with `rescore: true, oversampling: 3.0` reads float16 vectors from disk, the sparse leg reads on-disk posting lists, and payload is on disk.
@@ -27,7 +27,7 @@ Why prod Qdrant search p99 jumps from ~100 ms to ~4-4.7 s in short bursts, and h
 - **Qdrant telemetry shows 500s while the app records 0 errors.** Telemetry had `POST /points/query/batch` 500 x5 at 4.00-4.15 s, but `engram_prom_ex_qdrant_request_total{status="error"}` had no series in 24 h. Why the app did not count them is NOT verified. Read Qdrant's own telemetry, not just the app counter.
 - **The CPU metric is real**, not a broken scrape: daily max over two weeks is 0.21-0.43 cores, so it can show near-limit use. Low CPU during spikes is a true reading.
 - cadvisor scrapes every 60 s: use `[2m]` rates at minimum for 1-minute views.
-- Page cache = `working_set - rss`, flat at 1.61-1.63 GB through the burst.
+- Page cache from the container side = `working_set - rss`, flat at 1.61-1.63 GB through the burst. This is a different measure from the 2.0 GB above (Qdrant's per-component cached counters, taken at a different time), so the two will not match exactly.
 - Hardware counters (`vector_io_read`, `payload_index_io_read`) are logical bytes, not disk ops; they rose 2.5x in the burst minute but do not prove disk IO.
 - Tempo samples: only ~17 of ~200 `qdrant.query` spans kept, so in-flight concurrency is not measurable from traces.
 - Operator bastion runs that do bulk `POST /points` retrieves can overlap and add to a spike window.
@@ -36,8 +36,8 @@ Why prod Qdrant search p99 jumps from ~100 ms to ~4-4.7 s in short bursts, and h
 ```promql
 # Qdrant CPU (5m) and throttle ratio
 max without (task, role) (rate(container_cpu_usage_seconds_total{job="prometheus.scrape.qdrant_sys",container="qdrant"}[5m]))
-rate(container_cpu_cfs_throttled_periods_total{job="prometheus.scrape.qdrant_sys",container="qdrant"}[5m])
-  / rate(container_cpu_cfs_periods_total{job="prometheus.scrape.qdrant_sys",container="qdrant"}[5m])
+max without (task) (rate(container_cpu_cfs_throttled_periods_total{job="prometheus.scrape.qdrant_sys",container="qdrant"}[5m])
+  / rate(container_cpu_cfs_periods_total{job="prometheus.scrape.qdrant_sys",container="qdrant"}[5m]))
 
 # Validate the CPU metric can show load (daily max, 1m resolution)
 max_over_time(max(rate(container_cpu_usage_seconds_total{job="prometheus.scrape.qdrant_sys",container="qdrant"}[2m]))[1d:1m])
@@ -71,10 +71,12 @@ Query shape lives in `lib/engram/vector/qdrant.ex` `hybrid_search_body/3` (one `
 
 To settle the IO hypothesis: (a) disk IOPS/latency for the pod from Qdrant Cloud console/support; (b) staging replay of the same query shape at concurrency 1/4/16 on a cold cache; (c) the burst client's point count (read-only count on `u`).
 
-## Failed Approaches / Dead Ends
-- Raising the search timeout: longer queues, same throughput. Not recommended.
+## Not recommended (never tried)
+- Raising the search timeout: longer queues, same throughput.
 - Moving the sparse index to RAM: 2.4 GB does not fit in 3.8 GB alongside the rest.
-- Blaming upserts or the optimizer: bursts of each were checked minute by minute and did not line up with spikes.
+
+## Ruled out (checked, did not match)
+- Upserts and the optimizer: checked in 10-minute buckets, their bursts did not line up with spikes. OrphanSweep was NOT checked per minute. The 00:00-00:20Z spike window overlaps an operator bastion retrieve run, so that one window may be partly self-inflicted.
 
 ## References
 - `lib/engram/vector/qdrant.ex`, `lib/engram/search.ex`
