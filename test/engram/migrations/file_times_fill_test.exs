@@ -1,6 +1,6 @@
 defmodule Engram.Migrations.FileTimesFillTest do
   @moduledoc """
-  Migration 20261117160000 (R25 contract step (b)) fills the `*_at` twins
+  Migration 20261118100100 (R25 contract step (b)) fills the `*_at` twins
   still NULL over a double, with `Engram.FileTime.normalize/1`'s value in
   SQL, and never touches a set twin. Run as `engram_app` (RLS enforced):
   the suite's superuser would pass with an unscoped query too.
@@ -15,7 +15,7 @@ defmodule Engram.Migrations.FileTimesFillTest do
   @mod "Elixir.Engram.Repo.Migrations.FileTimesFillMigrate"
 
   setup_all do
-    Code.require_file("priv/repo/migrations/20261117160000_file_times_fill_migrate.exs")
+    Code.require_file("priv/repo/migrations/20261118100100_file_times_fill_migrate.exs")
     :ok
   end
 
