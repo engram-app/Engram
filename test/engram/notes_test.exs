@@ -30,8 +30,10 @@ defmodule Engram.NotesTest do
 
   defp stored_ctime(id),
     do:
-      Repo.one(from(n in Engram.Notes.Note, where: n.id == ^id, select: n.ctime),
-        skip_tenant_check: true
+      Engram.FileTime.ctime(
+        Repo.one(from(n in Engram.Notes.Note, where: n.id == ^id, select: %{ctime_at: n.ctime_at}),
+          skip_tenant_check: true
+        )
       )
 
   describe "client ctime" do
@@ -156,8 +158,8 @@ defmodule Engram.NotesTest do
 
       a2 = Engram.Fixtures.raw_note!(a.id)
       b2 = Engram.Fixtures.raw_note!(b.id)
-      assert a2.ctime == 11.0
-      assert b2.ctime == 7.0
+      assert Engram.FileTime.ctime(a2) == 11.0
+      assert Engram.FileTime.ctime(b2) == 7.0
       assert {a2.version, a2.seq, a2.updated_at} == {a.version, a.seq, a.updated_at}
     end
   end

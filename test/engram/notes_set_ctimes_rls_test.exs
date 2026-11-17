@@ -22,7 +22,12 @@ defmodule Engram.NotesSetCtimesRlsTest do
   end
 
   defp ctime_of(id),
-    do: Repo.one(from(n in Note, where: n.id == ^id, select: n.ctime), skip_tenant_check: true)
+    do:
+      Engram.FileTime.ctime(
+        Repo.one(from(n in Note, where: n.id == ^id, select: %{ctime_at: n.ctime_at}),
+          skip_tenant_check: true
+        )
+      )
 
   # CONTROL: proves the role drop engaged; without it green is ambiguous.
   test "control: the dropped role sees none of the user's notes", %{vault: vault} do
