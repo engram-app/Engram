@@ -136,6 +136,17 @@ defmodule Engram.Notes.CrdtDeliver do
     :ok
   end
 
+  @doc """
+  `fanout_idle/3` for a caller that already holds the committed state: the
+  CRDT checkpoint passes what it just wrote as `{state, head, seq}`, so there is
+  no second user fetch, tenant transaction or decrypt.
+  """
+  @spec fanout_state(String.t(), String.t(), String.t(), {binary(), term(), integer()}) :: :ok
+  def fanout_state(user_id, vault_id, note_id, {state, head, seq}) do
+    _ = emit_idle(user_id, vault_id, note_id, state, head, seq)
+    :ok
+  end
+
   defp id_of(%{id: id}), do: id
   defp id_of(id) when is_binary(id), do: id
 
@@ -146,6 +157,10 @@ defmodule Engram.Notes.CrdtDeliver do
         _ -> nil
       end
 
+    emit_idle(user_id, vault_id, note_id, state, head, seq)
+  end
+
+  defp emit_idle(user_id, vault_id, note_id, state, head, seq) do
     Engram.Notes.FanoutPacer.emit(
       "sync:#{user_id}:#{vault_id}",
       "note_yjs_update",

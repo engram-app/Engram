@@ -26,6 +26,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
     CrdtBloat,
     CrdtBridge,
     CrdtDeliver,
+    CrdtTransport,
     CrdtUpdateLog,
     Helpers,
     Location,
@@ -281,7 +282,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
           end)
 
         case outcome do
-          {prev_hash, new_hash, path, _embed_priority, _finalize?, renamed_title, pruned} ->
+          {prev_hash, new_hash, path, _embed_priority, _finalize?, renamed_title, pruned, fanout} ->
             :ok =
               post_commit(note_id, fn ->
                 interleave_hook(:post_commit)
@@ -304,6 +305,20 @@ defmodule Engram.Notes.CrdtCheckpoint do
                   # `prev_hash != new_hash` fires only on a committed content change
                   # (compaction and the #902 stale-abort both return equal hashes),
                   # so idle compactions and aborted writes raise no spurious re-pull.
+                  #
+                  # The announce alone does not deliver: a device with the note idle
+                  # and on disk only discovers it (no pull). A device that was offline
+                  # for the edit's live note_yjs_update (a plugin reload) is such a
+                  # device, and without this it waits for its 5 min fallback poll.
+                  # So the bytes go first, then the announce, like deliver_out. The
+                  # state is what this transaction just wrote: no re-read, no
+                  # decrypt, no second user fetch, so nothing here touches the DB
+                  # pool the CheckpointGate guards. Cost per content-changing
+                  # checkpoint: one base64 + one broadcast of the note's full state
+                  # (same bytes REST/MCP fan out); the checkpoint cadence (250 ms
+                  # eager after quiet, 5 s settle, 60 s ceiling) caps the rate and
+                  # FanoutPacer paces COLD notes. Frame size is not capped.
+                  _ = if fanout, do: CrdtDeliver.fanout_state(user_id, vault_id, note_id, fanout)
                   CrdtDeliver.announce_ready(user_id, vault_id, path, note_id)
                 end
               end)
@@ -415,10 +430,14 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # the checkpoint re-derived when it differs from the stored one (for the
   # post-commit name-index announce). Anything else passes through.
   # `path` out is `shown` (read before the lock) when it resolved.
-  defp carry_out({prev_hash, new_hash, path, title, pruned}, note, recording, shown) do
+  defp carry_out({prev_hash, new_hash, path, title, pruned}, note, recording, shown),
+    do: carry_out({prev_hash, new_hash, path, title, pruned, nil}, note, recording, shown)
+
+  # `fanout` is `{state, head, seq}` of a content-changing write, else nil.
+  defp carry_out({prev_hash, new_hash, path, title, pruned, fanout}, note, recording, shown) do
     {prev_hash, new_hash, shown || path, EmbedNote.priority_for(note),
      finalize?(note, recording, prev_hash, new_hash), if(title && title != note.title, do: title),
-     pruned}
+     pruned, fanout}
   end
 
   defp carry_out(other, _note, _recording, _shown), do: other
@@ -449,7 +468,8 @@ defmodule Engram.Notes.CrdtCheckpoint do
         content_hash: content_hash,
         ct: ct,
         nonce: nonce,
-        user: user
+        user: user,
+        fanout: {raw_state, CrdtTransport.head_marker(union_doc)}
       })
     else
       {:skip, _} = skip -> skip
@@ -549,6 +569,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # which suppresses the caller's embed + announce.
   defp checkpoint_write(note, vault_id, note_id, prune, opts, m) do
     %{text: text, content_hash: content_hash, ct: ct, nonce: nonce, user: user} = m
+    {fanout_state, fanout_head} = Map.get(m, :fanout, {nil, nil})
     prev = note.content_hash
 
     cond do
@@ -663,7 +684,8 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
             # The re-derived title rides out for the post-commit name-index
             # announce (a checkpoint broadcasts nothing else that carries it).
-            {prev, content_hash, note.path, title, pruned}
+            {prev, content_hash, note.path, title, pruned,
+             {fanout_state, fanout_head, changeset.changes.seq}}
 
           {0, _} ->
             # The row advanced since our snapshot — a newer write is already
