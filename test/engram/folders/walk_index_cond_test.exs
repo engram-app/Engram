@@ -31,7 +31,7 @@ defmodule Engram.Folders.WalkIndexCondTest do
   @big 500
   @small 5
 
-  setup do
+  setup ctx do
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user)
 
@@ -46,7 +46,7 @@ defmodule Engram.Folders.WalkIndexCondTest do
     Repo.query!("ALTER TABLE folders ALTER COLUMN user_id SET (n_distinct = 40)")
     Repo.query!("ALTER TABLE folders ALTER COLUMN parent_id SET (n_distinct = -0.29)")
     QueryPlan.fresh!("folders")
-    QueryPlan.all_visible!(["folders"])
+    _ = unless ctx[:not_vacuumed], do: QueryPlan.all_visible!(["folders"])
 
     %{user: user, vault: vault}
   end
@@ -96,6 +96,60 @@ defmodule Engram.Folders.WalkIndexCondTest do
     assert QueryPlan.buffers(big.custom) == QueryPlan.buffers(small.custom), big.custom
     assert QueryPlan.buffers(big.generic) == QueryPlan.buffers(small.generic), big.generic
     assert QueryPlan.buffers(big.custom) <= 3 * 3, big.custom
+  end
+
+  # Staging 0.87.1 (2026-11-17, row 11c): with pages not all-visible, an
+  # index-only scan costs a heap page like any other, so the live name
+  # index tied a non-partial `(vault_id, parent_id, id)` index (#2609's
+  # `folders_parent_all_ids`, or `folders_parent`) at 8.30 and lost: every
+  # level read siblings until the name matched. Every walk probe must key
+  # `name_hmac` however vacuumed the table is: the parent-keyed indexes
+  # carry it after `parent_id` (`folders_parent_name_ids`), so whichever
+  # wins, the name is keyed.
+  @tag :not_vacuumed
+  test "walk_many on a table not yet vacuumed: name_hmac still keys every level",
+       %{user: u, vault: v} do
+    walk = fn path ->
+      plans(u, fn -> Rows.ids_by_path(u, v.id, [path]) end, "WITH RECURSIVE q")
+    end
+
+    big = walk.("Big/S250/Leaf")
+    small = walk.("Small/S3/Leaf")
+
+    for plan <- [big.custom, big.generic, small.custom, small.generic],
+        do: assert_name_in_index_cond(plan)
+
+    assert QueryPlan.buffers(big.custom) == QueryPlan.buffers(small.custom), big.custom
+    assert QueryPlan.buffers(big.generic) == QueryPlan.buffers(small.generic), big.generic
+  end
+
+  # The parent FK's check (a hard delete of a folder, or a parent_id
+  # update) looks up children by `(vault_id, parent_id)`: it must still be
+  # an index probe on the prefix of `folders_parent_name_ids` now that
+  # `folders_parent` is gone. Postgres runs it as a cached (generic) plan,
+  # as the table owner.
+  test "the parent FK's child lookup probes the (vault_id, parent_id) prefix",
+       %{user: u, vault: v} do
+    big = Repo.with_tenant!(u.id, fn -> Rows.id_by_walk(u, v.id, "Big") end)
+
+    {:ok, plan} =
+      Repo.transaction(fn ->
+        Repo.query!("SET LOCAL plan_cache_mode = force_generic_plan")
+
+        Repo.query!(
+          "PREPARE fk_check(uuid, uuid) AS SELECT 1 FROM ONLY folders x " <>
+            "WHERE $1 OPERATOR(pg_catalog.=) vault_id AND $2 OPERATOR(pg_catalog.=) parent_id " <>
+            "FOR KEY SHARE OF x"
+        )
+
+        %{rows: rows} = Repo.query!("EXPLAIN EXECUTE fk_check('#{v.id}', '#{big}')")
+
+        Repo.query!("DEALLOCATE fk_check")
+        rows |> List.flatten() |> Enum.join("\n")
+      end)
+
+    assert plan =~ ~r/Index (Only )?Scan using folders_parent_name_ids on folders/, plan
+    assert plan =~ ~r/Index Cond: \(\(vault_id = \$1\) AND \(parent_id = \$2\)\)/, plan
   end
 
   test "id_by_walk (the walk the S3 name match embeds): the same, custom and generic",
