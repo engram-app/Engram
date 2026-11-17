@@ -9,8 +9,10 @@ defmodule Engram.ServiceConfig.Overrides do
   row, so there is no split brain between old and new tasks. The keys left
   are the v5 rebuild kill switch (`index_rebuild`) and the v5 step not
   taken yet (`tenant_idf`), plus the data migrations' kill switches
-  (`file_times_backfill`): every data migration added since 2026-11-06 has
-  one (`docs/context/data-migrations-ledger.md`). The retired null batch's
+  (`file_times_backfill`, `note_folder_hash_null`): every data migration
+  added since 2026-11-06 has one (`docs/context/data-migrations-ledger.md`),
+  and the folder hash null batch's per-pass cap
+  (`note_folder_hash_null_max_fixed`). The retired null batch's
   keys (`note_body_columns_null`, `note_body_columns_null_max_fixed`) are
   gone: a row left under either is ignored with the warning below.
 
@@ -99,7 +101,10 @@ defmodule Engram.ServiceConfig.Overrides do
     link_rewrite: :boolean,
     # `Engram.Workers.OrphanSweep.enabled?/0`, default on: off, the daily
     # sweep returns before any pass (no Qdrant, S3 or DB deletes).
-    orphan_sweep: :boolean
+    orphan_sweep: :boolean,
+    # R9 release E: the note folder hash null batch, kill switch and pace.
+    note_folder_hash_null: :boolean,
+    note_folder_hash_null_max_fixed: {:integer, 1..1_000_000}
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})
