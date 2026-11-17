@@ -325,6 +325,10 @@ defmodule Engram.Workers.OrphanSweepTest do
     for g <- ghosts, do: Storage.adapter().put("#{g}/1/orphan.bin", "orphan data")
     test_pid = self()
     on_exit(fn -> Application.delete_env(:engram, :orphan_sweep) end)
+    # The stop line is :info; the test env logger level is :warning.
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
 
     stub_qdrant(
       bypass,
@@ -337,10 +341,20 @@ defmodule Engram.Workers.OrphanSweepTest do
       Plug.Conn.resp(conn, 200, ~s({"result":{}}))
     end)
 
-    assert :ok = perform_job(OrphanSweep, %{})
+    {result, events} = LogCapture.with_events(fn -> perform_job(OrphanSweep, %{}) end)
+    assert result == :ok
 
     assert_received :qdrant_delete
     refute_received :qdrant_delete
+
+    assert [stop] =
+             Enum.filter(
+               events,
+               &match?({:string, "orphan_sweep stopped: kill switch off"}, &1.msg)
+             )
+
+    assert stop.level == :info
+    assert stop.meta[:result] == %{pass: :qdrant}
     for g <- ghosts, do: assert({:ok, "orphan data"} = Storage.adapter().get("#{g}/1/orphan.bin"))
   end
 

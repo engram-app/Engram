@@ -138,14 +138,18 @@ defmodule Engram.Workers.OrphanSweep do
   defp do_perform(args) do
     live_ids = live_user_ids()
 
-    qdrant_deleted = pass(fn -> sweep_qdrant(live_ids) end)
-    s3_deleted = pass(fn -> sweep_s3(live_ids) end)
-    points_deleted = pass(&sweep_point_orphans/0)
-    notes_flagged = pass(fn -> sweep_missing_points(force: Map.get(args, "force", false)) end)
-    index_requeued = pass(&requeue_trashed_index/0)
+    Process.delete(:orphan_sweep_stopped)
+    qdrant_deleted = pass(:qdrant_tenants, fn -> sweep_qdrant(live_ids) end)
+    s3_deleted = pass(:s3_prefixes, fn -> sweep_s3(live_ids) end)
+    points_deleted = pass(:qdrant_points, &sweep_point_orphans/0)
+
+    notes_flagged =
+      pass(:missing_points, fn -> sweep_missing_points(force: Map.get(args, "force", false)) end)
+
+    index_requeued = pass(:trashed_index, &requeue_trashed_index/0)
     # Frontmatter keys no note uses any more: frees per-user cap space (ids
     # are never reused, see `FrontmatterKeys.reap_unused/1`).
-    keys_reaped = pass(&Engram.Notes.FrontmatterKeys.reap_unused/0)
+    keys_reaped = pass(:frontmatter_keys, &Engram.Notes.FrontmatterKeys.reap_unused/0)
 
     :telemetry.execute(
       [:engram, :orphan_sweep, :result],
@@ -179,7 +183,27 @@ defmodule Engram.Workers.OrphanSweep do
   end
 
   # A pass's count, or 0 without running it once the kill switch is off.
-  defp pass(fun), do: if(enabled?(), do: fun.(), else: 0)
+  defp pass(name, fun) do
+    if enabled?() do
+      fun.()
+    else
+      stopped(name)
+      0
+    end
+  end
+
+  # One info line per run, naming the pass the kill switch stopped it in, so
+  # an operator who flipped it can see it took effect.
+  defp stopped(name) do
+    unless Process.get(:orphan_sweep_stopped) do
+      Process.put(:orphan_sweep_stopped, true)
+
+      Logger.info(
+        "orphan_sweep stopped: kill switch off",
+        Metadata.with_category(:info, :oban, result: %{pass: name})
+      )
+    end
+  end
 
   # -- Point-level orphans -------------------------------------------------
 
@@ -352,7 +376,9 @@ defmodule Engram.Workers.OrphanSweep do
     ids
     |> Enum.chunk_every(@point_delete_batch)
     |> Enum.reduce_while(0, fn batch, acc ->
-      if enabled?(), do: {:cont, delete_batch(batch, acc)}, else: {:halt, acc}
+      if enabled?(),
+        do: {:cont, delete_batch(batch, acc)},
+        else: {:halt, tap(acc, fn _ -> stopped(:qdrant_points) end)}
     end)
   end
 
@@ -874,7 +900,7 @@ defmodule Engram.Workers.OrphanSweep do
         |> Enum.reduce_while(0, fn id, acc ->
           if enabled?(),
             do: {:cont, acc + delete_fun.(Map.fetch!(found, id))},
-            else: {:halt, acc}
+            else: {:halt, tap(acc, fn _ -> stopped(store) end)}
         end)
     end
   end
