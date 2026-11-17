@@ -40,6 +40,7 @@ defmodule Engram.Notes.NameIndex do
   alias Engram.Crypto
   alias Engram.Native
   alias Engram.Notes
+  alias Engram.Notes.Location
   alias Engram.Repo
 
   require Logger
@@ -119,7 +120,11 @@ defmodule Engram.Notes.NameIndex do
   end
 
   defp build(user, vault) do
-    rows = Repo.with_tenant!(user.id, fn -> raw_rows(user, vault) end)
+    {rows, moves} =
+      Repo.with_tenant!(user.id, fn ->
+        {raw_rows(user, vault), Location.vault_moves(user, vault)}
+      end)
+
     {:ok, dek} = Crypto.get_dek(user)
 
     result =
@@ -132,6 +137,7 @@ defmodule Engram.Notes.NameIndex do
 
     case result do
       {:ok, handle, bytes} ->
+        _ = put_shown_paths(handle, user, moves)
         GenServer.call(__MODULE__, {:built, vault.id, handle, bytes}, @build_timeout)
         {:ok, handle}
 
@@ -139,6 +145,27 @@ defmodule Engram.Notes.NameIndex do
         Logger.error("name_index build failed: undecryptable name", vault_id: vault.id)
         GenServer.call(__MODULE__, {:failed, vault.id})
         :error
+    end
+  end
+
+  # The build decrypts STORED paths. Under a folder moved without a cascade
+  # (S5) a note is shown where its folder chain puts it (`Location`), so
+  # those notes are re-put at that path (an empty title keeps theirs). The
+  # one place this module holds plaintext paths as Elixir terms, and only in
+  # a vault holding such a folder (none before S5); `vault_moves/2` is one
+  # index probe otherwise.
+  defp put_shown_paths(_handle, _user, nil), do: :ok
+
+  defp put_shown_paths(handle, user, moves) do
+    case Location.listing_paths(user, moves) do
+      shown when shown == %{} ->
+        :ok
+
+      shown ->
+        Native.name_index_patch(
+          handle,
+          Enum.map(shown, fn {id, path} -> {:put, Ecto.UUID.dump!(id), path, ""} end)
+        )
     end
   end
 
@@ -288,6 +315,26 @@ defmodule Engram.Notes.NameIndex do
   @impl true
   def handle_info(%Phoenix.Socket.Broadcast{event: "note_changed", payload: payload}, state) do
     {:noreply, route_burst([event_of(payload)], state)}
+  end
+
+  # A folder rename or move (broadcast after its commit): an S5 one
+  # (`Engram.Folders.WriteStop`) writes no note row and so sends no per-note
+  # event. Mark the cached index stale (the next search rebuilds it with
+  # shown paths, `put_shown_paths/3`, while this one answers), and drop a
+  # build in flight: it may have read rows from before the move (its waiters
+  # get `:error`, an empty completion, and the next search builds again).
+  def handle_info(
+        %Phoenix.Socket.Broadcast{event: "folder_changed", topic: "sync:" <> ids},
+        state
+      ) do
+    case String.split(ids, ":", parts: 2) do
+      [_user_id, vault_id] ->
+        _ = :ets.update_element(@table, vault_id, {6, now() - @max_age_ms - 1})
+        {:noreply, abandon(state, vault_id)}
+
+      _ ->
+        {:noreply, state}
+    end
   end
 
   def handle_info({:name_index_put, vault_id, id, path, title}, state) do

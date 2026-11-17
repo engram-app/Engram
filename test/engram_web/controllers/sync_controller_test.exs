@@ -26,6 +26,7 @@ defmodule EngramWeb.SyncControllerTest do
       assert body == %{
                "change_seq" => 0,
                "feed_seq" => 0,
+               "feed_seq_moved" => 0,
                "pending_crdt_updates" => 0,
                "pending_checkpoints" => 0,
                "deferred_checkpoints" => 0,

@@ -73,12 +73,15 @@ defmodule Engram.Notes.Location do
   @doc """
   The S5 readers' capability level (Engram#2523): a node answering 1 reads,
   writes next to, deletes and restores notes under a folder moved without
-  a cascade correctly. The S5 writer moves folders that way only while every
-  node answers it (`Engram.Cluster.Readiness.peers_report/4`); an older build
-  has no such function and counts as behind.
+  a cascade correctly; 2 also serves such a move to plugins older than S4
+  (the moved-folder feed, `Engram.Notes.list_moved_changes/4`, the manifest's
+  moved seq, shown-path announces). The S5 writer moves folders that way
+  only while every node answers at least `Engram.Folders.WriteStop`'s level
+  (`Engram.Cluster.Readiness.peers_report/4`); an older build has no such
+  function, or a lower level, and counts as behind.
   """
-  @spec s5_reads() :: 1
-  def s5_reads, do: 1
+  @spec s5_reads() :: 2
+  def s5_reads, do: 2
 
   @doc "The columns `paths/2` reads from a row, beside `id`, `vault_id`, `deleted_at` and the path."
   @spec fields() :: [:folder_ref_id | :name_ciphertext | :name_nonce | :name_stamp, ...]
@@ -475,19 +478,31 @@ defmodule Engram.Notes.Location do
   """
   @spec listing_moves(map(), map(), [map()] | nil) :: {[map()], [map()]} | nil
   def listing_moves(user, vault, probed_rows) do
-    if moved?(probed_rows || []) do
-      rows =
-        Repo.all(
-          from(n in Engram.Notes.Note,
-            where:
-              n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
-                n.kind == "note",
-            select: map(n, ^[:id, :vault_id, :deleted_at, :path_nonce | fields()])
-          )
-        )
+    if moved?(probed_rows || []), do: read_moves(user, vault)
+  end
 
-      {rows, read_chains(rows)}
-    end
+  @doc """
+  `listing_moves/3` for a listing that read no rows with `moved_column/2`:
+  one probe (`named?/2`) first, nil when the vault never moved a folder
+  without a cascade. Inside the caller's tenant transaction.
+  """
+  @spec vault_moves(map(), map()) :: {[map()], [map()]} | nil
+  def vault_moves(user, vault) do
+    if named?(user.id, vault.id), do: read_moves(user, vault)
+  end
+
+  defp read_moves(user, vault) do
+    rows =
+      Repo.all(
+        from(n in Engram.Notes.Note,
+          where:
+            n.user_id == ^user.id and n.vault_id == ^vault.id and is_nil(n.deleted_at) and
+              n.kind == "note",
+          select: map(n, ^[:id, :vault_id, :deleted_at, :path_nonce | fields()])
+        )
+      )
+
+    {rows, read_chains(rows)}
   end
 
   @doc """
@@ -509,6 +524,24 @@ defmodule Engram.Notes.Location do
         %{}
     end
   end
+
+  @doc """
+  `%{id => seq}` for the notes of `listing_moves/3`'s answer shown under a
+  folder moved without a cascade: the highest such folder's seq on the
+  note's chain. A listing serves a note's seq as the later of its own and
+  this one, so a client comparing the manifest against its seq cursor (the
+  plugin's manifest validator) sees a moved note as changed when the move
+  was, not at its older own seq. CPU only, over the chains already read.
+  """
+  @spec listing_seqs({[map()], [map()] | nil} | nil) :: %{Ecto.UUID.t() => integer()}
+  def listing_seqs({rows, [_ | _] = chains}) do
+    named = Enum.filter(rows, &derivable?/1)
+    by_folder = Rows.moved_seqs(chains, named |> Enum.map(& &1.folder_ref_id) |> Enum.uniq())
+
+    for r <- named, seq = by_folder[r.folder_ref_id], seq != nil, into: %{}, do: {r.id, seq}
+  end
+
+  def listing_seqs(_moves), do: %{}
 
   @doc """
   The listing's additive folder fields (O(1) folder rename plan, Engram#2523),

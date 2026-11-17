@@ -45,14 +45,18 @@ defmodule Engram.Folders.MovedFolderFeedPlanTest do
         Folders.Rows.descendant_ids(v.id, folder.id, 100)
       end)
 
-    padded = Enum.map(refs, &Ecto.UUID.dump!/1)
+    raw = Enum.map(refs, &Ecto.UUID.dump!/1)
+    zero = Ecto.UUID.dump!("00000000-0000-0000-0000-000000000000")
+    params = [Ecto.UUID.dump!(v.id), raw, seq, zero, 3]
 
     for which <- [:live, :dead] do
-      sql = Notes.moved_ids_sql(which, 8)
-      zero = Ecto.UUID.dump!("00000000-0000-0000-0000-000000000000")
-      params = [Ecto.UUID.dump!(v.id), padded, seq, zero, 3]
+      # The custom plan folds a padded (NULL) slot to an empty child, so it is
+      # read at the subtree's own width; the generic plan, which prod reuses,
+      # at the padded width `moved_ids/6` sends.
+      %{custom: custom} =
+        QueryPlan.rls_plans(u.id, Notes.moved_ids_sql(which, length(refs)), params)
 
-      %{custom: custom, generic: generic} = QueryPlan.rls_plans(u.id, sql, params)
+      %{generic: generic} = QueryPlan.rls_plans(u.id, Notes.moved_ids_sql(which, 8), params)
 
       for plan <- [custom, generic] do
         assert plan =~ "Merge Append", plan

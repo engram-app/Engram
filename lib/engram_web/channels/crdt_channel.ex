@@ -720,7 +720,10 @@ defmodule EngramWeb.CrdtChannel do
           cursor,
           cursor_id,
           limit,
-          :all
+          :all,
+          nil,
+          # compat(plugin): moved_folder_feed - remove when plugin floor includes Engram-obsidian#689 (#2523)
+          moved: Engram.Sync.moved_feed?(socket.assigns[:plugin_version])
         )
 
       {next_seq, next_id} =

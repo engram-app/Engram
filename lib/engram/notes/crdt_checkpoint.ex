@@ -28,6 +28,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
     CrdtDeliver,
     CrdtUpdateLog,
     Helpers,
+    Location,
     Note,
     NoteBody,
     Revisions
@@ -271,7 +272,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
                 # #1710: the finalize decision rides out the same way. A
                 # CRDT-created row holds the hash of empty text, not nil, so its
                 # first checkpoint is the create and has no old text to finalize.
-                carry_out(result, note, recording)
+                carry_out(result, note, recording, user)
             end
           end)
 
@@ -409,13 +410,18 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # path, the PRE-write embed priority, the finalize decision, and the title
   # the checkpoint re-derived when it differs from the stored one (for the
   # post-commit name-index announce). Anything else passes through.
-  defp carry_out({prev_hash, new_hash, path, title, pruned}, note, recording) do
-    {prev_hash, new_hash, path, EmbedNote.priority_for(note),
+  # `path` out is the one the note is SHOWN at, for the post-commit announces:
+  # under a folder moved without a cascade (S5) the stored path is the old
+  # one, and a plugin handed it re-maps the id there and moves the file back
+  # (`discoverAnnouncedNote`). One index probe (`Location.shown_path/3`),
+  # plus the chain read only in a vault holding such a folder.
+  defp carry_out({prev_hash, new_hash, path, title, pruned}, note, recording, user) do
+    {prev_hash, new_hash, Location.shown_path(user, note) || path, EmbedNote.priority_for(note),
      finalize?(note, recording, prev_hash, new_hash), if(title && title != note.title, do: title),
      pruned}
   end
 
-  defp carry_out(other, _note, _recording), do: other
+  defp carry_out(other, _note, _recording, _user), do: other
 
   defp finalize?(note, recording, prev_hash, new_hash),
     do: note.content not in [nil, ""] and Revisions.finalize?(recording, prev_hash, new_hash)

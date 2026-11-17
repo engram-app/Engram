@@ -336,15 +336,19 @@ defmodule Engram.Folders.WriteStopOldPluginTest do
       held = Map.new(moved_paths(), &{&1, note_id(u, v, &1)})
       assert {:ok, _} = Folders.rename(u, v, "A", "B")
 
-      # Two notes die at one path: n1, then n2 renamed onto it (a re-create
-      # there would be refused as delete-wins).
+      # Two notes die at one path: n1, then a new note created there once
+      # the delete-wins window has passed (the tombstone aged here).
       :ok = Notes.delete_note(u, v, "B/n1.md")
-      assert {:ok, _} = Notes.rename_note(u, v, "B/n2.md", "B/n1.md")
+      age_tombstones!(v)
+      put!(u, v, "B/n1.md", "again")
       :ok = Notes.delete_note(u, v, "B/n1.md")
 
-      files = apply_rows(held, walk(u, v, cursor, 2))
+      rows = walk(u, v, cursor, 2)
+      assert Enum.count(rows, &(&1.path == "B/n1.md" and not &1.deleted)) >= 2
+
+      files = apply_rows(held, rows)
       refute Map.has_key?(files, "B/n1.md")
-      refute Map.has_key?(files, "B/n2.md")
+      refute Enum.any?(Map.keys(files), &String.starts_with?(&1, "A/"))
       refute Enum.any?(Map.keys(files), &String.starts_with?(&1, "A/"))
     end
 
@@ -389,6 +393,14 @@ defmodule Engram.Folders.WriteStopOldPluginTest do
       assert "B/n1.md" in paths
       refute "A/n1.md" in paths
     end
+  end
+
+  defp age_tombstones!(vault) do
+    Repo.query!(
+      "UPDATE notes SET deleted_at = deleted_at - interval '1 day' " <>
+        "WHERE vault_id = $1 AND deleted_at IS NOT NULL",
+      [Ecto.UUID.dump!(vault.id)]
+    )
   end
 
   defp note_id(user, vault, path),

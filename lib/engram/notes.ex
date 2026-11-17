@@ -6200,6 +6200,251 @@ defmodule Engram.Notes do
         from(n in base, where: n.seq > ^after_seq)
       end
 
+    {changes, has_more} = serve_feed(user, vault, base, limit, fields, max_bytes, nil)
+
+    # Derived from `changes`, NOT the rows read. The post-resolution trim can
+    # drop rows the read still holds, and a cursor taken from the read would
+    # then point past them: the client resumes after rows it was never sent
+    # and they are skipped permanently. Same shape as the merge watermark in
+    # Engram.Sync, one layer down.
+    next =
+      if has_more do
+        last = List.last(changes)
+        if last, do: {last.seq, last.id}
+      end
+
+    {:ok, %{changes: changes, has_more: has_more, next: next}}
+  end
+
+  # compat(plugin): moved_folder_feed - remove when plugin floor includes Engram-obsidian#689 (#2523)
+  @doc """
+  The moved-folder feed: what a plugin older than the S4 one (which learns a
+  folder move from `folder_changed` and the manifest's `folders`) needs to
+  learn a folder rename or move S5 wrote as ONE folder row
+  (`Engram.Folders.WriteStop`). Those notes keep their seq, so the seq feed
+  (`list_changes_by_seq/4`) never serves them again; this serves each live
+  note in the CURRENT subtree of every folder moved without a cascade at a
+  seq past the cursor, as an upsert at its shown path, AT THE FOLDER'S SEQ,
+  in id order, through the same page pipeline. The old plugin moves the
+  file by id (`moveIfIdRelocated`), as it does for a single-note rename.
+
+  Same cursor and options as `list_changes_by_seq/4` (`after_id:`, `limit:`,
+  `fields:`, `max_bytes:`); merged with it by `Engram.Sync` under the same
+  watermark. A page serves one folder's rows (the first past the cursor that
+  has any), in note-id order, resumed by `id > after_id`: 1.39.x builds its
+  cursor from the max `(seq, id)` it has seen. A folder moved twice keeps
+  its last seq, which covers the earlier one; nested moves serve a note
+  twice (an idempotent upsert); a note moved in or out, or edited, since the
+  move has its own later row (`seq < folder seq` here).
+
+  A note that died under the folder after the move is served too, as an
+  upsert at its tombstone path, to a client with a cursor (see
+  `moved_rows/5`), so it moves the file by id before the tombstone trashes
+  it, as the cascade's old-path tombstone did.
+
+  Cost per page: one range on `folders_moved_seq`, then per folder tried a
+  subtree walk (O(subfolders)) and, per leg, a Merge Append
+  (`moved_ids/6`: `k + F + R` index entries), then the page read. Nothing
+  is written.
+  """
+  @spec list_moved_changes(map(), map(), integer(), keyword()) ::
+          {:ok, %{changes: [map()], has_more: boolean(), next: {integer(), binary()} | nil}}
+  def list_moved_changes(user, vault, after_seq, opts \\ []) when is_integer(after_seq) do
+    limit =
+      opts
+      |> Keyword.get(:limit, @changes_page_max_limit)
+      |> min(@changes_page_max_limit)
+      |> max(1)
+
+    fields = Keyword.get(opts, :fields, :all)
+    after_id = Keyword.get(opts, :after_id)
+    max_bytes = Keyword.get(opts, :max_bytes) || page_max_bytes()
+
+    {:ok, picked} =
+      Repo.with_tenant(user.id, fn -> pick_moved(vault_id(vault), after_seq, after_id, limit) end)
+
+    case picked do
+      nil ->
+        {:ok, %{changes: [], has_more: false, next: nil}}
+
+      {folder, ids, later?} ->
+        stamps = Map.new(ids, &{&1, {folder.seq, folder.updated_at}})
+
+        base =
+          from(n in feed_rows(user, vault),
+            where: n.id in ^ids,
+            order_by: [asc: n.id],
+            limit: ^(limit + 1)
+          )
+
+        {changes, has_more} = serve_feed(user, vault, base, limit, fields, max_bytes, stamps)
+        has_more = has_more or later?
+
+        next =
+          if has_more do
+            last = List.last(changes)
+            if last, do: {last.seq, last.id}
+          end
+
+        {:ok, %{changes: changes, has_more: has_more, next: next}}
+    end
+  end
+
+  # Folders a moved subtree may hold: the walk's answer cap (the walk itself
+  # visits them all, `Rows.descendant_ids/4`).
+  @moved_subtree_cap 1_000_000
+
+  @doc """
+  The highest seq above `after_seq` at which the moved-folder feed would
+  serve a row (`list_moved_changes/4` to a client with a cursor), or 0: a
+  moved folder with nothing to serve is never reached by a client's cursor,
+  so it must not count toward a feed head (`Engram.Sync.feed_head/3`).
+  Inside the caller's tenant transaction. Reads the moved folders past
+  `after_seq`, newest first, until one has a row.
+  """
+  @spec moved_head(Ecto.UUID.t(), integer()) :: non_neg_integer()
+  def moved_head(vault_id, after_seq) do
+    vault_id
+    |> Rows.moved_since(after_seq, false, dead: true)
+    |> Enum.reverse()
+    |> Enum.find_value(0, fn f ->
+      if moved_rows(vault_id, f, nil, 1, true) != [], do: f.seq
+    end)
+  end
+
+  # The first moved folder past the cursor with a note to serve:
+  # `{folder, note ids in id order (at most limit + 1), dead ids, whether a
+  # moved folder follows}`, or nil. A folder with nothing left (every note
+  # written since, or the cursor on its last note) falls through to the next
+  # one, so the caller never reports more with no row to hold it.
+  #
+  # Id order inside the folder's seq, resumed by `id > after_id`: a 1.39.x
+  # client sends back the max `(seq, id)` it has seen as its cursor
+  # (`cursorAdvances`), so any other order stalls it.
+  defp pick_moved(vault_id, after_seq, after_id, limit) do
+    folders = Rows.moved_since(vault_id, after_seq, after_id != nil, dead: after_seq > 0)
+    last = length(folders) - 1
+
+    folders
+    |> Enum.with_index()
+    |> Enum.find_value(fn {f, i} ->
+      from_id = if f.seq == after_seq, do: after_id
+
+      case moved_rows(vault_id, f, from_id, limit + 1, after_seq > 0) do
+        [] -> nil
+        ids -> {f, ids, i < last}
+      end
+    end)
+  end
+
+  # The first `k` ids `pick_moved/4` serves for folder `f` past `from_id`:
+  # its live notes, and (`dead?`, a client with a cursor; a cursor of 0
+  # holds no file) the notes that died under it after the move, served as
+  # upserts at their tombstone path so the client moves the file there by
+  # id and the tombstone then trashes it (the cascade's sequence).
+  defp moved_rows(vault_id, f, from_id, k, dead?) do
+    live =
+      if f.dead,
+        do: [],
+        else:
+          moved_ids(
+            vault_id,
+            Rows.descendant_ids(vault_id, f.id, @moved_subtree_cap),
+            :live,
+            f.seq,
+            from_id,
+            k
+          )
+
+    dead =
+      if dead? do
+        refs = Rows.descendant_ids(vault_id, f.id, @moved_subtree_cap, dead: true)
+        moved_ids(vault_id, refs, :dead, f.seq, from_id, k)
+      else
+        []
+      end
+
+    (live ++ dead) |> Enum.sort() |> Enum.dedup() |> Enum.take(k)
+  end
+
+  # Subfolders per statement of `moved_ids/6`, per leg (`:live` and `:dead`
+  # each send their own).
+  @moved_children 256
+
+  @moved_preds %{
+    live: "deleted_at IS NULL AND kind = 'note' AND seq < $3",
+    dead: "deleted_at IS NOT NULL AND kind = 'note' AND seq > $3"
+  }
+
+  # The first `k` note ids, in id order, past `from_id`, of `refs`' folders:
+  # `:live` notes not written since the move (`seq < folder_seq`; a later
+  # write rides its own row), or `:dead` ones that died after it. One lazy
+  # Merge Append per 256 subfolders: a child per subfolder, `ORDER BY id
+  # LIMIT k` on `notes_folder_ref_live_id` (or `notes_folder_ref_dead_id`),
+  # under an outer `ORDER BY id LIMIT k`. One array parameter.
+  #
+  # ponytail: a page reads `k + F + R` index entries per leg: `k` served, one
+  # descent per subfolder F, and R rejected by the seq filter above the
+  # cursor. Dead: index-only (`seq` is INCLUDEd), so R is tombstones older
+  # than the move. Live: `seq` is a heap check, and R is notes edited since
+  # the move (each also served on its own row). Past 256 subfolders the
+  # chunks each read `k` and are merged here: `ceil(F / 256) x k + F + R`.
+  defp moved_ids(_vault_id, [], _which, _folder_seq, _from_id, _k), do: []
+
+  defp moved_ids(vault_id, refs, which, folder_seq, from_id, k) do
+    after_raw = Ecto.UUID.dump!(from_id || "00000000-0000-0000-0000-000000000000")
+    vault_raw = Ecto.UUID.dump!(vault_id)
+
+    refs
+    |> Enum.map(&Ecto.UUID.dump!/1)
+    |> Enum.chunk_every(@moved_children)
+    |> Enum.flat_map(fn chunk ->
+      # A fixed width per chunk (`moved_width/1`): the slots past the
+      # chunk's folders are NULL and match nothing, so there are three
+      # statement shapes, not one per subtree size.
+      %{rows: rows} =
+        Repo.query!(moved_ids_sql(which, moved_width(length(chunk))), [
+          vault_raw,
+          chunk,
+          folder_seq,
+          after_raw,
+          k
+        ])
+
+      Enum.map(rows, fn [id] -> id end)
+    end)
+    |> Enum.sort()
+    |> Enum.take(k)
+    |> Enum.map(&Ecto.UUID.load!/1)
+  end
+
+  defp moved_width(n) when n <= 8, do: 8
+  defp moved_width(n) when n <= 32, do: 32
+  defp moved_width(_n), do: @moved_children
+
+  @doc false
+  # The statement `moved_ids/6` sends for `n` subfolders (also the plan test's).
+  def moved_ids_sql(which, n) do
+    pred = Map.fetch!(@moved_preds, which)
+
+    children =
+      Enum.map_join(1..n, " UNION ALL ", fn i ->
+        "(SELECT id FROM notes WHERE vault_id = $1 AND folder_ref_id = ($2::uuid[])[#{i}] " <>
+          "AND #{pred} AND id > $4 ORDER BY id LIMIT $5)"
+      end)
+
+    "SELECT id FROM (#{children}) AS u ORDER BY id LIMIT $5"
+  end
+
+  # The feed page pipeline for `base` (a LIMIT limit + 1 query in the page's
+  # order): byte budget, decrypt, stale-body resolution, shown paths, change
+  # maps, second budget pass. Returns `{changes, has_more}`.
+  #
+  # `stamps` (the moved-folder feed, `list_moved_changes/4`): `%{id =>
+  # {seq, updated_at}}`, the folder's seq and move time each row is served
+  # at instead of its own; `base` is then in id order. nil: each row's own
+  # seq, `base` in (seq, id) order.
+  defp serve_feed(user, vault, base, limit, fields, max_bytes, stamps) do
     query =
       case fields do
         :meta -> from(n in base, select: struct(n, @note_meta_fields))
@@ -6238,7 +6483,7 @@ defmodule Engram.Notes do
     {notes, budget_more, chains} =
       case {fields, max_bytes} do
         {:all, b} when is_integer(b) and b > 0 ->
-          budgeted_page(base, user, limit, b, moved)
+          budgeted_page(base, user, limit, b, moved, stamps)
 
         _ ->
           # Unbudgeted (`:meta`, or no byte budget): the chains statement
@@ -6293,13 +6538,14 @@ defmodule Engram.Notes do
       decrypted
       |> Enum.map(&if(fields == :all, do: Map.get(resolved, &1.id, &1), else: &1))
       |> then(&Location.put_paths(user, &1, chains))
+      |> Enum.map(&stamp(&1, stamps))
 
     changes =
       Enum.zip_with(decrypted, located, fn note, resolved_note ->
         resolved_note
         |> change_map(fields)
         |> Map.merge(Location.wire_fields(resolved_note, names?))
-        |> Map.put(:seq, note.seq)
+        |> Map.put(:seq, stamped_seq(note, stamps))
       end)
 
     # Second budget pass, on what the page ACTUALLY carries.
@@ -6317,28 +6563,37 @@ defmodule Engram.Notes do
     # chunked by @resolve_chunk, which bounds its own peak). What it bounds is
     # the frame — the Elixir term, its JSON encoding and the transport buffer,
     # which is where the multiple lives.
-    {changes, has_more} = trim_to_budget(changes, has_more, fields, max_bytes)
+    trim_to_budget(changes, has_more, fields, max_bytes)
+  end
 
-    # Derived from `changes`, NOT `page`. The post-resolution trim can drop rows
-    # that `page` still holds, and a cursor taken from `page` would then point
-    # past them — the client resumes after rows it was never sent and they are
-    # skipped permanently. Same shape as the merge watermark in Engram.Sync, one
-    # layer down.
-    next =
-      if has_more do
-        last = List.last(changes)
-        if last, do: {last.seq, last.id}
-      end
+  defp stamped_seq(note, nil), do: note.seq
+  defp stamped_seq(note, stamps), do: stamps |> Map.fetch!(note.id) |> elem(0)
 
-    {:ok, %{changes: changes, has_more: has_more, next: next}}
+  # The move time, when later than the note's own: the plugin drops an
+  # id-keyed move whose time is older than the last one it applied for that
+  # id (`moveIfIdRelocated`), and the cascade this row replaces stamped now.
+  # A note that died after the move (`pick_moved/4`) is served as an upsert
+  # at its tombstone path: the client moves the file there by id, and the
+  # tombstone, at its own later seq, then trashes it.
+  defp stamp(note, nil), do: note
+
+  defp stamp(note, stamps) do
+    {_seq, at} = Map.fetch!(stamps, note.id)
+    note = %{note | deleted_at: nil}
+
+    if note.updated_at && DateTime.compare(at, note.updated_at) != :gt,
+      do: note,
+      else: %{note | updated_at: at}
   end
 
   # Trim an already-built page to the byte budget, reporting whether anything
   # was dropped. Mirrors count_within_budget's first-row rule: one oversized
   # note ships alone rather than producing an empty page the feed can never
   # drain past.
-  defp trim_to_budget(changes, has_more, :all, max_bytes)
-       when is_integer(max_bytes) and max_bytes > 0 do
+  @doc false
+  # Also `Engram.Sync`'s merged page, which joins two budgeted feeds.
+  def trim_to_budget(changes, has_more, :all, max_bytes)
+      when is_integer(max_bytes) and max_bytes > 0 do
     kept =
       changes
       |> Enum.reduce_while({[], 0}, fn change, {acc, used} ->
@@ -6356,7 +6611,7 @@ defmodule Engram.Notes do
     {kept, has_more or length(kept) < length(changes)}
   end
 
-  defp trim_to_budget(changes, has_more, _fields, _max_bytes), do: {changes, has_more}
+  def trim_to_budget(changes, has_more, _fields, _max_bytes), do: {changes, has_more}
 
   # Decrypts the page row by row against the PLAINTEXT budget and stops at the
   # first row that does not fit, so the decrypt peak is the budget plus one row
@@ -6405,18 +6660,24 @@ defmodule Engram.Notes do
   # transport buffer), so the live cost is a small multiple of this, not this.
   @default_page_max_bytes 4 * 1024 * 1024
 
-  defp page_max_bytes do
+  @doc false
+  # The feed page byte budget, shared with `Engram.Sync`'s merged page.
+  def page_max_bytes do
     Application.get_env(:engram, :sync_page_max_bytes, @default_page_max_bytes)
   end
 
   # The next page (up to `limit + 1` rows of `base`), cut at the byte budget
   # (`budget_cut/5`), and whether the budget (not the row limit) is what
   # stopped it.
-  defp budgeted_page(base, user, limit, max_bytes, moved) do
+  defp budgeted_page(base, user, limit, max_bytes, moved, stamps) do
+    # The moved-folder feed serves one folder's notes at its one seq, in id
+    # order: a first key constant over the page (its vault) keeps the cut so.
+    ord1 = if stamps, do: dynamic([n], n.vault_id), else: dynamic([n], n.seq)
+
     {rows, total, _spent, chains} =
       budget_cut_rows(
         base,
-        dynamic([n], n.seq),
+        ord1,
         @note_fields_without_crdt,
         user,
         max_bytes,

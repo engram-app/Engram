@@ -121,6 +121,14 @@ defmodule EngramWeb.Schemas.SyncQuiescenceResponse do
           "Highest seq the op-log catch-up feed can serve (notes and attachments; " <>
             "folder rows bump `change_seq` but are not in the feed)."
       },
+      feed_seq_moved: %Schema{
+        type: :integer,
+        description:
+          "The feed head a plugin older than 1.40.0 waits for: `feed_seq` or the " <>
+            "highest seq of a folder moved without a cascade, whichever is higher " <>
+            "(those clients get each such folder's notes at its seq). 1.40.0 and " <>
+            "later wait for `feed_seq`."
+      },
       pending_crdt_updates: %Schema{
         type: :integer,
         description: "CRDT updates stored but not yet folded into their note by a checkpoint."
@@ -147,6 +155,7 @@ defmodule EngramWeb.Schemas.SyncQuiescenceResponse do
     required: [
       :change_seq,
       :feed_seq,
+      :feed_seq_moved,
       :pending_crdt_updates,
       :pending_checkpoints,
       :deferred_checkpoints,
