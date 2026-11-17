@@ -268,8 +268,11 @@ defmodule Engram.Folders.LiveRefTest do
         id,
         [:engram, :repo, :query],
         fn _, _, meta, _ ->
-          if self() == pid and meta[:source] == "notes" and
-               not Process.get(:probed, false) and in_frame?(frame) do
+          # Every notes statement in `frame`, so the LAST scan is the one
+          # judged: a folder op first plans and claims from a scan OUTSIDE the
+          # lock (#2622, a claim cannot join the transaction), then re-scans
+          # under it, and its writes use that re-scan.
+          if self() == pid and meta[:source] == "notes" and in_frame?(frame) do
             Process.put(:probed, true)
             Process.put(:free_during, lock_free_from_elsewhere?(vault_id))
           end

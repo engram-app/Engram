@@ -1256,20 +1256,7 @@ defmodule Engram.Attachments do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
-      items =
-        Enum.map(pairs, fn {old_path, new_path} ->
-          old_path = PathSanitizer.sanitize(old_path)
-          new_path = PathSanitizer.sanitize(new_path)
-
-          %{
-            old_path: old_path,
-            new_path: new_path,
-            old_hmac: Crypto.hmac_field(filter_key, old_path),
-            new_hmac: Crypto.hmac_field(filter_key, new_path),
-            old_basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(old_path)),
-            new_basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(new_path))
-          }
-        end)
+      items = move_items(pairs, filter_key)
 
       Repo.with_tenant(user.id, fn ->
         # Vault first, then the source rows (LOCK ORDER, `Engram.Vaults`).
@@ -1302,6 +1289,44 @@ defmodule Engram.Attachments do
         {:error, _} = err ->
           err
       end
+    end
+  end
+
+  defp move_items(pairs, filter_key) do
+    Enum.map(pairs, fn {old_path, new_path} ->
+      old_path = PathSanitizer.sanitize(old_path)
+      new_path = PathSanitizer.sanitize(new_path)
+
+      %{
+        old_path: old_path,
+        new_path: new_path,
+        old_hmac: Crypto.hmac_field(filter_key, old_path),
+        new_hmac: Crypto.hmac_field(filter_key, new_path),
+        old_basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(old_path)),
+        new_basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(new_path))
+      }
+    end)
+  end
+
+  @doc """
+  `move_folder_pairs/3`'s target check alone, read-only and unlocked: `:ok`, or
+  the `{:error, :conflict}` the move would return. A folder op runs it before
+  it claims index paths, so a refusal it can know up front claims nothing; the
+  move re-checks under its lock.
+  """
+  @spec check_move_targets(map(), map(), [{String.t(), String.t()}]) :: :ok | {:error, term()}
+  def check_move_targets(_user, _vault, []), do: :ok
+
+  def check_move_targets(user, vault, pairs) do
+    user = fresh_user(user)
+
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      moving = pairs |> move_items(filter_key) |> Enum.reject(&(&1.old_path == &1.new_path))
+
+      Repo.with_tenant!(user.id, fn ->
+        move_targets_free(user, vault, moving, fn reason, _old_path -> reason end)
+      end)
     end
   end
 

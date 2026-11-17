@@ -10,7 +10,9 @@ defmodule Engram.Folders.MovedReadsBudgetTest do
   alias Engram.{Crypto, Folders, Notes, QueryRecorder}
 
   @same 3
-  @relocate 38
+  # +7 for the relocate's after-transaction settle (#2622): one roomless index
+  # fold reading the committed row. Constant per relocate.
+  @relocate 45
   @resurrect 25
   @restore 53
 

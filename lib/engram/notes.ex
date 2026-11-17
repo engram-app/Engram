@@ -1740,7 +1740,7 @@ defmodule Engram.Notes do
            seed: Keyword.get(opts, :seed),
            body: Keyword.get(opts, :body)
          },
-         {:ran, result, claimed?} <- run_genesis(genesis, initial_claim(opts)) do
+         {:ran, result, _claimed?} <- run_genesis(genesis, initial_claim(opts)) do
       {result, seed_outcome} = take_seed(result)
 
       announced =
@@ -1797,11 +1797,12 @@ defmodule Engram.Notes do
             # path", because only the former means the caller's frame was applied.
             {:adopted, note}
 
+          # A claimed relocate that failed was settled in `run_genesis/2`.
           {:ok, inner} ->
-            report_genesis_orphan(inner, user, vault, claimed?)
+            inner
 
           {:error, _} = err ->
-            report_genesis_orphan(err, user, vault, claimed?)
+            err
         end
 
       with_seed(announced, seed_outcome)
@@ -1817,7 +1818,7 @@ defmodule Engram.Notes do
 
   # One row transaction for every create that claims nothing, which is all of
   # them except a live id moving to a new path. That one leg classifies inside
-  # the transaction, returns `{:claim_first, live}` before writing anything,
+  # the transaction, returns `{:claim_first, live, shown}` before writing anything,
   # claims OUTSIDE it, and re-runs with the claim settled. The re-run
   # classifies afresh, so a row that changed in between is handled exactly as
   # the old claim-then-transaction order handled it.
@@ -1825,10 +1826,22 @@ defmodule Engram.Notes do
     case Repo.with_tenant(g.user.id, fn ->
            g |> genesis_txn(claim) |> probe_vault_populated(g) |> seed_in_txn(g)
          end) do
-      {:ok, {:claim_first, live}} ->
-        case claim_crdt_relocate(g, live) do
-          {:ok, claimed?} -> run_genesis(g, {:done, claimed?})
-          {:error, _} = err -> err
+      {:ok, {:claim_first, live, shown}} ->
+        case claim_crdt_relocate(g, live, shown) do
+          {:ok, false} ->
+            run_genesis(g, {:done, false})
+
+          # Claimed: the relocate's row transaction settles like every other
+          # claimant's (`with_settle/4`).
+          {:ok, entry} ->
+            with_settle(g.user, g.vault, [entry], fn ->
+              # Test seam (nil outside tests): claimed, row not yet moved.
+              :ok = interleave_hook(:relocate_claimed)
+              run_genesis(g, {:done, true})
+            end)
+
+          {:error, _} = err ->
+            err
         end
 
       result ->
@@ -1911,11 +1924,12 @@ defmodule Engram.Notes do
           {:ok, true, shown} ->
             {:ok, live |> decrypt_or_raise!(user) |> found_at(shown)}
 
-          {:ok, false, _shown} when claim == :pending ->
+          {:ok, false, shown} when claim == :pending ->
             # A relocate claims BEFORE the row moves (see
             # claim_crdt_relocate/2), so back out of this read-only
-            # transaction, claim, and re-run with the claim settled.
-            {:claim_first, live}
+            # transaction, claim, and re-run with the claim settled. `shown`
+            # (where the readers place the note) is the settle's pre-op path.
+            {:claim_first, live, shown || decrypt_or_raise!(live, user).path}
 
           {:ok, false, shown} ->
             # Phase E2 (rename-as-move): a crdt_create for a KNOWN live
@@ -1990,7 +2004,15 @@ defmodule Engram.Notes do
   #     name a row that never exists.
   #   * an OCCUPIED target is `:id_conflict` below, and claiming for a relocate
   #     that is about to be refused is the same permanent-unclaimability bug.
-  defp claim_crdt_relocate(g, live), do: claim_free_target(g.user, g.vault, live.id, g.path)
+  # `{:ok, {note_id, pre_path, claimed_path}}` once claimed, for the settle.
+  # `shown` was read before the claim, so nothing between the claim and the
+  # settle can fail.
+  defp claim_crdt_relocate(g, live, shown) do
+    case claim_free_target(g.user, g.vault, live.id, g.path) do
+      {:ok, id} when is_binary(id) -> {:ok, {id, shown, g.path}}
+      other -> other
+    end
+  end
 
   # The same row check `decide_claim/5` makes, load-bearing for the same reason:
   # `Identity.claim/3` sees only collisions recorded IN THE MAP, and in a vault
@@ -2013,30 +2035,6 @@ defmodule Engram.Notes do
         end
     end
   end
-
-  # A claim is durable and cannot join the row transaction, so a relocate that
-  # claimed and then failed leaves the authority naming a path the row never
-  # reached. Rare (the row check above closes all but a genuine race), but not
-  # eliminable — so it is counted the way `rename_note` counts it rather than
-  # silently dropped.
-  # Calls `orphan_claim/4` directly rather than reusing `report_orphan_claim/5`.
-  # That helper returns whatever `err` it was handed, so feeding it this path's
-  # `{:error, :id_conflict, note}` widened its inferred return type to include a
-  # 3-tuple — and `rename_note/5`, which shares it, then had a spec dialyzer
-  # called incomplete for a shape it cannot actually return. Widening that spec
-  # to silence the warning would have documented a return value that does not
-  # exist, so the narrow helper stays narrow.
-  defp report_genesis_orphan({:error, reason, _note} = err, user, vault, true) do
-    _ = orphan_claim(user, vault, 1, reason)
-    err
-  end
-
-  defp report_genesis_orphan({:error, reason} = err, user, vault, true) do
-    _ = orphan_claim(user, vault, 1, reason)
-    err
-  end
-
-  defp report_genesis_orphan(result, _user, _vault, _claimed?), do: result
 
   # :none-branch of genesis_crdt_note/4: no row by client id, so route by PATH.
   # note_by_path_query is computed HERE (its only consumer), not at the top of
@@ -5024,19 +5022,14 @@ defmodule Engram.Notes do
     now = DateTime.utc_now()
 
     with {:ok, user} <- Crypto.ensure_user_dek(user),
-         {:ok, claimed?, named?} <- claim_rename(user, vault, old_path, new_path, opts) do
-      try do
+         {:ok, claimed, named?} <- claim_rename(user, vault, old_path, new_path, opts) do
+      # Settled onto the committed row after the transaction, success, failure
+      # or a SeqGate shed alike (`with_settle/4`).
+      entries = if claimed, do: [{claimed, old_path, new_path}], else: []
+
+      with_settle(user, vault, entries, fn ->
         do_rename_note(user, vault, {old_path, new_path, new_folder}, now, opts, named?)
-      rescue
-        # Shed by the vault's SeqGate AFTER the claim committed: the same
-        # orphan as a failed rename, so projection converges the row.
-        e in SeqGate.BusyError ->
-          _ = report_orphan_claim(user, vault, claimed?, :busy, {:error, :busy})
-          reraise e, __STACKTRACE__
-      else
-        {:ok, _} = ok -> ok
-        {:error, reason} = err -> report_orphan_claim(user, vault, claimed?, reason, err)
-      end
+      end)
     end
   end
 
@@ -5050,7 +5043,7 @@ defmodule Engram.Notes do
   # deriving rows FROM the map and would otherwise feed itself. Claiming is the
   # DEFAULT so that a new call site is fail-safe rather than fail-silent.
   #
-  # Returns `{:ok, claimed?, named?}` so the caller can tell a rename that
+  # Returns `{:ok, claimed, named?}` (`claimed` is the note id, or false) so the caller can tell a rename that
   # failed having committed a claim from one that failed before committing
   # anything. `named?` is the claim lookup's moved-folder answer
   # (`Location.named?/2`, nil when nothing was looked up): the row checks
@@ -5102,25 +5095,9 @@ defmodule Engram.Notes do
     end
   end
 
+  # `{:ok, note_id}` once claimed: the caller settles that note afterwards.
   defp claim_one(user, vault, new_path, note_id) do
-    with :ok <- Identity.claim(user, vault.id, [{new_path, note_id}]), do: {:ok, true}
-  end
-
-  # A claim committed for a rename that then failed. The row check above makes
-  # this rare (a race, or a lost fence in rename_with_retry), but it cannot be
-  # eliminated: a CRDT op cannot join the row transaction, so there is nothing
-  # to roll back with.
-  #
-  # Counted and enqueued rather than hidden. Projection is what converges the
-  # divergence, and NOTHING else would enqueue it — `Identity` deliberately does
-  # not, and a room checkpoint might not happen for hours — so without this the
-  # design's "the row catches up" promise is unimplemented on exactly the path
-  # that breaks it.
-  defp report_orphan_claim(_user, _vault, false, _reason, err), do: err
-
-  defp report_orphan_claim(user, vault, true, reason, err) do
-    _ = orphan_claim(user, vault, 1, reason)
-    err
+    with :ok <- Identity.claim(user, vault.id, [{new_path, note_id}]), do: {:ok, note_id}
   end
 
   @doc false
@@ -5866,38 +5843,109 @@ defmodule Engram.Notes do
   # undone, each only if still ours: a batch that answered an error must not
   # move later through projection.
   defp apply_claimed_moves(user, vault, moves) do
+    with_claim_undo(user, vault, moves, fn ->
+      Repo.transaction_after_commit(fn ->
+        refs = ensure_move_folders!(user, vault, moves)
+        moved = apply_moves(user, vault, moves, refs)
+        # Test seam (nil outside tests): the last point before commit.
+        :ok = interleave_hook(:batch_move_applied)
+        moved
+      end)
+    end)
+  end
+
+  # Runs `fun` (a transaction whose claims `moves`, `[{note, claimed_path}]`,
+  # were made before it), then settles the moved notes' index entries onto
+  # their committed rows (`with_settle/4`).
+  defp with_claim_undo(user, vault, moves, fun) do
+    entries = for {note, path} <- moves, note.path != path, do: {note.id, note.path, path}
+    with_settle(user, vault, entries, fun)
+  end
+
+  # Runs `fun` (a row transaction whose claims were made before it), then
+  # settles each `{note_id, pre_path, claimed_path}` onto its committed row,
+  # whatever `fun` did: returned, failed, raised, exited or threw. The one
+  # after-transaction step of every server claimant (folder ops, batch note
+  # move, `rename_note/5`, the crdt_create relocate); `Identity.settle/4` has
+  # the argument for why it is enough.
+  defp with_settle(_user, _vault, [], fun), do: fun.()
+
+  defp with_settle(user, vault, entries, fun) do
     result =
       try do
-        Repo.transaction_after_commit(fn ->
-          refs = ensure_move_folders!(user, vault, moves)
-          moved = apply_moves(user, vault, moves, refs)
-          # Test seam (nil outside tests): the last point before commit.
-          :ok = interleave_hook(:batch_move_applied)
-          moved
-        end)
+        fun.()
       catch
         kind, reason ->
-          undo_claims(user, vault, moves, kind)
+          settle_claims(user, vault, entries, kind)
           :erlang.raise(kind, reason, __STACKTRACE__)
       end
 
-    with {:error, reason} <- result do
-      undo_claims(user, vault, moves, reason)
-      result
-    end
+    settle_claims(user, vault, entries, settle_why(result))
+    result
   end
 
-  # Moves each claimed note's index entry back to its row path, only while the
-  # entry is still at the target this batch claimed (Identity.unclaim/3). If
-  # the undo fails, the claim is reported for projection to converge.
-  defp undo_claims(user, vault, moves, why) do
-    undo =
-      for {note, new_path} <- moves, note.path != new_path, do: {note.id, new_path, note.path}
+  defp settle_why({:error, reason}), do: reason
+  defp settle_why(_ok), do: :committed
 
-    case Identity.unclaim(user, vault.id, undo) do
+  # Bounds one serialized index step (its row read and path decrypts run inside
+  # it, holding the room's queue).
+  @settle_chunk 500
+
+  # Never raises and never changes the caller's result. A chunk whose settle
+  # fails is retried by a job (`SettleIndexEntries`), NOT by projection:
+  # projection converges rows to the index, so after a failed op it would
+  # execute the move the API just refused.
+  defp settle_claims(user, vault, entries, why) do
+    entries
+    |> Enum.chunk_every(@settle_chunk)
+    |> Enum.each(&settle_chunk(user, vault, &1, why))
+  end
+
+  defp settle_chunk(user, vault, entries, why) do
+    # Test seam (nil outside tests): the transaction is done, not yet settled.
+    :ok = interleave_hook(:claims_settle)
+    allowed = Map.new(entries, fn {id, pre, claimed} -> {id, [pre, claimed]} end)
+
+    case settle_index(user, vault, Map.keys(allowed), &(&2 in Map.fetch!(allowed, &1))) do
       :ok -> :ok
-      error -> orphan_claim(user, vault, length(undo), {why, error})
+      error -> settle_later(user, vault, entries, {why, error})
     end
+  rescue
+    _ -> settle_later(user, vault, entries, {why, :settle_raised})
+  catch
+    kind, _ -> settle_later(user, vault, entries, {why, kind})
+  end
+
+  @doc """
+  `Identity.settle/4` for `note_ids`, reading their committed rows inside the
+  index step. Shared by the inline settle and `SettleIndexEntries`.
+  """
+  @spec settle_index(map(), map(), [String.t()], (String.t(), String.t() -> boolean())) ::
+          :ok | {:error, term()}
+  def settle_index(user, vault, note_ids, allowed?) do
+    rows = fn ->
+      {:ok, by_id} = get_note_meta_by_ids(user, vault, note_ids)
+      for {id, note} <- by_id, do: {id, note.path}
+    end
+
+    Identity.settle(user, vault.id, rows, allowed?)
+  end
+
+  defp settle_later(user, vault, entries, reason) do
+    :telemetry.execute(
+      [:engram, :crdt, :index_claim],
+      %{count: 1, entries: length(entries)},
+      %{op: :claim, route: :orphan, phase: :orphan_claim}
+    )
+
+    Logger.error(
+      "crdt index settle failed, retrying by job: #{Metadata.safe_reason(reason)}",
+      Metadata.with_category(:error, :sync, user_id: user.id, vault_id: vault.id)
+    )
+
+    Engram.Workers.SettleIndexEntries.enqueue(user, vault.id, entries)
+  rescue
+    _ -> :ok
   end
 
   # One meta read for the whole batch (was one transaction per id).
@@ -7855,8 +7903,13 @@ defmodule Engram.Notes do
   # `Crypto.ensure_user_dek/1` already.
   defp rename_folder_gated(user, vault, old_folder, new_folder, rows, drift) do
     new_folder = String.trim_trailing(new_folder, "/")
-    old_prefix = old_folder <> "/"
 
+    with :ok <- gate_folder_rename(user, vault, old_folder, new_folder, drift) do
+      do_rename_folder(user, vault, old_folder, old_folder <> "/", new_folder, rows)
+    end
+  end
+
+  defp gate_folder_rename(user, vault, old_folder, new_folder, drift) do
     cond do
       # A folder cannot move into itself or its own subtree (it would become
       # its own ancestor), by path or by row. Refused before anything is read
@@ -7870,7 +7923,7 @@ defmodule Engram.Notes do
       # No-op rename: same folder. Skip the target conflict check so the
       # call is idempotent rather than colliding with itself.
       old_folder == new_folder ->
-        do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows)
+        :ok
 
       folder_target_exists?(user, vault, new_folder, drift) ->
         # Pre-check the unique (user, vault, path_hmac) constraint so
@@ -7882,9 +7935,227 @@ defmodule Engram.Notes do
         {:error, :conflict}
 
       true ->
-        do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows)
+        :ok
     end
   end
+
+  # ---- claiming a folder op BEFORE its transaction ---------------------------
+  #
+  # `Engram.Folders` runs a rename or batch move as ONE transaction (notes and
+  # attachments roll back together, under the folder-write lock). A claim
+  # cannot join it (docs/context/crdt-identity-authority.md): inside, the
+  # snapshot route rolled back with the caller while the live-room route did
+  # not, and the snapshot route held the index fold lock to the commit. So the
+  # caller claims first, outside (`claim_folder_rename/4`,
+  # `claim_folder_batch_move/4`), then runs its transaction inside
+  # `with_folder_claims/4`.
+  #
+  # Inside, the cascade re-scans under the lock as before and, instead of
+  # claiming, CONSUMES the plan: each cascade step's claims must equal the
+  # planned step's, and every planned step must be consumed before commit
+  # (`folder_claims_consumed/0`). A row that appeared or left between the plan
+  # and the lock makes the attempt `:claims_stale`: it is settled, re-planned
+  # and re-claimed ONCE, and a second disagreement is a `:conflict`. Never a
+  # moved row the index did not claim. After the transaction, whatever it did,
+  # the moved notes are settled onto their committed rows (`settle_claims/4`,
+  # shared with the batch note move and `rename_note/5`): an op the API reports
+  # as failed is not executed later by projection, and no op reverts another's
+  # committed move.
+  #
+  # Cost: one more meta scan of the moved subtree, outside the transaction.
+  @preclaim_key :engram_folder_preclaim
+
+  @typedoc "A folder op's claims, made before its transaction."
+  @type folder_claims :: %{steps: [[{String.t(), String.t()}]], moves: [{map(), String.t()}]}
+
+  @typedoc """
+  The caller's own refusals, run on the planned `[{old_folder, new_folder}]`
+  pairs before anything is claimed (a refused op must never show clients a
+  move and its revert). Its transaction re-checks them under the lock.
+  """
+  @type precheck :: ([{String.t(), String.t()}] -> :ok | {:error, term()})
+
+  @doc """
+  Claims what `rename_folder/4` will move, outside any transaction. Run the
+  rename itself inside `with_folder_claims/4`.
+  """
+  @spec claim_folder_rename(map(), map(), String.t(), String.t(), precheck()) ::
+          {:ok, folder_claims()} | {:error, term()}
+  def claim_folder_rename(user, vault, old_folder, new_folder, precheck \\ fn _ -> :ok end) do
+    new_folder = String.trim_trailing(new_folder, "/")
+
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         :ok <- gate_folder_rename(user, vault, old_folder, new_folder, nil) do
+      rows = fetch_decrypted_live_rows(user, vault, [old_folder])
+      claim_planned(user, vault, rows, [{old_folder, new_folder}], precheck)
+    end
+  end
+
+  @doc """
+  Claims what `batch_move_folders/4` will move, outside any transaction. The
+  batch's later markers see its earlier moves (in memory, as the batch does).
+  """
+  @spec claim_folder_batch_move(map(), map(), [String.t()], term(), precheck()) ::
+          {:ok, folder_claims()} | {:error, term()}
+  def claim_folder_batch_move(user, vault, marker_ids, target, precheck \\ fn _ -> :ok end) do
+    with {:ok, user, target_folder, dek} <- resolve_move_target(user, vault, target),
+         {:ok, sources} <- resolve_move_folders(user, vault, marker_ids, target_folder, dek) do
+      # resolve_move_folders/5 prepends: back to marker order.
+      sources = Enum.reverse(sources)
+      {rows, drift} = scan_with_drift(user, vault, sources)
+
+      # Each marker's folder as `move_folder_into/6` will read it, after the
+      # batch's earlier moves (its own row moves with an ancestor's).
+      {pairs, _done} =
+        Enum.map_reduce(sources, [], fn source, done ->
+          now = Enum.reduce(done, source, fn {o, n}, f -> moved_folder(f, o, n) end)
+
+          new =
+            if target_folder == "",
+              do: Path.basename(now),
+              else: target_folder <> "/" <> Path.basename(now)
+
+          {{now, new}, done ++ [{now, new}]}
+        end)
+
+      with :ok <- gate_batch_pairs(user, vault, marker_ids, pairs, drift) do
+        claim_planned(user, vault, rows, pairs, precheck)
+      end
+    end
+  end
+
+  # Each marker's rename gate, as `move_folder_into/6` maps it, against the
+  # state before the batch; the cascade gates again under the lock.
+  defp gate_batch_pairs(user, vault, marker_ids, pairs, drift) do
+    marker_ids
+    |> Enum.zip(pairs)
+    |> Enum.find_value(:ok, fn {id, {old, new}} ->
+      case gate_folder_rename(user, vault, old, new, drift) do
+        :ok -> nil
+        {:error, :conflict} -> {:error, {:conflict, id}}
+        {:error, :invalid_path} -> {:error, {:cycle, id}}
+      end
+    end)
+  end
+
+  @doc """
+  Claims with `claim_fun` (`claim_folder_rename/4` or
+  `claim_folder_batch_move/4`), then runs `fun` (the caller's transaction)
+  against those claims, undoing them when it fails, raises or exits.
+
+  A cascade whose locked re-scan disagrees with the plan (a row appeared or
+  left in between) is retried ONCE: unclaim, re-plan, re-claim, run again. A
+  second disagreement is `{:error, :conflict}`.
+  """
+  @spec with_folder_claims(
+          map(),
+          map(),
+          (-> {:ok, folder_claims()} | {:error, term()}),
+          (-> result)
+        ) ::
+          result
+        when result: {:ok, term()} | {:error, term()}
+  def with_folder_claims(user, vault, claim_fun, fun, attempts \\ 2) do
+    with {:ok, claims} <- claim_fun.() do
+      case run_claimed(user, vault, claims, fun) do
+        {:error, :claims_stale} when attempts > 1 ->
+          with_folder_claims(user, vault, claim_fun, fun, attempts - 1)
+
+        {:error, :claims_stale} ->
+          {:error, :conflict}
+
+        result ->
+          result
+      end
+    end
+  end
+
+  defp run_claimed(user, vault, %{steps: steps, moves: moves}, fun) do
+    # Test seam (nil outside tests): claimed, transaction not yet open.
+    :ok = interleave_hook(:folder_claimed)
+
+    with_claim_undo(user, vault, moves, fn ->
+      Process.put(@preclaim_key, steps)
+
+      try do
+        fun.()
+      after
+        Process.delete(@preclaim_key)
+      end
+    end)
+  end
+
+  @doc "`:ok` when the cascade consumed every claimed step; call before commit."
+  @spec folder_claims_consumed() :: :ok | {:error, :claims_stale}
+  def folder_claims_consumed,
+    do: if(Process.get(@preclaim_key) == [], do: :ok, else: {:error, :claims_stale})
+
+  # One claim for the op's FINAL paths (a note an earlier step moved and a
+  # later one moves again claims only where it ends), validated against the
+  # rows like every cascade claim.
+  defp claim_planned(user, vault, rows, pairs, precheck) do
+    {steps, _rows} =
+      Enum.map_reduce(pairs, rows, fn {old, new}, rows ->
+        {step_claims(rows, old, new), advance_renamed_rows(rows, old, new)}
+      end)
+
+    steps = Enum.reject(steps, &(&1 == []))
+    final = steps |> List.flatten() |> Map.new(fn {path, id} -> {id, path} end)
+    claims = Enum.map(final, fn {id, path} -> {path, id} end)
+    from = Map.new(rows, &{&1.id, &1.path})
+
+    with :ok <- precheck.(pairs),
+         :ok <- claim_cascade(user, vault, claims, MapSet.new(Map.keys(final))) do
+      {:ok,
+       %{
+         steps: steps,
+         moves: Enum.map(final, fn {id, path} -> {%{id: id, path: from[id]}, path} end)
+       }}
+    end
+  end
+
+  # What `do_rename_folder/6` claims for one step, from the same arithmetic
+  # (`advance_renamed_rows/3` mirrors it).
+  defp step_claims(rows, old, new) do
+    rows
+    |> Enum.filter(&folder_in?(&1.folder || "", [old]))
+    |> advance_renamed_rows(old, new)
+    |> Enum.reject(&(&1.kind == "folder"))
+    |> Enum.map(&{&1.path, &1.id})
+    |> Enum.sort()
+  end
+
+  defp moved_folder(folder, old, new) do
+    cond do
+      folder == old ->
+        new
+
+      String.starts_with?(folder, old <> "/") ->
+        new <> String.slice(folder, String.length(old)..-1//1)
+
+      true ->
+        folder
+    end
+  end
+
+  # Inside `with_folder_claims/4`, consume the next planned step instead of
+  # claiming; otherwise claim (a direct `rename_folder/4` call, outside any
+  # transaction).
+  defp claim_or_consume(user, vault, claims, movers) do
+    case Process.get(@preclaim_key) do
+      nil -> claim_cascade(user, vault, claims, movers)
+      _steps when claims == [] -> :ok
+      [step | rest] -> consume_step(step, Enum.sort(claims), rest)
+      [] -> {:error, :claims_stale}
+    end
+  end
+
+  defp consume_step(step, step, rest) do
+    Process.put(@preclaim_key, rest)
+    :ok
+  end
+
+  defp consume_step(_planned, _claims, _rest), do: {:error, :claims_stale}
 
   # True if any non-deleted row lives directly in `folder`: a note by its
   # reference (`directly_in/4`), a folder marker by its path hash (markers
@@ -8282,7 +8553,6 @@ defmodule Engram.Notes do
       {:ok, 0}
     else
       now = DateTime.utc_now()
-      old_len = String.length(old_folder)
       content_by_id = fetch_v1_contents(user, notes)
 
       # Build bulk updates — compute new paths/folders/titles in Elixir,
@@ -8295,12 +8565,7 @@ defmodule Engram.Notes do
       # can branch on kind.
       updates =
         Enum.map(notes, fn note ->
-          new_note_folder =
-            if note.folder == old_folder do
-              new_folder
-            else
-              new_folder <> String.slice(note.folder, old_len..-1//1)
-            end
+          new_note_folder = moved_folder(note.folder, old_folder, new_folder)
 
           {new_path, new_title} =
             case note.kind do
@@ -8355,7 +8620,11 @@ defmodule Engram.Notes do
       # a partial folder rename executing asynchronously after a 500.
       movers = MapSet.new(real_note_updates, fn {n, _o, _np, _f, _t} -> n.id end)
 
-      case claim_cascade(user, vault, claims, movers) do
+      # A caller holding claims made before its transaction (`Engram.Folders`)
+      # owns undoing them, so only a claim made HERE is reported as orphaned.
+      preclaimed? = Process.get(@preclaim_key) != nil
+
+      case claim_or_consume(user, vault, claims, movers) do
         {:error, reason} ->
           {:error, reason}
 
@@ -8533,11 +8802,11 @@ defmodule Engram.Notes do
             {:ok, length(notes)}
           rescue
             e ->
-              _ = orphan_claim(user, vault, length(claims), e)
+              _ = unless preclaimed?, do: orphan_claim(user, vault, length(claims), e)
               reraise e, __STACKTRACE__
           catch
             {:rename_refused, reason} ->
-              _ = orphan_claim(user, vault, length(claims), reason)
+              _ = unless preclaimed?, do: orphan_claim(user, vault, length(claims), reason)
               {:error, reason}
           end
       end
@@ -9445,26 +9714,28 @@ defmodule Engram.Notes do
 
   # Move folders under a parent given by PATH. No marker is required at the
   # target — a "derived" parent exists purely as a path. `folder == ""` is root.
-  def batch_move_folders(user, vault, marker_ids, {:path, folder})
-      when is_list(marker_ids) and is_binary(folder) do
-    with {:ok, folder} <- PathSanitizer.sanitize_target(folder),
-         {:ok, user} <- Crypto.ensure_user_dek(user),
-         {:ok, dek} <- Crypto.get_dek(user) do
-      reduce_move_folders(user, vault, marker_ids, folder, dek)
+  def batch_move_folders(user, vault, marker_ids, target) when is_list(marker_ids) do
+    with {:ok, user, target_folder, dek} <- resolve_move_target(user, vault, target) do
+      reduce_move_folders(user, vault, marker_ids, target_folder, dek)
     end
   end
 
-  def batch_move_folders(user, vault, marker_ids, "root") when is_list(marker_ids) do
-    batch_move_folders(user, vault, marker_ids, {:path, ""})
+  # The batch target as a folder path, with the user (dek ensured) and dek.
+  defp resolve_move_target(user, _vault, {:path, folder}) when is_binary(folder) do
+    with {:ok, folder} <- PathSanitizer.sanitize_target(folder),
+         {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, dek} <- Crypto.get_dek(user) do
+      {:ok, user, folder, dek}
+    end
   end
 
-  def batch_move_folders(user, vault, marker_ids, target_folder_id)
-      when is_list(marker_ids) and is_binary(target_folder_id) do
+  defp resolve_move_target(user, vault, "root"), do: resolve_move_target(user, vault, {:path, ""})
+
+  defp resolve_move_target(user, vault, target_folder_id) when is_binary(target_folder_id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, target_marker} <- get_folder_marker_by_id(user, vault, target_folder_id),
          {:ok, dek} <- Crypto.get_dek(user) do
-      target_folder = hydrate_folder_marker(target_marker, dek).folder
-      reduce_move_folders(user, vault, marker_ids, target_folder, dek)
+      {:ok, user, hydrate_folder_marker(target_marker, dek).folder, dek}
     else
       {:error, :not_found} -> {:error, {:not_found, target_folder_id}}
       {:error, reason} -> {:error, reason}
@@ -9544,6 +9815,10 @@ defmodule Engram.Notes do
 
         {:error, :cycle} ->
           {:halt, {:rollback, {:cycle, id}}}
+
+        # The plan disagreed with the locked scan: `with_folder_claims/5` retries.
+        {:error, :claims_stale} ->
+          {:halt, {:rollback, :claims_stale}}
       end
     end)
     |> case do
@@ -9559,16 +9834,12 @@ defmodule Engram.Notes do
   # re-scan. Filter + rewrite arithmetic MUST match do_rename_folder/6.
   defp advance_renamed_rows(rows, old_folder, new_folder) do
     old_prefix = old_folder <> "/"
-    old_len = String.length(old_folder)
 
     Enum.map(rows, fn n ->
       folder = n.folder || ""
 
       if folder == old_folder or String.starts_with?(folder, old_prefix) do
-        new_note_folder =
-          if folder == old_folder,
-            do: new_folder,
-            else: new_folder <> String.slice(folder, old_len..-1//1)
+        new_note_folder = moved_folder(folder, old_folder, new_folder)
 
         new_path =
           case n.kind do
@@ -9620,6 +9891,7 @@ defmodule Engram.Notes do
           case rename_folder_gated(user, vault, source_folder, new_folder, rows, drift) do
             {:ok, _count} -> {:ok, {source_folder, new_folder}}
             {:error, :conflict} -> {:error, :conflict}
+            {:error, :claims_stale} = stale -> stale
             {:error, :invalid_path} -> {:error, :cycle}
           end
         end

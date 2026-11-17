@@ -214,11 +214,12 @@ defmodule Engram.Notes.IdentityTest do
   end
 
   describe "a rename shed by the vault write gate" do
-    # The claim (the commit) lands BEFORE the row waits on the gate. A shed is
-    # a raise, which skipped the orphan report, so nothing converged the row to
-    # the claim and the caller was told the rename did not happen. The shed must
-    # take the same orphan path as a failed rename.
-    test "reports the orphan claim so projection converges the row", ctx do
+    # The claim lands BEFORE the row waits on the gate. A shed is a raise, and
+    # the caller is told the rename did not happen, so the index must not keep
+    # saying it did: like every failed claimant (#2622), the shed settles the
+    # entry back onto the committed row. Projection is NOT queued, because it
+    # would execute the rename the caller was told failed.
+    test "settles the claim back onto the row instead of queueing projection", ctx do
       n = note(ctx, "a.md")
       prev = Application.fetch_env!(:engram, :seq_gate_wait_ms)
       Application.put_env(:engram, :seq_gate_wait_ms, 50)
@@ -245,10 +246,12 @@ defmodule Engram.Notes.IdentityTest do
       send(holder.pid, :release)
       Task.await(holder)
 
-      assert index_entries(ctx)["b.md"]["note_id"] == n.id
+      entries = index_entries(ctx)
+      refute Map.has_key?(entries, "b.md")
+      assert entries["a.md"]["note_id"] == n.id
       assert path_of(ctx, n.id) == "a.md"
 
-      assert_enqueued(
+      refute_enqueued(
         worker: Engram.Workers.ProjectVaultIndex,
         args: %{user_id: ctx.user.id, vault_id: ctx.vault.id}
       )

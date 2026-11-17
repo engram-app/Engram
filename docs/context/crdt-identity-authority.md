@@ -94,12 +94,29 @@ inside one has its snapshot write rolled back with the caller while a live-room
 write survives. Same call, different durability, depending on whether the user
 has a socket open.
 
-No caller does this any more. `batch_move_folders/4` was the last, and it
-dropped its batch-wide transaction rather than keep it: that transaction could
-only revert ROWS, never the claims already committed, so it was not providing
-batch atomicity — it was concealing that batch atomicity is impossible once a
-claim is the commit. `Identity` still logs and counts `:in_transaction` as a
-tripwire for future call sites.
+`batch_move_folders/4` dropped its own batch-wide transaction for this
+reason, but its only production caller, `Folders.batch_move/4`, wrapped it in
+another one, and so did `Folders.rename/5` (REST, MCP `rename_folder`, the
+folder-op wire): the tripwire fired once per MCP `rename_folder` on staging.
+Both now claim BEFORE their transaction (`Notes.claim_folder_rename/4`,
+`Notes.claim_folder_batch_move/4`) and run it inside
+`Notes.with_folder_claims/4`: the cascade re-scans under the folder lock and
+must consume exactly the planned claims (else it re-plans and retries once,
+then `:conflict`).
+
+**Settle after every claimant's transaction.** A claim made before the row
+transaction cannot be undone by comparing values: an identical concurrent op
+(a client retry) claims the same value, so a compare-and-set undo reverts the
+twin's committed move (ABA), and a re-claim after commit overwrites a later
+rename. Instead every server claimant (folder ops, batch note move,
+`rename_note/5`) calls `Identity.settle/3` once its transaction returns,
+success or failure: it reads the notes' COMMITTED row paths inside the index's
+serialized step (the room's `update_doc`, or `fold_roomless/3`'s lock) and
+writes them. The last row commit for a note is followed by a settle that reads
+it, and every later index write is a settle or a claim whose op settles after
+it, so the index ends on the committed rows under any interleaving. A settle
+that matches writes nothing. `Identity` still logs
+and counts `:in_transaction` as a tripwire for future call sites.
 
 **Projection must never claim.** It is deriving FROM the map; a claim there is a
 feedback loop. `rename_note/5` takes `index: :skip` for that one caller, and

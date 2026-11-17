@@ -55,6 +55,18 @@ defmodule Engram.Folders do
 
   @type counts :: %{notes: non_neg_integer(), attachments: non_neg_integer()}
 
+  # `atomic/2` for a rename or batch move, whose index claims were made
+  # BEFORE the transaction (a claim cannot join one: see
+  # `Notes.with_folder_claims/4`). The cascade consumes them under the lock,
+  # and a failure undoes them.
+  defp claimed_atomic(user, vault, claim_fun, fun) do
+    Notes.with_folder_claims(user, vault, claim_fun, fn ->
+      atomic(vault, fn ->
+        with {:ok, result} <- fun.(), :ok <- Notes.folder_claims_consumed(), do: {:ok, result}
+      end)
+    end)
+  end
+
   # Bug 3 / Bug 6 — atomicity across both tables.
   #
   # Each leg (`Notes.*`, `Attachments.*`) runs its own `Repo.with_tenant`
@@ -226,7 +238,16 @@ defmodule Engram.Folders do
            Attachments.folder_rename_pairs(user, vault, old_folder, new_folder) do
       expect = opts[:expect]
 
-      atomic(vault, fn ->
+      # The cheap refusals run before the claim too, so a refused rename claims
+      # nothing; the transaction re-checks them under the lock.
+      precheck = fn _pairs ->
+        with :ok <- check_expected(user, vault, old_folder, new_folder, expect),
+             do: Attachments.check_move_targets(user, vault, att_pairs)
+      end
+
+      claim = fn -> Notes.claim_folder_rename(user, vault, old_folder, new_folder, precheck) end
+
+      claimed_atomic(user, vault, claim, fn ->
         with :ok <- check_expected(user, vault, old_folder, new_folder, expect),
              {:ok, notes} <- Notes.rename_folder(user, vault, old_folder, new_folder),
              :ok <- move_bare_row(user, vault, old_folder, new_folder, notes, expect),
@@ -516,7 +537,13 @@ defmodule Engram.Folders do
     # moved folders' attachments are read.
     with {:ok, folders} <- Notes.resolve_folder_markers(user, vault, marker_ids),
          {:ok, %{metas: metas}} <- Attachments.scan_under(user, vault, folders) do
-      atomic(vault, fn ->
+      precheck = fn pairs ->
+        Attachments.check_move_targets(user, vault, attachment_move_pairs(metas, pairs))
+      end
+
+      claim = fn -> Notes.claim_folder_batch_move(user, vault, marker_ids, target, precheck) end
+
+      claimed_atomic(user, vault, claim, fn ->
         with {:ok, %{moved: notes, pairs: pairs}} <-
                Notes.batch_move_folders(user, vault, marker_ids, target),
              {:ok, atts} <- rename_attachments_for(user, vault, metas, pairs) do
@@ -553,16 +580,16 @@ defmodule Engram.Folders do
 
   defp rename_attachments_for(_user, _vault, _metas, []), do: {:ok, 0}
 
-  defp rename_attachments_for(user, vault, metas, pairs) do
-    move_pairs =
-      Enum.flat_map(metas, fn %{path: old_path} ->
-        case rename_target(old_path, pairs) do
-          {:ok, new_path} -> [{old_path, new_path}]
-          :no_match -> []
-        end
-      end)
+  defp rename_attachments_for(user, vault, metas, pairs),
+    do: Attachments.move_folder_pairs(user, vault, attachment_move_pairs(metas, pairs))
 
-    Attachments.move_folder_pairs(user, vault, move_pairs)
+  defp attachment_move_pairs(metas, pairs) do
+    Enum.flat_map(metas, fn %{path: old_path} ->
+      case rename_target(old_path, pairs) do
+        {:ok, new_path} -> [{old_path, new_path}]
+        :no_match -> []
+      end
+    end)
   end
 
   # Maps a decrypted attachment path to its new path under whichever {old, new}

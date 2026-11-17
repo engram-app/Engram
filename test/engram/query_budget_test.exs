@@ -177,7 +177,11 @@ defmodule Engram.QueryBudgetTest do
     #  the old name's terms, INSERT of the new name's, the stamp UPDATE,
     #  commit. Constant: each a set-based statement over at most 32 rows;
     #  a note with no terms yet (this test) skips the DELETE, so 39 here.
-    "POST notes/rename" => 40,
+    #  +8 the after-transaction settle (#2622): the rotation-gate users read
+    #  and one roomless index fold (begin, enter, advisory lock, snapshot,
+    #  tail window, the committed row's meta read, commit). Constant; it writes
+    #  nothing when the entry already matches. 47 here.
+    "POST notes/rename" => 48,
     # begin, enter, the note row, seq bump, tombstone, usage_meters, the
     # index-delete job insert + its pg_notify, the release joining the
     # warm-up's pending release job (one UPDATE, no insert), commit. With no
