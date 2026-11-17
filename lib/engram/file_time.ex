@@ -1,68 +1,41 @@
 defmodule Engram.FileTime do
   @moduledoc """
-  The one normalizer for client file times (`notes.mtime` / `ctime`,
-  `attachments.mtime`, `attachment_uploads.mtime`): an epoch number to the
-  `*_at` timestamptz written beside it.
+  The one normalizer for client file times: the epoch number a client
+  sends for `mtime` / `ctime` to the `*_at` timestamptz stored for it
+  (`notes.mtime_at` / `ctime_at`, `attachments.mtime_at`,
+  `attachment_uploads.mtime_at`), and back to the number a reader serves.
 
-  Clients send epoch seconds, but prod holds milliseconds too (2026-11-05:
-  `notes.mtime` min 1,776,072,500.9 s, max 1,793,442,859,572.0 ms). Below
-  1e11 in magnitude is seconds (1e11 s is the year 5138), at or above it
+  R25 contract step (b): the epoch doubles are neither read nor written.
+  The schemas cast `mtime` / `ctime` as virtual fields, `put_at/3` derives
+  the twin from them, and readers serve `mtime/1` / `ctime/1`. The columns
+  are dropped in the next release. No rollback below step (a) (0.88): an
+  older release heals twins from the doubles, which this one leaves stale.
+
+  Clients send epoch seconds, but prod held milliseconds too (2026-11-05:
+  min 1,776,072,500.9 s, max 1,793,442,859,572.0 ms). Below 1e11 in
+  magnitude is seconds (1e11 s is the year 5138), at or above it
   milliseconds (1e11 ms is 1973). `0` is the plugin's "unknown": its twin
-  is the epoch itself (1970-01-01T00:00:00Z, `@zero`), so a stored 0 still
-  reads back as 0 once the doubles are gone, never as NULL (old plugins
-  parse the number). Before 0.88 it was NULL; `FileTimes` v4 fills those.
-  Rounded to the nearest microsecond from the double's exact binary value
-  (half away from zero, integer math, no float multiply), so a
-  millisecond-precision value keeps its digits (floored, 2147484020.404
-  was stored as .403999) and a sub-microsecond one rounds by its true
-  digits (the float product made 1792348622.2113965, exactly
-  ...2113964557..., the tie ...211396.5). Never
-  across a whole second: that would break `DateTime.to_unix(at) ==
-  trunc(t)` (payload hashes depend on it), so a value within a
-  microsecond below a second is clamped to its .999999 (the old floor
-  could cross too, when the float `t * 1e6` rounded up). Floor equals trunc
-  only for `t >= 0`, which is all the payload hash reads. Outside years 1 to 9999 is out of range. 0.74 and 0.75 floored, and the FileTimes v2 build (main and staging only, never released) rounded the float product; `twin?/2`
-  accepts their twins (within 1 us) as agreeing, and
-  `Engram.DataMigrations.FileTimes` v3 rewrites them.
+  is the epoch itself (`@zero`), served back as 0, never nil (old plugins
+  parse the number). Rounded to the nearest microsecond from the double's
+  exact binary value (half away from zero, integer math, no float
+  multiply), never across a whole second: `DateTime.to_unix(at) ==
+  trunc(t)` (payload hashes depend on it), so a value within a microsecond
+  below a second is clamped to its .999999. Outside years 1 to 9999 is out
+  of range. `twin?/2` accepts a twin within 1 us of a double (0.74 and 0.75
+  floored).
 
-  Desktop Obsidian sends sub-microsecond digits (`stat.mtimeMs` has
-  sub-millisecond fractions; the plugin divides by 1000). Those are
-  precision noise: after contract the wire serves the value rounded to the
-  microsecond (a change under 1 us). No client sees it: the plugin never
-  compares server mtimes, and the web tree shows minutes or seconds.
+  Served values: a row read back serves its twin as seconds, so a value
+  with at most six decimals is bit-identical to what the client sent.
+  Desktop Obsidian sends sub-microsecond digits (`stat.mtimeMs` / 1000);
+  those now come back rounded to the microsecond (a change under 1 us; the
+  plugin never compares server mtimes). A struct a write just returned
+  still holds the client's number, served as sent.
 
   Strict only at the client boundary: `check/2` (REST params, 422) and
   `validate/2` (a request changeset). Every write behind it is lenient,
-  `put_at/3`: a stored out-of-range double (a legacy row a move or restore
-  copies) gets a NULL `*_at` and one log line, never a refused write.
-  Rows built for `insert_all` / `update_all` use `to_at!/1` on values the
-  server made or already checked.
-
-  Contract step (a) (R25): no write derives a twin from a STORED double.
-  `put_at/3` sets the twin only when the double itself changes, and every
-  reader of a double goes through `epoch/2`, which trusts the twin. Step
-  (b) stops writing the doubles, and a step (b) node writing beside this
-  one leaves them stale: this release must never copy a stale double over
-  a fresh twin. No rollback below this release once (b) is out.
-
-  Phase migrate-data (R25), read switch: readers go through `epoch/2`
-  (`mtime/1`, `ctime/1`), which serves the `*_at` twin's instant (the
-  double's exact digits when the two agree) and falls back to the double
-  only while the twin is NULL. `put_at/3` repairs a stale twin
-  on every write, and `Engram.DataMigrations.FileTimes` backfilled the
-  rest (done in prod before this switch). No rollback below 0.74.0: an
-  older release moves the double without its twin, and this release would
-  serve that stale twin.
-
-  Phase expand: the doubles are still written exactly as sent. A previous
-  release running during the rollout, or after a rollback, moves a double
-  without its `*_at`, so migrate-data must recompute every row where
-  `*_at IS DISTINCT FROM` the normalized double (not only NULL ones) and
-  report how many it repaired: that count is the guard against a writer
-  that skips the twin. It must normalize with this module (or the same
-  rounding, second guard and bounds in SQL; never `to_timestamp`, which
-  rounds across a second), and count out-of-range legacy rows separately instead of
-  aborting the batch.
+  `put_at/3`: an out-of-range value gets a NULL `*_at` and one log line,
+  never a refused write. Rows built for `insert_all` / `update_all` use
+  `to_at!/1` on values the server made or already checked.
   """
 
   alias Engram.Logger.Metadata
@@ -77,16 +50,6 @@ defmodule Engram.FileTime do
   @min_us -62_135_596_800_000_000
   # The twin of a `0`: a reader serves it as 0, as it served the double.
   @zero ~U[1970-01-01 00:00:00.000000Z]
-
-  @doc """
-  The twin rounding this build writes: 3 = 2 plus a `0` stored as the epoch
-  (`@zero`), not NULL. 2 = the exact value rounded to the
-  microsecond (`to_at/1`). 1 (the FileTimes v2 build, never released) rounded the float product; 0.75 and
-  older lack it and floored.
-  `Engram.DataMigrations.FileTimes` asks every peer before it closes.
-  """
-  @spec twin_rounding() :: 3
-  def twin_rounding, do: 3
 
   @doc "Whether `t` is in seconds (below 1e11 in magnitude), not milliseconds."
   @spec seconds?(number()) :: boolean()
@@ -251,9 +214,7 @@ defmodule Engram.FileTime do
   @doc """
   Puts `normalize/1` of `field` in `at_field` when `field` changes and its
   twin differs. A write that leaves `field` alone leaves the twin alone:
-  the double it would read may be stale (a step (b) node stopped writing
-  it), and the twin is the authority. `Engram.DataMigrations.FileTimes`
-  fills a missing twin. Out of range (checked at the client boundary, so
+  the twin is the authority. Out of range (checked at the client boundary, so
   only a copied legacy value gets here) is NULL plus one warning, never an
   error.
   """

@@ -43,7 +43,6 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.KeyAliases,
     Engram.DataMigrations.PersonOriginBackfill,
     Engram.DataMigrations.EffectiveDates,
-    Engram.DataMigrations.FileTimes,
     Engram.DataMigrations.NameTerms,
     Engram.DataMigrations.NoteName,
     Engram.DataMigrations.NoteMeta
@@ -182,7 +181,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
   # (`DataMigration.progress_metadata/1`): name, version, result (`:blocked`
   # when a pass walked nothing behind a guard), the totals and per-walk
   # counts `IdWindows.heal_pass/4` recorded, and what the migration reported
-  # (`FileTimes`' open and clean tables). Counts and names only.
+  # (e.g. open and clean tables). Counts and names only.
   defp summarize(mod, result) do
     stats = DataMigration.take_stats()
     walks = stats |> Map.get(:walks, []) |> Enum.reverse()

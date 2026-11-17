@@ -47,8 +47,8 @@ defmodule Engram.DataMigration do
 
   @doc """
   Adds `fields` (counts and table names, never ids or content) to the
-  current pass's summary line, e.g. `FileTimes`' open and clean table sets,
-  or `blocked:` with the reason a pass walked nothing.
+  current pass's summary line, e.g. open and clean table sets, or
+  `blocked:` with the reason a pass walked nothing.
   """
   @spec report(keyword()) :: :ok
   def report(fields) do

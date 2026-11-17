@@ -41,7 +41,8 @@ defmodule Engram.Attachments.Attachment do
     field :content_hash, :string
     field :mime_type, :string
     field :size_bytes, :integer
-    field :mtime, :float
+    # The client's epoch number, cast and never stored (R25 step (b)).
+    field :mtime, :float, virtual: true
     # `mtime` as a timestamp (`Engram.FileTime`), derived by `changeset/2`.
     field :mtime_at, :utc_datetime_usec
     field :storage_key, :string

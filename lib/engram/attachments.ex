@@ -1972,7 +1972,7 @@ defmodule Engram.Attachments do
   # in the decode step. `struct(a, fields)` keeps a real %Attachment{}
   # struct (decrypt_aad/3 pattern-matches `%_{dek_version: v}`), just with
   # only these fields populated.
-  @tree_attachment_fields ~w(id dek_version path_ciphertext path_nonce mime_type size_bytes mtime mtime_at updated_at content_hash)a
+  @tree_attachment_fields ~w(id dek_version path_ciphertext path_nonce mime_type size_bytes mtime_at updated_at content_hash)a
 
   # Returns the raw rows alongside the decrypted metas so a caller can tell
   # whether `decrypt_each/3` dropped any of them. Each skip is already logged

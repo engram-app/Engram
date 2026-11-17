@@ -64,8 +64,8 @@ defmodule Engram.DataMigrations.NotePayloadStamps do
   end
 
   @doc """
-  Kill switch: the `payload_backfill` service override (default on), as
-  `FileTimes.enabled?/0`. Off, the runner runs no pass (no notes walk, no
+  Kill switch: the `payload_backfill` service override (default on).
+  Off, the runner runs no pass (no notes walk, no
   jobs, no Qdrant scroll or unstamp) and the ledger stays open without
   counting as stuck. Below the `n` payload version it is always on.
   """

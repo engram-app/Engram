@@ -114,8 +114,7 @@ defmodule Engram.Cluster.Readiness do
   without the function (an older build) counts as behind; an erpc error or
   timeout as unreachable. `:ok`, or `{:members_missing, nil}`,
   `{:peer_behind, node}`, `{:peer_unreachable, node}`. The one fleet gate
-  for "no older node is still writing" (`Engram.Crypto.CompressionGate`,
-  `Engram.DataMigrations.FileTimes`).
+  for "no older node is still writing" (`Engram.Crypto.CompressionGate`).
 
   Options: those of `rooms_reachable?/1`, plus `:multicall` (fun of the
   peer list returning `:erpc.multicall/5`-shaped results).

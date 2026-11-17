@@ -121,7 +121,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   `"heal"`. The unique keys are `[:user_id, :mode]`, and Oban compares only
   the keys a NEW job's args carry: a heal without a mode would match a
   queued `n` backfill (`mode: "n"`) and be dropped into it. Every caller
-  (DEK rotation, FileTimes, the Drain, the ledger) goes through here.
+  (DEK rotation, the Drain, the ledger) goes through here.
   """
   @impl Oban.Worker
   def new(args, opts) when is_map(args) and is_list(opts) do
