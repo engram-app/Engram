@@ -1456,9 +1456,13 @@ defmodule EngramWeb.CrdtChannelTest do
       send(holder.pid, :release)
       Task.await(holder)
 
+      # The recovery step proves the socket still serves deletes, not how
+      # fast it sheds: under the 200 ms shed budget a loaded CI runner's own
+      # gate queueing shed it as busy (2026-11-16 and -17, three branches).
       assert Process.alive?(socket.channel_pid)
+      channel_budget(60_000)
       ref2 = push(socket, "crdt_delete", %{"doc_id" => note.id})
-      assert %{status: :ok, payload: %{doc_id: _}} = await_reply(ref2, socket, 2_000)
+      assert %{status: :ok, payload: %{doc_id: _}} = await_reply(ref2, socket, 5_000)
       refute Notes.note_in_vault?(user, vault.id, note.id)
     end
 

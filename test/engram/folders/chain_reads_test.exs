@@ -233,10 +233,13 @@ defmodule Engram.Folders.ChainReadsTest do
 
       # 9 distinct prefixes: A, A/B, A/B/C, A/B/C/D, A/B/C/D/E, A/B/C/x,
       # Other, Ünïcødé, Ünïcødé/日本 語.
-      assert plan =~ "folders_live_name", plan
+      # A name-keyed probe a level: the live name index, or the parent
+      # index that keys the name after `parent_id` (an unvacuumed table
+      # ties them, `WalkIndexCondTest`); never a parent-only key.
+      assert plan =~ ~r/folders_(live_name|parent_name_ids)/, plan
       refute plan =~ "Seq Scan on folders", plan
       refute plan =~ "folders_full_path", plan
-      refute plan =~ "folders_parent", plan
+      refute plan =~ ~r/folders_parent(?!_name_ids)/, plan
       refute plan =~ "folders_user", plan
       # 2-3 index pages per probe; a scan of the tenant's 170 folders is more.
       assert QueryPlan.buffers(plan) <= 9 * 3, plan

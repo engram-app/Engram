@@ -27,15 +27,19 @@ defmodule Engram.Folders.WalkSql do
   column to a bound value, a walk result or a subquery's (an InitPlan
   parameter).
 
-  Every probe keys `(vault_id, parent_id, name_hmac)` and reads only `id`
-  and `user_id`, which `folders_live_name_ids` INCLUDEs, so it is an
-  index-only scan. That margin (no heap page) is what keeps the planner off
-  `folders_live_parent_id` and `folders_parent`, which key only
-  `(vault_id, parent_id)` and read every sibling: the planner multiplies
-  the two keys' selectivities as independent, estimates about one row, and
-  ties them with a plain probe of the name index (staging 0.87.0 picked them;
-  `Engram.Folders.WalkIndexCondTest`). A probe that also selected another column would
-  lose the index-only scan and the tie would be back.
+  Every probe keys `(vault_id, parent_id, name_hmac)` and reads only `id`,
+  `user_id` and `deleted_at`. The planner multiplies the vault and parent
+  selectivities as independent and estimates about one row for a probe by
+  parent alone, so any index keyed `(vault_id, parent_id)` ties the name
+  probe and, picked, reads every sibling (staging 0.87.0 and 0.87.1;
+  `Engram.Folders.WalkIndexCondTest`). An index-only margin does not hold
+  that off on a table whose pages are not all-visible. So every
+  non-partial parent index keys the name after `parent_id`
+  (`folders_parent_name_ids`, INCLUDE `user_id, deleted_at`): whichever of
+  it and `folders_live_name_ids` wins, the name is in the Index Cond.
+  `folders_live_parent_id` (live, id order) still keys only the parent; it
+  has not won the tie in the plan tests. A probe that selected another
+  column would lose the index-only scan on both.
   """
 
   @walk """

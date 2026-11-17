@@ -233,9 +233,9 @@ defmodule Engram.Folders.MovedFolderFeedPlanTest do
 
     for plan <- [custom] do
       # Each level probes the parent's children by key
-      # (`folders_parent_all_ids`, index-only), never the vault's or the
+      # (`folders_parent_name_ids`, index-only, by its parent prefix), never the vault's or the
       # tenant's whole folder list.
-      assert plan =~ ~r/folders_parent_all_ids[^\n]*\n\s+Index Cond: [^\n]*parent_id/, plan
+      assert plan =~ ~r/folders_parent_name_ids[^\n]*\n\s+Index Cond: [^\n]*parent_id/, plan
       refute plan =~ "Seq Scan", plan
     end
   end

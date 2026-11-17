@@ -76,13 +76,17 @@ defmodule Engram.Notes.LocationPlanTest do
     mark_moved!(user, vault)
     plan = lookup_plan(user, vault, "A/B/new.md", false)
 
-    for index <- ["folders_moved_live", "folders_live_name", "notes_name_key_live", path_index],
+    for index <- ["folders_moved_live", "notes_name_key_live", path_index],
         do: assert(plan =~ index, "expected #{index} in:\n#{plan}")
+
+    # The walk's name-keyed probe: the live name index or the parent index
+    # that keys the name (an unvacuumed table ties them, `WalkIndexCondTest`).
+    assert plan =~ ~r/folders_(live_name|parent_name_ids)/, plan
 
     # No level reads a whole vault's (or a parent's) folders.
     refute plan =~ "Seq Scan", plan
     refute plan =~ "Hash Join", plan
-    refute plan =~ "folders_parent", plan
+    refute plan =~ ~r/folders_parent(?!_name_ids)/, plan
     refute plan =~ "notes_user_vault_live", plan
   end
 
@@ -109,14 +113,18 @@ defmodule Engram.Notes.LocationPlanTest do
   # CTE walks UP a matched row's chain, and runs only for such a row).
   defp walk_line(plan) do
     # The name arm's walk: the recursive union whose probe reads
-    # `folders_live_name` (the S5 stale-holder walk up reads an id key).
+    # a name-keyed index (`folders_live_name*` or `folders_parent_name_ids`;
+    # the S5 stale-holder walk up reads an id key).
     lines = String.split(plan, "\n")
 
     lines
     |> Enum.with_index()
     |> Enum.filter(fn {l, _} -> l =~ "Recursive Union" end)
     |> Enum.find_value(fn {l, i} ->
-      if lines |> Enum.slice(i, 12) |> Enum.any?(&(&1 =~ "folders_live_name")), do: l
+      if lines
+         |> Enum.slice(i, 12)
+         |> Enum.any?(&(&1 =~ ~r/folders_(live_name|parent_name_ids)/)),
+         do: l
     end) || flunk(plan)
   end
 
