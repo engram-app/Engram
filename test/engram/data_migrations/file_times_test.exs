@@ -1,10 +1,9 @@
 defmodule Engram.DataMigrations.FileTimesTest do
   @moduledoc """
-  R25 migrate-data backfill: every row whose `*_at` IS DISTINCT FROM
-  `FileTime.to_at(double)` is recomputed (NULL and non-NULL drift alike, a
-  previous release moves the double without its twin), millisecond doubles
-  normalized, out-of-range legacy doubles counted and set NULL without
-  stopping the walk, and a rerun is a no-op.
+  R25 backfill, v4 (contract step (a)): a NULL twin is filled from its
+  double (a `0` as the epoch), a twin within 1 us of it is refined, a twin
+  further off is kept (the double is the stale one beside a step (b)
+  node), millisecond doubles normalized, and a rerun is a no-op.
   """
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
@@ -67,8 +66,7 @@ defmodule Engram.DataMigrations.FileTimesTest do
     |> Enum.take(50)
   end
 
-  test "repairs NULL and non-NULL drift, normalizes ms, counts out of range, rerun is a no-op",
-       ctx do
+  test "fills NULL twins, keeps far-off ones, normalizes ms, rerun is a no-op", ctx do
     ok = note!(ctx, "ok.md", %{"mtime" => 1_776_072_500.928, "ctime" => 1_510_897_528.861})
     null = note!(ctx, "null.md", %{"mtime" => 1_776_072_500.9, "ctime" => 1_510_897_528.0})
     drift = note!(ctx, "drift.md", %{"mtime" => 1_776_072_600.5})
@@ -79,22 +77,23 @@ defmodule Engram.DataMigrations.FileTimesTest do
     # Pre-expand rows: double, no twin.
     set!(ctx, Note, null, mtime_at: nil, ctime_at: nil)
     set!(ctx, Note, after_big, mtime_at: nil)
-    # A previous release moved the double; the twin is stale but NOT NULL.
+    # The double moved without its twin (a step (b) node leaves the double
+    # stale): the twin is the authority and is kept.
     set!(ctx, Note, drift, mtime: 1_776_090_000.75)
     set!(ctx, Note, ms, mtime: 1_776_072_500_928.0, mtime_at: nil)
-    # A legacy out-of-range double with a (wrong) twin: NULL is right.
+    # A legacy out-of-range double: its twin is kept too.
     set!(ctx, Note, big, mtime: 1.0e19, mtime_at: ~U[2020-01-01 00:00:00.000000Z])
 
-    log = capture_log(fn -> assert [{:more, rows: 5} | _] = run_to_done() end)
+    capture_log(fn -> assert [{:more, rows: 3} | _] = run_to_done() end)
 
-    assert_parity!(ctx, Note, mtime: :mtime_at, ctime: :ctime_at)
-    assert log =~ "file_time_out_of_range"
-
-    by_id = Map.new(rows(ctx, Note, mtime: :mtime_at), &{&1.id, &1})
+    by_id = Map.new(rows(ctx, Note, mtime: :mtime_at, ctime: :ctime_at), &{&1.id, &1})
     assert by_id[ms].mtime_at == ~U[2026-04-13 09:28:20.928000Z]
-    assert by_id[drift].mtime_at == FileTime.to_at!(1_776_090_000.75)
-    assert by_id[big].mtime_at == nil
+    assert by_id[drift].mtime_at == FileTime.to_at!(1_776_072_600.5)
+    assert by_id[big].mtime_at == ~U[2020-01-01 00:00:00.000000Z]
     assert by_id[ok].mtime_at == ~U[2026-04-13 09:28:20.928000Z]
+    assert by_id[null].mtime_at == FileTime.to_at!(1_776_072_500.9)
+    assert by_id[null].ctime_at == FileTime.to_at!(1_510_897_528.0)
+    assert by_id[after_big].mtime_at == FileTime.to_at!(1_700_000_000.25)
 
     # Rerun: one clean walk, nothing written.
     before = rows(ctx, Note, mtime: :mtime_at, ctime: :ctime_at)
@@ -113,7 +112,7 @@ defmodule Engram.DataMigrations.FileTimesTest do
     {:ok, %Upload{} = up} =
       Uploads.start(ctx.user, ctx.vault, %{path: "d.bin", size_bytes: 3, mtime: 1_776_072_500.5})
 
-    set!(ctx, Attachment, att.id, mtime: 1_776_072_500_928.0, mtime_at: ~U[2000-01-01 00:00:00Z])
+    set!(ctx, Attachment, att.id, mtime: 1_776_072_500_928.0, mtime_at: nil)
     set!(ctx, Upload, up.id, mtime_at: nil)
 
     capture_log(fn -> run_to_done() end)
@@ -127,23 +126,41 @@ defmodule Engram.DataMigrations.FileTimesTest do
     assert FileTimes in DataMigrationsRunner.migrations()
   end
 
-  defp oor_lines(log),
-    do: log |> String.split("\n") |> Enum.filter(&(&1 =~ "file_time_out_of_range"))
+  # Contract step (a): 0.87 stored a `0` with a NULL twin, which would read
+  # back as nil once the doubles go. v4 fills the epoch, which reads as 0.
+  test "a 0 double with a NULL twin gets the epoch twin", ctx do
+    id = note!(ctx, "zero.md", %{"mtime" => 1.0})
+    set!(ctx, Note, id, mtime: 0.0, mtime_at: nil)
 
-  test "out of range is logged once per pass per table, with the count", ctx do
-    for p <- ~w(a b c d) do
-      id = note!(ctx, "#{p}.md", %{"mtime" => 1.0})
-      set!(ctx, Note, id, mtime: 1.0e19, mtime_at: ~U[2020-01-01 00:00:00.000000Z])
-    end
+    {:ok, att} =
+      Attachments.upsert_attachment(ctx.user, ctx.vault, %{
+        "path" => "z.png",
+        :content => "png",
+        "mtime" => 1.0
+      })
 
-    log = capture_log(fn -> FileTimes.run_pass(batch: 1) end)
-    assert [line] = oor_lines(log)
-    assert line =~ "total_count=4"
-    assert line =~ "table=notes"
+    set!(ctx, Attachment, att.id, mtime: 0.0, mtime_at: nil)
 
-    # Written once: a later walk finds them clean and says nothing.
-    log = capture_log(fn -> run_to_done(batch: 1) end)
-    assert oor_lines(log) == []
+    capture_log(fn -> run_to_done() end)
+
+    assert [%{mtime_at: ~U[1970-01-01 00:00:00.000000Z]}] = rows(ctx, Note, mtime: :mtime_at)
+
+    assert [%{mtime_at: ~U[1970-01-01 00:00:00.000000Z]}] =
+             rows(ctx, Attachment, mtime: :mtime_at)
+  end
+
+  test "wanted/2: fill a NULL twin, refine within 1 us, else keep the twin" do
+    t = 2_147_484_020.404
+    want = FileTime.normalize(t)
+    low = DateTime.add(want, -1, :microsecond)
+    far = ~U[2030-01-01 00:00:00.000000Z]
+
+    assert FileTimes.wanted(nil, t) == want
+    assert FileTimes.wanted(low, t) == want
+    assert FileTimes.wanted(far, t) == far
+    assert FileTimes.wanted(far, nil) == far
+    assert FileTimes.wanted(nil, nil) == nil
+    assert FileTimes.wanted(nil, 0.0) == ~U[1970-01-01 00:00:00.000000Z]
   end
 
   test "a clean table is skipped while another is open, then confirmed before done", ctx do
@@ -276,7 +293,12 @@ defmodule Engram.DataMigrations.FileTimesTest do
     assert FileTimes.run_pass(batch: 2, fleet: v2) == {:more, rows: 0}
     assert [%{mtime_at: ^floored}] = rows(ctx, Note, mtime: :mtime_at)
 
-    new = Keyword.put(old, :multicall, fn _ -> [{:ok, 2}] end)
+    # A 0.87 node (rounding 2) stores a `0` as NULL: it holds it open too.
+    v87 = Keyword.put(old, :multicall, fn _ -> [{:ok, 2}] end)
+    assert FileTimes.run_pass(batch: 2, fleet: v87) == {:more, rows: 0}
+    assert [%{mtime_at: ^floored}] = rows(ctx, Note, mtime: :mtime_at)
+
+    new = Keyword.put(old, :multicall, fn _ -> [{:ok, 3}] end)
     capture_log(fn -> run_to_done(batch: 2, fleet: new) end)
     assert [%{mtime_at: ~U[2038-01-19 03:20:20.404000Z]}] = rows(ctx, Note, mtime: :mtime_at)
     assert FileTimes.run_pass(batch: 2, fleet: new) == :done
