@@ -32,17 +32,18 @@ defmodule Engram.Workers.SettleIndexEntries do
   """
   @spec enqueue(map(), String.t(), [{String.t(), String.t(), String.t()}]) :: :ok
   def enqueue(user, vault_id, entries) do
-    with {:ok, fk} <- Crypto.dek_filter_key(user) do
-      allowed =
-        Map.new(entries, fn {id, pre, claimed} -> {id, [hmac(fk, pre), hmac(fk, claimed)]} end)
+    _ =
+      with {:ok, fk} <- Crypto.dek_filter_key(user) do
+        allowed =
+          Map.new(entries, fn {id, pre, claimed} -> {id, [hmac(fk, pre), hmac(fk, claimed)]} end)
 
-      allowed
-      |> Map.drop(merge_pending(user, allowed))
-      |> Enum.map(fn {id, paths} ->
-        new(%{user_id: user.id, vault_id: vault_id, note_id: id, allowed: paths})
-      end)
-      |> Enqueue.enqueue_all("settle_index_entries")
-    end
+        allowed
+        |> Map.drop(merge_pending(user, allowed))
+        |> Enum.map(fn {id, paths} ->
+          new(%{user_id: user.id, vault_id: vault_id, note_id: id, allowed: paths})
+        end)
+        |> Enqueue.enqueue_all("settle_index_entries")
+      end
 
     :ok
   end
