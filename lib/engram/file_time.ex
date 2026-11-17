@@ -7,7 +7,10 @@ defmodule Engram.FileTime do
   Clients send epoch seconds, but prod holds milliseconds too (2026-11-05:
   `notes.mtime` min 1,776,072,500.9 s, max 1,793,442,859,572.0 ms). Below
   1e11 in magnitude is seconds (1e11 s is the year 5138), at or above it
-  milliseconds (1e11 ms is 1973). `0` is the plugin's "unknown": NULL.
+  milliseconds (1e11 ms is 1973). `0` is the plugin's "unknown": its twin
+  is the epoch itself (1970-01-01T00:00:00Z, `@zero`), so a stored 0 still
+  reads back as 0 once the doubles are gone, never as NULL (old plugins
+  parse the number). Before 0.88 it was NULL; `FileTimes` v4 fills those.
   Rounded to the nearest microsecond from the double's exact binary value
   (half away from zero, integer math, no float multiply), so a
   millisecond-precision value keeps its digits (floored, 2147484020.404
@@ -34,6 +37,13 @@ defmodule Engram.FileTime do
   copies) gets a NULL `*_at` and one log line, never a refused write.
   Rows built for `insert_all` / `update_all` use `to_at!/1` on values the
   server made or already checked.
+
+  Contract step (a) (R25): no write derives a twin from a STORED double.
+  `put_at/3` sets the twin only when the double itself changes, and every
+  reader of a double goes through `epoch/2`, which trusts the twin. Step
+  (b) stops writing the doubles, and a step (b) node writing beside this
+  one leaves them stale: this release must never copy a stale double over
+  a fresh twin. No rollback below this release once (b) is out.
 
   Phase migrate-data (R25), read switch: readers go through `epoch/2`
   (`mtime/1`, `ctime/1`), which serves the `*_at` twin's instant (the
@@ -65,15 +75,18 @@ defmodule Engram.FileTime do
   # so without this a negative millisecond value passes here and the write
   # fails in Postgres.
   @min_us -62_135_596_800_000_000
+  # The twin of a `0`: a reader serves it as 0, as it served the double.
+  @zero ~U[1970-01-01 00:00:00.000000Z]
 
   @doc """
-  The twin rounding this build writes: 2 = the exact value rounded to the
+  The twin rounding this build writes: 3 = 2 plus a `0` stored as the epoch
+  (`@zero`), not NULL. 2 = the exact value rounded to the
   microsecond (`to_at/1`). 1 (the FileTimes v2 build, never released) rounded the float product; 0.75 and
   older lack it and floored.
   `Engram.DataMigrations.FileTimes` asks every peer before it closes.
   """
-  @spec twin_rounding() :: 2
-  def twin_rounding, do: 2
+  @spec twin_rounding() :: 3
+  def twin_rounding, do: 3
 
   @doc "Whether `t` is in seconds (below 1e11 in magnitude), not milliseconds."
   @spec seconds?(number()) :: boolean()
@@ -82,7 +95,7 @@ defmodule Engram.FileTime do
   @doc "`{:ok, DateTime | nil}`, or `{:error, :out_of_range}`."
   @spec to_at(number() | nil) :: {:ok, DateTime.t() | nil} | {:error, :out_of_range}
   def to_at(nil), do: {:ok, nil}
-  def to_at(t) when t == 0, do: {:ok, nil}
+  def to_at(t) when t == 0, do: {:ok, @zero}
   # Past year 9999 even as milliseconds (2.5e14), and the scaling below
   # would overflow a double near 1e302.
   def to_at(t) when is_number(t) and abs(t) > @max_abs, do: {:error, :out_of_range}
@@ -236,21 +249,19 @@ defmodule Engram.FileTime do
   end
 
   @doc """
-  Puts `normalize/1` of `field` in `at_field` whenever it differs from the
-  stored twin: on a change of `field`, and on any write that carries an
-  unchanged double over a stale twin (a pre-expand writer moved the double
-  alone), so every write heals. Out of range (checked at the client
-  boundary, so only a stored legacy value gets here) is NULL plus one
-  warning, never an error.
+  Puts `normalize/1` of `field` in `at_field` when `field` changes and its
+  twin differs. A write that leaves `field` alone leaves the twin alone:
+  the double it would read may be stale (a step (b) node stopped writing
+  it), and the twin is the authority. `Engram.DataMigrations.FileTimes`
+  fills a missing twin. Out of range (checked at the client boundary, so
+  only a copied legacy value gets here) is NULL plus one warning, never an
+  error.
   """
   @spec put_at(Ecto.Changeset.t(), atom(), atom()) :: Ecto.Changeset.t()
   def put_at(changeset, field, at_field) do
-    t = Ecto.Changeset.get_field(changeset, field)
-    at = normalize(t)
-
-    if same_at?(at, Ecto.Changeset.get_field(changeset, at_field)) do
-      changeset
-    else
+    with {:ok, t} <- Ecto.Changeset.fetch_change(changeset, field),
+         at = normalize(t),
+         false <- same_at?(at, Ecto.Changeset.get_field(changeset, at_field)) do
       if match?({:error, _}, to_at(t)) do
         Logger.warning(
           "file_time_out_of_range",
@@ -259,6 +270,8 @@ defmodule Engram.FileTime do
       end
 
       Ecto.Changeset.put_change(changeset, at_field, at)
+    else
+      _ -> changeset
     end
   end
 end

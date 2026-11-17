@@ -160,7 +160,7 @@ defmodule Engram.Notes.Utf8Backfill do
              %{
                "path" => decrypted.path,
                "content" => Helpers.scrub_utf8(decrypted.content || "", :backfill),
-               "mtime" => decrypted.mtime
+               "mtime" => Engram.FileTime.mtime(decrypted)
              },
              force: true,
              actor: "maintenance"

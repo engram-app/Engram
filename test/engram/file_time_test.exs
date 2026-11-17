@@ -122,10 +122,12 @@ defmodule Engram.FileTimeTest do
     assert {:ok, %DateTime{year: 1973}} = FileTime.to_at(100_000_000_000)
   end
 
-  test "nil and 0 (the plugin's unknown) are NULL" do
+  test "nil is NULL; 0 (the plugin's unknown) is the epoch, so it reads back as 0" do
     assert FileTime.to_at(nil) == {:ok, nil}
-    assert FileTime.to_at(0) == {:ok, nil}
-    assert FileTime.to_at(0.0) == {:ok, nil}
+    assert FileTime.to_at(0) == {:ok, ~U[1970-01-01 00:00:00.000000Z]}
+    assert FileTime.to_at(0.0) == {:ok, ~U[1970-01-01 00:00:00.000000Z]}
+    # Served from the twin alone (no double) it is still 0, never nil.
+    assert FileTime.epoch(~U[1970-01-01 00:00:00.000000Z], nil) === 0.0
   end
 
   test "a time before 1970 in seconds is kept" do
@@ -194,18 +196,19 @@ defmodule Engram.FileTimeTest do
 
     refute Ecto.Changeset.changed?(cs.(%{}), :mtime_at)
 
-    # A write that carries an unchanged double heals a stale twin.
+    # A write that leaves the double alone leaves the twin alone: the
+    # stored double may be stale (contract step (b) stops writing it).
     heal = fn data, attrs ->
       {data, types} |> Ecto.Changeset.cast(attrs, [:mtime]) |> FileTime.put_at(:mtime, :mtime_at)
     end
 
     stale = %{mtime: 1_700_000_000.5, mtime_at: ~U[2000-01-01 00:00:00.000000Z]}
 
-    assert Ecto.Changeset.get_change(heal.(stale, %{}), :mtime_at) ==
-             ~U[2023-11-14 22:13:20.500000Z]
+    refute Ecto.Changeset.changed?(heal.(stale, %{}), :mtime_at)
+    refute Ecto.Changeset.changed?(heal.(stale, %{mtime: 1_700_000_000.5}), :mtime_at)
 
-    assert Ecto.Changeset.get_change(heal.(stale, %{mtime: 1_700_000_000.5}), :mtime_at) ==
-             ~U[2023-11-14 22:13:20.500000Z]
+    assert Ecto.Changeset.get_change(heal.(stale, %{mtime: 1_700_000_001.5}), :mtime_at) ==
+             ~U[2023-11-14 22:13:21.500000Z]
 
     ok = %{mtime: 1_700_000_000.5, mtime_at: ~U[2023-11-14 22:13:20.500000Z]}
     refute Ecto.Changeset.changed?(heal.(ok, %{}), :mtime_at)
@@ -220,7 +223,7 @@ defmodule Engram.FileTimeTest do
   test "normalize/1 is to_at/1 with out of range as NULL; same_at?/2 compares instants" do
     assert FileTime.normalize(1_776_072_500_928.0) == ~U[2026-04-13 09:28:20.928000Z]
     assert FileTime.normalize(1.0e19) == nil
-    assert FileTime.normalize(0) == nil
+    assert FileTime.normalize(0) == ~U[1970-01-01 00:00:00.000000Z]
     assert FileTime.same_at?(nil, nil)
     assert FileTime.same_at?(~U[2026-01-01 00:00:00Z], ~U[2026-01-01 00:00:00.000000Z])
     refute FileTime.same_at?(nil, ~U[2026-01-01 00:00:00Z])

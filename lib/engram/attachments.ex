@@ -1151,7 +1151,7 @@ defmodule Engram.Attachments do
         content_hash: live.content_hash,
         mime_type: live.mime_type,
         size_bytes: live.size_bytes,
-        mtime: live.mtime,
+        mtime: Engram.FileTime.mtime(live),
         user_id: user.id,
         vault_id: vault.id,
         storage_key: nil,

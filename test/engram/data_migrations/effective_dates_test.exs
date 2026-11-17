@@ -77,7 +77,15 @@ defmodule Engram.DataMigrations.EffectiveDatesTest do
       eff_v: nil
     )
 
-    set!(ctx.user, bare, mtime: 1_700_000_000.5, eff_updated: nil, eff_v: nil)
+    # A file time moved as every writer moves it (double and timestamp);
+    # since R25 step (a) the backfill reads the timestamp.
+    set!(ctx.user, bare,
+      mtime: 1_700_000_000.5,
+      mtime_at: Engram.FileTime.to_at!(1_700_000_000.5),
+      eff_updated: nil,
+      eff_v: nil
+    )
+
     # Derived by a save: the backfill must not overwrite it.
     set!(ctx.user, saved, eff_updated: 42)
 
@@ -163,5 +171,28 @@ defmodule Engram.DataMigrations.EffectiveDatesTest do
 
   test "an empty table is done at once" do
     assert run_until_done(2) == :done
+  end
+
+  # R25 contract step (a): a step (b) node leaves the doubles stale or NULL,
+  # so the backfill derives the file-time dates from the timestamps.
+  test "derives the file-time dates from the timestamps, not the doubles", ctx do
+    {:ok, note} =
+      Engram.Notes.upsert_note(
+        ctx.user,
+        ctx.vault,
+        %{
+          "path" => "t.md",
+          "content" => "x\n",
+          "mtime" => 1_700_000_000.5,
+          "ctime" => 1_600_000_000.0
+        },
+        actor: "api"
+      )
+
+    assert run_until_done() == :done
+    set!(ctx.user, note, version: 9, eff_updated: nil, eff_created: nil, mtime: nil, ctime: 5.0)
+    assert run_until_done() == :done
+
+    assert {_, _, 1_700_000_000, 1_600_000_000, true} = dates(note)
   end
 end

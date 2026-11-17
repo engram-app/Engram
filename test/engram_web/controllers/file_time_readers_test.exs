@@ -126,4 +126,44 @@ defmodule EngramWeb.FileTimeReadersTest do
       assert get_resp_header(raw, "x-engram-mtime") == [Jason.encode!(@stale_s)]
     end
   end
+
+  # Contract step (a) pin: the wire serves what 0.87.0 served for a stored
+  # 0 (0, never nil: old plugins parse it), a NULL (nil) and a normal value
+  # (bit-identical), and keeps serving it once the doubles are no longer
+  # written (step (b), simulated by NULLing them).
+  describe "served values without the doubles" do
+    setup %{conn: conn} do
+      post_note(conn, "zero.md", %{mtime: 0})
+      post_note(conn, "s.md", %{mtime: @s, ctime: 1_510_897_528.861})
+      post_att(conn, "zero.png", 0)
+      post_att(conn, "s.png", @s)
+      :ok
+    end
+
+    defp drop_doubles(user) do
+      Repo.with_tenant!(user.id, fn ->
+        Repo.update_all(Note, set: [mtime: nil, ctime: nil])
+        Repo.update_all(Attachment, set: [mtime: nil])
+      end)
+    end
+
+    defp served(conn) do
+      zero = conn |> get("/api/notes/zero.md") |> json_response(200)
+      s = conn |> get("/api/notes/s.md") |> json_response(200)
+      list = notes_by_path((conn |> get("/api/attachments") |> json_response(200))["attachments"])
+      raw = get(conn, "/api/attachments/zero.png?raw=1")
+
+      {{zero["mtime"], zero["ctime"]}, {s["mtime"], s["ctime"]},
+       {list["zero.png"]["mtime"], list["s.png"]["mtime"]},
+       get_resp_header(raw, "x-engram-mtime")}
+    end
+
+    @today {{0.0, nil}, {@s, 1_510_897_528.861}, {0.0, @s}, ["0.0"]}
+
+    test "0 stays 0, NULL stays nil, a normal value is bit-identical", %{conn: conn, user: user} do
+      assert served(conn) === @today
+      drop_doubles(user)
+      assert served(conn) === @today
+    end
+  end
 end

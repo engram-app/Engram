@@ -338,7 +338,7 @@ defmodule Engram.Notes.Note do
   # The stored effective dates, from the frontmatter dates and file times
   # this write leaves on the row, whenever one of them changes; `eff_v`
   # follows `version` so a write that did not derive them is visible.
-  @eff_inputs [:fm_updated, :fm_created_s, :mtime, :ctime, :version]
+  @eff_inputs [:fm_updated, :fm_created_s, :mtime, :ctime, :mtime_at, :ctime_at, :version]
   defp put_effective_dates(changeset) do
     # An insert always derives them: its inputs may all be defaults.
     if changeset.data.__meta__.state == :built or
@@ -355,14 +355,19 @@ defmodule Engram.Notes.Note do
 
   @doc """
   `eff_updated` / `eff_created` for a row holding `fields` (its
-  `fm_updated`, `fm_created_s`, `mtime`, `ctime`): what `changeset/2`
+  `fm_updated`, `fm_created_s` and its file times, read through
+  `FileTime.mtime/1` / `ctime/1` so the twin wins): what `changeset/2`
   stores, for a writer that sets the frontmatter dates without it.
   """
-  @spec effective_dates(map()) :: %{eff_updated: integer() | nil, eff_created: integer() | nil}
+  @spec effective_dates(%{
+          required(:fm_updated) => integer() | nil,
+          required(:fm_created_s) => integer() | nil,
+          optional(atom()) => any()
+        }) :: %{eff_updated: integer() | nil, eff_created: integer() | nil}
   def effective_dates(fields) do
     %{
-      eff_updated: EffectiveDates.stored(fields.fm_updated, fields.mtime),
-      eff_created: EffectiveDates.stored(fields.fm_created_s, fields.ctime)
+      eff_updated: EffectiveDates.stored(fields.fm_updated, FileTime.mtime(fields)),
+      eff_created: EffectiveDates.stored(fields.fm_created_s, FileTime.ctime(fields))
     }
   end
 

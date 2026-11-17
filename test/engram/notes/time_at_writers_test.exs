@@ -61,10 +61,12 @@ defmodule Engram.Notes.TimeAtWritersTest do
     assert s.ctime_at == ~U[2017-11-17 05:45:28.861000Z]
   end
 
-  test "0 and no file time are NULL timestamps", ctx do
+  test "0 is the epoch timestamp; no file time is NULL", ctx do
     {:ok, z} = put(ctx, "z.md", %{"mtime" => 0.0, "ctime" => 0.0})
     {:ok, none} = put(ctx, "n.md", %{})
-    assert {row(ctx, z.id).mtime_at, row(ctx, none.id).mtime_at} == {nil, nil}
+    z = row(ctx, z.id)
+    assert {z.mtime_at, z.ctime_at} == {~U[1970-01-01 00:00:00.000000Z], nil}
+    assert row(ctx, none.id).mtime_at == nil
   end
 
   # Behind the client boundary (REST refuses it with a 422) a stored legacy
@@ -90,21 +92,32 @@ defmodule Engram.Notes.TimeAtWritersTest do
     assert row(ctx, b.id).ctime == 1_510_897_528_861.0
   end
 
-  # A pre-expand writer moved the double alone; the next write that carries
-  # the same double (a re-push, an edit, a move) heals the twin.
-  test "a write carrying an unchanged double heals a stale twin", ctx do
+  # Contract step (a): a step (b) node stops writing the doubles, so a row
+  # it wrote holds a stale (or NULL) double beside a fresh twin. No write
+  # here may copy that double over the twin.
+  test "a stale double never overwrites a fresh twin", ctx do
     {:ok, n} = put(ctx, "h.md", %{"mtime" => 1_776_072_500.5, "ctime" => 1_510_897_528.0})
+    before = row(ctx, n.id)
 
     Repo.with_tenant!(ctx.user.id, fn ->
       Repo.update_all(from(x in Note, where: x.id == ^n.id),
-        set: [mtime_at: ~U[2000-01-01 00:00:00.000000Z], ctime_at: nil]
+        set: [mtime: 1_000_000_000.0, ctime: nil]
       )
     end)
 
+    # The ctime batch fills only a note with no ctime: this one has one.
+    assert {:ok, 0} =
+             Notes.set_client_ctimes(ctx.user, ctx.vault, [
+               %{path: "h.md", ctime: 1_600_000_000.0}
+             ])
+
+    # An edit with no ctime keeps the stored one; a rename sends no mtime.
     {:ok, _} = put(ctx, "h.md", %{"mtime" => 1_776_072_500.5}, "y\n")
+    {:ok, _} = Notes.rename_note(ctx.user, ctx.vault, "h.md", "i.md")
+
     n = row(ctx, n.id)
-    assert n.mtime_at == FileTime.to_at!(1_776_072_500.5)
-    assert n.ctime_at == FileTime.to_at!(1_510_897_528.0)
+    assert {n.mtime_at, n.ctime_at} == {before.mtime_at, before.ctime_at}
+    assert {n.eff_updated, n.eff_created} == {before.eff_updated, before.eff_created}
   end
 
   test "rename, folder rename and edit keep the timestamps with the doubles", ctx do

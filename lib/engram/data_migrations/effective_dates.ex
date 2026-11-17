@@ -13,13 +13,11 @@ defmodule Engram.DataMigrations.EffectiveDates do
   never indexed has no `note_attrs` dates and gets its file time only,
   until its next save.
 
-  Order against the file-time migrate-data (the `mtime_at` / `ctime_at`
-  backfill, `Engram.DataMigrations.FileTimes`): none needed. The file time is read from the
-  double through `Engram.FileTime`, the function that fills `*_at`, so this
-  pass gives the same value whether or not that backfill has run, and a
-  previous release's write that moved the double without its `*_at` cannot
-  make it stale. When the contract phase drops the doubles, `stored/2`
-  switches to `*_at` and this ledger version is bumped.
+  The file times are the `mtime_at` / `ctime_at` timestamps, as epoch
+  seconds (R25 contract step (a): a step (b) node leaves the doubles stale
+  or NULL, so they are not read). Where a twin agrees with its double this
+  is the same `stored/2` value (the whole second is the same), so the
+  ledger version is not bumped.
 
   Until a row is derived, the note filter reads its row time
   (`EffectiveDates.updated_sql/1`). Not re-verified. Discovery walks `notes`
@@ -37,10 +35,10 @@ defmodule Engram.DataMigrations.EffectiveDates do
 
   # Also a note whose ctime a previous release's ctime batch filled (no
   # `version` bump, no `eff_created`): `stored/2` gives it a value exactly
-  # when `ctime > 0` and `ctime_at` is set, so the set still shrinks.
+  # when `ctime_at` is after the epoch, so the set still shrinks.
   @needs "n.kind = 'note' AND (n.eff_v IS DISTINCT FROM n.version OR " <>
-           "(n.eff_created IS NULL AND n.fm_created_s IS NULL AND n.ctime > 0 AND " <>
-           "n.ctime_at IS NOT NULL))"
+           "(n.eff_created IS NULL AND n.fm_created_s IS NULL AND " <>
+           "n.ctime_at > 'epoch'::timestamptz))"
 
   @impl true
   def name, do: "note_effective_dates"
@@ -70,7 +68,8 @@ defmodule Engram.DataMigrations.EffectiveDates do
         %{rows: rows} =
           repo.query!(
             """
-            SELECT n.id, n.version, n.mtime, n.ctime,
+            SELECT n.id, n.version, extract(epoch FROM n.mtime_at)::float8,
+              extract(epoch FROM n.ctime_at)::float8,
               (SELECT a.d FROM note_attrs a WHERE a.note_id = n.id AND a.key_id = $2 AND a.ord = 0),
               (SELECT a.d FROM note_attrs a WHERE a.note_id = n.id AND a.key_id = $3 AND a.ord = 0)
             FROM notes n
