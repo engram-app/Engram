@@ -1,8 +1,8 @@
 defmodule Engram.ConcurrencyGate do
   @moduledoc """
   A counting semaphore process: at most `:limit` holders at once, optionally
-  at most `:per_key` of them per key, with a bounded FIFO wait queue. The one
-  server behind `Engram.Sync.PageGate`, `Engram.MCP.ParseGate` and
+  at most `:per_key` of them per key, with a FIFO wait queue. The one server
+  behind `Engram.Sync.PageGate`, `Engram.MCP.ParseGate` and
   `Engram.Search.Gate`; each of those owns only its caller policy (degrade
   open, run in a task, refuse busy).
 
@@ -11,13 +11,21 @@ defmodule Engram.ConcurrencyGate do
   first: a crashed or killed holder cannot shrink capacity. A queued waiter is
   monitored too, so one that dies while waiting leaves the queue at once.
 
-  Every operation costs O(1) except handing a freed slot to the next waiter,
-  which scans the queue for the first waiter whose key is under `:per_key`.
-  The queue is bounded by `:max_waiting` (and `:max_waiting_per_key`), so that
-  scan is bounded too. A `:busy` reply (queue full) is immediate.
+  Cost: acquire, release and holder death are O(1). Handing a freed slot to
+  the next waiter is O(1) when there is no `:per_key` limit (PageGate,
+  ParseGate: the head of the queue always fits, and PageGate's queue is
+  unbounded). With a `:per_key` limit it scans for the oldest waiter whose
+  key is under its cap, which is O(queue), so a per-key gate must also set
+  `:max_waiting` (Search.Gate: 32). Withdrawing a waiter (its timeout or its
+  death) is O(queue), and only happens to waiters.
 
-  NOT re-entrant: one slot per holder pid. Acquiring twice from the same
-  process would overwrite its own entry. No caller nests.
+  NOT re-entrant: one slot per holder pid. A second `acquire/3` from a pid
+  that already holds a slot raises `ArgumentError` in the caller instead of
+  silently double-counting its key. No caller nests.
+
+  A gate restart forgets its holders: the new process starts empty while the
+  old holders still run, so for a while up to twice the limit can run.
+  Supervisor restart intensity bounds how often.
 
   Options for `start_link/1`: `:limit` (required), `:per_key`, `:max_waiting`,
   `:max_waiting_per_key` (each default `:infinity`), `:name` (`nil` starts an
@@ -44,6 +52,7 @@ defmodule Engram.ConcurrencyGate do
   @doc """
   Take one slot for the calling process under `key`, waiting up to `timeout`
   ms. `:busy` when the queue is full, the wait ran out, or the gate is down.
+  Raises `ArgumentError` if the caller already holds a slot of this gate.
 
   On a timeout the caller is still queued (and still alive), so it withdraws
   with a cast before returning: a grant that races the timeout would
@@ -53,7 +62,14 @@ defmodule Engram.ConcurrencyGate do
   """
   @spec acquire(gate(), term(), timeout()) :: :ok | :busy
   def acquire(gate, key, timeout) do
-    GenServer.call(gate, {:acquire, key}, timeout)
+    case call(gate, {:acquire, key}, timeout) do
+      :reentrant -> raise ArgumentError, "#{inspect(self())} already holds a slot of this gate"
+      status -> status
+    end
+  end
+
+  defp call(gate, msg, timeout) do
+    GenServer.call(gate, msg, timeout)
   catch
     :exit, _ ->
       cancel(gate)
@@ -75,12 +91,23 @@ defmodule Engram.ConcurrencyGate do
   end
 
   @impl true
-  def init(limits),
-    do: {:ok, Map.merge(limits, %{active: %{}, counts: %{}, queued: %{}, waiting: :queue.new()})}
+  def init(limits) do
+    {:ok,
+     Map.merge(limits, %{
+       active: %{},
+       counts: %{},
+       queued: %{},
+       waiters: %{},
+       waiting: :queue.new()
+     })}
+  end
 
   @impl true
   def handle_call({:acquire, key}, {pid, _} = from, state) do
     cond do
+      Map.has_key?(state.active, pid) or Map.has_key?(state.waiters, pid) ->
+        {:reply, :reentrant, state}
+
       grantable?(state, key) ->
         {:reply, :ok, grant(state, pid, key)}
 
@@ -89,12 +116,11 @@ defmodule Engram.ConcurrencyGate do
         {:reply, :busy, state}
 
       true ->
-        entry = {from, key, Process.monitor(pid)}
-
         {:noreply,
          %{
            state
-           | waiting: :queue.in(entry, state.waiting),
+           | waiting: :queue.in({from, key}, state.waiting),
+             waiters: Map.put(state.waiters, pid, Process.monitor(pid)),
              queued: bump(state.queued, key, 1)
          }}
     end
@@ -141,39 +167,60 @@ defmodule Engram.ConcurrencyGate do
     end
   end
 
+  # O(1) for a pid that is not waiting (every holder): the scan only runs for
+  # a waiter that timed out or died.
   defp unqueue(state, pid) do
-    {gone, kept} =
-      state.waiting |> :queue.to_list() |> Enum.split_with(fn {{w, _}, _, _} -> w == pid end)
+    case Map.pop(state.waiters, pid) do
+      {nil, _} ->
+        state
 
-    Enum.reduce(gone, %{state | waiting: :queue.from_list(kept)}, fn {_, key, ref}, acc ->
-      Process.demonitor(ref, [:flush])
-      %{acc | queued: bump(acc.queued, key, -1)}
-    end)
+      {ref, waiters} ->
+        Process.demonitor(ref, [:flush])
+        {gone, kept} = state.waiting |> :queue.to_list() |> Enum.split_with(&waiter?(&1, pid))
+        queued = Enum.reduce(gone, state.queued, fn {_, key}, acc -> bump(acc, key, -1) end)
+        %{state | waiting: :queue.from_list(kept), waiters: waiters, queued: queued}
+    end
   end
 
-  # Hand freed slots to the oldest waiters whose key is under `:per_key`. A
+  defp waiter?({{w, _}, _key}, pid), do: w == pid
+
+  # Hand freed slots to waiters while there is room.
+  defp pump(%{per_key: :infinity} = state) do
+    with true <- map_size(state.active) < state.limit,
+         {{:value, entry}, rest} <- :queue.out(state.waiting) do
+      state |> hand_off(entry, rest) |> pump()
+    else
+      _ -> state
+    end
+  end
+
+  # With a per-key limit: the oldest waiter whose key is under its cap. A
   # waiter of a key at its cap keeps its place; later waiters of other keys
   # go first, so one busy key cannot hold the whole gate behind it.
   defp pump(state) do
     if map_size(state.active) < state.limit do
       list = :queue.to_list(state.waiting)
 
-      case Enum.find_index(list, fn {_, key, _} -> grantable?(state, key) end) do
+      case Enum.find_index(list, fn {_, key} -> grantable?(state, key) end) do
         nil ->
           state
 
         i ->
-          {{{pid, _} = from, key, ref}, rest} = List.pop_at(list, i)
-          Process.demonitor(ref, [:flush])
-          GenServer.reply(from, :ok)
-
-          %{state | waiting: :queue.from_list(rest), queued: bump(state.queued, key, -1)}
-          |> grant(pid, key)
-          |> pump()
+          {entry, rest} = List.pop_at(list, i)
+          state |> hand_off(entry, :queue.from_list(rest)) |> pump()
       end
     else
       state
     end
+  end
+
+  defp hand_off(state, {{pid, _} = from, key}, rest) do
+    {ref, waiters} = Map.pop(state.waiters, pid)
+    if ref, do: Process.demonitor(ref, [:flush])
+    GenServer.reply(from, :ok)
+
+    %{state | waiting: rest, waiters: waiters, queued: bump(state.queued, key, -1)}
+    |> grant(pid, key)
   end
 
   defp bump(map, key, n) do
