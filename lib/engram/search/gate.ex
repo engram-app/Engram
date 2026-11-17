@@ -40,53 +40,138 @@ defmodule Engram.Search.Gate do
   Each run emits `[:engram, :search, :gate]` with `%{wait: native}` (time to
   a slot or to the refusal) and `%{outcome: :ok | :busy}`. No user id.
 
+  Around all of that, `admit/2` bounds WHOLE searches per user on a second
+  gate (embed included), and `pool_busy/2` turns a saturated Finch pool on
+  any of a search's requests into the same busy error.
+
   Test seam: `ServiceConfig.put_override(:search_gate, gate: pid, ...)` points
-  a test's searches at its own unregistered gate.
+  a test's searches at its own unregistered gate (`admission_gate: pid` for
+  the admission one).
   """
 
   alias Engram.ConcurrencyGate
+  alias Engram.Logger.Metadata
   alias Engram.ServiceConfig
 
+  require Logger
+
   @event [:engram, :search, :gate]
+  @admission Engram.Search.Admission
 
-  def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
+  # Finch RAISES (it does not return an error) when no pooled connection
+  # frees up within `:pool_timeout`: `Finch.HTTP1.Pool.request/6` reraises
+  # NimblePool's checkout exit as a RuntimeError with this message. Matched
+  # by prefix because that message is the only thing identifying it.
+  @pool_busy "Finch was unable to provide a connection"
 
-  @doc "Start the gate from `config :engram, :search_gate`; `opts` win."
+  @doc """
+  `kind: :qdrant` (default) is the per-request Qdrant slot gate; `kind:
+  :admission` is the per-user gate around whole searches (`admit/2`).
+  """
+  def child_spec(opts) do
+    kind = Keyword.get(opts, :kind, :qdrant)
+    %{id: {__MODULE__, kind}, start: {__MODULE__, :start_link, [opts]}}
+  end
+
+  @doc "Start a gate from `config :engram, :search_gate`; `opts` win."
   def start_link(opts \\ []) do
     config = Keyword.merge(Application.get_env(:engram, :search_gate, []), opts)
 
-    ConcurrencyGate.start_link(
-      limit: Keyword.fetch!(config, :limit),
-      per_key: Keyword.fetch!(config, :per_user),
-      max_waiting: Keyword.fetch!(config, :max_waiting),
-      max_waiting_per_key: Keyword.fetch!(config, :max_waiting_per_user),
-      name: Keyword.get(config, :name, __MODULE__)
+    case Keyword.get(config, :kind, :qdrant) do
+      :qdrant ->
+        ConcurrencyGate.start_link(
+          limit: Keyword.fetch!(config, :limit),
+          per_key: Keyword.fetch!(config, :per_user),
+          max_waiting: Keyword.fetch!(config, :max_waiting),
+          max_waiting_per_key: Keyword.fetch!(config, :max_waiting_per_user),
+          name: Keyword.get(config, :name, __MODULE__)
+        )
+
+      :admission ->
+        ConcurrencyGate.start_link(
+          limit: Keyword.fetch!(config, :admission_limit),
+          per_key: Keyword.fetch!(config, :admission_per_user),
+          max_waiting: Keyword.fetch!(config, :admission_max_waiting),
+          max_waiting_per_key: Keyword.fetch!(config, :admission_max_waiting_per_user),
+          name: Keyword.get(config, :name, @admission)
+        )
+    end
+  end
+
+  @doc "Run ONE Qdrant request of a search in a slot (see the moduledoc)."
+  @spec run(term(), (-> result)) :: result | {:error, :search_busy} when result: var
+  def run(user_id, fun) do
+    config = config()
+    gate = Keyword.get(config, :gate, __MODULE__)
+    start = System.monotonic_time()
+    status = ConcurrencyGate.acquire(gate, user_id, Keyword.fetch!(config, :acquire_timeout))
+    :telemetry.execute(@event, %{wait: System.monotonic_time() - start}, %{outcome: status})
+    hold(status, gate, fun)
+  end
+
+  @doc """
+  Admit one WHOLE search (query embed, Postgres reads, every Qdrant request)
+  of `user_id`: at most `:admission_per_user` per user and `:admission_limit`
+  per node in flight, waiting up to `:acquire_timeout` ms (at most
+  `:admission_max_waiting_per_user` queued per user), else
+  `{:error, :search_busy}` without running `fun`.
+
+  Why: the Qdrant slot covers only Qdrant, so before this one user's 200
+  parallel searches all ran their query embeds at once, drained the shared
+  Finch pool and got 500s instead of busy. A separate gate process from the
+  Qdrant one, so `run/2` nests inside it in the same process (the
+  double-acquire raise is per gate). Released like `run/2`: on return, raise,
+  exit or caller death. Same `admission_gate: pid` test seam as `gate:`.
+  """
+  @spec admit(term(), (-> result)) :: result | {:error, :search_busy} when result: var
+  def admit(user_id, fun) do
+    config = config()
+    gate = Keyword.get(config, :admission_gate, @admission)
+
+    hold(
+      ConcurrencyGate.acquire(gate, user_id, Keyword.fetch!(config, :acquire_timeout)),
+      gate,
+      fun
     )
   end
 
-  @spec run(term(), (-> result)) :: result | {:error, :search_busy} when result: var
-  def run(user_id, fun) do
-    config =
+  @doc """
+  Run one outbound request of a search (`upstream` names it in the log) and
+  turn a Finch pool checkout timeout into `{:error, :search_busy}` with a
+  warning. Every other result, raise or exit passes through untouched.
+  """
+  @spec pool_busy(atom(), (-> result)) :: result | {:error, :search_busy} when result: var
+  def pool_busy(upstream, fun) do
+    fun.()
+  rescue
+    e in RuntimeError ->
+      if String.starts_with?(e.message, @pool_busy) do
+        Logger.warning(
+          "search upstream connection pool busy, refusing search_busy",
+          Metadata.with_category(:warning, :search,
+            upstream: upstream,
+            reason_label: :pool_checkout_timeout
+          )
+        )
+
+        {:error, :search_busy}
+      else
+        reraise e, __STACKTRACE__
+      end
+  end
+
+  defp config,
+    do:
       Keyword.merge(
         Application.get_env(:engram, :search_gate, []),
         ServiceConfig.get(:search_gate, [])
       )
 
-    gate = Keyword.get(config, :gate, __MODULE__)
-    start = System.monotonic_time()
-    status = ConcurrencyGate.acquire(gate, user_id, Keyword.fetch!(config, :acquire_timeout))
-    :telemetry.execute(@event, %{wait: System.monotonic_time() - start}, %{outcome: status})
-
-    case status do
-      :ok ->
-        try do
-          fun.()
-        after
-          ConcurrencyGate.release(gate)
-        end
-
-      :busy ->
-        {:error, :search_busy}
-    end
+  defp hold(:ok, gate, fun) do
+    fun.()
+  after
+    ConcurrencyGate.release(gate)
   end
+
+  defp hold(:busy, _gate, _fun), do: {:error, :search_busy}
 end

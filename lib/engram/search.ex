@@ -39,10 +39,12 @@ defmodule Engram.Search do
     # so a bulk indexing burst can't starve synchronous user search. `model`
     # comes from the per-user SearchProfile; nil falls back to the global
     # query-embed model (or the embedder default when that too is unset).
-    case model || query_embed_model() do
-      nil -> embedder().embed_texts([query], purpose: :query)
-      m -> embedder().embed_texts([query], model: m, purpose: :query)
-    end
+    Gate.pool_busy(:query_embed, fn ->
+      case model || query_embed_model() do
+        nil -> embedder().embed_texts([query], purpose: :query)
+        m -> embedder().embed_texts([query], model: m, purpose: :query)
+      end
+    end)
   end
 
   @doc """
@@ -54,12 +56,14 @@ defmodule Engram.Search do
   def similar(user, vault, point_ids, opts \\ []) when is_list(point_ids) and point_ids != [] do
     with :ok <- vault_ids_present?(vault, opts),
          :ok <- cross_vault_entitlement(user, opts) do
-      do_search_instrumented(
-        user,
-        vault,
-        {:similar, point_ids},
-        Keyword.merge(opts, mode: :similar, group_by_note: true)
-      )
+      Gate.admit(user.id, fn ->
+        do_search_instrumented(
+          user,
+          vault,
+          {:similar, point_ids},
+          Keyword.merge(opts, mode: :similar, group_by_note: true)
+        )
+      end)
     end
   end
 
@@ -99,9 +103,13 @@ defmodule Engram.Search do
     with :ok <- vault_ids_present?(vault, opts),
          :ok <- validate_input(query, opts),
          :ok <- cross_vault_entitlement(user, opts),
-         {:ok, opts} <- resolve_field_filters(user, opts),
-         :ok <- spend_search_budget(user, opts) do
-      do_search_instrumented(user, vault, query, opts)
+         {:ok, opts} <- resolve_field_filters(user, opts) do
+      # Admission (`Gate.admit/2`) before the budget spend: a search refused
+      # busy never ran, so it costs no token.
+      Gate.admit(user.id, fn ->
+        with :ok <- spend_search_budget(user, opts),
+             do: do_search_instrumented(user, vault, query, opts)
+      end)
     end
   end
 
@@ -677,7 +685,10 @@ defmodule Engram.Search do
 
           rerank_module = if rerank_for_user?, do: reranker(), else: Engram.Rerankers.None
 
-          with {:ok, ranked} <- rerank_module.rerank(query, decrypted, rerank_keep) do
+          with {:ok, ranked} <-
+                 Gate.pool_busy(:rerank, fn ->
+                   rerank_module.rerank(query, decrypted, rerank_keep)
+                 end) do
             ranked |> rehydrate_display_fields(hits) |> diversify(group?, limit, diversity)
           end
         end
@@ -941,6 +952,11 @@ defmodule Engram.Search do
             qdrant(user, fn -> Qdrant.search(collection(), vector, search_opts) end)
         end
 
+      # Our own connection pool is saturated, not the embedder down: busy,
+      # so the caller backs off instead of piling on keyword searches.
+      {:error, :search_busy} = busy ->
+        busy
+
       {:error, reason} = err ->
         # Embedding backend down/rate-limited: degrade to keyword-only rather
         # than failing a search the keyword leg could still serve.
@@ -1002,7 +1018,7 @@ defmodule Engram.Search do
   # Postgres reads around it hold none: a slow embedder must degrade search,
   # never turn it into busy refusals for everyone. A busy refusal comes after
   # the budget was spent, as the embed it meters may already have run.
-  defp qdrant(user, fun), do: Gate.run(user.id, fun)
+  defp qdrant(user, fun), do: Gate.run(user.id, fn -> Gate.pool_busy(:qdrant, fun) end)
 
   # Bounded label for telemetry AND for the degradation log — the raw reason can
   # carry a whole provider response body, and metric tags must stay

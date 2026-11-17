@@ -507,6 +507,7 @@ config :logger, :default_formatter,
     :transaction_id,
     :trigger,
     :unreadable,
+    :upstream,
     :user_agent,
     :user_id,
     :vault_id,
@@ -685,12 +686,21 @@ config :engram, Engram.MCP.ParseGate,
 # Qdrant's 4 threads (plus the worker's). A caller waits up to `acquire_timeout` ms for a slot (at
 # most `max_waiting` queued, `max_waiting_per_user` per user), then gets a
 # busy error (MCP `rate_limited`, REST 429 with retry-after).
+#
+# `admission_*` bound WHOLE searches (query embed + every Qdrant request,
+# `Engram.Search.Gate.admit/2`), same wait and busy error. Total kept under
+# Req's default Finch pool (50 per host), so one node's searches cannot drain
+# it; one user gets `admission_per_user` running and that many queued.
 config :engram, :search_gate,
   limit: 4,
   per_user: 2,
   acquire_timeout: 2_500,
   max_waiting: 32,
-  max_waiting_per_user: 8
+  max_waiting_per_user: 8,
+  admission_limit: 32,
+  admission_per_user: 4,
+  admission_max_waiting: 64,
+  admission_max_waiting_per_user: 4
 
 # Self-host install census ping: prod builds only, so a dev `mix phx.server` or a
 # source run never pings the real collector and pollutes the install count.
