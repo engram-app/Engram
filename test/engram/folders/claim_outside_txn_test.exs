@@ -316,4 +316,46 @@ defmodule Engram.Folders.ClaimOutsideTxnTest do
     assert live_path(room, a.id) == "Docs/a.md"
     assert live_path(room, x.id) == "Other/x.md"
   end
+
+  # The other ordering of the ABA: an identical rename B has claimed and is
+  # waiting for the lock while A (same claim) fails and reconciles the shared
+  # entry back to the rows. B then commits; the index must end where B's rows
+  # are, or projection would move B's committed rename back.
+  test "an identical rename waiting while ours fails still ends with the index on its rows",
+       ctx do
+    {:ok, room} = CrdtIndexRegistry.ensure_observed(ctx.user.id, ctx.vault.id)
+    n = note(ctx, "Docs/n.md")
+    put_att(ctx, "Docs/a.png")
+    counter = :counters.new(1, [])
+    test_pid = self()
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :folder_claimed ->
+        :counters.add(counter, 1, 1)
+
+        case :counters.get(counter, 1) do
+          # B has claimed: A runs whole and fails on an attachment conflict
+          # that appears after its precheck; then the conflict goes away.
+          1 ->
+            send(test_pid, {:a, Folders.rename(ctx.user, ctx.vault, "Docs", "Archive")})
+            :ok = Attachments.delete_attachment(ctx.user, ctx.vault, "Archive/a.png")
+
+          2 ->
+            put_att(ctx, "Archive/a.png")
+
+          _ ->
+            :ok
+        end
+
+        :ok
+
+      _ ->
+        :ok
+    end)
+
+    assert {:ok, _} = Folders.rename(ctx.user, ctx.vault, "Docs", "Archive")
+    assert_received {:a, {:error, :conflict}}
+    assert {:ok, %{path: "Archive/n.md"}} = Notes.get_note_by_id(ctx.user, ctx.vault, n.id)
+    assert live_path(room, n.id) == "Archive/n.md"
+  end
 end

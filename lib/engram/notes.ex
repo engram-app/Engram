@@ -5880,6 +5880,14 @@ defmodule Engram.Notes do
   # Runs `fun` (a transaction whose claims `moves`, `[{note, claimed_path}]`,
   # were made before it) and, when it fails, raises or exits, reconciles them.
   # The one compensation for every claim-before-transaction caller.
+  #
+  # On success the claims are asserted AGAIN, after the commit. While this op
+  # waited for its lock, an identical op (a client retry claiming the same
+  # values) may have failed and reconciled the shared entries back to the
+  # then-committed rows; without this the index would trail the rows this op
+  # just committed, and projection, which converges rows to the index, would
+  # move them back. One more index write per op; it never fails the committed
+  # op (a refusal is reported for projection like any orphan).
   defp with_claim_undo(user, vault, moves, fun) do
     result =
       try do
@@ -5890,9 +5898,23 @@ defmodule Engram.Notes do
           :erlang.raise(kind, reason, __STACKTRACE__)
       end
 
-    with {:error, reason} <- result do
-      reconcile_claims(user, vault, moves, reason)
-      result
+    case result do
+      {:ok, _} ->
+        reassert_claims(user, vault, moves)
+        result
+
+      {:error, reason} ->
+        reconcile_claims(user, vault, moves, reason)
+        result
+    end
+  end
+
+  defp reassert_claims(user, vault, moves) do
+    claims = for {note, path} <- moves, note.path != path, do: {path, note.id}
+
+    case Identity.claim(user, vault.id, claims) do
+      :ok -> :ok
+      error -> orphan_claim(user, vault, length(claims), {:reassert, error})
     end
   end
 
