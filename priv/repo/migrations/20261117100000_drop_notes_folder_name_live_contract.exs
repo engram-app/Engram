@@ -2,13 +2,15 @@ defmodule Engram.Repo.Migrations.DropNotesFolderNameLiveContract do
   use Ecto.Migration
 
   # phase/contract: drops `notes_folder_name_live` (20261112100000), the S3
-  # by-name index of the O(1) folder rename plan (Engram#2523). It has had
-  # no reader since #2589 (release 0.84.0): the by-name lookup probes
-  # `notes_name_key_live` on the stored `name_key` instead, and an
-  # expression index serves only a query that names the same expression,
-  # which nothing in lib/ does. The rollback floor is 0.87.0, so no release
-  # a deploy can run beside this one reads it. Every note write that changes
-  # the folder or the name still pays for one entry in it; this ends that.
+  # by-name index of the O(1) folder rename plan (Engram#2523). No code has
+  # named its expression since #2589 (release 0.84.0): the by-name lookup
+  # probes `notes_name_key_live`. Prod still scanned it (0.87.0: 9,757 scans)
+  # because its leading `vault_id` and its `deleted_at IS NULL AND kind =
+  # 'note'` predicate make it a generic vault-scoped live-note index for any
+  # read with no user qual (the maintenance pool). Those reads move to the
+  # other vault-leading live indexes (`notes_folder_ref_live`, ...), pinned
+  # by NotesVaultLivePlanTest. Every note write that changes the folder or
+  # the name still paid for one entry in it; this ends that.
   #
   # Not dropped here: `folders_moved_live` (same file, read by every
   # by-path lookup) and every `path_*` / `folder_*` column, which S5 still
