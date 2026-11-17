@@ -37,4 +37,22 @@ defmodule Engram.FileTimeDoublesGoneTest do
       assert f in schema.__schema__(:virtual_fields), inspect({schema, f})
     end
   end
+
+  # Raw SQL would only fail at runtime in whatever test runs it: no lib/
+  # SQL string or one-letter query binding (`n.mtime`) names a double.
+  test "no lib/ SQL or query binding names a double column" do
+    sql_word = ~r/\b(SELECT|UPDATE|INSERT|WHERE|SET|FROM)\b/
+    double = ~r/\b(mtime|ctime)\b/
+    binding = ~r/(?<![A-Za-z_.])[a-z]\.(mtime|ctime)\b/
+
+    hits =
+      for path <- Path.wildcard("lib/**/*.ex"),
+          {line, n} <- path |> File.read!() |> String.split("\n") |> Enum.with_index(1),
+          not String.starts_with?(String.trim_leading(line), "#"),
+          (Regex.match?(sql_word, line) and Regex.match?(double, line) and
+             String.contains?(line, ~s("))) or Regex.match?(binding, line),
+          do: "#{path}:#{n}: #{String.trim(line)}"
+
+    assert hits == []
+  end
 end
