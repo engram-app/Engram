@@ -415,12 +415,14 @@ defmodule Engram.DataMigrations.FolderTable do
   defp update_row(repo, ctx, row, explicit?) do
     {ct, nonce} = encrypt_name(ctx, row.id, row.segment)
     keys = Folder.name_keys(ctx.fk, row.segment, nonce)
+    seq = moved_seq(repo, row)
 
     repo.query!(
       """
       UPDATE folders SET parent_id = $2, name_ciphertext = $3, name_nonce = $4, name_hmac = $5,
              full_path_hmac = $6, dek_version = $7, explicit = explicit OR $8, updated_at = now(),
-             deleted_at = NULL, delete_op_id = NULL, name_ci_hmac = $11, name_stamp = $12
+             deleted_at = NULL, delete_op_id = NULL, name_ci_hmac = $11, name_stamp = $12,
+             seq = COALESCE($13, seq), notes_cascaded = notes_cascaded AND $13::bigint IS NULL
       WHERE id = $1 AND vault_id = $9 AND user_id = $10
       """,
       [
@@ -435,9 +437,40 @@ defmodule Engram.DataMigrations.FolderTable do
         row.vault,
         dump(ctx.user_id),
         keys[:name_ci_hmac],
-        keys[:name_stamp]
+        keys[:name_stamp],
+        seq
       ]
     )
+  end
+
+  # Moving or reviving a folder row changes where its notes are shown when
+  # they are shown by their folder chain: when the row, or a folder on its
+  # current chain or on its new parent's chain, was moved without a cascade
+  # (S5). Their paths are already derived then, so stamping the row
+  # uncascaded changes no shown path; it gives the row a seq, so the
+  # moved-folder feed (`Engram.Notes.list_moved_changes/4`) serves its
+  # subtree to clients behind it. Any other row is left as it was (stamping
+  # it would switch its notes from stored to derived paths). The seq lock
+  # comes before the folder row (the LOCK ORDER in `Engram.Vaults`). Two
+  # O(depth) chain walks.
+  defp moved_seq(repo, row) do
+    %{rows: [[moved?]]} =
+      repo.query!(
+        """
+        WITH RECURSIVE up(id, parent_id, cascaded, d) AS (
+          SELECT id, parent_id, notes_cascaded, 0 FROM folders
+          WHERE vault_id = $1 AND id = ANY(ARRAY[$2::uuid, $3::uuid])
+          UNION ALL
+          SELECT f.id, f.parent_id, f.notes_cascaded, up.d + 1 FROM folders f
+          JOIN up ON f.id = up.parent_id
+          WHERE f.vault_id = $1 AND f.deleted_at IS NULL AND up.d < 512
+        )
+        SELECT coalesce(bool_or(NOT cascaded), false) FROM up
+        """,
+        [row.vault, row.id, row.parent]
+      )
+
+    if moved?, do: Vaults.next_seq!(Ecto.UUID.load!(row.vault), repo: repo)
   end
 
   defp encrypt_name(ctx, id, segment),

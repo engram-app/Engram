@@ -662,7 +662,8 @@ defmodule Engram.Folders.Rows do
           dek_version: f.dek_version,
           ct: f.name_ciphertext,
           nonce: f.name_nonce,
-          cascaded: f.notes_cascaded
+          cascaded: f.notes_cascaded,
+          seq: f.seq
         }
       )
 
@@ -685,7 +686,8 @@ defmodule Engram.Folders.Rows do
           dek_version: f.dek_version,
           ct: f.name_ciphertext,
           nonce: f.name_nonce,
-          cascaded: f.notes_cascaded
+          cascaded: f.notes_cascaded,
+          seq: f.seq
         }
       )
 
@@ -700,7 +702,8 @@ defmodule Engram.Folders.Rows do
           dek_version: f.dek_version,
           ct: f.ct,
           nonce: f.nonce,
-          cascaded: f.cascaded
+          cascaded: f.cascaded,
+          seq: f.seq
         }
       )
 
@@ -711,7 +714,8 @@ defmodule Engram.Folders.Rows do
         dek_version: t.dek_version,
         ct: t.ct,
         nonce: t.nonce,
-        cascaded: t.cascaded
+        cascaded: t.cascaded,
+        seq: t.seq
       }
     )
     |> recursive_ctes(true)
@@ -735,6 +739,40 @@ defmodule Engram.Folders.Rows do
   """
   @spec moved_paths(binary(), [map()], [Ecto.UUID.t()]) :: %{Ecto.UUID.t() => String.t()}
   def moved_paths(dek, rows, ids), do: paths_of(dek, rows, ids, & &1)
+
+  @doc """
+  `%{id => seq}` for the `ids` (folder ids) whose chain in `chain_rows/3`'s
+  `rows` holds a folder moved without a cascade: the highest such folder's
+  seq, the last time a move changed where the folder's notes are shown.
+  CPU only.
+  """
+  @spec moved_seqs([map()], [Ecto.UUID.t()]) :: %{Ecto.UUID.t() => integer()}
+  def moved_seqs(rows, ids) do
+    by_id = Map.new(rows, &{&1.id, &1})
+
+    for id <- ids,
+        seq = chain_seq(by_id, id, nil, 0),
+        seq != nil,
+        into: %{},
+        do: {id, seq}
+  end
+
+  defp chain_seq(_by_id, _id, acc, depth) when depth > @max_depth, do: acc
+
+  defp chain_seq(by_id, id, acc, depth) do
+    case by_id do
+      %{^id => row} ->
+        acc =
+          if Map.get(row, :cascaded) == false and is_integer(Map.get(row, :seq)),
+            do: max(acc || 0, row.seq),
+            else: acc
+
+        if row.parent_id, do: chain_seq(by_id, row.parent_id, acc, depth + 1), else: acc
+
+      _ ->
+        acc
+    end
+  end
 
   defp paths_of(_dek, [], _ids, _keep?), do: %{}
 
@@ -841,14 +879,24 @@ defmodule Engram.Folders.Rows do
   # The recursive walk from `roots` (a query of `%{id, depth}`) down the live
   # folders of `vault_id`: the CTE pieces, for `subtree_query/2` and
   # `descendant_ids/3` to select from.
-  defp walk_down(vault_id, roots) do
+  # `dead?`: dead rows too (the moved-folder feed's dead notes, which keep
+  # their folder reference after a folder delete).
+  #
+  # `user_id`: the tenant bound in the query, so the planner sees this
+  # tenant's real folder count instead of an average tenant's, at which a
+  # tenant-led `folders_user` scan per level ties with the parent probe
+  # (`MovedFolderFeedPlanTest`; the same trap as `chain_reads_test`).
+  defp walk_down(vault_id, roots, dead? \\ false, user_id \\ nil) do
     walk =
       from(f in Folder,
         join: t in "folder_subtree",
         on: f.parent_id == t.id,
-        where: f.vault_id == ^vault_id and is_nil(f.deleted_at) and t.depth < @max_depth,
+        where: f.vault_id == ^vault_id and t.depth < @max_depth,
         select: %{id: f.id, depth: fragment("? + 1", t.depth)}
       )
+
+    walk = if dead?, do: walk, else: where(walk, [f], is_nil(f.deleted_at))
+    walk = if user_id, do: where(walk, [f], f.user_id == ^user_id), else: walk
 
     union_all(roots, ^walk)
   end
@@ -880,13 +928,21 @@ defmodule Engram.Folders.Rows do
   gives `[]`. Runs inside the caller's tenant transaction. The cap bounds the
   answer, not the walk: Postgres still visits the whole subtree.
   """
-  @spec descendant_ids(Ecto.UUID.t(), Ecto.UUID.t(), pos_integer()) :: [Ecto.UUID.t()]
-  def descendant_ids(vault_id, root_id, limit) do
+  @spec descendant_ids(Ecto.UUID.t(), Ecto.UUID.t(), pos_integer(), keyword()) :: [
+          Ecto.UUID.t()
+        ]
+  def descendant_ids(vault_id, root_id, limit, opts \\ []) do
+    dead? = Keyword.get(opts, :dead, false)
+
     roots =
       from(f in Folder,
-        where: f.vault_id == ^vault_id and f.id == ^root_id and is_nil(f.deleted_at),
+        where: f.vault_id == ^vault_id and f.id == ^root_id,
         select: %{id: f.id, depth: fragment("0")}
       )
+
+    roots = if dead?, do: roots, else: where(roots, [f], is_nil(f.deleted_at))
+    user_id = opts[:user_id]
+    roots = if user_id, do: where(roots, [f], f.user_id == ^user_id), else: roots
 
     from(t in "folder_subtree",
       group_by: t.id,
@@ -895,8 +951,40 @@ defmodule Engram.Folders.Rows do
       select: type(t.id, Ecto.UUID)
     )
     |> recursive_ctes(true)
-    |> with_cte("folder_subtree", as: ^walk_down(vault_id, roots))
-    |> Repo.all()
+    |> with_cte("folder_subtree", as: ^walk_down(vault_id, roots, dead?, user_id))
+    # Unnamed, as `ids_by_path/3`: a generic plan costs an average vault's
+    # folders and walks the whole vault each level (`MovedFolderFeedPlanTest`).
+    |> Repo.all(prepare: :unnamed)
+  end
+
+  @doc """
+  The folders of `vault_id` moved without a cascade (S5) at a seq past
+  `after_seq` (`inclusive?`: at it too, for a cursor resuming inside that
+  folder's rows), as `%{id, seq, updated_at, dead}` in seq order: what the
+  moved-folder feed expands (`Engram.Notes.list_moved_changes/4`). Live
+  ones only, unless `dead: true` (a folder deleted after its move keeps its
+  seq). One range seek on `folders_moved_seq` `(vault_id, seq) WHERE NOT
+  notes_cascaded`: only the moved folders past the cursor are read. Runs
+  inside the caller's tenant transaction.
+  """
+  @spec moved_since(Ecto.UUID.t(), integer(), boolean(), keyword()) :: [map()]
+  def moved_since(vault_id, after_seq, inclusive?, opts \\ []) do
+    past =
+      if inclusive?, do: dynamic([f], f.seq >= ^after_seq), else: dynamic([f], f.seq > ^after_seq)
+
+    query =
+      from(f in Folder,
+        where: f.vault_id == ^vault_id and not f.notes_cascaded and not is_nil(f.seq),
+        where: ^past,
+        order_by: [asc: f.seq, asc: f.id],
+        select: %{id: f.id, seq: f.seq, updated_at: f.updated_at, dead: not is_nil(f.deleted_at)}
+      )
+
+    # `dead: true`: also the folders deleted since (their notes died after
+    # the move; the moved-folder feed relocates them before their tombstones).
+    query = if opts[:dead], do: query, else: where(query, [f], is_nil(f.deleted_at))
+
+    Repo.all(query)
   end
 
   # ---- rename --------------------------------------------------------------
@@ -923,17 +1011,25 @@ defmodule Engram.Folders.Rows do
   would make the `folders_release_refs` trigger NULL every moved row's
   reference and the move write it again: two writes per row (#2468 reviews).
   After them it releases only the stragglers.
-  """
-  @spec rename(map(), Ecto.UUID.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def rename(_user, _vault_id, same, same), do: :ok
 
-  def rename(_user, _vault_id, old_folder, new_folder)
+  `uncascaded: seq` (S5, `Engram.Folders.WriteStop`): the notes under the
+  folder do not move, so the moved row is stamped `notes_cascaded = false`
+  at the op's `seq` and readers derive its notes' paths from it. Refused
+  with `{:error, :merge}` when a live folder already holds `new_folder`: a
+  merge re-points the notes, so only the cascade can do it.
+  """
+  @spec rename(map(), Ecto.UUID.t(), String.t(), String.t(), keyword()) ::
+          :ok | {:error, term()}
+  def rename(user, vault_id, old_folder, new_folder, opts \\ [])
+  def rename(_user, _vault_id, same, same, _opts), do: :ok
+
+  def rename(_user, _vault_id, old_folder, new_folder, _opts)
       when old_folder == "" or new_folder == "",
       do: {:error, :invalid_path}
 
-  def rename(user, vault_id, old_folder, new_folder) do
+  def rename(user, vault_id, old_folder, new_folder, opts) do
     with :ok <- check_move(user, vault_id, old_folder, new_folder),
-         do: do_rename(user, vault_id, old_folder, new_folder)
+         do: do_rename(user, vault_id, old_folder, new_folder, opts)
   end
 
   @doc """
@@ -998,10 +1094,16 @@ defmodule Engram.Folders.Rows do
   def into_own_subtree?(old_folder, new_folder),
     do: new_folder == old_folder or String.starts_with?(new_folder, old_folder <> "/")
 
-  defp do_rename(user, vault_id, old_folder, new_folder) do
+  defp do_rename(user, vault_id, old_folder, new_folder, opts) do
     with {:ok, dek} <- Crypto.get_dek(user),
          {:ok, fk} <- Crypto.dek_filter_key(user) do
-      ctx = %{user_id: user.id, vault_id: vault_id, dek: dek, fk: fk}
+      ctx = %{
+        user_id: user.id,
+        vault_id: vault_id,
+        dek: dek,
+        fk: fk,
+        uncascaded: opts[:uncascaded]
+      }
 
       case subtree(user, vault_id, [old_folder]) do
         [] -> :ok
@@ -1025,6 +1127,9 @@ defmodule Engram.Folders.Rows do
     paths = new_paths(ctx, rows, root.id, new_folder)
 
     case live_child(ctx.vault_id, new_parent, new_name_h) do
+      %{id: occupant} when occupant != root.id and is_integer(ctx.uncascaded) ->
+        {:error, :merge}
+
       %{id: occupant} when occupant != root.id ->
         merge_subtree(ctx, rows, paths, root.id, occupant, new_parent)
 
@@ -1041,15 +1146,43 @@ defmodule Engram.Folders.Rows do
               full_path_hmac: path_hmac(ctx.fk, new_folder),
               dek_version: Crypto.row_version_aad_bound(),
               updated_at: now()
-            ] ++ Folder.name_keys(ctx.fk, new_segment, nonce)
+            ] ++ Folder.name_keys(ctx.fk, new_segment, nonce) ++ uncascaded(ctx.uncascaded)
         )
 
         :ok = put_names(ctx, [{root.id, new_segment}])
         rest = for r <- rows, r.id != root.id, Map.has_key?(paths, r.id), do: {r.id, paths[r.id]}
         write_path_hmacs(ctx, rest)
+        :ok = recascade(ctx, rows)
         :ok
     end
   end
+
+  # A cascade rewrote every stored path below (its scan reads the subtree by
+  # folder id, `Notes.scan_with_drift/3`): no row under it is moved any more,
+  # or the moved-folder feed would re-walk it on every page until S6. One
+  # statement, only when one of them was moved.
+  defp recascade(%{uncascaded: nil} = ctx, rows) do
+    case for(%{notes_cascaded: false, id: id} <- rows, do: id) do
+      [] ->
+        :ok
+
+      ids ->
+        _ =
+          Repo.update_all(
+            from(f in Folder, where: f.vault_id == ^ctx.vault_id and f.id in ^ids),
+            set: [notes_cascaded: true]
+          )
+
+        :ok
+    end
+  end
+
+  defp recascade(_ctx, _rows), do: :ok
+
+  # The root row's flag: a cascade clears it (`recascade/2` does the rest of
+  # the subtree), an S5 move sets it at the op's seq.
+  defp uncascaded(nil), do: [notes_cascaded: true]
+  defp uncascaded(seq) when is_integer(seq), do: [notes_cascaded: false, seq: seq]
 
   # id => new full path, for every row whose chain of names opens.
   defp new_paths(ctx, rows, root_id, new_folder) do

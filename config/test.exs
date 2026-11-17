@@ -19,6 +19,11 @@ config :engram, :rate_limit_override, 10_000
 # `ServiceConfig.put_override(:name_reads_ledger, :read)`: the ledger row,
 # which the test DB never completes.
 config :engram, :name_reads_ledger, :done
+
+# The S5 write stop's floor check (`Engram.Folders.WriteStop.floors?/0`): the
+# rollback floor stays below the moved-folder feed release until release B
+# raises it, so tests assume it (the floor PR asserts the real one).
+config :engram, :write_stop_floors, :assume
 # The OAuth limiter's coarse per-IP bucket (EngramWeb.Plugs.OAuthRateLimit):
 # every test shares 127.0.0.1, so it needs the same high ceiling.
 config :engram, :oauth_ip_rate_limit_override, 10_000

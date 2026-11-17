@@ -38,6 +38,7 @@ defmodule Engram.Notes do
     Keys,
     LineEndings,
     Location,
+    MovedFeedSql,
     Name,
     Note,
     NoteBody,
@@ -2395,8 +2396,6 @@ defmodule Engram.Notes do
   end
 
   defp shown_by_other?(user, vault, path, id) do
-    :ok = Engram.Vaults.lock_seq!(vault.id)
-
     case located_ids_at(user, vault, [path]) do
       {%{^path => other}, _named?} -> other != id
       _ -> false
@@ -2417,19 +2416,32 @@ defmodule Engram.Notes do
     # deleted. Mirror the REST upsert_pathless guard EXACTLY — refuse so the
     # delete stands; the client trashes its local copy on `recently_deleted`.
     # A rename (different path) lands outside this guard and resurrects below.
-    cond do
-      recent_same_path_tombstone?(prior, sanitized_path, user) ->
-        {:error, :recently_deleted}
+    if recent_same_path_tombstone?(prior, sanitized_path, user) do
+      {:error, :recently_deleted}
+    else
+      # Test seam: where a stale `moved?` used to decide (`ResurrectRaceTest`).
+      interleave_hook(:resurrect_before_lock)
+      resurrect_move({prior, moved?}, user, vault, sanitized_path, folder, origin, recording)
+    end
+  end
 
-      # A live note SHOWN at the target (by name under a moved folder, which
-      # no unique key holds) is a conflict, as a keyed holder is. Only in a
-      # vault holding such a folder (`moved?`, read with the row), under the
-      # vault seq lock so no uncascaded move lands between check and write.
-      moved? and shown_by_other?(user, vault, sanitized_path, prior.id) ->
-        {:error, :id_conflict, prior}
+  # A live note SHOWN at the target (by name under a moved folder, which no
+  # unique key holds) is a conflict, as a keyed holder is. Run by `move_note`
+  # right after its `next_seq!` takes the vault seq lock, so no uncascaded
+  # move (S5) lands between check and write, and the merge, encrypt and
+  # NoteCommitted insert stay outside the lock (#1710). `moved?` (read with
+  # the row) can be a stale `false`: the vault's FIRST move may commit before
+  # the lock, so the bit is re-read here. One index probe
+  # (`folders_moved_live`) in a vault that never moved a folder.
+  defp shown_check(moved?, user, vault, path, id) do
+    fn ->
+      moved? = moved? or Location.named?(user.id, vault.id)
 
-      true ->
-        resurrect_move({prior, moved?}, user, vault, sanitized_path, folder, origin, recording)
+      cond do
+        not moved? -> {:ok, false}
+        shown_by_other?(user, vault, path, id) -> :conflict
+        true -> {:ok, true}
+      end
     end
   end
 
@@ -2448,7 +2460,8 @@ defmodule Engram.Notes do
     }
 
     case move_note(prior, base_attrs, user, sanitized_path, folder, "sync", recording,
-           free_slot: moved?
+           free_slot: moved?,
+           check: shown_check(moved?, user, vault, sanitized_path, prior.id)
          ) do
       {:ok, {:moved, _prev_hash, updated, _merged_text, _content_hash}} ->
         case Crypto.maybe_decrypt_note_fields(updated, user) do
@@ -2475,6 +2488,10 @@ defmodule Engram.Notes do
         end
 
       {:error, _} = err ->
+        err
+
+      # `shown_check/5` under the lock: a note is shown at the target.
+      {:error, :id_conflict, _} = err ->
         err
 
       # See genesis_relocate_live: move_note can now lose its snapshot fence.
@@ -2834,6 +2851,10 @@ defmodule Engram.Notes do
     # statement below is skipped.
     {free_slot?, opts} = Keyword.pop(opts, :free_slot, true)
     {outbox?, opts} = Keyword.pop(opts, :outbox, true)
+    # `check:` a probe run under the vault seq lock, right after `next_seq!`:
+    # `:conflict` refuses the write, `{:ok, moved?}` frees a stale key too
+    # when the vault turned out to hold a moved folder (a resurrect).
+    {check, opts} = Keyword.pop(opts, :check, fn -> {:ok, false} end)
     # The write's own opts (`actor`, MCP's agent settle), for a revived note's job.
     {write_opts, db_opts} = Keyword.pop(opts, :embed_opts, actor: actor)
 
@@ -2901,68 +2922,88 @@ defmodule Engram.Notes do
               )
 
         seq = Engram.Vaults.next_seq!(prior.vault_id)
-        folder_ref = folder_ref_for(refs, user, prior.vault_id, folder)
 
-        changeset =
-          prior
-          |> Note.changeset(Map.put(phase_b, :version, prior.version + 1))
-          |> Ecto.Changeset.put_change(:seq, seq)
-          # Every leg names its live row, a restore or resurrect included.
-          |> Ecto.Changeset.put_change(:folder_ref_id, folder_ref)
-          |> Ecto.Changeset.put_change(:deleted_at, nil)
-          # Any undelete leaves the op that deleted it (#609), so a later
-          # restore of that op cannot reach a row that has lived since.
-          |> Ecto.Changeset.put_change(:delete_op_id, nil)
-
-        # Same snapshot fence as do_rewrite_note, for the same reason: this
-        # merges CRDT state from `prior.crdt_state` and then writes both
-        # `content` and `crdt_state`, so a checkpoint committing in the gap
-        # would be rolled back to the pre-checkpoint snapshot with its tail
-        # already pruned. Fixing only do_rewrite_note left the rename and
-        # id-keyed-move path clobbering checkpoints. #1335.
-        #
-        # `put_change(:deleted_at, nil)` means this can also resurrect a
-        # tombstone, so the fence carries the whole pre-image, not just the id.
-        # The target's key may still be held by a note moved away without a
-        # cascade (S5): free it first. A refused write would abort a caller's
-        # transaction that runs no savepoint (CRDT relocate, resurrect).
-        _ = if free_slot?, do: free_stale_slot(user, prior.vault_id, sanitized_path, prior.id)
-
-        case fenced_update(snapshot_fenced(changeset, prior), db_opts) do
-          {:ok, updated} ->
-            _ =
-              if was_tombstoned do
-                :ok = UsageMeters.inc_notes_count(user.id, 1)
-              end
-
-            # #1710. AFTER the fenced write, same transaction: a lost fence
-            # returns :stale_snapshot below and must record nothing. `prior` is
-            # the PRE-write row. The hash check keeps a pure rename out of history.
-            _ =
-              if prior.content_hash != crdt.content_hash,
-                do: Revisions.record_write(prior, actor, recording)
-
-            # A queued job means the returned prev hash is the new one, so a
-            # caller that queues on a hash change does not queue twice.
-            prev_hash = if queue?, do: crdt.content_hash, else: prior.content_hash
-
-            # Tagged `:moved` (not the plain 4-tuple do_rewrite_note returns) so
-            # the caller broadcasts unconditionally: a rename keeps the same
-            # content_hash but persisted a new path/seq/version, and the plain
-            # `prev_hash != content_hash` broadcast guard would skip it — leaving
-            # peers with the old-path delete but no new-path upsert (the note
-            # vanishes on them until their next pull).
-            {:ok, {:moved, prev_hash, updated, crdt.merged_text, crdt.content_hash}}
-
-          {:error, changeset} ->
+        case check.() do
+          :conflict ->
             :ok = discard_job(job)
-            {:error, changeset}
+            {:error, :id_conflict, prior}
 
-          :stale_snapshot ->
-            :ok = discard_job(job)
-            :stale_snapshot
+          {:ok, moved_now?} ->
+            write_moved(
+              {prior, phase_b, crdt, job, queue?, was_tombstoned},
+              {seq, refs, user, folder, sanitized_path, free_slot? or moved_now?},
+              {actor, recording, db_opts}
+            )
         end
       end
+    end
+  end
+
+  defp write_moved(
+         {prior, phase_b, crdt, job, queue?, was_tombstoned},
+         {seq, refs, user, folder, sanitized_path, free_slot?},
+         {actor, recording, db_opts}
+       ) do
+    folder_ref = folder_ref_for(refs, user, prior.vault_id, folder)
+
+    changeset =
+      prior
+      |> Note.changeset(Map.put(phase_b, :version, prior.version + 1))
+      |> Ecto.Changeset.put_change(:seq, seq)
+      # Every leg names its live row, a restore or resurrect included.
+      |> Ecto.Changeset.put_change(:folder_ref_id, folder_ref)
+      |> Ecto.Changeset.put_change(:deleted_at, nil)
+      # Any undelete leaves the op that deleted it (#609), so a later
+      # restore of that op cannot reach a row that has lived since.
+      |> Ecto.Changeset.put_change(:delete_op_id, nil)
+
+    # Same snapshot fence as do_rewrite_note, for the same reason: this
+    # merges CRDT state from `prior.crdt_state` and then writes both
+    # `content` and `crdt_state`, so a checkpoint committing in the gap
+    # would be rolled back to the pre-checkpoint snapshot with its tail
+    # already pruned. Fixing only do_rewrite_note left the rename and
+    # id-keyed-move path clobbering checkpoints. #1335.
+    #
+    # `put_change(:deleted_at, nil)` means this can also resurrect a
+    # tombstone, so the fence carries the whole pre-image, not just the id.
+    # The target's key may still be held by a note moved away without a
+    # cascade (S5): free it first. A refused write would abort a caller's
+    # transaction that runs no savepoint (CRDT relocate, resurrect).
+    _ = if free_slot?, do: free_stale_slot(user, prior.vault_id, sanitized_path, prior.id)
+
+    case fenced_update(snapshot_fenced(changeset, prior), db_opts) do
+      {:ok, updated} ->
+        _ =
+          if was_tombstoned do
+            :ok = UsageMeters.inc_notes_count(user.id, 1)
+          end
+
+        # #1710. AFTER the fenced write, same transaction: a lost fence
+        # returns :stale_snapshot below and must record nothing. `prior` is
+        # the PRE-write row. The hash check keeps a pure rename out of history.
+        _ =
+          if prior.content_hash != crdt.content_hash,
+            do: Revisions.record_write(prior, actor, recording)
+
+        # A queued job means the returned prev hash is the new one, so a
+        # caller that queues on a hash change does not queue twice.
+        prev_hash = if queue?, do: crdt.content_hash, else: prior.content_hash
+
+        # Tagged `:moved` (not the plain 4-tuple do_rewrite_note returns) so
+        # the caller broadcasts unconditionally: a rename keeps the same
+        # content_hash but persisted a new path/seq/version, and the plain
+        # `prev_hash != content_hash` broadcast guard would skip it — leaving
+        # peers with the old-path delete but no new-path upsert (the note
+        # vanishes on them until their next pull).
+        {:ok, {:moved, prev_hash, updated, crdt.merged_text, crdt.content_hash}}
+
+      {:error, changeset} ->
+        :ok = discard_job(job)
+        {:error, changeset}
+
+      :stale_snapshot ->
+        :ok = discard_job(job)
+        :stale_snapshot
     end
   end
 
@@ -6200,6 +6241,222 @@ defmodule Engram.Notes do
         from(n in base, where: n.seq > ^after_seq)
       end
 
+    {changes, has_more} = serve_feed(user, vault, base, limit, fields, max_bytes, nil)
+
+    # Derived from `changes`, NOT the rows read. The post-resolution trim can
+    # drop rows the read still holds, and a cursor taken from the read would
+    # then point past them: the client resumes after rows it was never sent
+    # and they are skipped permanently. Same shape as the merge watermark in
+    # Engram.Sync, one layer down.
+    next =
+      if has_more do
+        last = List.last(changes)
+        if last, do: {last.seq, last.id}
+      end
+
+    {:ok, %{changes: changes, has_more: has_more, next: next}}
+  end
+
+  # compat(plugin): moved_folder_feed - remove when plugin floor includes Engram-obsidian#689 (#2523)
+  @doc """
+  The moved-folder feed: what a plugin older than the S4 one (which learns a
+  folder move from `folder_changed` and the manifest's `folders`) needs to
+  learn a folder rename or move S5 wrote as ONE folder row
+  (`Engram.Folders.WriteStop`). Those notes keep their seq, so the seq feed
+  (`list_changes_by_seq/4`) never serves them again; this serves each live
+  note in the CURRENT subtree of every folder moved without a cascade at a
+  seq past the cursor, as an upsert at its shown path, AT THE FOLDER'S SEQ,
+  in id order, through the same page pipeline. The old plugin moves the
+  file by id (`moveIfIdRelocated`), as it does for a single-note rename.
+
+  Same cursor and options as `list_changes_by_seq/4` (`after_id:`, `limit:`,
+  `fields:`, `max_bytes:`); merged with it by `Engram.Sync` under the same
+  watermark. `room:` (a function of the picked folder's seq) answers what is
+  left of the page below that seq, `{rows, bytes}`, or `:skip` when nothing
+  of it would be sent: decided before any body is read, so one page budget
+  covers every feed. A page serves one folder's rows (the first past the cursor that
+  has any), in note-id order, resumed by `id > after_id`: 1.39.x builds its
+  cursor from the max `(seq, id)` it has seen. A folder moved twice keeps
+  its last seq, which covers the earlier one; nested moves serve a note
+  twice (an idempotent upsert); a note moved in or out, or edited, since the
+  move has its own later row (`seq < folder seq` here).
+
+  A note that died under the folder after the move is served too, as an
+  upsert at its tombstone path, to a client with a cursor (see
+  `moved_rows/5`), so it moves the file by id before the tombstone trashes
+  it, as the cascade's old-path tombstone did.
+
+  Accepted costs, until S6: a first sync's later pages cannot be told from a
+  client behind the move, so a first sync also gets those dead-note upserts
+  (each file is created, then trashed: a junk trash entry) and pulls each
+  live note under a moved folder twice, at its own seq and at the folder's.
+  Both are idempotent.
+
+  Cost per page: one range on `folders_moved_seq`, then per folder tried a
+  subtree walk (O(subfolders)) and, per leg, a Merge Append
+  (`MovedFeedSql.ids/6`: `k + F + R` index entries), then the page read. Nothing
+  is written.
+  """
+  @spec list_moved_changes(map(), map(), integer(), keyword()) ::
+          {:ok, %{changes: [map()], has_more: boolean(), next: {integer(), binary()} | nil}}
+  def list_moved_changes(user, vault, after_seq, opts \\ []) when is_integer(after_seq) do
+    limit =
+      opts
+      |> Keyword.get(:limit, @changes_page_max_limit)
+      |> min(@changes_page_max_limit)
+      |> max(1)
+
+    fields = Keyword.get(opts, :fields, :all)
+    after_id = Keyword.get(opts, :after_id)
+    max_bytes = Keyword.get(opts, :max_bytes) || page_max_bytes()
+
+    {:ok, picked} =
+      Repo.with_tenant(user.id, fn ->
+        pick_moved({user.id, vault_id(vault)}, after_seq, after_id, limit)
+      end)
+
+    case picked do
+      nil ->
+        {:ok, %{changes: [], has_more: false, next: nil}}
+
+      {folder, ids, later?} ->
+        case Keyword.get(opts, :room, fn _seq -> {limit, max_bytes} end).(folder.seq) do
+          # Nothing of it would be sent on this page (the caller's other feeds
+          # stop below its seq, or fill the page first): no body is read.
+          :skip ->
+            {:ok, %{changes: [], has_more: true, next: nil}}
+
+          {room, bytes} ->
+            serve_moved(
+              user,
+              vault,
+              folder,
+              {Enum.take(ids, room + 1), later?},
+              room,
+              fields,
+              bytes
+            )
+        end
+    end
+  end
+
+  defp serve_moved(user, vault, folder, {ids, later?}, limit, fields, max_bytes) do
+    stamps = Map.new(ids, &{&1, {folder.seq, folder.updated_at}})
+
+    base =
+      from(n in feed_rows(user, vault),
+        where: n.id in ^ids,
+        order_by: [asc: n.id],
+        limit: ^(limit + 1)
+      )
+
+    {changes, has_more} = serve_feed(user, vault, base, limit, fields, max(max_bytes, 1), stamps)
+    has_more = has_more or later?
+
+    next =
+      if has_more do
+        last = List.last(changes)
+        if last, do: {last.seq, last.id}
+      end
+
+    {:ok, %{changes: changes, has_more: has_more, next: next}}
+  end
+
+  # Folders a moved subtree may hold: the walk's answer cap (the walk itself
+  # visits them all, `Rows.descendant_ids/4`).
+  @moved_subtree_cap 1_000_000
+
+  @doc """
+  The highest seq above `after_seq` at which the moved-folder feed would
+  serve a row (`list_moved_changes/4` to a client with a cursor), or 0: a
+  moved folder with nothing to serve is never reached by a client's cursor,
+  so it must not count toward a feed head (`Engram.Sync.feed_head/3`).
+  Inside the caller's tenant transaction. Reads the moved folders past
+  `after_seq`, newest first, until one has a row.
+  """
+  @spec moved_head(map(), Ecto.UUID.t(), integer()) :: non_neg_integer()
+  def moved_head(user, vault_id, after_seq) do
+    vault_id
+    |> Rows.moved_since(after_seq, false, dead: true)
+    |> Enum.reverse()
+    |> Enum.find_value(0, fn f ->
+      if moved_rows({user.id, vault_id}, f, nil, 1, true) != [], do: f.seq
+    end)
+  end
+
+  # The first moved folder past the cursor with a note to serve:
+  # `{folder, note ids in id order (at most limit + 1), dead ids, whether a
+  # moved folder follows}`, or nil. A folder with nothing left (every note
+  # written since, or the cursor on its last note) falls through to the next
+  # one, so the caller never reports more with no row to hold it.
+  #
+  # Id order inside the folder's seq, resumed by `id > after_id`: a 1.39.x
+  # client sends back the max `(seq, id)` it has seen as its cursor
+  # (`cursorAdvances`), so any other order stalls it.
+  #
+  # ponytail: a page tries the moved folders past the cursor in turn (two
+  # subtree walks and two Merge Appends each) until one has a row, so a
+  # vault whose moved folders were all edited since pays O(moved folders past
+  # the cursor) a page. Pruned by a cascade over them (`Rows` resets the
+  # bit) and gone at S6.
+  defp pick_moved({user_id, vault_id}, after_seq, after_id, limit) do
+    folders = Rows.moved_since(vault_id, after_seq, after_id != nil, dead: after_seq > 0)
+    last = length(folders) - 1
+
+    folders
+    |> Enum.with_index()
+    |> Enum.find_value(fn {f, i} ->
+      from_id = if f.seq == after_seq, do: after_id
+
+      case moved_rows({user_id, vault_id}, f, from_id, limit + 1, after_seq > 0) do
+        [] -> nil
+        ids -> {f, ids, i < last}
+      end
+    end)
+  end
+
+  # The first `k` ids `pick_moved/4` serves for folder `f` past `from_id`:
+  # its live notes, and (`dead?`, a cursor past 0: a first sync's first page
+  # holds no file; its later pages look like a client behind the move, see
+  # `list_moved_changes/4`) the notes that died under it after the move, served as
+  # upserts at their tombstone path so the client moves the file there by
+  # id and the tombstone then trashes it (the cascade's sequence).
+  defp moved_rows({user_id, vault_id}, f, from_id, k, dead?) do
+    live =
+      if f.dead,
+        do: [],
+        else:
+          MovedFeedSql.ids(
+            vault_id,
+            Rows.descendant_ids(vault_id, f.id, @moved_subtree_cap, user_id: user_id),
+            :live,
+            f.seq,
+            from_id,
+            k
+          )
+
+    dead =
+      if dead? do
+        refs =
+          Rows.descendant_ids(vault_id, f.id, @moved_subtree_cap, dead: true, user_id: user_id)
+
+        MovedFeedSql.ids(vault_id, refs, :dead, f.seq, from_id, k)
+      else
+        []
+      end
+
+    (live ++ dead) |> Enum.sort() |> Enum.dedup() |> Enum.take(k)
+  end
+
+  # The feed page pipeline for `base` (a LIMIT limit + 1 query in the page's
+  # order): byte budget, decrypt, stale-body resolution, shown paths, change
+  # maps, second budget pass. Returns `{changes, has_more}`.
+  #
+  # `stamps` (the moved-folder feed, `list_moved_changes/4`): `%{id =>
+  # {seq, updated_at}}`, the folder's seq and move time each row is served
+  # at instead of its own; `base` is then in id order. nil: each row's own
+  # seq, `base` in (seq, id) order.
+  defp serve_feed(user, vault, base, limit, fields, max_bytes, stamps) do
     query =
       case fields do
         :meta -> from(n in base, select: struct(n, @note_meta_fields))
@@ -6238,7 +6495,7 @@ defmodule Engram.Notes do
     {notes, budget_more, chains} =
       case {fields, max_bytes} do
         {:all, b} when is_integer(b) and b > 0 ->
-          budgeted_page(base, user, limit, b, moved)
+          budgeted_page(base, user, limit, b, moved, stamps)
 
         _ ->
           # Unbudgeted (`:meta`, or no byte budget): the chains statement
@@ -6293,13 +6550,14 @@ defmodule Engram.Notes do
       decrypted
       |> Enum.map(&if(fields == :all, do: Map.get(resolved, &1.id, &1), else: &1))
       |> then(&Location.put_paths(user, &1, chains))
+      |> Enum.map(&stamp(&1, stamps))
 
     changes =
       Enum.zip_with(decrypted, located, fn note, resolved_note ->
         resolved_note
         |> change_map(fields)
         |> Map.merge(Location.wire_fields(resolved_note, names?))
-        |> Map.put(:seq, note.seq)
+        |> Map.put(:seq, stamped_seq(note, stamps))
       end)
 
     # Second budget pass, on what the page ACTUALLY carries.
@@ -6317,28 +6575,37 @@ defmodule Engram.Notes do
     # chunked by @resolve_chunk, which bounds its own peak). What it bounds is
     # the frame — the Elixir term, its JSON encoding and the transport buffer,
     # which is where the multiple lives.
-    {changes, has_more} = trim_to_budget(changes, has_more, fields, max_bytes)
+    trim_to_budget(changes, has_more, fields, max_bytes)
+  end
 
-    # Derived from `changes`, NOT `page`. The post-resolution trim can drop rows
-    # that `page` still holds, and a cursor taken from `page` would then point
-    # past them — the client resumes after rows it was never sent and they are
-    # skipped permanently. Same shape as the merge watermark in Engram.Sync, one
-    # layer down.
-    next =
-      if has_more do
-        last = List.last(changes)
-        if last, do: {last.seq, last.id}
-      end
+  defp stamped_seq(note, nil), do: note.seq
+  defp stamped_seq(note, stamps), do: stamps |> Map.fetch!(note.id) |> elem(0)
 
-    {:ok, %{changes: changes, has_more: has_more, next: next}}
+  # The move time, when later than the note's own: the plugin drops an
+  # id-keyed move whose time is older than the last one it applied for that
+  # id (`moveIfIdRelocated`), and the cascade this row replaces stamped now.
+  # A note that died after the move (`pick_moved/4`) is served as an upsert
+  # at its tombstone path: the client moves the file there by id, and the
+  # tombstone, at its own later seq, then trashes it.
+  defp stamp(note, nil), do: note
+
+  defp stamp(note, stamps) do
+    {_seq, at} = Map.fetch!(stamps, note.id)
+    note = %{note | deleted_at: nil}
+
+    if note.updated_at && DateTime.compare(at, note.updated_at) != :gt,
+      do: note,
+      else: %{note | updated_at: at}
   end
 
   # Trim an already-built page to the byte budget, reporting whether anything
   # was dropped. Mirrors count_within_budget's first-row rule: one oversized
   # note ships alone rather than producing an empty page the feed can never
   # drain past.
-  defp trim_to_budget(changes, has_more, :all, max_bytes)
-       when is_integer(max_bytes) and max_bytes > 0 do
+  @doc false
+  # Also `Engram.Sync`'s merged page, which joins two budgeted feeds.
+  def trim_to_budget(changes, has_more, :all, max_bytes)
+      when is_integer(max_bytes) and max_bytes > 0 do
     kept =
       changes
       |> Enum.reduce_while({[], 0}, fn change, {acc, used} ->
@@ -6356,7 +6623,7 @@ defmodule Engram.Notes do
     {kept, has_more or length(kept) < length(changes)}
   end
 
-  defp trim_to_budget(changes, has_more, _fields, _max_bytes), do: {changes, has_more}
+  def trim_to_budget(changes, has_more, _fields, _max_bytes), do: {changes, has_more}
 
   # Decrypts the page row by row against the PLAINTEXT budget and stops at the
   # first row that does not fit, so the decrypt peak is the budget plus one row
@@ -6405,18 +6672,24 @@ defmodule Engram.Notes do
   # transport buffer), so the live cost is a small multiple of this, not this.
   @default_page_max_bytes 4 * 1024 * 1024
 
-  defp page_max_bytes do
+  @doc false
+  # The feed page byte budget, shared with `Engram.Sync`'s merged page.
+  def page_max_bytes do
     Application.get_env(:engram, :sync_page_max_bytes, @default_page_max_bytes)
   end
 
   # The next page (up to `limit + 1` rows of `base`), cut at the byte budget
   # (`budget_cut/5`), and whether the budget (not the row limit) is what
   # stopped it.
-  defp budgeted_page(base, user, limit, max_bytes, moved) do
+  defp budgeted_page(base, user, limit, max_bytes, moved, stamps) do
+    # The moved-folder feed serves one folder's notes at its one seq, in id
+    # order: a first key constant over the page (its vault) keeps the cut so.
+    ord1 = if stamps, do: dynamic([n], n.vault_id), else: dynamic([n], n.seq)
+
     {rows, total, _spent, chains} =
       budget_cut_rows(
         base,
-        dynamic([n], n.seq),
+        ord1,
         @note_fields_without_crdt,
         user,
         max_bytes,
@@ -7897,6 +8170,264 @@ defmodule Engram.Notes do
     end
   end
 
+  # The folder-rename UPDATE column set for marker rows (see the per-class
+  # sets by `do_rename_folder/6`); the S5 leg rewrites markers too.
+  @marker_rename_cols [:folder_ciphertext, :folder_nonce, :folder_hmac]
+
+  @doc """
+  S5 of the O(1) folder rename plan (Engram#2523, `Engram.Folders.WriteStop`):
+  renames or moves `old_folder` to `new_folder` by updating ONE folder row
+  (`Rows.rename/5` with `uncascaded:`) at one seq. No note row is written, no
+  tombstone inserted, nothing broadcast per note: every reader derives the
+  notes' paths from the folder chain plus their names (`Location`). Returns
+  `{:ok, notes}` (the live notes now under the new path), an error, or
+  `:cascade` when only the cascade (`rename_folder/4`) can serve the op:
+
+    * no live folder row at `old_folder` (a path-only folder, drift), a
+      no-op, or nothing under it (the cascade's answer for that stands);
+    * a live folder already at `new_folder` (a merge or a conflict: the
+      cascade decides which);
+    * any placed drift in the vault (a folder reference that disagrees
+      with its stored folder), or a note under it with a stale name stamp
+      (the previous release wrote its path).
+
+  A note with no `name_key` yet (written before 20261113100000) has it
+  filled first (`key_names/3`): one statement, once per such row.
+
+  Still O(notes under the folder), all reads and CPU, no row writes: the
+  scan that decides the above, the `filemeta_v0` re-claim old plugins'
+  index room needs (one `Identity.claim`, the plan's condition C5, until
+  the vault's index projects from `filemeta_v1`), and the link-rewrite
+  targets (ids and HMACs, one `RewriteNoteLinks` chain per 1,000 notes).
+  Folder markers under it (explicit folders, O(subfolders)) and the
+  descendant folder rows' path keys (O(subfolders), S6 drops them) are still
+  rewritten: their writers and readers key on the stored folder path.
+
+  Runs in the caller's transaction (`Folders.rename/5`).
+  """
+  @spec rename_folder_uncascaded(map(), map(), String.t(), String.t()) ::
+          {:ok, non_neg_integer()} | :cascade | {:error, term()}
+  def rename_folder_uncascaded(user, vault, old_folder, new_folder) do
+    new_folder = String.trim_trailing(new_folder, "/")
+
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         false <- old_folder == new_folder,
+         ids =
+           Repo.with_tenant!(user.id, fn ->
+             Rows.ids_by_path(user, vault.id, [old_folder, new_folder])
+           end),
+         %{^old_folder => folder_id} when is_binary(folder_id) <- ids,
+         nil <- ids[new_folder],
+         {rows, drift} = scan_with_drift(user, vault, [old_folder]),
+         {markers, notes} = Enum.split_with(rows, &(&1.kind == "folder")),
+         # Nothing under it: the cascade answers (REST's 404 for an empty
+         # path-made folder, or the wire's bare-row move).
+         false <- notes == [] and markers == [],
+         true <- Enum.all?(notes, &uncascadable?/1),
+         # Any placed drift in the vault (0 in steady state): a drift row the
+         # stored-folder filter dropped may still name this folder by
+         # reference, and would move silently. The cascade decides it.
+         [] <- drift do
+      case key_names(user, vault, notes) do
+        :ok -> move_folder_row(user, vault, folder_id, {old_folder, new_folder}, notes, markers)
+        # A row the trigger cannot key (no name hash): only the cascade moves it.
+        :unkeyed -> :cascade
+      end
+    else
+      {:error, _} = err -> err
+      _ -> :cascade
+    end
+  end
+
+  defp uncascadable?(note), do: Location.derivable?(note)
+
+  # Fills `name_key` for any of `notes` that has none (rows no writer
+  # touched since 20261113100000): the by-name lookup must find each of them
+  # once its stored path goes stale. Naming `name_stamp` fires the
+  # `notes_set_name_key` trigger, which computes the key in SQL: no crypto,
+  # no seq, nothing a reader shows changes. One read, and one write of only the
+  # unkeyed rows when there are any: a vault pays it once per legacy row.
+  defp key_names(_user, _vault, []), do: :ok
+
+  defp key_names(user, vault, notes) do
+    ids = Enum.map(notes, & &1.id)
+
+    Repo.with_tenant!(user.id, fn ->
+      unkeyed =
+        Repo.all(
+          from(n in Note,
+            where: n.vault_id == ^vault.id and n.id in ^ids and fragment("name_key IS NULL"),
+            select: n.id
+          )
+        )
+
+      if unkeyed == [] do
+        :ok
+      else
+        Repo.update_all(
+          from(n in Note, where: n.id in ^unkeyed, update: [set: [name_stamp: n.name_stamp]]),
+          []
+        )
+
+        still =
+          Repo.exists?(from(n in Note, where: n.id in ^unkeyed and fragment("name_key IS NULL")))
+
+        if still, do: :unkeyed, else: :ok
+      end
+    end)
+  end
+
+  # The planned claims of the folder op in flight (`with_folder_claims/4`).
+  @preclaim_key :engram_folder_preclaim
+
+  defp move_folder_row(user, vault, folder_id, {old_folder, new_folder}, notes, markers) do
+    old_len = String.length(old_folder)
+    relocate = fn path -> new_folder <> String.slice(path, old_len..-1//1) end
+    claims = Enum.map(notes, &{relocate.(&1.path), &1.id})
+
+    marker_rows =
+      markers
+      |> Enum.map(&{&1, nil, nil, relocate.(&1.folder), nil})
+      |> then(&group_rename_updates(user, &1, %{}))
+      |> Map.get(:marker, [])
+
+    links =
+      Enum.map(notes, fn n ->
+        {:note, n.id, old_path_hmac_b64!(user, n.path),
+         Base.encode64(Links.basename_hmac(user, Links.basename_key(n.path)))}
+      end)
+
+    # C5: the index room's path-keyed map is re-keyed before the row moves,
+    # as the cascade does. Inside `with_folder_claims/4` (`Folders.rename/5`)
+    # that claim was made before the transaction: this leg consumes the
+    # planned step once the row moved (a mismatch is `:claims_stale`, which
+    # re-plans), and leaves it for the cascade when it falls back. The caller
+    # undoes the claim on any failure, so only a claim made here is reported.
+    preclaimed? = Process.get(@preclaim_key) != nil
+
+    claimed =
+      if claims == [] or preclaimed?, do: :ok, else: Identity.claim(user, vault.id, claims)
+
+    orphan = fn reason ->
+      _ = unless preclaimed?, do: orphan_claim(user, vault, length(claims), reason)
+    end
+
+    with :ok <- claimed,
+         {:ok, :ok} <-
+           write_claimed(
+             {user, vault, folder_id},
+             {old_folder, new_folder},
+             notes,
+             {marker_rows, links},
+             orphan
+           ),
+         :ok <- if(preclaimed?, do: claim_or_consume(user, vault, claims, nil), else: :ok) do
+      # Counted as the cascade counts: every row under the folder, markers
+      # included (REST and MCP answer 404 for 0).
+      {:ok, length(notes) + length(markers)}
+    else
+      # A folder appeared at the target: the cascade runs instead and
+      # consumes (or, called directly, re-claims) every note it scans.
+      {:ok, {:error, :merge}} ->
+        :cascade
+
+      # A note under this folder was written after the scan. The cascade
+      # re-claims what it scans, but a scanned note that moved out or died
+      # since keeps the entry this claim gave it: report it, so projection
+      # (queued in this transaction, which the cascade commits) repairs it.
+      # Preclaimed, the cascade's consume finds the plan stale and re-plans.
+      {:ok, {:error, :raced}} ->
+        orphan.(:raced)
+        :cascade
+
+      {:ok, {:error, reason}} ->
+        # The claim committed but no row moved: report it, as the cascade
+        # does (projection converges the map back to the rows).
+        orphan.(reason)
+        {:error, reason}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # The row write after a committed claim, reported like the cascade's if it
+  # raises (`orphan_claim/4`).
+  defp write_claimed({user, vault, folder_id}, folders, notes, {marker_rows, links}, orphan) do
+    write_folder_row(user, vault, folder_id, folders, notes, marker_rows, links)
+  rescue
+    e ->
+      orphan.(e)
+      reraise e, __STACKTRACE__
+  end
+
+  # Under the vault seq lock: one seq, then a re-check that nothing under the
+  # folder changed since the scan (a note written there since has a higher
+  # seq, and so does a scanned note written, moved out or deleted since; such
+  # a note would miss the claim and the link targets), then the folder row,
+  # the markers, the link chain. Returns `{:ok, :ok}` or `{:ok, {:error, _}}`.
+  defp write_folder_row(
+         user,
+         vault,
+         folder_id,
+         {old_folder, new_folder},
+         notes,
+         marker_rows,
+         links
+       ) do
+    Repo.with_tenant(user.id, fn ->
+      seq = Engram.Vaults.next_seq!(vault.id)
+
+      with false <- raced?(user, vault, old_folder, notes),
+           :ok <- Rows.rename(user, vault.id, old_folder, new_folder, uncascaded: seq) do
+        BulkRename.update!(marker_rows, @marker_rename_cols, seq, DateTime.utc_now())
+
+        user.id
+        |> RewriteNoteLinks.new_for_folder(vault.id, links,
+          folder_move: folder_move_args(user, folder_id, old_folder)
+        )
+        |> Enqueue.enqueue_all("rewrite_note_links")
+
+        :ok
+      else
+        true -> {:error, :raced}
+        {:error, _} = err -> err
+      end
+    end)
+  end
+
+  # Two indexed probes: notes under the subtree (`notes_folder_ref_live`)
+  # above the scan's seq, and the scanned notes by primary key.
+  defp raced?(user, vault, old_folder, notes) do
+    max_seq = notes |> Enum.map(& &1.seq) |> Enum.max(fn -> 0 end)
+    ids = Enum.map(notes, & &1.id)
+    refs = user |> Rows.subtree_refs(vault.id, [old_folder]) |> Enum.map(& &1.id)
+
+    Repo.exists?(
+      from(n in Note,
+        where:
+          n.vault_id == ^vault.id and is_nil(n.deleted_at) and n.kind == "note" and
+            n.folder_ref_id in ^refs and n.seq > ^max_seq
+      )
+    ) or
+      (ids != [] and
+         Repo.exists?(
+           from(n in Note,
+             where: n.id in ^ids and (n.seq > ^max_seq or not is_nil(n.deleted_at))
+           )
+         ))
+  end
+
+  # The folder's old path rides the link chain once, as user-DEK ciphertext
+  # bound to the folder id (T3.2: no plaintext in job args), so the chain can
+  # recover each moved note's old path without a tombstone.
+  defp folder_move_args(user, folder_id, old_folder) do
+    {:ok, dek} = Crypto.get_dek(user)
+    aad = Crypto.aad_for_row("oban_rewrite_note_links", "old_folder", folder_id)
+    {ct, nonce} = Envelope.encrypt(old_folder, dek, aad)
+    %{folder_id: folder_id, ciphertext: Base.encode64(ct), nonce: Base.encode64(nonce)}
+  end
+
   # Conflict-gated rename shared by the public entry point (rows = nil →
   # do_rename_folder scans the vault itself) and the batch-move path (rows =
   # the ONE decrypted scan shared across all K markers). Caller must have run
@@ -7963,7 +8494,7 @@ defmodule Engram.Notes do
   # committed move.
   #
   # Cost: one more meta scan of the moved subtree, outside the transaction.
-  @preclaim_key :engram_folder_preclaim
+  # (`@preclaim_key` is set above `move_folder_row/6`, its first reader.)
 
   @typedoc "A folder op's claims, made before its transaction."
   @type folder_claims :: %{steps: [[{String.t(), String.t()}]], moves: [{map(), String.t()}]}
@@ -8453,7 +8984,6 @@ defmodule Engram.Notes do
   # phase_b_path_folder_for / full_aad_bound_kw), plus the `folder_ref_id` the
   # cascade adds for notes (markers have no reference) — values are fetched
   # from the kw by these names when the VALUES rows are built.
-  @marker_rename_cols [:folder_ciphertext, :folder_nonce, :folder_hmac]
   @v2_rename_cols [
     :folder_ref_id,
     :path_ciphertext,

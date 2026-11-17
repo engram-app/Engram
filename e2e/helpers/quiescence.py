@@ -31,11 +31,33 @@ import time
 
 from helpers.cdp import PLUGIN_PATH
 
-PROBE = f"JSON.stringify({PLUGIN_PATH}.syncQuiescence())"
+PROBE = (
+    f"JSON.stringify({{...{PLUGIN_PATH}.syncQuiescence(), "
+    f"pluginVersion: {PLUGIN_PATH}.manifest.version}})"
+)
+# The first plugin that learns a folder move from `folder_changed` (S4,
+# Engram-obsidian#689). An older one also pulls the moved-folder feed, so it
+# waits for `feed_seq_moved` (Engram.Sync.moved_feed?/1).
+S4_PLUGIN = (1, 40, 0)
 OWED = ("pushing", "pendingPushes", "queued", "flushing", "creating", "crdtOps")
 QUEUE_DUMP_CAP = 20
 # Bounded so a wedged renderer cannot push the dump past the pytest timeout.
 QUEUE_DUMP_TIMEOUT_S = 5
+
+
+def _version(v: object) -> tuple[int, ...] | None:
+    try:
+        return tuple(int(p) for p in str(v).split("-")[0].split(".")[:3])
+    except ValueError:
+        return None
+
+
+def _feed_head(server: dict, client: dict) -> int:
+    """The op-log head this client's cursor can reach (see `S4_PLUGIN`)."""
+    version = _version(client.get("pluginVersion"))
+    old = version is None or version < S4_PLUGIN
+    key = "feed_seq_moved" if old and "feed_seq_moved" in server else "feed_seq"
+    return server.get(key, server["change_seq"])
 
 
 def _settled(server: dict, client: dict, caught_up: bool) -> bool:
@@ -45,7 +67,7 @@ def _settled(server: dict, client: dict, caught_up: bool) -> bool:
         # `feed_seq`, not `change_seq`: the vault seq also counts folder rows,
         # which the op-log feed never serves, so a cursor cannot reach
         # change_seq after a folder write until some later note bump.
-        and (not caught_up or client["catchupSeq"] >= server.get("feed_seq", server["change_seq"]))
+        and (not caught_up or client["catchupSeq"] >= _feed_head(server, client))
         and not client["pulling"]
         and all(client[k] == 0 for k in OWED)
     )

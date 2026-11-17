@@ -1,0 +1,34 @@
+defmodule Engram.Folders.WriteStopFloorTest do
+  # S5 (Engram#2523) is a write stop: from it, a note under a renamed folder
+  # keeps its old stored path. Release A ships the moved-folder feed and the
+  # shown-path announces with the writer inert; release B raises the rollback
+  # floor to A, which switches it on (`docs/context/rollback-floor.md`). The
+  # first test flips there, in the floor PR.
+  #
+  # No plugin floor: plugins older than S4 learn such a move from the
+  # moved-folder feed (`Engram.Sync.moved_feed?/1`), so they keep syncing.
+  use ExUnit.Case, async: true
+
+  alias Engram.Folders.WriteStop
+  alias Engram.PluginVersion
+  alias Engram.Release.Floor
+  alias Engram.Sync
+
+  test "the write stop is inert until the rollback floor reaches the feed release" do
+    refute Floor.at_least?(WriteStop.reads_release())
+    refute WriteStop.floors?(:enforce)
+  end
+
+  test "plugins older than S4 still sync, and get the moved-folder feed" do
+    assert PluginVersion.supported?("1.39.3")
+    assert Sync.moved_feed?("1.39.3")
+    assert Sync.moved_feed?("1.39.4-pr.689.g23b5eee")
+    refute Sync.moved_feed?(WriteStop.s4_plugin())
+    refute Sync.moved_feed?("1.41.0")
+  end
+
+  test "a client with no readable version gets the moved-folder feed" do
+    assert Sync.moved_feed?(nil)
+    assert Sync.moved_feed?("not-a-version")
+  end
+end

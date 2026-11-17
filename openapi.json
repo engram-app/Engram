@@ -764,6 +764,12 @@
             "x-struct": null,
             "x-validate": null
           },
+          "feed_seq_moved": {
+            "description": "The feed head a plugin older than 1.40.0 waits for: `feed_seq` or the highest seq of a folder moved without a cascade, whichever is higher (those clients get each such folder's notes at its seq). 1.40.0 and later wait for `feed_seq`.",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
           "pending_checkpoints": {
             "description": "Unfinished checkpoint jobs for this vault's notes whose note has no live room. Includes a snoozed job whose room has since exited.",
             "type": "integer",
@@ -780,6 +786,7 @@
         "required": [
           "change_seq",
           "feed_seq",
+          "feed_seq_moved",
           "pending_crdt_updates",
           "pending_checkpoints",
           "deferred_checkpoints",

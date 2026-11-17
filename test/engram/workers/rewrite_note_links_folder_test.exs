@@ -30,6 +30,19 @@ defmodule Engram.Workers.RewriteNoteLinksFolderTest do
     |> Enum.map(&%{id: &1})
   end
 
+  # Through the real writer: a row with a current name and folder reference,
+  # the shape the S5 write stop moves (the bulk fixture's rows cascade).
+  defp seed_written!(user, vault, folder, n) do
+    for i <- 1..n do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "#{folder}/n#{i}.md", "content" => "#{i}"},
+          actor: "api"
+        )
+
+      %{id: note.id}
+    end
+  end
+
   defp seed_source!(user, vault, path, content) do
     {:ok, source} =
       Notes.upsert_note(user, vault, %{"path" => path, "content" => content}, actor: "api")
@@ -70,8 +83,8 @@ defmodule Engram.Workers.RewriteNoteLinksFolderTest do
 
   defp links(prefix, n), do: Enum.map_join(1..n, " ", &"[[#{prefix}/n#{&1}]]")
 
-  defp folder_move_rewrites_once(user, vault, n) do
-    moved = seed_folder!(user, vault, "docs", n)
+  defp folder_move_rewrites_once(user, vault, n, seed \\ &seed_folder!/4) do
+    moved = seed.(user, vault, "docs", n)
     index = seed_source!(user, vault, "Index.md", links("docs", n))
     before = writes(user, index)
 
@@ -124,6 +137,44 @@ defmodule Engram.Workers.RewriteNoteLinksFolderTest do
     assert authoritative!(user, bare.id) == "only [[n1]] and [[n2]]"
     assert writes(user, bare) == bare_before
     assert authoritative!(user, inside.id) == "sib [[archive/n1]] [[archive/n2]]"
+  end
+
+  # S5 (Engram#2523): with the write stop on, a folder rename writes no
+  # tombstone, so each moved note's old path comes from the chain's
+  # `folder_move` (the folder's old path, as ciphertext) plus where the note
+  # sits now. The same two proofs as above.
+  describe "S5: a folder moved without a cascade" do
+    setup do
+      ServiceConfig.put_override(:folder_ops, true)
+      :ok
+    end
+
+    test "the index note is rewritten once, in one chain", ctx do
+      folder_move_rewrites_once(ctx.user, ctx.vault, 20, &seed_written!/4)
+
+      assert Engram.Repo.with_tenant!(ctx.user.id, fn ->
+               Repo.exists?(from(f in Engram.Folders.Folder, where: not f.notes_cascaded))
+             end)
+    end
+
+    test "every link form follows, inside and outside the folder", ctx do
+      %{user: user, vault: vault} = ctx
+      seed_written!(user, vault, "docs", 3)
+      text = "q [[docs/n1]] alias [[docs/n1|One]] anchor [[docs/n2#H|Two]] embed ![[docs/n3.md]]"
+      refs = seed_source!(user, vault, "Refs.md", text)
+      inside = seed_source!(user, vault, "docs/inside.md", "sib [[docs/n1]] [[docs/n2]]")
+
+      {:ok, _} = Engram.Folders.rename(user, vault, "docs", "archive")
+      assert [job] = all_enqueued(worker: RewriteNoteLinks)
+      assert job.args["folder_move"]
+      drain!()
+
+      assert authoritative!(user, refs.id) ==
+               "q [[archive/n1]] alias [[archive/n1|One]] anchor [[archive/n2#H|Two]] " <>
+                 "embed ![[archive/n3.md]]"
+
+      assert authoritative!(user, inside.id) == "sib [[archive/n1]] [[archive/n2]]"
+    end
   end
 
   test "kill switch off: the job snoozes and rewrites nothing; on again, it lands", ctx do

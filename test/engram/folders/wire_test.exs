@@ -261,8 +261,11 @@ defmodule Engram.Folders.WireTest do
 
     # #2523: a plugin follows the move as ONE op only if `folder_changed`
     # lands before any per-file event of that move.
+    # The cascade (write stop off, release A) moves each note row and
+    # broadcasts it.
     test "folder_changed is the first event of a rename, before note and attachment legs",
          %{user: user, vault: vault} do
+      ServiceConfig.put_override(:folder_write_stop, false)
       put_note_and_att!(user, vault, "A")
 
       assert {:ok, %{attachments: 1}} = Folders.rename(user, vault, "A", "B/A")
@@ -271,6 +274,21 @@ defmodule Engram.Folders.WireTest do
       assert [{"folder_changed", _} | rest] = events
       assert Enum.any?(rest, &att?/1)
       assert Enum.any?(rest, &note?/1)
+    end
+
+    # S5 (write stop on) writes no note row, so it broadcasts no note: the
+    # plugin follows the folder event. Attachments still move row by row.
+    test "an uncascaded rename leads with folder_changed and sends no note",
+         %{user: user, vault: vault} do
+      assert Engram.Folders.WriteStop.on?()
+      put_note_and_att!(user, vault, "A")
+
+      assert {:ok, %{attachments: 1}} = Folders.rename(user, vault, "A", "B/A")
+      events = broadcasts()
+
+      assert [{"folder_changed", _} | rest] = events
+      assert Enum.any?(rest, &att?/1)
+      refute Enum.any?(rest, &note?/1)
     end
 
     test "folder_changed is the first event of a batch move too", %{user: user, vault: vault} do

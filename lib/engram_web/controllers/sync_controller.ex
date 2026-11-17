@@ -65,14 +65,21 @@ defmodule EngramWeb.SyncController do
         pending =
           Repo.one(from(l in CrdtUpdateLog, where: l.vault_id == ^vault.id, select: count()))
 
-        {Engram.Vaults.raw_current_seq(vault.id), Engram.Sync.feed_head(user, vault), pending}
+        # compat(plugin): moved_folder_feed - remove when plugin floor includes Engram-obsidian#689 (#2523)
+        # Both heads: the caller (e2e, which sends no plugin version) picks
+        # by the plugin it waits on.
+        feed =
+          {Engram.Sync.feed_head(user, vault, moved: false), Engram.Sync.feed_head(user, vault)}
+
+        {Engram.Vaults.raw_current_seq(vault.id), feed, pending}
       end)
 
     {owed, deferred, capped?} = checkpoint_counts(vault.id)
 
     json(conn, %{
       change_seq: current,
-      feed_seq: feed,
+      feed_seq: elem(feed, 0),
+      feed_seq_moved: elem(feed, 1),
       pending_crdt_updates: pending_updates,
       # Past the cap the unread jobs may be owed, so never report quiet.
       pending_checkpoints: if(capped?, do: max(owed, 1), else: owed),
@@ -255,6 +262,11 @@ defmodule EngramWeb.SyncController do
     |> select_merge(^Map.put(moved, :crdt_head, NoteBody.head_off_notes_scan()))
   end
 
+  # A note under a folder moved without a cascade is served at the later of
+  # its own seq and the move's (`Location.listing_seqs/1`).
+  defp shown_seq(seq, nil), do: seq
+  defp shown_seq(seq, moved), do: max(seq || 0, moved)
+
   defp path_half(query, :short),
     do: where(query, [n], fragment("octet_length(?) <= 2000", n.path_ciphertext))
 
@@ -263,6 +275,7 @@ defmodule EngramWeb.SyncController do
 
   defp render_manifest(conn, {note_rows, attachment_rows, folder_rows, moves}, dek, current_seq) do
     moved = Location.listing_paths(conn.assigns.current_user, moves)
+    moved_seqs = Location.listing_seqs(moves)
 
     # One batch native call per column (`PathCrypto.decrypt_many!/3`): one key
     # schedule, AAD built in Rust from the raw ids selected above. Measured
@@ -277,7 +290,7 @@ defmodule EngramWeb.SyncController do
             id: row.id,
             path: Map.get(moved, row.id, path),
             content_hash: row.hash,
-            seq: row.seq,
+            seq: shown_seq(row.seq, moved_seqs[row.id]),
             crdt_head: row.crdt_head
           }
         end)

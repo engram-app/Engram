@@ -78,15 +78,19 @@ defmodule Engram.Vaults do
   write it stamps (and inherits RLS tenant context). The row-level lock on
   the vault row serializes seq assignment per vault.
 
-  `opts` is passed straight to `Repo.query!/3`. The batch upsert path passes
+  `opts` is passed straight to `Repo.query!/3` (`repo:` picks another
+  repo, the caller's transaction's). The batch upsert path passes
   `mode: :savepoint` so a failed bump (e.g. bigint overflow) rolls back to a
   per-statement savepoint instead of poisoning the shared batch transaction.
   """
   # Its own literal statement, not `next_seq_block!(id, 1)`: tests and query
   # budgets locate the single-seq bump by this exact SQL.
   def next_seq!(vault_id, opts \\ []) do
+    # `repo:` a caller on another repo (the maintenance repo's heal pass).
+    {repo, opts} = Keyword.pop(opts, :repo, Repo)
+
     %{rows: [[seq]]} =
-      Repo.query!(
+      repo.query!(
         "UPDATE vaults SET change_seq = change_seq + 1 WHERE id = $1 RETURNING change_seq",
         [Ecto.UUID.dump!(vault_id)],
         opts

@@ -752,13 +752,13 @@ defmodule Engram.Links.Rewriter do
     new_full = CrdtBridge.project_doc(doc)
     :ok = Links.replace_links(user, vault, note.id, Parser.extract(new_full))
 
+    # The path the note is SHOWN at: under a folder moved without a cascade
+    # (S5) its stored path is the old one, and a plugin handed that path
+    # re-maps the id to it and moves the file back (`discoverAnnouncedNote`).
     _ =
-      case Crypto.maybe_decrypt_note_fields(note, user) do
-        {:ok, %{path: path}} when is_binary(path) ->
-          CrdtDeliver.announce_ready(user.id, vault.id, path, note.id)
-
-        _ ->
-          :ok
+      case Location.shown_path(user, note) do
+        path when is_binary(path) -> CrdtDeliver.announce_ready(user.id, vault.id, path, note.id)
+        _ -> :ok
       end
 
     {:ok, :rewritten}
@@ -776,8 +776,9 @@ defmodule Engram.Links.Rewriter do
       edits ->
         new_text = splice(content, edits)
 
-        with {:ok, %{path: path}} when is_binary(path) <-
-               Crypto.maybe_decrypt_note_fields(note, user),
+        # By its shown path: a write at a moved note's stored (old) path
+        # would create a second note there (S5).
+        with path when is_binary(path) <- Location.shown_path(user, note),
              {:ok, _updated} <-
                Notes.upsert_note(user, vault, %{"path" => path, "content" => new_text},
                  actor: "link_rewrite"
@@ -785,7 +786,7 @@ defmodule Engram.Links.Rewriter do
           :ok = Links.replace_links(user, vault, note.id, Parser.extract(new_text))
           {:ok, :rewritten}
         else
-          {:ok, _no_path} -> {:error, :path_undecryptable}
+          nil -> {:error, :path_undecryptable}
           {:error, :version_conflict, _existing} -> {:error, :version_conflict}
           {:error, reason} -> {:error, reason}
         end

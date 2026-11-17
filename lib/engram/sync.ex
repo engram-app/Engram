@@ -4,6 +4,7 @@ defmodule Engram.Sync do
   attachments change feeds for a vault (the socket op-log catch-up feed).
   """
   alias Engram.{Attachments, Notes}
+  alias Engram.Folders.WriteStop
 
   @doc """
   The highest seq this feed can serve for `vault`. Lower than the vault's
@@ -11,9 +12,35 @@ defmodule Engram.Sync do
   are not in the feed), so a client cursor that reached it has seen every row
   the feed holds. Run inside `Repo.with_tenant/2`.
   """
-  @spec feed_head(map(), map()) :: non_neg_integer()
-  def feed_head(user, vault),
-    do: max(Notes.feed_head_seq(user, vault), Attachments.feed_head_seq(user, vault))
+  @spec feed_head(map(), map(), keyword()) :: non_neg_integer()
+  def feed_head(user, vault, opts \\ []) do
+    own = max(Notes.feed_head_seq(user, vault), Attachments.feed_head_seq(user, vault))
+
+    # The moved-folder feed serves rows at its folders' seqs, but only to the
+    # clients that get it (`moved: moved_feed?/1`, on by default): the S4
+    # plugin pulls none, so its cursor could never reach a head counting them.
+    if Keyword.get(opts, :moved, true),
+      do: max(own, Notes.moved_head(user, vault.id, own)),
+      else: own
+  end
+
+  # compat(plugin): moved_folder_feed - remove when plugin floor includes Engram-obsidian#689 (#2523)
+  @doc """
+  Whether a client announcing `plugin_version` gets the moved-folder feed
+  (`Notes.list_moved_changes/4`): every client but the S4 plugin and later
+  (`Engram.Folders.WriteStop.s4_plugin/0`), which learn a folder move from
+  `folder_changed` and the manifest's `folders` and so pull 0 rows for it.
+  A missing or unreadable version gets it: the old view is the safe one.
+  """
+  @spec moved_feed?(String.t() | nil) :: boolean()
+  def moved_feed?(plugin_version) do
+    with v when is_binary(v) <- plugin_version,
+         {:ok, v} <- Version.parse(v) do
+      Version.compare(v, Version.parse!(WriteStop.s4_plugin())) == :lt
+    else
+      _ -> true
+    end
+  end
 
   @doc """
   One seq-ordered page merging the notes + attachments change feeds for a vault.
@@ -35,19 +62,31 @@ defmodule Engram.Sync do
 
   `max_bytes` bounds the note content this page may carry (see
   `Notes.list_changes_by_seq/4`). Pass `nil` to use the configured default.
+
+  `opts`: `moved:` (default true) merges in the moved-folder feed
+  (`Notes.list_moved_changes/4`, see `moved_feed?/1`).
   """
-  def merged_changes_page(user, vault, after_seq, after_id, limit, fields, max_bytes \\ nil)
+  def merged_changes_page(
+        user,
+        vault,
+        after_seq,
+        after_id,
+        limit,
+        fields,
+        max_bytes \\ nil,
+        opts \\ []
+      )
       when is_integer(after_seq) and is_integer(limit) do
     # One slot per in-flight page (see PageGate): the byte budget bounds ONE
     # page, this bounds how many exist at once so a burst of first syncs queues
     # instead of stacking memory. Queues, never rejects — the client aborts its
     # whole walk on a rejected fetch.
     Engram.Sync.PageGate.with_slot(fn ->
-      build_page(user, vault, after_seq, after_id, limit, fields, max_bytes)
+      build_page(user, vault, after_seq, after_id, limit, fields, max_bytes, opts)
     end)
   end
 
-  defp build_page(user, vault, after_seq, after_id, limit, fields, max_bytes) do
+  defp build_page(user, vault, after_seq, after_id, limit, fields, max_bytes, opts) do
     {:ok, %{changes: notes, has_more: notes_more}} =
       Notes.list_changes_by_seq(user, vault, after_seq,
         after_id: after_id,
@@ -64,8 +103,25 @@ defmodule Engram.Sync do
         limit: limit + 1
       )
 
+    # The moved-folder feed (`moved_feed?/1`), a third feed under the same
+    # watermark. `moved: false` (the S4 plugin) reads nothing.
+    #
+    # Read after the other two, so its share of the page is known before any
+    # of its bodies is read (`room/6`): one row and byte budget per page.
+    {:ok, %{changes: moved, has_more: moved_more}} =
+      if Keyword.get(opts, :moved, true),
+        do:
+          Notes.list_moved_changes(user, vault, after_seq,
+            after_id: after_id,
+            limit: limit + 1,
+            fields: fields,
+            max_bytes: max_bytes,
+            room: &room({notes, notes_more}, {atts, atts_more}, &1, limit, fields, max_bytes)
+          ),
+        else: {:ok, %{changes: [], has_more: false}}
+
     merged =
-      (Enum.map(notes, &Map.put(&1, :type, :note)) ++
+      (Enum.map(notes ++ moved, &Map.put(&1, :type, :note)) ++
          Enum.map(atts, &Map.put(&1, :type, :attachment)))
       |> Enum.sort_by(&key/1)
 
@@ -83,7 +139,11 @@ defmodule Engram.Sync do
     # feed can now stop at 1 row on seq 5 while attachments still return 500 rows
     # up to seq 500. Without this clamp that page would strand every note between.
     watermark =
-      [notes_more && List.last(notes), atts_more && List.last(atts)]
+      [
+        notes_more && List.last(notes),
+        atts_more && List.last(atts),
+        moved_more && List.last(moved)
+      ]
       |> Enum.filter(&is_map/1)
       |> Enum.map(&key/1)
       |> Enum.min(fn -> nil end)
@@ -96,8 +156,15 @@ defmodule Engram.Sync do
       else
         # `capped` shorter than `merged` means the watermark held rows back, so
         # there is definitionally more to serve even if neither feed said so.
-        {capped, notes_more or atts_more or length(capped) < length(merged)}
+        {capped, notes_more or atts_more or moved_more or length(capped) < length(merged)}
       end
+
+    # One byte budget for the page: the notes feed and the moved-folder feed
+    # each cut at it, so together they could carry twice.
+    {page, has_more} =
+      if moved == [],
+        do: {page, has_more},
+        else: Notes.trim_to_budget(page, has_more, fields, max_bytes || Notes.page_max_bytes())
 
     next =
       if has_more and page != [] do
@@ -106,6 +173,31 @@ defmodule Engram.Sync do
       end
 
     %{page: page, has_more: has_more, next: next}
+  end
+
+  # What is left of the page for a moved folder at `seq`: `:skip` when a
+  # feed that has more stops below `seq` (the watermark would drop every row
+  # at it) or the rows below `seq` already fill the page; else the rows and
+  # bytes those rows leave.
+  defp room({notes, notes_more}, {atts, atts_more}, seq, limit, fields, max_bytes) do
+    stops_below? =
+      (notes_more and notes != [] and List.last(notes).seq < seq) or
+        (atts_more and atts != [] and List.last(atts).seq < seq)
+
+    below = Enum.filter(notes ++ atts, &(&1.seq < seq))
+    rows = limit - length(below)
+
+    cond do
+      stops_below? or rows <= 0 ->
+        :skip
+
+      fields == :all ->
+        budget = max_bytes || Notes.page_max_bytes()
+        {rows, budget - Enum.sum(Enum.map(below, &byte_size(&1[:content] || "")))}
+
+      true ->
+        {rows, max_bytes}
+    end
   end
 
   defp key(row), do: {row.seq, row.id}
