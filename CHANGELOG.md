@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.88.0](https://github.com/engram-app/Engram/compare/0.87.1...0.88.0) (2026-11-17)
+
+
+### Features
+
+* **file-time:** twin is the authority (R25 contract a) ([#2625](https://github.com/engram-app/Engram/issues/2625)) ([65c2d7b](https://github.com/engram-app/Engram/commit/65c2d7b410c7550313e9d78f17ac46516cdd050f))
+* **folders:** S5 write stop with old-plugin shim (release A, inert) ([#2609](https://github.com/engram-app/Engram/issues/2609)) ([104ec8a](https://github.com/engram-app/Engram/commit/104ec8a5269163be8469964e41c1c5d0696d576a))
+* **notes:** R9 release E, gated note folder hash write stop + NULL batch ([#2522](https://github.com/engram-app/Engram/issues/2522)) ([64db9a3](https://github.com/engram-app/Engram/commit/64db9a3c4873b5951aa2f23bbd93889fc9938cb7))
+
+
+### Bug Fixes
+
+* **crdt:** answer a crdt_delete whose task dies ([#2614](https://github.com/engram-app/Engram/issues/2614)) ([6407557](https://github.com/engram-app/Engram/commit/640755752ce8bdd7366f6b492e5de16890eed53a))
+* **crdt:** fan out checkpointed state to idle devices ([#2631](https://github.com/engram-app/Engram/issues/2631)) ([ed2cbc1](https://github.com/engram-app/Engram/commit/ed2cbc10588ac3c78c41b3bdfccf7c881341e24e))
+* **folders:** claim index paths before the folder txn ([#2622](https://github.com/engram-app/Engram/issues/2622)) ([14dc2aa](https://github.com/engram-app/Engram/commit/14dc2aaf90a2842a115ed68426a0c8516a92258f))
+* **folders:** key the name in every parent index ([#2635](https://github.com/engram-app/Engram/issues/2635)) ([11a0229](https://github.com/engram-app/Engram/commit/11a02295b5064e3934bd6fb4714a2b152e9c326c))
+* **orphan-sweep:** pin trashed page to notes_path_tomb ([#2623](https://github.com/engram-app/Engram/issues/2623)) ([96a64a6](https://github.com/engram-app/Engram/commit/96a64a688ea5e4502966a207a7522bfe85341ad0))
+* **search:** per-user search concurrency cap ([#2621](https://github.com/engram-app/Engram/issues/2621)) ([6c1d810](https://github.com/engram-app/Engram/commit/6c1d810cf306f76c29c5a80878ac1e2fdc77f241))
+
 ## [0.87.1](https://github.com/engram-app/Engram/compare/0.87.0...0.87.1) (2026-11-17)
 
 
