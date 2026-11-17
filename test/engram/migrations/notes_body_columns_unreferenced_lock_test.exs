@@ -15,6 +15,11 @@ defmodule Engram.Migrations.NotesBodyColumnsUnreferencedLockTest do
     :ok
   end
 
+  setup do
+    # R8(e) dropped the columns D's `run_down` names.
+    :ok = Engram.Fixtures.legacy_body_columns!()
+  end
+
   defp migration,
     do:
       String.to_existing_atom("Elixir.Engram.Repo.Migrations.NotesBodyColumnsUnreferencedExpand")

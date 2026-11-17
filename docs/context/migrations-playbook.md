@@ -256,3 +256,26 @@ Note `add :some_col, :string` renders `varchar(255)` and **fails**
 `prefer-text-field` — resizing a varchar later takes an ACCESS EXCLUSIVE lock.
 Use `:text` for anything without a real length constraint; Postgres stores them
 identically.
+
+## Recovery: the R8(e) notes body columns drop refused
+
+Migration `20261117180000_drop_notes_body_ciphertext_columns_drops` raises at
+boot, before dropping `notes.content_ciphertext` / `notes.crdt_state_ciphertext`,
+when a note still holds its only body copy there: no `note_bodies` row of the
+same owner, or a NULL `content_ct` / `crdt_ct` while the `notes` column is set.
+Nothing was dropped and the version is not recorded, so every boot retries and
+fails the same way until the rows are fixed. The message names up to 5 note ids.
+
+The two earlier migrations that fill bodies from those columns are rerun-safe:
+`20261107120000` (every note gets its body row, owner repair) and
+`20261110130000` (pre-nonce notes with a NULL body). Rerun them by deleting
+their versions; Ecto then runs them before the drop on the next boot:
+
+```sql
+-- Back up first. As the migration role, with the app stopped.
+DELETE FROM schema_migrations WHERE version IN (20261107120000, 20261110130000);
+```
+
+Restart. If the drop still refuses, the listed notes need a look by hand
+(compare `notes` and `note_bodies` for those ids as a role that bypasses RLS);
+do not delete the rows, the `notes` copy is the only one.

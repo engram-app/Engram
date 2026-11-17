@@ -26,9 +26,11 @@ defmodule Engram.Repo.Migrations.DropNotesBodyCiphertextColumnsDrops do
   raises with the count and leaves the version unrecorded, so the columns
   stay. The gate must see every tenant (FORCE RLS on both tables): as a
   superuser/BYPASSRLS role, else as `engram_maintenance` (its
-  `maintenance_all` policies), else one tenanted query per user. On the two
-  one-statement paths the connection must see a note when the table's
-  statistics say it has any, so an RLS-blind 0 cannot pass.
+  `maintenance_all` policies), else one tenanted query per user. On every
+  path the gate must see a note when the catalog says `notes` has rows
+  (`greatest(n_live_tup, reltuples)`), so an RLS-blind 0 cannot pass. The
+  error names up to 5 note ids (ids only) and the recovery section in
+  `docs/context/migrations-playbook.md`.
 
   The drop is one statement (both columns or neither), a catalog change
   with no rewrite, under LockTimeoutRetry's 5 s `lock_timeout` retried
@@ -56,16 +58,14 @@ defmodule Engram.Repo.Migrations.DropNotesBodyCiphertextColumnsDrops do
       OR (b.crdt_ct IS NULL AND n.crdt_state_ciphertext IS NOT NULL))
   """
 
-  @unsafe_all """
-  SELECT count(*) FILTER (WHERE #{@unsafe_where}), count(*)
+  # The unsafe count, the notes seen (the RLS-blind guard) and up to
+  # #{5} unsafe note ids for the error. `$1` NULL means every user.
+  @unsafe """
+  SELECT count(*) FILTER (WHERE #{@unsafe_where}), count(*),
+    (array_agg(n.id::text ORDER BY n.id) FILTER (WHERE #{@unsafe_where}))[1:5]
   FROM notes n
   LEFT JOIN note_bodies b ON b.note_id = n.id AND b.user_id = n.user_id
-  """
-
-  @unsafe_user """
-  SELECT count(*) FROM notes n
-  LEFT JOIN note_bodies b ON b.note_id = n.id AND b.user_id = n.user_id
-  WHERE n.user_id = $1 AND #{@unsafe_where}
+  WHERE $1::uuid IS NULL OR n.user_id = $1::uuid
   """
 
   # As 20261107120000's: bypass, or a usable `engram_maintenance`.
@@ -82,7 +82,13 @@ defmodule Engram.Repo.Migrations.DropNotesBodyCiphertextColumnsDrops do
     END
   """
 
-  @live_estimate "SELECT coalesce(n_live_tup, 0) FROM pg_stat_user_tables WHERE relid = 'notes'::regclass"
+  # `reltuples` survives a stats reset (crash recovery, failover), which
+  # zeroes `n_live_tup`; -1 means never analyzed.
+  @live_estimate """
+  SELECT greatest(coalesce(s.n_live_tup, 0), c.reltuples::bigint)
+  FROM pg_class c LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
+  WHERE c.oid = 'notes'::regclass
+  """
 
   def up, do: run_up(repo())
   def down, do: run_down(repo())
@@ -112,54 +118,65 @@ defmodule Engram.Repo.Migrations.DropNotesBodyCiphertextColumnsDrops do
     do: match?(%{rows: [[n]]} when n > 0, repo.query!(@columns_present))
 
   @doc false
-  # Public for the test: the count of notes the drop would lose. Raises
-  # when the connection cannot be shown to see every tenant.
-  def unsafe_count(repo) do
-    case repo.query!(@visibility).rows do
-      [[true, _]] -> in_txn(repo, nil, fn -> visible_count!(repo) end)
-      [[_, true]] -> in_txn(repo, "engram_maintenance", fn -> visible_count!(repo) end)
-      _ -> per_user_count(repo)
-    end
-  end
+  # Public for the test: the count of notes the drop would lose.
+  def unsafe_count(repo), do: repo |> unsafe() |> elem(0)
 
-  defp gate!(repo) do
-    case unsafe_count(repo) do
-      0 ->
-        :ok
-
-      n ->
-        raise "notes body columns drop: #{n} note(s) hold their only body copy in " <>
-                "notes (no body row, or a NULL body column); not dropping, not recording"
-    end
-  end
-
-  defp visible_count!(repo) do
-    %{rows: [[unsafe, seen]]} = repo.query!(@unsafe_all)
+  @doc false
+  # `{unsafe count, up to 5 unsafe note ids}`. Raises when the connection
+  # sees no note while the catalog says `notes` has rows (RLS hid them).
+  def unsafe(repo) do
+    {unsafe, seen, ids} =
+      case repo.query!(@visibility).rows do
+        [[true, _]] -> in_txn(repo, nil, fn -> run_unsafe(repo, nil) end)
+        [[_, true]] -> in_txn(repo, "engram_maintenance", fn -> run_unsafe(repo, nil) end)
+        _ -> per_user(repo)
+      end
 
     if seen == 0 and live_estimate(repo) > 0,
       do: raise("notes body columns drop: the gate sees no notes but notes has rows (RLS)")
 
-    unsafe
+    {unsafe, ids}
+  end
+
+  defp gate!(repo) do
+    case unsafe(repo) do
+      {0, _} ->
+        :ok
+
+      {n, ids} ->
+        raise "notes body columns drop: #{n} note(s) hold their only body copy in " <>
+                "notes (no body row, or a NULL body column), e.g. #{Enum.join(ids, ", ")}; " <>
+                "not dropping, not recording. Recovery: docs/context/migrations-playbook.md " <>
+                "\"Recovery: the R8(e) notes body columns drop refused\""
+    end
+  end
+
+  defp run_unsafe(repo, user_id) do
+    %{rows: [[unsafe, seen, ids]]} = repo.query!(@unsafe, [user_id])
+    {unsafe, seen, ids || []}
   end
 
   defp live_estimate(repo) do
     case repo.query!(@live_estimate).rows do
-      [[n]] -> n
+      [[n]] when is_integer(n) -> n
       _ -> 0
     end
   end
 
-  defp per_user_count(repo) do
+  defp per_user(repo) do
     %{rows: users} = repo.query!("SELECT id FROM users ORDER BY id")
 
-    Enum.reduce(users, 0, fn [user_id], acc ->
-      acc +
+    Enum.reduce(users, {0, 0, []}, fn [user_id], {u, s, ids} ->
+      {du, ds, dids} =
         in_txn(repo, nil, fn ->
           repo.query!("SELECT set_config('app.current_tenant', $1::uuid::text, true)", [user_id])
-          %{rows: [[n]]} = repo.query!(@unsafe_user, [user_id])
+
+          result = run_unsafe(repo, user_id)
           repo.query!("SELECT set_config('app.current_tenant', '', true)")
-          n
+          result
         end)
+
+      {u + du, s + ds, Enum.take(ids ++ dids, 5)}
     end)
   end
 

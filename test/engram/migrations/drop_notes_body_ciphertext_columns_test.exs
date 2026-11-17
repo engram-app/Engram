@@ -1,6 +1,6 @@
 defmodule Engram.Migrations.DropNotesBodyCiphertextColumnsTest do
   @moduledoc """
-  Migration 20261117120000 (R8(e)) drops `notes.content_ciphertext` and
+  Migration 20261117180000 (R8(e)) drops `notes.content_ciphertext` and
   `notes.crdt_state_ciphertext`, gated on no note holding its only body
   copy there (#2402). The suite's database already ran it, so each test
   puts the columns back inside its sandbox transaction (`run_down/1`) and
@@ -12,8 +12,21 @@ defmodule Engram.Migrations.DropNotesBodyCiphertextColumnsTest do
 
   alias Engram.Notes
 
+  # Hands the gate's per-user walk a tenant no note belongs to: the RLS
+  # policy then hides every row, as a wrong GUC or a policy change would.
+  defmodule WrongTenantRepo do
+    @tenant "SELECT set_config('app.current_tenant', $1::uuid::text, true)"
+    def query!(sql, params \\ [], opts \\ [])
+
+    def query!(@tenant, [_], opts),
+      do: Engram.Repo.query!(@tenant, [Ecto.UUID.dump!(Ecto.UUID.generate())], opts)
+
+    def query!(sql, params, opts), do: Engram.Repo.query!(sql, params, opts)
+    def transaction(fun, opts), do: Engram.Repo.transaction(fun, opts)
+  end
+
   defp mod,
-    do: Engram.MigrationFile.load!("20261117120000_drop_notes_body_ciphertext_columns_drops.exs")
+    do: Engram.MigrationFile.load!("20261117180000_drop_notes_body_ciphertext_columns_drops.exs")
 
   setup do
     :ok = Engram.Fixtures.legacy_body_columns!()
@@ -90,6 +103,29 @@ defmodule Engram.Migrations.DropNotesBodyCiphertextColumnsTest do
 
     assert as_app(fn -> mod().unsafe_count(Repo) end) == 1
     assert_raise RuntimeError, ~r/only body copy/, fn -> mod().run_up(Repo) end
+    assert columns() == @both
+  end
+
+  test "the per-user walk raises when RLS hides every note the catalog counts", %{
+    user: u,
+    vault: v
+  } do
+    write!(u, v, "a.md")
+    # Puts this transaction's rows into `reltuples`, the guard's estimate.
+    Repo.query!("ANALYZE notes")
+
+    assert_raise RuntimeError, ~r/sees no notes but notes has rows/, fn ->
+      as_app(fn -> mod().unsafe_count(WrongTenantRepo) end)
+    end
+  end
+
+  test "the error names the note and the recovery section", %{user: u, vault: v} do
+    note = write!(u, v, "bad.md")
+    only_copy_in_notes!(note, "content_ciphertext", "content_ct")
+
+    e = assert_raise RuntimeError, fn -> mod().run_up(Repo) end
+    assert e.message =~ note.id
+    assert e.message =~ "Recovery: the R8(e) notes body columns drop refused"
     assert columns() == @both
   end
 end

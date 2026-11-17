@@ -14,7 +14,7 @@ defmodule Engram.Notes.NoteBody do
   reading them (migration 20261107120000 gives every note its body row
   before boot), R8(d) removed the last database objects and code that
   named them (migration 20261111000100), and R8(e) dropped the two columns
-  (20261117120000). The nonces and `crdt_head` are still written on `notes` (the
+  (20261117180000). The nonces and `crdt_head` are still written on `notes` (the
   fences below).
   Needs the rollback floor (`Engram.Release.Floor`) at 0.76 or later, the
   first release that reads bodies from here.
