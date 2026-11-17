@@ -952,7 +952,9 @@ defmodule Engram.Folders.Rows do
     )
     |> recursive_ctes(true)
     |> with_cte("folder_subtree", as: ^walk_down(vault_id, roots, dead?, user_id))
-    |> Repo.all()
+    # Unnamed, as `ids_by_path/3`: a generic plan costs an average vault's
+    # folders and walks the whole vault each level (`MovedFolderFeedPlanTest`).
+    |> Repo.all(prepare: :unnamed)
   end
 
   @doc """

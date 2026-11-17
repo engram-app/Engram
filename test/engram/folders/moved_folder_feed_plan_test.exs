@@ -105,6 +105,7 @@ defmodule Engram.Folders.MovedFolderFeedPlanTest do
         do: Repo.query!("ALTER TABLE folders ALTER COLUMN #{col} SET (n_distinct = 40)")
 
     QueryPlan.fresh!("folders")
+    QueryPlan.all_visible!(["folders"])
   end
 
   test "X3: the dead leg is index-only; old tombstones are rejected on the index", ctx do
@@ -154,6 +155,8 @@ defmodule Engram.Folders.MovedFolderFeedPlanTest do
 
   test "X2: the dead-row subtree walk is index reads, no seq scan", ctx do
     %{user: u, vault: v} = ctx
+    # Prod's folder shape: about 3.5 folders a parent (`walk_index_cond_test`).
+    Repo.query!("ALTER TABLE folders ALTER COLUMN parent_id SET (n_distinct = -0.29)")
     folders_fresh!()
 
     dead =
@@ -166,19 +169,20 @@ defmodule Engram.Folders.MovedFolderFeedPlanTest do
         )
       end)
 
-    %{custom: custom, generic: generic} =
+    # Sent unnamed (`prepare: :unnamed`), so only its custom plan ever runs:
+    # a generic one is costed for an average vault and walks it all a level.
+    %{custom: custom} =
       plans(
         u,
-        fn -> Folders.Rows.descendant_ids(v.id, dead, 100, dead: true) end,
+        fn -> Folders.Rows.descendant_ids(v.id, dead, 100, dead: true, user_id: u.id) end,
         "folder_subtree"
       )
 
-    for plan <- [custom, generic] do
-      # Index reads only. Under this sandbox's statistics (one tenant holding
-      # every folder, its count overridden to an average tenant's) the
-      # planner walks the tenant's folders (`folders_user`) per level, as it
-      # does for the existing live walk; a prod-scale plan is read on staging
-      # (PR body), not proven here.
+    for plan <- [custom] do
+      # Each level probes the parent's children by key
+      # (`folders_parent_all_ids`, index-only), never the vault's or the
+      # tenant's whole folder list.
+      assert plan =~ ~r/folders_parent_all_ids[^\n]*\n\s+Index Cond: [^\n]*parent_id/, plan
       refute plan =~ "Seq Scan", plan
     end
   end
