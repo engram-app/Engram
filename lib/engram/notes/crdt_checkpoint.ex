@@ -305,6 +305,12 @@ defmodule Engram.Notes.CrdtCheckpoint do
                   # (compaction and the #902 stale-abort both return equal hashes),
                   # so idle compactions and aborted writes raise no spurious re-pull.
                   CrdtDeliver.announce_ready(user_id, vault_id, path, note_id)
+                  # The announce alone does not deliver: a device with the note idle
+                  # and on disk only discovers it (no pull). A device that was offline
+                  # for the edit's live note_yjs_update (a plugin reload) is such a
+                  # device, and without this it waits for its 5 min fallback poll.
+                  # Full committed state, paced; the same bytes REST/MCP writes fan out.
+                  CrdtDeliver.fanout_idle(user, vault_id, note_id)
                 end
               end)
 
