@@ -24,11 +24,23 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
   import Ecto.Query, only: [from: 2]
   import Engram.Factory
 
+  import ExUnit.CaptureLog
+
+  alias Ecto.Adapters.SQL.Sandbox
   alias Engram.CheckpointInterleave
   alias Engram.Crypto
   alias Engram.Notes
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtUpdateLog}
+
+  alias Engram.Notes.{
+    CrdtBridge,
+    CrdtCheckpoint,
+    CrdtCheckpointTimer,
+    CrdtRegistry,
+    CrdtUpdateLog
+  }
+
   alias Engram.Repo
+  alias Yex.Sync.SharedDoc
 
   setup do
     CheckpointInterleave.checkout_real!()
@@ -164,5 +176,123 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
       end)
 
     assert is_integer(tail)
+  end
+
+  # A room checkpoint that loses its snapshot fence wrote nothing, and nothing
+  # else ticks: a folder rename bumps the moved rows' seq without touching the
+  # room. The timer must retry, or the edit sits only in the room until the next
+  # edit, the 300 s idle unbind or an overflow job.
+  describe "a room checkpoint that loses the stale-write race" do
+    setup %{user: user, vault: vault} do
+      # Only the edit's eager tick and the retries fire; no settle/ceiling tick
+      # can stand in for a missing retry.
+      Application.put_env(:engram, CrdtCheckpointTimer,
+        settle_ms: 600_000,
+        ceiling_ms: 600_000,
+        eager_ms: 50
+      )
+
+      on_exit(fn -> Application.delete_env(:engram, CrdtCheckpointTimer) end)
+
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Old/cp3.md", "content" => "base"},
+          actor: "api"
+        )
+
+      # The room and its timer run on the test's real connection.
+      Sandbox.mode(Repo, {:shared, self()})
+
+      # Runs before the outer cleanup (on_exit is LIFO): the room's unbind
+      # needs a connection, and the test process is gone by then.
+      on_exit(fn ->
+        CheckpointInterleave.checkout_real!()
+        Sandbox.mode(Repo, {:shared, self()})
+        CrdtRegistry.terminate_room(note.id)
+        Sandbox.mode(Repo, :manual)
+      end)
+
+      {:ok, room} = CrdtRegistry.ensure_started(user.id, vault.id, note.id)
+      _ = :sys.get_state(room)
+      %{note: note, room: room, timer: CheckpointInterleave.timer_of(room)}
+    end
+
+    defp edit!(room, text) do
+      :ok =
+        SharedDoc.update_doc(room, fn doc ->
+          doc |> Yex.Doc.get_text(CrdtBridge.text_name()) |> Yex.Text.insert(0, text)
+        end)
+    end
+
+    test "a folder rename mid-checkpoint is retried and announced", ctx do
+      %{user: user, vault: vault, note: note, room: room, timer: timer} = ctx
+
+      on_exit(CheckpointInterleave.arm(:after_row_read))
+      edit!(room, "ROOM-")
+      parked = CheckpointInterleave.await_parked(:after_row_read, timer)
+
+      rename =
+        Task.async(fn ->
+          CheckpointInterleave.checkout_real!()
+          Notes.rename_folder(user, vault, "Old", "New")
+        end)
+
+      assert {:ok, _} = Task.await(rename, 15_000)
+
+      EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+      CheckpointInterleave.release(:after_row_read, parked)
+
+      # No further edit: only a retry can write and announce this.
+      note_id = note.id
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "crdt_doc_ready",
+                       payload: %{"doc_id" => ^note_id}
+                     },
+                     1_000
+
+      {:ok, fresh} = Notes.get_note(user, vault, "New/cp3.md")
+      assert fresh.content == "ROOM-base"
+    end
+
+    test "a checkpoint that keeps losing the race stops retrying", ctx do
+      %{room: room, timer: timer, note: note} = ctx
+      attempts = :counters.new(1, [])
+
+      # Every attempt loses: another connection bumps seq after each row read.
+      CheckpointInterleave.put_hook(fn
+        :after_row_read ->
+          :counters.add(attempts, 1, 1)
+
+          # Monitored, not linked: the timer traps exits and stops on any
+          # {:EXIT, _, _}, so a Task.async here would end the room.
+          {_, ref} =
+            spawn_monitor(fn ->
+              CheckpointInterleave.checkout_real!()
+              seq = Engram.Fixtures.raw_note!(note.id).seq
+              Engram.Fixtures.write_note_body!(note.id, seq: seq + 1)
+            end)
+
+          receive do
+            {:DOWN, ^ref, :process, _, :normal} -> :ok
+          after
+            15_000 -> raise "seq bump never finished"
+          end
+
+        _ ->
+          :ok
+      end)
+
+      log =
+        capture_log(fn ->
+          edit!(room, "ROOM-")
+          # 1 tick + 3 retries at 50 ms each, with room to spare.
+          Process.sleep(600)
+          _ = :sys.get_state(timer)
+        end)
+
+      assert :counters.get(attempts, 1) == 4
+      assert log =~ "crdt checkpoint stale retries exhausted"
+      assert %{settle_timer: nil, stale_retries: 0} = :sys.get_state(timer)
+    end
   end
 end
