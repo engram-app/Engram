@@ -11,7 +11,7 @@ defmodule Engram.Folders.WriteStopOldPluginTest do
 
   alias Engram.{Crypto, Folders, Notes, Repo, ServiceConfig, Sync}
   alias Engram.Folders.{Folder, WriteStop}
-  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint}
+  alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, NameIndex}
 
   @n 7
 
@@ -57,7 +57,8 @@ defmodule Engram.Folders.WriteStopOldPluginTest do
         nil
 
       {seq, id} ->
-        page = Sync.merged_changes_page(user, vault, seq, id, limit, :all, nil, opts)
+        {max_bytes, opts} = Keyword.pop(opts, :max_bytes)
+        page = Sync.merged_changes_page(user, vault, seq, id, limit, :all, max_bytes, opts)
         next = Enum.reduce(page.page, {seq, id}, &max_cursor/2)
         {page.page, if(page.has_more and next != {seq, id}, do: next, else: :done)}
     end)
@@ -299,6 +300,65 @@ defmodule Engram.Folders.WriteStopOldPluginTest do
     end
   end
 
+  describe "the merge watermark holds the moved feed (X1)" do
+    test "a byte budget that cuts the moved feed mid-folder loses no note", ctx do
+      %{user: u, vault: v, cursor: cursor} = ctx
+      assert {:ok, %{seq: seq}} = Folders.rename(u, v, "A", "B")
+      # Notes after the move: rows past its seq that must not overtake it.
+      for i <- 1..4, do: put!(u, v, "Other/after#{i}.md", String.duplicate("x", 40))
+
+      rows = walk(u, v, cursor, 500, max_bytes: 10)
+      assert Enum.count(rows, &(&1.seq == seq)) == @n + 1
+    end
+
+    test "a second moved folder after the first is not jumped over", ctx do
+      %{user: u, vault: v, cursor: cursor} = ctx
+      assert {:ok, %{seq: s1}} = Folders.rename(u, v, "A", "B")
+      assert {:ok, %{seq: s2}} = Folders.rename(u, v, "Other", "Other2")
+      for i <- 1..3, do: put!(u, v, "late#{i}.md", "late")
+
+      rows = walk(u, v, cursor, 500)
+      assert Enum.count(rows, &(&1.seq == s1)) == @n + 1
+      assert [%{path: "Other2/o.md"}] = Enum.filter(rows, &(&1.seq == s2))
+    end
+
+    test "pages below a moved folder read none of its bodies", ctx do
+      %{user: u, vault: v} = ctx
+      assert {:ok, _} = Folders.rename(u, v, "A", "B")
+      me = self()
+      handler = "moved-feed-decrypts-#{inspect(me)}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :crypto, :decrypt_batch],
+        fn _e, %{count: n}, %{kind: :notes}, _ ->
+          if self() == me, do: send(me, {:decrypted, n})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      # From 0 with limit 2: the first pages hold notes from before the move,
+      # and the notes feed has more below the folder's seq.
+      _ = Sync.merged_changes_page(u, v, 0, nil, 2, :all)
+
+      decrypted =
+        Stream.repeatedly(fn ->
+          receive do
+            {:decrypted, n} -> n
+          after
+            0 -> nil
+          end
+        end)
+
+      total = decrypted |> Enum.take_while(& &1) |> Enum.sum()
+
+      # The notes feed's own `limit + 1`, nothing for the moved folder.
+      assert total <= 3
+    end
+  end
+
   describe "a note that died under a moved folder (offline 1.39.3, rejoin replay only)" do
     test "is moved by id, then trashed; nothing at the old path", ctx do
       %{user: u, vault: v, cursor: cursor} = ctx
@@ -352,12 +412,21 @@ defmodule Engram.Folders.WriteStopOldPluginTest do
       refute Enum.any?(Map.keys(files), &String.starts_with?(&1, "A/"))
     end
 
-    test "a first sync gets no relocation for the dead", ctx do
+    test "a first sync: one page gets no relocation; a later page may (accepted)", ctx do
       %{user: u, vault: v} = ctx
       assert {:ok, _} = Folders.rename(u, v, "A", "B")
       :ok = Notes.delete_note(u, v, "B/n1.md")
 
+      # A cursor of 0 is a first sync: the dead leg is skipped.
       refute Enum.any?(walk(u, v, 0, 500), &(&1.path == "B/n1.md" and not &1.deleted))
+
+      # Past its first page the server cannot tell a first sync from a
+      # client behind the move, so the dead note may be relocated and then
+      # trashed (a junk trash entry, m-b, accepted). The end state holds.
+      files = apply_rows(%{}, walk(u, v, 0, 2))
+      refute Map.has_key?(files, "B/n1.md")
+      # Every live note (the setup's @n + 2, less the dead one).
+      assert map_size(files) == @n + 1
     end
   end
 
@@ -383,13 +452,13 @@ defmodule Engram.Folders.WriteStopOldPluginTest do
   describe "MCP name completion" do
     test "offers a moved note at its new path", ctx do
       %{user: u, vault: v} = ctx
-      Engram.Notes.NameIndex.clear()
-      assert {:ok, ["A/n1.md" | _], _} = Engram.Notes.NameIndex.search(u, v, "A/n1", 5)
+      NameIndex.clear()
+      assert {:ok, ["A/n1.md" | _], _} = NameIndex.search(u, v, "A/n1", 5)
       assert {:ok, _} = Folders.rename(u, v, "A", "B")
       # The index learns the move (folder_changed marks it stale; the rebuild
       # puts shown paths), with no per-note event.
       Process.sleep(50)
-      assert {:ok, paths, _} = Engram.Notes.NameIndex.search(u, v, "n1", 5)
+      assert {:ok, paths, _} = NameIndex.search(u, v, "n1", 5)
       assert "B/n1.md" in paths
       refute "A/n1.md" in paths
     end

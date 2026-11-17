@@ -881,7 +881,12 @@ defmodule Engram.Folders.Rows do
   # `descendant_ids/3` to select from.
   # `dead?`: dead rows too (the moved-folder feed's dead notes, which keep
   # their folder reference after a folder delete).
-  defp walk_down(vault_id, roots, dead? \\ false) do
+  #
+  # `user_id`: the tenant bound in the query, so the planner sees this
+  # tenant's real folder count instead of an average tenant's, at which a
+  # tenant-led `folders_user` scan per level ties with the parent probe
+  # (`MovedFolderFeedPlanTest`; the same trap as `chain_reads_test`).
+  defp walk_down(vault_id, roots, dead? \\ false, user_id \\ nil) do
     walk =
       from(f in Folder,
         join: t in "folder_subtree",
@@ -891,6 +896,7 @@ defmodule Engram.Folders.Rows do
       )
 
     walk = if dead?, do: walk, else: where(walk, [f], is_nil(f.deleted_at))
+    walk = if user_id, do: where(walk, [f], f.user_id == ^user_id), else: walk
 
     union_all(roots, ^walk)
   end
@@ -935,6 +941,8 @@ defmodule Engram.Folders.Rows do
       )
 
     roots = if dead?, do: roots, else: where(roots, [f], is_nil(f.deleted_at))
+    user_id = opts[:user_id]
+    roots = if user_id, do: where(roots, [f], f.user_id == ^user_id), else: roots
 
     from(t in "folder_subtree",
       group_by: t.id,
@@ -943,21 +951,20 @@ defmodule Engram.Folders.Rows do
       select: type(t.id, Ecto.UUID)
     )
     |> recursive_ctes(true)
-    |> with_cte("folder_subtree", as: ^walk_down(vault_id, roots, dead?))
+    |> with_cte("folder_subtree", as: ^walk_down(vault_id, roots, dead?, user_id))
     |> Repo.all()
   end
 
   @doc """
-  The live folders of `vault_id` moved without a cascade (S5) at a seq past
+  The folders of `vault_id` moved without a cascade (S5) at a seq past
   `after_seq` (`inclusive?`: at it too, for a cursor resuming inside that
-  folder's rows), as `%{id, seq, updated_at}` in seq order: what the
-  moved-folder feed expands (`Engram.Notes.list_moved_changes/4`). Reads
-  `folders_moved_live`, O(moved live folders of the vault): one index page
-  in a vault that never moved one. Runs inside the caller's tenant
-  transaction.
+  folder's rows), as `%{id, seq, updated_at, dead}` in seq order: what the
+  moved-folder feed expands (`Engram.Notes.list_moved_changes/4`). Live
+  ones only, unless `dead: true` (a folder deleted after its move keeps its
+  seq). One range seek on `folders_moved_seq` `(vault_id, seq) WHERE NOT
+  notes_cascaded`: only the moved folders past the cursor are read. Runs
+  inside the caller's tenant transaction.
   """
-  # ponytail: O(moved live folders) per page, never pruned; S6 drops
-  # `notes_cascaded`. A partial (vault_id, seq) index if it shows in plans.
   @spec moved_since(Ecto.UUID.t(), integer(), boolean(), keyword()) :: [map()]
   def moved_since(vault_id, after_seq, inclusive?, opts \\ []) do
     past =

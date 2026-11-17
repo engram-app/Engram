@@ -20,7 +20,7 @@ defmodule Engram.Sync do
     # clients that get it (`moved: moved_feed?/1`, on by default): the S4
     # plugin pulls none, so its cursor could never reach a head counting them.
     if Keyword.get(opts, :moved, true),
-      do: max(own, Notes.moved_head(vault.id, own)),
+      do: max(own, Notes.moved_head(user, vault.id, own)),
       else: own
   end
 
@@ -105,6 +105,9 @@ defmodule Engram.Sync do
 
     # The moved-folder feed (`moved_feed?/1`), a third feed under the same
     # watermark. `moved: false` (the S4 plugin) reads nothing.
+    #
+    # Read after the other two, so its share of the page is known before any
+    # of its bodies is read (`room/6`): one row and byte budget per page.
     {:ok, %{changes: moved, has_more: moved_more}} =
       if Keyword.get(opts, :moved, true),
         do:
@@ -112,7 +115,8 @@ defmodule Engram.Sync do
             after_id: after_id,
             limit: limit + 1,
             fields: fields,
-            max_bytes: max_bytes
+            max_bytes: max_bytes,
+            room: &room({notes, notes_more}, {atts, atts_more}, &1, limit, fields, max_bytes)
           ),
         else: {:ok, %{changes: [], has_more: false}}
 
@@ -169,6 +173,31 @@ defmodule Engram.Sync do
       end
 
     %{page: page, has_more: has_more, next: next}
+  end
+
+  # What is left of the page for a moved folder at `seq`: `:skip` when a
+  # feed that has more stops below `seq` (the watermark would drop every row
+  # at it) or the rows below `seq` already fill the page; else the rows and
+  # bytes those rows leave.
+  defp room({notes, notes_more}, {atts, atts_more}, seq, limit, fields, max_bytes) do
+    stops_below? =
+      (notes_more and notes != [] and List.last(notes).seq < seq) or
+        (atts_more and atts != [] and List.last(atts).seq < seq)
+
+    below = Enum.filter(notes ++ atts, &(&1.seq < seq))
+    rows = limit - length(below)
+
+    cond do
+      stops_below? or rows <= 0 ->
+        :skip
+
+      fields == :all ->
+        budget = max_bytes || Notes.page_max_bytes()
+        {rows, budget - Enum.sum(Enum.map(below, &byte_size(&1[:content] || "")))}
+
+      true ->
+        {rows, max_bytes}
+    end
   end
 
   defp key(row), do: {row.seq, row.id}

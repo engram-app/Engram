@@ -2421,16 +2421,42 @@ defmodule Engram.Notes do
       recent_same_path_tombstone?(prior, sanitized_path, user) ->
         {:error, :recently_deleted}
 
-      # A live note SHOWN at the target (by name under a moved folder, which
-      # no unique key holds) is a conflict, as a keyed holder is. Only in a
-      # vault holding such a folder (`moved?`, read with the row), under the
-      # vault seq lock so no uncascaded move lands between check and write.
-      moved? and shown_by_other?(user, vault, sanitized_path, prior.id) ->
-        {:error, :id_conflict, prior}
-
       true ->
-        resurrect_move({prior, moved?}, user, vault, sanitized_path, folder, origin, recording)
+        # A live note SHOWN at the target (by name under a moved folder,
+        # which no unique key holds) is a conflict, as a keyed holder is.
+        # Only in a vault holding such a folder, under the vault seq lock so
+        # no uncascaded move lands between check and write.
+        moved? = moved_under_lock?(moved?, user, vault)
+
+        if moved? and shown_by_other?(user, vault, sanitized_path, prior.id),
+          do: {:error, :id_conflict, prior},
+          else:
+            resurrect_move(
+              {prior, moved?},
+              user,
+              vault,
+              sanitized_path,
+              folder,
+              origin,
+              recording
+            )
     end
+  end
+
+  # The vault's moved-folder bit as of the vault seq lock. `moved?` was read
+  # with the row, before the lock: the vault's FIRST uncascaded move can
+  # commit in between (S5), and a resurrect deciding on the stale `false`
+  # would skip the occupancy check and land a second note at a path shown by
+  # name. So a `false` is re-read once the lock is held (the write takes it
+  # next anyway, `next_seq!`; re-entrant in one transaction). One index
+  # probe (`folders_moved_live`). `true` never goes back to false.
+  defp moved_under_lock?(true, _user, _vault), do: true
+
+  defp moved_under_lock?(false, user, vault) do
+    # Test seam: where the stale read used to decide (`ResurrectRaceTest`).
+    interleave_hook(:resurrect_before_lock)
+    :ok = Engram.Vaults.lock_seq!(vault.id)
+    Location.named?(user.id, vault.id)
   end
 
   defp resurrect_move({prior, moved?}, user, vault, sanitized_path, folder, origin, recording) do
@@ -6230,7 +6256,10 @@ defmodule Engram.Notes do
 
   Same cursor and options as `list_changes_by_seq/4` (`after_id:`, `limit:`,
   `fields:`, `max_bytes:`); merged with it by `Engram.Sync` under the same
-  watermark. A page serves one folder's rows (the first past the cursor that
+  watermark. `room:` (a function of the picked folder's seq) answers what is
+  left of the page below that seq, `{rows, bytes}`, or `:skip` when nothing
+  of it would be sent: decided before any body is read, so one page budget
+  covers every feed. A page serves one folder's rows (the first past the cursor that
   has any), in note-id order, resumed by `id > after_id`: 1.39.x builds its
   cursor from the max `(seq, id)` it has seen. A folder moved twice keeps
   its last seq, which covers the earlier one; nested moves serve a note
@@ -6241,6 +6270,12 @@ defmodule Engram.Notes do
   upsert at its tombstone path, to a client with a cursor (see
   `moved_rows/5`), so it moves the file by id before the tombstone trashes
   it, as the cascade's old-path tombstone did.
+
+  Accepted costs, until S6: a first sync's later pages cannot be told from a
+  client behind the move, so a first sync also gets those dead-note upserts
+  (each file is created, then trashed: a junk trash entry) and pulls each
+  live note under a moved folder twice, at its own seq and at the folder's.
+  Both are idempotent.
 
   Cost per page: one range on `folders_moved_seq`, then per folder tried a
   subtree walk (O(subfolders)) and, per leg, a Merge Append
@@ -6261,33 +6296,55 @@ defmodule Engram.Notes do
     max_bytes = Keyword.get(opts, :max_bytes) || page_max_bytes()
 
     {:ok, picked} =
-      Repo.with_tenant(user.id, fn -> pick_moved(vault_id(vault), after_seq, after_id, limit) end)
+      Repo.with_tenant(user.id, fn ->
+        pick_moved({user.id, vault_id(vault)}, after_seq, after_id, limit)
+      end)
 
     case picked do
       nil ->
         {:ok, %{changes: [], has_more: false, next: nil}}
 
       {folder, ids, later?} ->
-        stamps = Map.new(ids, &{&1, {folder.seq, folder.updated_at}})
+        case Keyword.get(opts, :room, fn _seq -> {limit, max_bytes} end).(folder.seq) do
+          # Nothing of it would be sent on this page (the caller's other feeds
+          # stop below its seq, or fill the page first): no body is read.
+          :skip ->
+            {:ok, %{changes: [], has_more: true, next: nil}}
 
-        base =
-          from(n in feed_rows(user, vault),
-            where: n.id in ^ids,
-            order_by: [asc: n.id],
-            limit: ^(limit + 1)
-          )
-
-        {changes, has_more} = serve_feed(user, vault, base, limit, fields, max_bytes, stamps)
-        has_more = has_more or later?
-
-        next =
-          if has_more do
-            last = List.last(changes)
-            if last, do: {last.seq, last.id}
-          end
-
-        {:ok, %{changes: changes, has_more: has_more, next: next}}
+          {room, bytes} ->
+            serve_moved(
+              user,
+              vault,
+              folder,
+              {Enum.take(ids, room + 1), later?},
+              room,
+              fields,
+              bytes
+            )
+        end
     end
+  end
+
+  defp serve_moved(user, vault, folder, {ids, later?}, limit, fields, max_bytes) do
+    stamps = Map.new(ids, &{&1, {folder.seq, folder.updated_at}})
+
+    base =
+      from(n in feed_rows(user, vault),
+        where: n.id in ^ids,
+        order_by: [asc: n.id],
+        limit: ^(limit + 1)
+      )
+
+    {changes, has_more} = serve_feed(user, vault, base, limit, fields, max(max_bytes, 1), stamps)
+    has_more = has_more or later?
+
+    next =
+      if has_more do
+        last = List.last(changes)
+        if last, do: {last.seq, last.id}
+      end
+
+    {:ok, %{changes: changes, has_more: has_more, next: next}}
   end
 
   # Folders a moved subtree may hold: the walk's answer cap (the walk itself
@@ -6302,13 +6359,13 @@ defmodule Engram.Notes do
   Inside the caller's tenant transaction. Reads the moved folders past
   `after_seq`, newest first, until one has a row.
   """
-  @spec moved_head(Ecto.UUID.t(), integer()) :: non_neg_integer()
-  def moved_head(vault_id, after_seq) do
+  @spec moved_head(map(), Ecto.UUID.t(), integer()) :: non_neg_integer()
+  def moved_head(user, vault_id, after_seq) do
     vault_id
     |> Rows.moved_since(after_seq, false, dead: true)
     |> Enum.reverse()
     |> Enum.find_value(0, fn f ->
-      if moved_rows(vault_id, f, nil, 1, true) != [], do: f.seq
+      if moved_rows({user.id, vault_id}, f, nil, 1, true) != [], do: f.seq
     end)
   end
 
@@ -6321,7 +6378,13 @@ defmodule Engram.Notes do
   # Id order inside the folder's seq, resumed by `id > after_id`: a 1.39.x
   # client sends back the max `(seq, id)` it has seen as its cursor
   # (`cursorAdvances`), so any other order stalls it.
-  defp pick_moved(vault_id, after_seq, after_id, limit) do
+  #
+  # ponytail: a page tries the moved folders past the cursor in turn (two
+  # subtree walks and two Merge Appends each) until one has a row, so a
+  # vault whose moved folders were all edited since pays O(moved folders past
+  # the cursor) a page. Pruned by a cascade over them (`Rows` resets the
+  # bit) and gone at S6.
+  defp pick_moved({user_id, vault_id}, after_seq, after_id, limit) do
     folders = Rows.moved_since(vault_id, after_seq, after_id != nil, dead: after_seq > 0)
     last = length(folders) - 1
 
@@ -6330,7 +6393,7 @@ defmodule Engram.Notes do
     |> Enum.find_value(fn {f, i} ->
       from_id = if f.seq == after_seq, do: after_id
 
-      case moved_rows(vault_id, f, from_id, limit + 1, after_seq > 0) do
+      case moved_rows({user_id, vault_id}, f, from_id, limit + 1, after_seq > 0) do
         [] -> nil
         ids -> {f, ids, i < last}
       end
@@ -6338,18 +6401,19 @@ defmodule Engram.Notes do
   end
 
   # The first `k` ids `pick_moved/4` serves for folder `f` past `from_id`:
-  # its live notes, and (`dead?`, a client with a cursor; a cursor of 0
-  # holds no file) the notes that died under it after the move, served as
+  # its live notes, and (`dead?`, a cursor past 0: a first sync's first page
+  # holds no file; its later pages look like a client behind the move, see
+  # `list_moved_changes/4`) the notes that died under it after the move, served as
   # upserts at their tombstone path so the client moves the file there by
   # id and the tombstone then trashes it (the cascade's sequence).
-  defp moved_rows(vault_id, f, from_id, k, dead?) do
+  defp moved_rows({user_id, vault_id}, f, from_id, k, dead?) do
     live =
       if f.dead,
         do: [],
         else:
           moved_ids(
             vault_id,
-            Rows.descendant_ids(vault_id, f.id, @moved_subtree_cap),
+            Rows.descendant_ids(vault_id, f.id, @moved_subtree_cap, user_id: user_id),
             :live,
             f.seq,
             from_id,
@@ -6358,7 +6422,9 @@ defmodule Engram.Notes do
 
     dead =
       if dead? do
-        refs = Rows.descendant_ids(vault_id, f.id, @moved_subtree_cap, dead: true)
+        refs =
+          Rows.descendant_ids(vault_id, f.id, @moved_subtree_cap, dead: true, user_id: user_id)
+
         moved_ids(vault_id, refs, :dead, f.seq, from_id, k)
       else
         []
