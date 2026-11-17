@@ -258,7 +258,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
                 # Before the write takes the vault seq lock (`next_seq!`), so
                 # the probe adds nothing under it (#1710).
-                shown = shown_path(user, note)
+                shown = shown_path(user, note, Location.named?(user.id, note.vault_id))
 
                 result =
                   if CrdtBridge.markdown_path?(note.path) do
@@ -282,10 +282,13 @@ defmodule Engram.Notes.CrdtCheckpoint do
           end)
 
         case outcome do
-          {prev_hash, new_hash, path, _embed_priority, _finalize?, renamed_title, pruned, fanout} ->
+          {prev_hash, new_hash, {path, moved_row}, _embed_priority, _finalize?, renamed_title,
+           pruned, fanout} ->
             :ok =
               post_commit(note_id, fn ->
                 interleave_hook(:post_commit)
+                announce? = renamed_title != nil or prev_hash != new_hash
+                path = reresolve(user, moved_row, path, announce?)
 
                 # Post-commit, like the announce below: the name index learns a
                 # title the checkpoint just re-derived.
@@ -429,13 +432,15 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # path, the PRE-write embed priority, the finalize decision, and the title
   # the checkpoint re-derived when it differs from the stored one (for the
   # post-commit name-index announce). Anything else passes through.
-  # `path` out is `shown` (read before the lock) when it resolved.
+  # `path` out is `{shown, moved_row}`: the path the note is shown at (read
+  # before the lock), and the pre-write row when the vault holds a moved
+  # folder (nil otherwise), for `reresolve/4`.
   defp carry_out({prev_hash, new_hash, path, title, pruned}, note, recording, shown),
     do: carry_out({prev_hash, new_hash, path, title, pruned, nil}, note, recording, shown)
 
   # `fanout` is `{state, head, seq}` of a content-changing write, else nil.
-  defp carry_out({prev_hash, new_hash, path, title, pruned, fanout}, note, recording, shown) do
-    {prev_hash, new_hash, shown || path, EmbedNote.priority_for(note),
+  defp carry_out({prev_hash, new_hash, path, title, pruned, fanout}, note, recording, {shown, moved?}) do
+    {prev_hash, new_hash, {shown || path, if(moved?, do: note)}, EmbedNote.priority_for(note),
      finalize?(note, recording, prev_hash, new_hash), if(title && title != note.title, do: title),
      pruned, fanout}
   end
@@ -445,10 +450,22 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # The path the post-commit announces carry: the one the note is SHOWN at.
   # Under a folder moved without a cascade (S5) the stored path is the old
   # one, and a plugin handed it re-maps the id there and moves the file back
-  # (`discoverAnnouncedNote`). One index probe (`Location.shown_path/3`),
-  # plus the chain read only in a vault holding such a folder. In the
+  # (`discoverAnnouncedNote`). One index probe (`Location.named?/2`), plus
+  # the chain read only in a vault holding such a folder. In the
   # checkpoint's transaction (no extra BEGIN/COMMIT), before its lock.
-  defp shown_path(user, row), do: Location.shown_path(user, row)
+  defp shown_path(user, row, moved?), do: {Location.shown_path(user, row, moved?), moved?}
+
+  # A folder move that commits between that read and this checkpoint's
+  # commit leaves the read stale, and a plugin handed the pre-move path
+  # re-maps the note id onto it. So after the commit, a vault that holds a
+  # moved folder re-reads the chain (its own tenant transaction, outside the
+  # vault seq lock) before announcing. A vault with none pays nothing.
+  # ponytail: a vault's FIRST uncascaded move landing in that same window is
+  # not re-read (the bit said false); covering it costs every checkpoint a
+  # post-commit probe. Add it if the plugin still corrupts its id map there.
+  defp reresolve(_user, nil, path, _announce?), do: path
+  defp reresolve(_user, _row, path, false), do: path
+  defp reresolve(user, row, path, true), do: Location.shown_path(user, row, true) || path
 
   defp finalize?(note, recording, prev_hash, new_hash),
     do: note.content not in [nil, ""] and Revisions.finalize?(recording, prev_hash, new_hash)
