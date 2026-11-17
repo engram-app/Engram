@@ -77,8 +77,11 @@ defmodule Engram.Notes.MovedFeedSql do
   defp width(n) when n <= 32, do: 32
   defp width(_n), do: @moved_children
 
+  @typedoc "Subfolder slots in one statement (`sql/2`): 1 to `@moved_children`."
+  @type width :: 1..unquote(@moved_children)
+
   @doc "The statement `ids/6` sends for `n` subfolders (also the plan test's)."
-  @spec sql(:live | :dead, pos_integer()) :: String.t()
+  @spec sql(:live | :dead, width()) :: String.t()
   # Only fixed predicates and integers are ever spliced into the text.
   def sql(which, n) when which in [:live, :dead] and is_integer(n) and n in 1..@moved_children do
     pred = Map.fetch!(@moved_preds, which)
