@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.87.0](https://github.com/engram-app/Engram/compare/0.86.0...0.87.0) (2026-11-17)
+
+
+### Features
+
+* **folders:** read folders by their parent chain (Gap A) ([#2606](https://github.com/engram-app/Engram/issues/2606)) ([0714367](https://github.com/engram-app/Engram/commit/07143672f1a54c60c865eb8c2f441eddf0e57ee5))
+* **folders:** S5 readers, folders moved without a cascade ([#2610](https://github.com/engram-app/Engram/issues/2610)) ([e8b600b](https://github.com/engram-app/Engram/commit/e8b600b8818f7ec60b6a5f4f1682e70c4733684b))
+* **qdrant:** retire legacy payload indexes (R3b) ([#2605](https://github.com/engram-app/Engram/issues/2605)) ([2ba85be](https://github.com/engram-app/Engram/commit/2ba85beae41cb006f60c248c85e94842dff5a474))
+
+
+### Bug Fixes
+
+* **folders:** index-only walk probe per level ([#2616](https://github.com/engram-app/Engram/issues/2616)) ([98fe995](https://github.com/engram-app/Engram/commit/98fe995230552bb8a44ebcb6ffccdfa606dd4916))
+* **sync:** emit folder_changed before attachment legs ([#2615](https://github.com/engram-app/Engram/issues/2615)) ([2f51731](https://github.com/engram-app/Engram/commit/2f51731bd306b88bfccad408291c20a315d4c4a7))
+
+
+### Performance Improvements
+
+* **orphan-sweep:** find tenants via the u facet ([#2608](https://github.com/engram-app/Engram/issues/2608)) ([812c6f6](https://github.com/engram-app/Engram/commit/812c6f6ca4e6d4f50a56a75c4478b6cd43bb9bbc))
+
 ## [0.86.0](https://github.com/engram-app/Engram/compare/0.85.0...0.86.0) (2026-11-16)
 
 
