@@ -94,7 +94,7 @@ defmodule Engram.Notes.NoteIndexStateTest do
     n = write!(u, v, "A.md", "# A\n\nbody")
     before = xmin(n.id)
 
-    stamp!(n.id, mtime: 42.0)
+    stamp!(n.id, mtime_at: ~U[2030-01-01 00:00:00.000000Z])
     assert xmin(n.id) == before
 
     # Listed but unchanged: the upsert skips an identical row.

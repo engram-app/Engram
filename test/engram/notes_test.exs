@@ -41,7 +41,7 @@ defmodule Engram.NotesTest do
     test "is stored on create and kept when a later push omits it", %{user: user, vault: vault} do
       attrs = %{"path" => "ct.md", "content" => "one", "mtime" => 1.0, "ctime" => 500.0}
       {:ok, note} = Notes.upsert_note(user, vault, attrs, actor: "api")
-      assert note.ctime == 500.0
+      assert Engram.FileTime.ctime(note) == 500.0
 
       # older plugin: no ctime key, must not null it
       {:ok, note} =
@@ -49,7 +49,7 @@ defmodule Engram.NotesTest do
           actor: "api"
         )
 
-      assert note.ctime == 500.0
+      assert Engram.FileTime.ctime(note) == 500.0
     end
 
     # ctime is the file's creation time. Another device's local copy has its
@@ -68,7 +68,7 @@ defmodule Engram.NotesTest do
           actor: "api"
         )
 
-      assert note.ctime == 500.0
+      assert Engram.FileTime.ctime(note) == 500.0
       assert stored_ctime(note.id) == 500.0
     end
 
@@ -129,7 +129,7 @@ defmodule Engram.NotesTest do
           actor: "api"
         )
 
-      assert note.ctime == nil
+      assert Engram.FileTime.ctime(note) == nil
     end
   end
 

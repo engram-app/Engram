@@ -10,7 +10,6 @@ defmodule Engram.Notes.TimeAtWritersTest do
 
   alias Engram.FileTime
   alias Engram.Notes
-  alias Engram.Notes.Note
 
   setup do
     {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
