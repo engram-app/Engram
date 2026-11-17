@@ -154,7 +154,8 @@ defmodule Engram.Notes.LocationRlsPlanTest do
     "notes_user_vault_live",
     "Seq Scan on notes",
     "Seq Scan on folders",
-    "folders_parent",
+    # A parent-only key (reads siblings); `folders_parent_name_ids` keys the name.
+    ~r/folders_parent(?!_name_ids)/,
     "notes_recent_index"
   ]
 
@@ -167,7 +168,7 @@ defmodule Engram.Notes.LocationRlsPlanTest do
         {mode, plan} <- by_mode,
         mode == :custom or sql =~ "notes_cascaded",
         bad <- @bad,
-        do: refute(plan =~ bad, "#{mode} plan reads #{bad}:\n#{sql}\n\n#{plan}")
+        do: refute(plan =~ bad, "#{mode} plan reads #{inspect(bad)}:\n#{sql}\n\n#{plan}")
   end
 
   defp lookup_plans(plans) do
