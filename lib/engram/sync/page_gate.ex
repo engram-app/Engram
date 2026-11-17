@@ -69,7 +69,7 @@ defmodule Engram.Sync.PageGate do
     gate = Keyword.get(opts, :gate, __MODULE__)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
-    case ConcurrencyGate.acquire(gate, nil, timeout) do
+    case acquire(gate, timeout) do
       :ok ->
         try do
           fun.()
@@ -87,7 +87,24 @@ defmodule Engram.Sync.PageGate do
         )
 
         fun.()
+
+      # This process already holds a slot (a nested page build). The shared
+      # gate refuses re-entry with a raise; crashing the channel would strand
+      # the sync, so the inner page runs ungated and, holding nothing,
+      # releases nothing (the outer slot stays the outer call's).
+      :nested ->
+        Logger.warning("sync page gate re-entered, building nested page ungated",
+          category: :sync
+        )
+
+        fun.()
     end
+  end
+
+  defp acquire(gate, timeout) do
+    ConcurrencyGate.acquire(gate, nil, timeout)
+  rescue
+    ArgumentError -> :nested
   end
 
   @doc """

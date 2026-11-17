@@ -2113,10 +2113,15 @@ defmodule Engram.MCP.Handlers do
       "mcp #{op} failed",
       Engram.Logger.Metadata.with_category(level, :http,
         tool: op,
-        reason_label: Engram.Telemetry.error_kind(reason)
+        reason_label: Engram.Telemetry.error_kind(reason),
+        http_status: http_status(reason)
       )
     )
   end
+
+  # The status of an upstream HTTP error, never its body (bounded, safe).
+  defp http_status({status, _body}) when is_integer(status), do: status
+  defp http_status(_reason), do: nil
 
   # Search hits → `{folder, count}` sorted by descending count. Shared by
   # suggest_folder (which takes the top N) and auto_place_folder (the head).

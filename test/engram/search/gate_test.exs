@@ -280,6 +280,49 @@ defmodule Engram.Search.GateTest do
     end
   end
 
+  describe "auto-placement when the search fails" do
+    setup do
+      bypass = Bypass.open()
+      ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+      ServiceConfig.put_override(:qdrant_search_timeout, 30_000)
+
+      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
+        Plug.Conn.send_resp(conn, 500, ~s({"status":{"error":"Timeout error"}}))
+      end)
+
+      Mox.stub(Engram.MockEmbedder, :embed_texts, fn texts, _opts ->
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      {:ok, user} = insert(:user) |> Engram.Crypto.ensure_user_dek()
+      %{user: user, vault: insert(:vault, user: user)}
+    end
+
+    test "a Qdrant 500 is logged with its status, and the note is still created at the root",
+         %{user: user, vault: vault} do
+      {result, events} =
+        Engram.Test.LogCapture.with_events(fn ->
+          Engram.MCP.Handlers.handle("create_note", user, vault, %{
+            "title" => "Placed",
+            "content" => "body"
+          })
+        end)
+
+      assert {:ok, _text, _structured} = result
+      assert {:ok, %{path: "Placed.md"}} = Engram.Notes.get_note(user, vault, "Placed.md")
+
+      assert [meta] =
+               for(
+                 %{meta: %{tool: "auto_place_folder"} = meta} <- events,
+                 self() in [meta[:pid]],
+                 do: meta
+               )
+
+      assert meta.http_status == 500
+      refute Map.has_key?(meta, :body)
+    end
+  end
+
   test "a second acquire from a holder is refused loudly and leaves the counts intact" do
     g = gate(limit: 4, per_user: 2)
     assert Engram.ConcurrencyGate.acquire(g, "a", 100) == :ok

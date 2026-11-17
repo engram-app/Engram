@@ -68,6 +68,15 @@ defmodule Engram.Sync.PageGateTest do
     send(b, :release)
   end
 
+  # PageGate promises never to crash the sync: a nested acquire (which the
+  # shared gate refuses with a raise) runs the inner page ungated instead.
+  test "a nested with_slot runs ungated instead of raising", %{gate: gate} do
+    assert PageGate.with_slot(
+             fn -> PageGate.with_slot(fn -> :inner end, gate: gate) end,
+             gate: gate
+           ) == :inner
+  end
+
   test "returns the function's value", %{gate: gate} do
     assert PageGate.with_slot(fn -> {:ok, 42} end, gate: gate) == {:ok, 42}
   end

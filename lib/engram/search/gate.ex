@@ -17,6 +17,12 @@ defmodule Engram.Search.Gate do
   in total, `:max_waiting_per_user` for its user), gets `{:error, :search_busy}`
   without running `fun`.
 
+  The wait is per Qdrant request, not per search: a search makes at most 3
+  (its first round, one widen round, one payload fallback retrieve), so it
+  can wait up to 3 x `:acquire_timeout` (7.5 s) in the worst case, and a busy
+  refusal in a later request comes after its embed and budget token were
+  spent. Accepted: bounded, and it surfaces as an error, never a partial page.
+
   A client that hangs up does not stop its search: Bandit keeps running the
   request process, so an abandoned type-ahead search keeps its slot until
   its Qdrant request ends, at most the search receive timeout (5 s; Qdrant
