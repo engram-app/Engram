@@ -439,7 +439,12 @@ defmodule Engram.Notes.CrdtCheckpoint do
     do: carry_out({prev_hash, new_hash, path, title, pruned, nil}, note, recording, shown)
 
   # `fanout` is `{state, head, seq}` of a content-changing write, else nil.
-  defp carry_out({prev_hash, new_hash, path, title, pruned, fanout}, note, recording, {shown, moved?}) do
+  defp carry_out(
+         {prev_hash, new_hash, path, title, pruned, fanout},
+         note,
+         recording,
+         {shown, moved?}
+       ) do
     {prev_hash, new_hash, {shown || path, if(moved?, do: note)}, EmbedNote.priority_for(note),
      finalize?(note, recording, prev_hash, new_hash), if(title && title != note.title, do: title),
      pruned, fanout}
