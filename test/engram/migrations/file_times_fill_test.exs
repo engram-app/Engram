@@ -139,6 +139,20 @@ defmodule Engram.Migrations.FileTimesFillTest do
         do: assert(twins("notes", id, [:mtime_at]) == [~U[2026-04-13 09:28:20.928000Z]])
   end
 
+  # Review of #2626: an out-of-range double normalizes to NULL, so its row
+  # still matches the fill. The tenant walk must step past it, not select
+  # it again forever (window 1: one such row is enough).
+  test "the tenant walk steps past a row it cannot fill", ctx do
+    bad = note!(ctx, "bad.md")
+    ok = note!(ctx, "ok.md")
+    legacy!("notes", bad, "mtime = 1.0e19, mtime_at = NULL")
+    legacy!("notes", ok, "mtime = 1776072500.928, mtime_at = NULL")
+
+    assert :ok = fill!(window: 1)
+    assert twins("notes", bad, [:mtime_at]) == [nil]
+    assert twins("notes", ok, [:mtime_at]) == [~U[2026-04-13 09:28:20.928000Z]]
+  end
+
   # A window locked out is retried twice, the user once more after the
   # others, and only then does the run raise (not recorded).
   test "lock contention: retried, then the run raises", ctx do
