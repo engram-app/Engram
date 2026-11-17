@@ -1,5 +1,13 @@
+# Shared helper; see the file for why it is not in lib/.
+Code.require_file("lock_timeout_retry.exs", __DIR__)
+
 defmodule Engram.Repo.Migrations.DropAttachmentUploadsMtimeDrops do
   use Ecto.Migration
+
+  alias Engram.Repo.Migrations.LockTimeoutRetry
+
+  @disable_ddl_transaction true
+  @disable_migration_lock true
 
   # The migration-gates reference check greps lib/ for the bare names, and
   # `mtime` / `ctime` stay in lib/ as the client's wire params and the
@@ -21,24 +29,23 @@ defmodule Engram.Repo.Migrations.DropAttachmentUploadsMtimeDrops do
   first, in the same batch.
 
   DROP COLUMN is a catalog change (no rewrite; no index, trigger or view
-  names the column) under ACCESS EXCLUSIVE, held for milliseconds. A 5 s
-  `lock_timeout` (SET LOCAL, this migration's transaction only): behind a
-  long transaction it fails fast instead of queueing every read, and the
-  next boot retries (IF EXISTS, rerun-safe). `down` restores it nullable
-  and empty.
+  names the column) under ACCESS EXCLUSIVE, held for milliseconds, in its
+  own autocommit statement. It runs through `LockTimeoutRetry` (as
+  20261114120000): a 5 s `lock_timeout`, retried twice, so behind a long
+  transaction it fails fast instead of queueing every read, and only then
+  raises (the next boot retries; IF EXISTS, rerun-safe). `down` restores it
+  nullable and empty.
   """
 
   def up do
-    execute "SET LOCAL lock_timeout = '5s'"
-
-    alter table(:attachment_uploads) do
-      remove_if_exists :mtime, :float
-    end
+    LockTimeoutRetry.with_lock_timeout(repo(), [
+      "ALTER TABLE attachment_uploads DROP COLUMN IF EXISTS mtime"
+    ])
   end
 
   def down do
-    alter table(:attachment_uploads) do
-      add_if_not_exists :mtime, :float
-    end
+    LockTimeoutRetry.with_lock_timeout(repo(), [
+      "ALTER TABLE attachment_uploads ADD COLUMN IF NOT EXISTS mtime double precision"
+    ])
   end
 end

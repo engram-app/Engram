@@ -39,20 +39,53 @@ defmodule Engram.FileTimeDoublesGoneTest do
   end
 
   # Raw SQL would only fail at runtime in whatever test runs it: no lib/
-  # SQL string or one-letter query binding (`n.mtime`) names a double.
+  # SQL (a string or a heredoc that is not a doc) and no one-letter query
+  # binding (`n.mtime`) names a double.
   test "no lib/ SQL or query binding names a double column" do
-    sql_word = ~r/\b(SELECT|UPDATE|INSERT|WHERE|SET|FROM)\b/
-    double = ~r/\b(mtime|ctime)\b/
-    binding = ~r/(?<![A-Za-z_.])[a-z]\.(mtime|ctime)\b/
-
     hits =
       for path <- Path.wildcard("lib/**/*.ex"),
-          {line, n} <- path |> File.read!() |> String.split("\n") |> Enum.with_index(1),
-          not String.starts_with?(String.trim_leading(line), "#"),
-          (Regex.match?(sql_word, line) and Regex.match?(double, line) and
-             String.contains?(line, ~s("))) or Regex.match?(binding, line),
+          {line, n} <- sql_lines(File.read!(path)),
+          Regex.match?(~r/\b(mtime|ctime)\b/, line) or
+            Regex.match?(~r/(?<![A-Za-z_.])[a-z]\.(mtime|ctime)\b/, line),
           do: "#{path}:#{n}: #{String.trim(line)}"
 
     assert hits == []
+  end
+
+  test "the scan sees heredoc SQL and quoted SQL, not docs" do
+    src =
+      ~s|@doc """\nSET the mtime\n"""\nq = """\nUPDATE notes SET mtime = 1\n"""\nx = "SELECT ctime FROM notes"\ny = n.mtime\n|
+
+    assert Enum.map(sql_lines(src), &elem(&1, 1)) == [5, 7, 8]
+  end
+
+  # `{line, number}` for every line that can hold SQL or a query binding:
+  # a line inside a heredoc that is not a `@doc` / `@moduledoc`, a quoted
+  # line with an SQL keyword, and any non-comment line (for bindings, which
+  # the caller matches separately).
+  defp sql_lines(src) do
+    sql_word = ~r/\b(SELECT|UPDATE|INSERT|WHERE|SET|FROM)\b/
+
+    src
+    |> String.split("\n")
+    |> Enum.with_index(1)
+    |> Enum.map_reduce(:code, fn {line, n}, mode ->
+      trimmed = String.trim(line)
+      opens? = String.ends_with?(trimmed, ~s(""")) and trimmed != ~s(""")
+
+      cond do
+        mode != :code and trimmed == ~s(""") -> {nil, :code}
+        mode == :doc -> {nil, :doc}
+        mode == :sql -> {{line, n}, :sql}
+        opens? and Regex.match?(~r/@(module)?doc\b/, trimmed) -> {nil, :doc}
+        opens? -> {nil, :sql}
+        String.starts_with?(trimmed, "#") -> {nil, :code}
+        String.contains?(line, ~s(")) and Regex.match?(sql_word, line) -> {{line, n}, :code}
+        Regex.match?(~r/(?<![A-Za-z_.])[a-z]\.(mtime|ctime)\b/, line) -> {{line, n}, :code}
+        true -> {nil, :code}
+      end
+    end)
+    |> elem(0)
+    |> Enum.reject(&is_nil/1)
   end
 end
