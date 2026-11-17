@@ -19,7 +19,7 @@ defmodule Engram.Folders.MovedFolderFeedPlanTest do
     {:ok, user} = Crypto.ensure_user_dek(user)
     ServiceConfig.put_override(:folder_ops, true)
 
-    for f <- ~w(x y z), i <- 1..6 do
+    for f <- ~w(x y), i <- 1..4 do
       {:ok, _} =
         Notes.upsert_note(user, vault, %{"path" => "A/#{f}/n#{i}.md", "content" => "a"},
           actor: "api"
@@ -29,11 +29,40 @@ defmodule Engram.Folders.MovedFolderFeedPlanTest do
     {:ok, %{seq: seq}} = Folders.rename(user, vault, "A", "B")
     :ok = Notes.delete_note(user, vault, "B/x/n1.md")
 
+    # Prod-sized folders, without a write through the app per row: each
+    # subfolder gets 1,500 live copies of one of its notes (fresh path hash,
+    # written before the move) and 1,500 dead ones (died after the move). A
+    # handful of rows sort for free, which proves nothing about the bound.
+    for f <- ~w(x y) do
+      {:ok, note} = Notes.get_note(user, vault, "B/#{f}/n2.md")
+      clone!(note.id, 1_500, %{})
+      clone!(note.id, 1_500, %{"deleted_at" => "2026-11-17T00:00:00Z", "seq" => seq + 1})
+    end
+
     for col <- ~w(user_id vault_id),
         do: Repo.query!("ALTER TABLE notes ALTER COLUMN #{col} SET (n_distinct = 40)")
 
+    # And prod's folder count (about 47k folder rows, 2026-11-16): a test
+    # vault's two or three folders make `folder_ref_id = $n` look like a third
+    # of the table, which no prod plan sees.
+    Repo.query!("ALTER TABLE notes ALTER COLUMN folder_ref_id SET (n_distinct = 5000)")
+
     QueryPlan.fresh!("notes")
     %{user: user, vault: vault, seq: seq}
+  end
+
+  defp clone!(id, n, set) do
+    Repo.query!(
+      """
+      INSERT INTO notes
+      SELECT (jsonb_populate_record(r, jsonb_build_object('id', uuidv7(),
+               'path_hmac', '\\x' || encode(sha256(convert_to(g::text || r.id::text, 'UTF8')), 'hex'))
+               || $3::jsonb)).*
+      FROM notes r, generate_series(1, $2) g
+      WHERE r.id = $1
+      """,
+      [Ecto.UUID.dump!(id), n, set]
+    )
   end
 
   test "both legs are a Merge Append of their index, no sort, no seq scan", ctx do
