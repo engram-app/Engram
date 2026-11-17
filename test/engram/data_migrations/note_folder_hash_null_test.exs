@@ -89,10 +89,11 @@ defmodule Engram.DataMigrations.NoteFolderHashNullTest do
     assert Repo.query!("SELECT id, folder_ref_id FROM notes ORDER BY id").rows == refs_before
   end
 
-  test "rerun-safe: a hash a release-C node writes back is nulled by a new pass", %{
-    user: u,
-    vault: v
-  } do
+  test "idempotent SQL: a second walk after a writeback nulls it (not a self-heal: done is not re-verified)",
+       %{
+         user: u,
+         vault: v
+       } do
     n = note!(u, v, "A/n.md")
     hash = hash_at(n.id)
     done!()

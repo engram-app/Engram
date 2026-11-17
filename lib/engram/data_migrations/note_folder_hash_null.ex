@@ -22,7 +22,7 @@ defmodule Engram.DataMigrations.NoteFolderHashNull do
   (`notes` primary-key windows of 200; one fleet walk on the maintenance pool
   on SaaS, per tenant on self-host). Each window is one statement under
   `SET LOCAL lock_timeout = '2s'` and `statement_timeout = '5s'`, locking with
-  `FOR UPDATE OF n SKIP LOCKED`: a row a writer holds is skipped and counts
+  `FOR NO KEY UPDATE OF n SKIP LOCKED`: a row a writer holds is skipped and counts
   as left. Per row: one `folders` primary-key probe and one non-HOT update
   (`folder_hmac` and the `folder_id` key `notes_derive_core_keys` derives
   from it are indexed). The load that matters is autovacuum cleaning the dead
@@ -122,7 +122,7 @@ defmodule Engram.DataMigrations.NoteFolderHashNull do
     SELECT n.id FROM notes AS n, folders AS f
     WHERE #{@redundant}
     ORDER BY n.id
-    FOR UPDATE OF n SKIP LOCKED
+    FOR NO KEY UPDATE OF n SKIP LOCKED
   )
   UPDATE notes AS n SET folder_hmac = NULL
   FROM c

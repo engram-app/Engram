@@ -783,6 +783,44 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       assert reloaded_note.folder_hmac == expected
     end
+
+    # R9 release E: once `note_payload_stamps` is done the sweep goes through
+    # the write gate (`Engram.Notes.FolderHash`). The null batch is not
+    # re-verified, so a hash this sweep re-adds would never be removed.
+    test "ledger done: a nested note loses its folder hash, root and marker keep theirs", %{
+      user: user,
+      vault: vault,
+      note: nested
+    } do
+      root =
+        Engram.Fixtures.insert_note!(user, vault, %{path: "top.md", content: "x", folder: ""})
+
+      {:ok, marker} = Engram.Notes.create_folder_marker(user, vault, "M")
+
+      :ok =
+        Engram.DataMigrations.mark_done(
+          Engram.DataMigrations.NotePayloadStamps.name(),
+          Engram.DataMigrations.NotePayloadStamps.version()
+        )
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      {:ok, new_dek} = Crypto.get_dek(reloaded_user)
+      new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek)
+
+      assert Engram.Fixtures.raw_note!(nested.id).folder_hmac == nil
+
+      assert Engram.Fixtures.raw_note!(root.id).folder_hmac ==
+               Crypto.hmac_field(new_filter_key, "")
+
+      assert Engram.Fixtures.raw_note!(marker.id).folder_hmac ==
+               Crypto.hmac_field(new_filter_key, "M")
+    end
   end
 
   # #1341. crdt_state is a ciphertext column like any other, but it was missing
