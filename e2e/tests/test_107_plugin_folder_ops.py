@@ -22,15 +22,10 @@ The switch is GLOBAL to the stack, so `_folder_ops_on` flips it for one test
 and restores it in `finally`, and refuses to run under more than one xdist
 worker (e2e-clerk runs the suite serially, `-n 1`).
 
-Pairing (expand / merge / contract, see
-../engram-workspace/docs/context/oauth-e2e-pairing-and-token-binding.md):
-tests that need plugin behaviour plugin main lacks SKIP, with a reason, when
-the plugin under test has no `syncEngine.folderOps` (or no
-`api.renameAttachment`). They run when e2e-clerk is dispatched with
-`plugin_branch=feat/folder-ops-s4`, and on every run once Engram-obsidian#689
-merges. CONTRACT (after #689 is on plugin main): delete `_require_folder_ops` /
-`_require_attachment_rename` so a regression fails instead of skipping.
-The flag-OFF fallback and the old-plugin-vs-flag-ON tests never skip.
+Plugin folder ops (Engram-obsidian#689) are on plugin main, so every case
+asserts them unconditionally: a plugin that loses `folderOps` or
+`renameAttachment` fails here, it never skips (the contract step of
+../engram-workspace/docs/context/oauth-e2e-pairing-and-token-binding.md).
 
 Not covered here: plugins 1.35.0 / 1.39.2 by version (the harness builds the
 plugin from source, so "old plugin" is plugin main), and mobile event order
@@ -72,38 +67,6 @@ TINY_PNG = (
     b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
 )
 
-PAIRING = (
-    "dispatch verify.yml with plugin_branch=feat/folder-ops-s4 to run it; "
-    "CONTRACT: drop this skip once Engram-obsidian#689 is on plugin main"
-)
-
-
-# -- capability gates (expand step; see module docstring) --------------------
-
-
-async def _require_folder_ops(cdp) -> None:
-    if not await cdp.evaluate(
-        f"typeof {ENGINE_PATH}.folderOps?.enabled === 'function'"
-    ):
-        pytest.skip(
-            f"plugin under test has no folder ops (Engram-obsidian#689); {PAIRING}"
-        )
-
-
-async def _has_attachment_rename(cdp) -> bool:
-    return (
-        await cdp.evaluate(f"typeof {ENGINE_PATH}.api?.renameAttachment === 'function'")
-        is True
-    )
-
-
-async def _require_attachment_rename(cdp) -> None:
-    if not await _has_attachment_rename(cdp):
-        pytest.skip(
-            f"plugin under test has no attachment rename (Engram-obsidian#689); {PAIRING}"
-        )
-
-
 # -- the folder_ops switch ----------------------------------------------------
 
 
@@ -136,14 +99,12 @@ async def _plugin_folder_ops_enabled(cdp) -> bool:
     return await cdp.evaluate(f"{ENGINE_PATH}.folderOps.enabled() === true") is True
 
 
-async def _rejoin(cdp, want: bool | None) -> None:
+async def _rejoin(cdp, want: bool) -> None:
     """Rejoin so the plugin re-reads `features.folder_ops` from the USER join
     reply; with `want`, wait until the plugin reports it."""
     await cdp.disconnect_stream()
     await cdp.reconnect_stream()
     await cdp.wait_for_stream_connected()
-    if want is None:
-        return
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if await _plugin_folder_ops_enabled(cdp) is want:
@@ -161,19 +122,15 @@ async def _folder_ops_on(cdp_a, cdp_b):
             f"test_107 flips the stack-global folder_ops switch; under {workers} xdist "
             "workers it would change every concurrently running test"
         )
-    capable = await cdp_a.evaluate(
-        f"typeof {ENGINE_PATH}.folderOps?.enabled === 'function'"
-    )
-    want = True if capable else None
     try:
         _set_switch(True)
         for cdp in (cdp_a, cdp_b):
-            await _rejoin(cdp, want)
+            await _rejoin(cdp, True)
         yield
     finally:
         _set_switch(False)
         for cdp in (cdp_a, cdp_b):
-            await _rejoin(cdp, False if capable else None)
+            await _rejoin(cdp, False)
 
 
 async def _wait_folders_known(cdp, *paths: str, teach: bool = False) -> None:
@@ -303,7 +260,6 @@ async def test_plugin_attachment_rename_moves_the_row(
     switch, vault_a, vault_b, cdp_a, cdp_b, api_sync
 ):
     """A renames an attachment: one POST /attachments/rename, no re-upload."""
-    await _require_attachment_rename(cdp_a)
     root = f"E2E/Att107-{uuid.uuid4().hex[:12]}"
     old, new = f"{root}/img.png", f"{root}/img2.png"
 
@@ -353,7 +309,6 @@ async def test_plugin_folder_rename_is_one_folder_op(
     vault_a, vault_b, cdp_a, cdp_b, api_sync
 ):
     """Flag on: ONE folder_op, nothing per file, ids kept, B follows in one rename."""
-    await _require_folder_ops(cdp_a)
     old, new = _layout(uuid.uuid4().hex[:12], "F")
     async with _folder_ops_on(cdp_a, cdp_b):
         rows = await _seed_folder(vault_a, vault_b, api_sync, old, with_attachment=True)
@@ -424,7 +379,7 @@ async def test_folder_rename_flag_off_falls_back_per_file(
         else:
             assert wait_for_binary_delivery(vault_b, moved, api_sync) == TINY_PNG
     # Files, not the folder: the per-file path can leave the emptied folder
-    # on the peer (test_34 asserts files only too); measured on plugin main and a1029bdd.
+    # on the peer (test_34 asserts files only too); measured at plugin a1029bdd.
     for path in rows:
         wait_for_file_gone(vault_b, path)
 
@@ -436,16 +391,10 @@ async def test_folder_rename_flag_off_falls_back_per_file(
         if path.endswith(".md"):
             moved = after[path.replace(old, new, 1)]
             assert moved["id"] == rows[path]["id"], f"{path} changed identity: {moved}"
-    # The attachment leg differs by plugin, so it is asserted per capability,
-    # never by accepting either outcome.
-    if await _has_attachment_rename(cdp_a):
-        assert routes.attachment_rename == 1 and routes.attachment_upload == 0, (
-            f"plugin with attachment rename re-uploaded instead of moving: {routes}"
-        )
-    else:
-        assert routes.attachment_upload >= 1, (
-            f"main plugin should delete+upload: {routes}"
-        )
+    # The per-file attachment leg is a move, never a delete plus re-upload.
+    assert routes.attachment_rename == 1 and routes.attachment_upload == 0, (
+        f"the attachment was re-uploaded instead of moved: {routes}"
+    )
 
 
 @pytest.mark.asyncio
@@ -454,17 +403,10 @@ async def test_api_folder_rename_converges_with_flag_on(
 ):
     """Flag on, folder renamed on the web/API: both devices converge, nothing lost.
 
-    Against plugin main this is "an old plugin on a folder-ops server" (it
-    ignores `folder_changed` and follows the per-note events); against #689 it
-    is the inbound `folder_changed` path. Convergence is the same claim for
-    both; only #689 also removes the emptied old folder (one `vault.rename`),
-    plugin main leaves it (measured on the first CI run), so that leg is
-    asserted per capability.
+    The inbound `folder_changed` path: both devices follow with one
+    `vault.rename`, so the emptied old folder is gone too.
     """
     old, new = _layout(uuid.uuid4().hex[:12], "Api")
-    follows_folders = await cdp_a.evaluate(
-        f"typeof {ENGINE_PATH}.folderOps?.enabled === 'function'"
-    )
     async with _folder_ops_on(cdp_a, cdp_b):
         rows = await _seed_folder(vault_a, vault_b, api_sync, old, with_attachment=True)
         assert api_sync.rename_folder(old, new) == 200
@@ -478,8 +420,7 @@ async def test_api_folder_rename_converges_with_flag_on(
                 else:
                     assert wait_for_binary_delivery(vault, moved, api_sync) == TINY_PNG
                 wait_for_file_gone(vault, path)
-            if follows_folders:
-                wait_for_folder_gone(vault, old)
+            wait_for_folder_gone(vault, old)
 
 
 # -- C: offline create / edit + offline folder rename ------------------------
@@ -528,7 +469,6 @@ async def test_offline_create_and_folder_rename_converge(
     create made the server mint a second folder row at the target and the op
     was refused `conflict` (round-5 HIGH-1 / MEDIUM-3 on #689).
     """
-    await _require_folder_ops(cdp_a)
     old, new = _layout(uuid.uuid4().hex[:12], "Off" + order[0].upper())
     async with _folder_ops_on(cdp_a, cdp_b):
         rows = await _seed_folder(
@@ -574,7 +514,6 @@ async def test_offline_edit_then_folder_rename_lands_at_new_path(
 ):
     """Offline edit of a child + offline folder rename: the edit lands at the
     new path, one note, no 409 drop (the replay hold on #689)."""
-    await _require_folder_ops(cdp_a)
     old, new = _layout(uuid.uuid4().hex[:12], "Edit")
     async with _folder_ops_on(cdp_a, cdp_b):
         rows = await _seed_folder(
@@ -614,7 +553,6 @@ async def test_restart_with_folder_op_pending(
     meanwhile. The op survives in data.json, is sent after the reload, A's
     files never move back, B's edit lands at the new path, one note per id
     (round-5 MEDIUM-4 on #689)."""
-    await _require_folder_ops(cdp_a)
     old, new = _layout(uuid.uuid4().hex[:12], "Rst")
     async with _folder_ops_on(cdp_a, cdp_b):
         rows = await _seed_folder(
