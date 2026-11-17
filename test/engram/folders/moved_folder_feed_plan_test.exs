@@ -10,10 +10,10 @@ defmodule Engram.Folders.MovedFolderFeedPlanTest do
   # async: false: `QueryPlan.fresh!/1` CLUSTERs `notes`.
   use EngramWeb.ConnCase, async: false
 
+  import Ecto.Query
+
   alias Engram.{Crypto, Folders, Notes, QueryPlan, Repo, ServiceConfig}
   alias Engram.Folders.Folder
-
-  import Ecto.Query
 
   setup :authed_api_conn
 
@@ -151,6 +151,58 @@ defmodule Engram.Folders.MovedFolderFeedPlanTest do
       assert plan =~ "folders_moved_seq", plan
       refute plan =~ "Seq Scan", plan
     end
+  end
+
+  # `descendant_ids/4` runs unnamed (a custom plan per call), the LIVE walk
+  # too (the folder rename and delete paths). Its planning time, measured as
+  # `engram_app` under RLS on this fixture (300 sibling folders), printed for
+  # the PR and bounded loosely so a regression shows.
+  test "the live walk's custom plan is cheap to plan", ctx do
+    %{user: u, vault: v, seq: seq} = ctx
+    folders_fresh!()
+
+    root =
+      Repo.with_tenant!(u.id, fn -> Repo.get_by!(Folder, vault_id: v.id, seq: seq).id end)
+
+    {_, queries} =
+      Engram.QueryRecorder.record(fn ->
+        Repo.with_tenant!(u.id, fn ->
+          Folders.Rows.descendant_ids(v.id, root, 1_000_000, user_id: u.id)
+        end)
+      end)
+
+    me = self()
+
+    [{sql, params}] =
+      for %{sql: s, params: p, pid: ^me} <- queries, s =~ "folder_subtree", do: {s, p}
+
+    times =
+      for _ <- 1..20 do
+        {:ok, ms} =
+          Repo.transaction(fn ->
+            Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+            Repo.query!("SELECT set_config('app.current_tenant', $1, true)", [u.id])
+            %{rows: rows} = Repo.query!("EXPLAIN (SUMMARY ON) " <> sql, params)
+
+            [_, ms] =
+              Regex.run(~r/Planning Time: ([\d.]+) ms/, rows |> List.flatten() |> Enum.join("\n"))
+
+            Repo.rollback(String.to_float(ms))
+          end)
+          |> case do
+            {:error, ms} -> {:ok, ms}
+          end
+
+        ms
+      end
+
+    median = times |> Enum.sort() |> Enum.at(10)
+
+    IO.puts(
+      "live descendant walk planning time: median #{median} ms over 20 (#{inspect(Enum.min_max(times))})"
+    )
+
+    assert median < 20
   end
 
   test "X2: the dead-row subtree walk is index reads, no seq scan", ctx do

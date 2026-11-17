@@ -54,7 +54,7 @@ defmodule Engram.Repo.Migrations.IndexNotesFolderRefDeadIdExpand do
         {"folders_moved_seq",
          "ON folders (vault_id, seq) INCLUDE (user_id) WHERE NOT notes_cascaded"}
       ],
-      lock_key: 20_261_117_010_000,
+      lock_key: 20_261_117_200_000,
       label: "index_notes_folder_ref_dead_id"
     )
 

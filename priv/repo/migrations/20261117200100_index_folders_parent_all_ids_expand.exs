@@ -34,7 +34,7 @@ defmodule Engram.Repo.Migrations.IndexFoldersParentAllIdsExpand do
     BoundedIndexBuild.build!(
       repo(),
       [{"folders_parent_all_ids", "ON folders (vault_id, parent_id, id) INCLUDE (user_id)"}],
-      lock_key: 20_261_117_020_000,
+      lock_key: 20_261_117_200_100,
       label: "index_folders_parent_all_ids"
     )
 
