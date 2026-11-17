@@ -466,16 +466,21 @@ defmodule Engram.Notes.CrdtCheckpoint do
   defp reresolve(_user, nil, path, _announce?), do: path
   defp reresolve(_user, _row, path, false), do: path
 
-  # A failed re-read (a DB error after the commit) falls back to the path
-  # read before the lock, so the announces still go out.
+  # A re-read that hits a database error after the commit falls back to
+  # the path read before the lock, so the announces still go out.
   defp reresolve(user, row, path, true) do
     # Test seam (nil outside tests): the re-read is about to run.
     interleave_hook(:reresolve)
     Location.shown_path(user, row, true) || path
   rescue
-    err -> reresolve_failed(row.id, Metadata.safe_reason(err), path)
+    # Database errors only: anything else is a bug and raises as before.
+    err in [DBConnection.ConnectionError, Postgrex.Error] ->
+      reresolve_failed(row.id, Metadata.safe_reason(err), path)
   catch
-    :exit, reason -> reresolve_failed(row.id, Metadata.safe_exit_reason(reason), path)
+    # A pool checkout that timed out.
+    :exit, {reason, _} = exit
+    when reason == :timeout or is_struct(reason, DBConnection.ConnectionError) ->
+      reresolve_failed(row.id, Metadata.safe_exit_reason(exit), path)
   end
 
   defp reresolve_failed(note_id, reason, path) do

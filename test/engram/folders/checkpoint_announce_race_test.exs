@@ -105,6 +105,36 @@ defmodule Engram.Folders.CheckpointAnnounceRaceTest do
     assert log =~ "announce path re-read failed"
   end
 
+  # Only database errors fall back: a bug in the re-read raises as before
+  # (the post-commit guard logs it and nothing is announced).
+  test "a re-read that raises a non-database error is not swallowed", ctx do
+    %{user: u, vault: v} = ctx
+    note = Notes.get_note(u, v, "A/n1.md") |> elem(1)
+    assert {:ok, _} = Folders.rename(u, v, "A", "B")
+    EngramWeb.Endpoint.subscribe("crdt:#{u.id}:#{v.id}")
+
+    {:ok, raw} = Repo.with_tenant(u.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
+    {:ok, state} = Crypto.decrypt_crdt_state(raw, u)
+    {:ok, doc} = CrdtBridge.doc_from_state(state)
+    :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "edited")
+
+    me = self()
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :reresolve when self() == me -> raise ArgumentError, "a bug"
+      _ -> :ok
+    end)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        :ok = CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc)
+      end)
+
+    refute_receive %Phoenix.Socket.Broadcast{event: "crdt_doc_ready"}, 500
+    assert log =~ "post-commit work failed"
+    refute log =~ "announce path re-read failed"
+  end
+
   # The re-read's cost lands only on a vault that holds a moved folder:
   # measured as the same checkpoint before and after the vault's first move.
   test "only a vault with a moved folder pays for the re-read", ctx do
