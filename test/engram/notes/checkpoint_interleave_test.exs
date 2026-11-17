@@ -305,10 +305,23 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
 
     # The compaction branch (text unchanged, crdt_state rewritten) has its own
     # fenced write; it must report the same lost race, not a plain skip.
+    test "a trashed row's checkpoint fans nothing out", ctx do
+      %{user: user, vault: vault, room: room, timer: timer} = ctx
+      assert {:ok, _} = Notes.delete_note(user, vault, "Old/cp3.md")
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      edit!(room, "ROOM-")
+      send(timer, :tick)
+      _ = :sys.get_state(timer)
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 300
+    end
+
     test "a compaction checkpoint that loses the race is retried", ctx do
       %{timer: timer, note: note} = ctx
       row_reads(note.id, &(&1 == 1))
       before = Engram.Fixtures.raw_note!(note.id)
+      EngramWeb.Endpoint.subscribe("sync:#{ctx.user.id}:#{ctx.vault.id}")
 
       # No edit: the room's text equals the row's, so this tick compacts.
       send(timer, :tick)
@@ -318,11 +331,14 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
 
       assert %{stale_retries: 0} = :sys.get_state(timer)
       assert Engram.Fixtures.raw_note!(note.id).crdt_state_nonce != before.crdt_state_nonce
+      # Unchanged text: nothing for an idle device to apply.
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200
     end
 
     test "a checkpoint that keeps losing the race stops retrying", ctx do
       %{room: room, timer: timer, note: note} = ctx
       row_reads(note.id, fn _ -> true end)
+      EngramWeb.Endpoint.subscribe("sync:#{ctx.user.id}:#{ctx.vault.id}")
 
       log =
         capture_log(fn ->
@@ -334,6 +350,8 @@ defmodule Engram.Notes.CheckpointInterleaveTest do
         end)
 
       assert log =~ "crdt checkpoint stale retries exhausted"
+      # Every attempt lost the fence and wrote nothing: no fan-out either.
+      refute_receive %Phoenix.Socket.Broadcast{event: "note_yjs_update"}, 200
       assert %{settle_timer: nil, stale_retries: 0} = :sys.get_state(timer)
       refute_receive {:row_read, 5}, 300
     end
