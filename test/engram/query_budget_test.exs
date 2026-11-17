@@ -212,12 +212,14 @@ defmodule Engram.QueryBudgetTest do
     # another node's lock, and the checkpoint encrypts) plus one checkpoint txn
     # (10: BEGIN, tenant_enter, note read, next_seq, note write, tail prune,
     # revisions read + 2 inserts, COMMIT) plus the dispatcher job insert and
-    # Oban's pg_notify.
-    "CRDT checkpoint tick" => 13,
-    # idle (was 48): bind 5 + delta 4 + the exit checkpoint 13 + the exit's
+    # Oban's pg_notify. +1 (S5, #2609): the vault's moved-folder bit
+    # (`Location.shown_path/3`, one `folders_moved_live` index probe), so the
+    # post-commit announce carries the path the note is SHOWN at.
+    "CRDT checkpoint tick" => 14,
+    # idle (was 48): bind 5 + delta 4 + the exit checkpoint 14 + the exit's
     # re-time of a CheckpointNote snoozed behind this room (one UPDATE on
     # oban_jobs, `CheckpointNote.retime_snoozed/1`, #2085 review).
-    "CRDT crdt_doc_update idle" => 23,
+    "CRDT crdt_doc_update idle" => 24,
     # open (was 25 at bee71923, 13 before wave 3): the channel's ownership +
     # path read 4 (`Notes.live_note_path/3`) + bind 5.
     "CRDT room open" => 9

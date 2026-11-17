@@ -13,7 +13,10 @@ defmodule Engram.Folders.MovedReadsBudgetTest do
   # +7 for the relocate's after-transaction settle (#2622): one roomless index
   # fold reading the committed row. Constant per relocate.
   @relocate 45
-  @resurrect 25
+  # +1 for the resurrect race fix (#2609): the moved-folder bit read with the
+  # row can be a stale `false`, so it is re-read under the vault seq lock
+  # (`Location.named?/2`, one `folders_moved_live` index probe).
+  @resurrect 26
   @restore 53
 
   setup do
