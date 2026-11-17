@@ -77,10 +77,9 @@ defmodule Engram.DataMigrations.EffectiveDatesTest do
       eff_v: nil
     )
 
-    # A file time moved as every writer moves it (double and timestamp);
-    # since R25 step (a) the backfill reads the timestamp.
+    # A file time moved as every writer moves it (the timestamp; the double
+    # is no longer stored since R25 step (b)).
     set!(ctx.user, bare,
-      mtime: 1_700_000_000.5,
       mtime_at: Engram.FileTime.to_at!(1_700_000_000.5),
       eff_updated: nil,
       eff_v: nil
@@ -190,7 +189,7 @@ defmodule Engram.DataMigrations.EffectiveDatesTest do
       )
 
     assert run_until_done() == :done
-    set!(ctx.user, note, version: 9, eff_updated: nil, eff_created: nil, mtime: nil, ctime: 5.0)
+    set!(ctx.user, note, version: 9, eff_updated: nil, eff_created: nil)
     assert run_until_done() == :done
 
     assert {_, _, 1_700_000_000, 1_600_000_000, true} = dates(note)
