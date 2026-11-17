@@ -305,7 +305,8 @@ defmodule Engram.Folders.WriteStopOldPluginTest do
       %{user: u, vault: v, cursor: cursor} = ctx
       assert {:ok, %{seq: seq}} = Folders.rename(u, v, "A", "B")
       # Notes after the move: rows past its seq that must not overtake it.
-      for i <- 1..4, do: put!(u, v, "Other/after#{i}.md", String.duplicate("x", 40))
+      # Tiny, so the merged page fits its byte budget with them in it.
+      for i <- 1..4, do: put!(u, v, "Other/after#{i}.md", "x")
 
       rows = walk(u, v, cursor, 500, max_bytes: 10)
       assert Enum.count(rows, &(&1.seq == seq)) == @n + 1
