@@ -105,12 +105,18 @@ defmodule Engram.Search do
          :ok <- cross_vault_entitlement(user, opts),
          {:ok, opts} <- resolve_field_filters(user, opts) do
       # The budget is checked before the search (an over-cap user is refused
-      # before any embed) and charged after it, unless it came back busy:
-      # admission, a Qdrant slot or our own connection pool turned it away,
-      # so it served nothing and costs no token.
+      # before any embed) and charged after it, whatever it returned or
+      # raised, unless it came back busy: admission, a Qdrant slot or our own
+      # connection pool turned it away, so it served nothing and costs no token.
       Gate.admit(user.id, fn ->
         with :ok <- check_search_budget(user, opts) do
-          case do_search_instrumented(user, vault, query, opts) do
+          try do
+            do_search_instrumented(user, vault, query, opts)
+          catch
+            kind, reason ->
+              charge_search_budget(user)
+              :erlang.raise(kind, reason, __STACKTRACE__)
+          else
             {:error, :search_busy} = busy -> busy
             result -> tap(result, fn _ -> charge_search_budget(user) end)
           end

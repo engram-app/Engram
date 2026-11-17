@@ -284,6 +284,9 @@ defmodule Engram.Search.AdmissionTest do
         ["pool"], _opts ->
           raise RuntimeError, @pool_msg
 
+        ["crash"], _opts ->
+          raise RuntimeError, "embedder crashed"
+
         texts, _opts ->
           {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
       end)
@@ -349,6 +352,18 @@ defmodule Engram.Search.AdmissionTest do
 
       # The one token is still there: this search runs, the next is capped.
       assert Search.search(a, a_vault, "served") == {:ok, []}
+      assert {:error, :search_cap_exceeded, 1} = Search.search(a, a_vault, "capped")
+    end
+
+    test "a search that raises still costs its token (only busy is free)",
+         %{users: [{a, a_vault} | _]} do
+      gates()
+      insert(:user_limit_override, user: a, key: "ai_searches_per_day", value: %{"v" => 1})
+
+      assert_raise RuntimeError, "embedder crashed", fn ->
+        Search.search(a, a_vault, "crash", mode: :vector)
+      end
+
       assert {:error, :search_cap_exceeded, 1} = Search.search(a, a_vault, "capped")
     end
   end
