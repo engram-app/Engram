@@ -104,7 +104,10 @@ defmodule Engram.ServiceConfig.Overrides do
     orphan_sweep: :boolean,
     # R9 release E: the note folder hash null batch, kill switch and pace.
     note_folder_hash_null: :boolean,
-    note_folder_hash_null_max_fixed: {:integer, 1..1_000_000}
+    note_folder_hash_null_max_fixed: {:integer, 1..1_000_000},
+    # S6 step 6: the attachment name key fill ledger, kill switch and pace.
+    attachment_name_key: :boolean,
+    attachment_name_key_max_fixed: {:integer, 1..1_000_000}
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})

@@ -597,9 +597,19 @@ defmodule Engram.Notes.Location do
   # with their decrypted names; a row whose folder has no path there is left
   # out (it keeps its stored path), and its name is never decrypted: only
   # the rows a path is derived for pay a name decrypt.
-  defp derive(_dek, [], _folder_paths), do: %{}
+  defp derive(dek, rows, folder_paths), do: derive(:notes, dek, rows, folder_paths)
 
-  defp derive(dek, rows, folder_paths) do
+  @doc """
+  `%{id => folder path <> "/" <> name}` for the `table` rows (`:notes` or
+  `:attachments`, S6 step 6) whose folder `folder_paths` (given their folder
+  ids) places; any other row is left out and keeps its stored path. One
+  batch name decrypt, for the placed rows only.
+  """
+  @spec derive(:notes | :attachments, binary(), [map()], ([Ecto.UUID.t()] -> map())) ::
+          %{Ecto.UUID.t() => String.t()}
+  def derive(_table, _dek, [], _folder_paths), do: %{}
+
+  def derive(table, dek, rows, folder_paths) do
     folders = folder_paths.(rows |> Enum.map(& &1.folder_ref_id) |> Enum.uniq())
 
     case Enum.filter(rows, &Map.has_key?(folders, &1.folder_ref_id)) do
@@ -607,7 +617,7 @@ defmodule Engram.Notes.Location do
         %{}
 
       rows ->
-        for {row, {:ok, name}} <- Enum.zip(rows, decrypt_names(dek, rows)),
+        for {row, {:ok, name}} <- Enum.zip(rows, decrypt_names(table, dek, rows)),
             into: %{},
             do: {row.id, folders[row.folder_ref_id] <> "/" <> name}
     end
@@ -616,16 +626,16 @@ defmodule Engram.Notes.Location do
   # One native call for the batch (`Envelope.decrypt_many/3`); it is
   # all-or-nothing, so a row that will not open sends the batch through the
   # per-row decrypt, which fails just that row (it falls back to its path).
-  defp decrypt_names(dek, rows) do
+  defp decrypt_names(table, dek, rows) do
     fields =
       Enum.map(rows, &{Ecto.UUID.dump!(&1.id), true, &1.name_ciphertext, &1.name_nonce})
 
-    case Envelope.decrypt_many(dek, Crypto.aad_prefix(:notes, :name), fields) do
+    case Envelope.decrypt_many(dek, Crypto.aad_prefix(table, :name), fields) do
       {:ok, names} ->
         Enum.map(names, &{:ok, &1})
 
       :error ->
-        Enum.map(rows, &Name.decrypt(:notes, dek, &1.id, &1.name_ciphertext, &1.name_nonce))
+        Enum.map(rows, &Name.decrypt(table, dek, &1.id, &1.name_ciphertext, &1.name_nonce))
     end
   end
 
