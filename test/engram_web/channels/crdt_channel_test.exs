@@ -1409,6 +1409,41 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_reply ref2, :ok, %{doc_id: _}
     end
 
+    # The op queues send the next delete the moment the last one replied, so
+    # the reply and the freeing of the one-delete slot must be ONE channel
+    # step. The slot used to free on the task's :DOWN while the task replied
+    # straight to the socket: two senders, no order between them, so the next
+    # delete could land first and be refused `busy` (verify flaked on this
+    # about one run in five, 2026-11-16 to -18). Proved by suspending the
+    # channel: no reply may reach the client while the channel cannot run.
+    test "a delete replies only from the channel, so the next one is never refused busy", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/next.md", "content" => "x"},
+          actor: "api"
+        )
+
+      channel_budget(60_000)
+      holder = hold_vault_gate(vault.id)
+      ref = push(socket, "crdt_delete", %{"doc_id" => note.id})
+      task = Process.monitor(await_gate_waiter(vault.id))
+
+      :erlang.suspend_process(socket.channel_pid)
+      send(holder.pid, :release)
+      Task.await(holder)
+      # The delete task finished its whole run while the channel was frozen.
+      assert_receive {:DOWN, ^task, :process, _, _}, 5_000
+      refute_received %Phoenix.Socket.Reply{ref: ^ref}, "replied before the slot was freed"
+      :erlang.resume_process(socket.channel_pid)
+
+      assert %{status: :ok} = await_reply(ref, socket, 5_000)
+      ref2 = push(socket, "crdt_delete", %{"doc_id" => note.id})
+      assert %{status: :ok} = await_reply(ref2, socket, 5_000)
+    end
+
     # 2026-10-31: the delete queues on the vault's SeqGate. It must (1) shed
     # on the CHANNEL budget, well inside the clients' 10s push timeout, with a
     # retryable `busy` instead of a raise that crashed the channel, and (2) not
@@ -1456,9 +1491,10 @@ defmodule EngramWeb.CrdtChannelTest do
       send(holder.pid, :release)
       Task.await(holder)
 
-      # The recovery step proves the socket still serves deletes, not how
-      # fast it sheds: under the 200 ms shed budget a loaded CI runner's own
-      # gate queueing shed it as busy (2026-11-16 and -17, three branches).
+      # The recovery step proves the socket still serves deletes, sent the
+      # moment the shed replied. Its `busy` flakes (2026-11-16 to -18) were not
+      # gate load: the slot freed on the task's :DOWN, after the reply, so this
+      # push could beat it (pinned by the "replies only from the channel" test).
       assert Process.alive?(socket.channel_pid)
       channel_budget(60_000)
       ref2 = push(socket, "crdt_delete", %{"doc_id" => note.id})
