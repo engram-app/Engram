@@ -281,6 +281,55 @@ defmodule Engram.LogsReemitTest do
       refute_receive {^ref, _, _}, 100
     end
 
+    # Android vs iOS vs desktop, plugin and Obsidian version: `platform` says
+    # only mobile|desktop, so a mobile report could not be tied to a device
+    # class or a release from Loki alone. Metadata, never labels (cardinality).
+    test "plugin os, app_version and plugin_version reach the re-emit metadata" do
+      meta = reemit_plugin(%{"os" => "android", "app_version" => "1.8.10"}, "1.39.3")
+
+      assert meta[:os] == "android"
+      assert meta[:app_version] == "1.8.10"
+      assert meta[:plugin_version] == "1.39.3"
+    end
+
+    test "an out-of-shape os, app_version or plugin_version is dropped" do
+      meta =
+        reemit_plugin(
+          %{"os" => "Linux 6.1 Medical/x.md", "app_version" => "1.8.10 (Pixel 8)"},
+          "1.0 /home/todd/vault"
+        )
+
+      for key <- ~w(os app_version plugin_version)a do
+        refute Map.has_key?(meta, key), "#{key} passed through"
+      end
+    end
+
+    defp reemit_plugin(context, plugin_version) do
+      user = insert(:user)
+      parent = self()
+      ref = make_ref()
+      handler_id = :logs_reemit_plugin_handler
+
+      :logger.add_handler(handler_id, __MODULE__, %{config: %{parent: parent, ref: ref}})
+      on_exit(fn -> :logger.remove_handler(handler_id) end)
+
+      {:ok, 1} =
+        Logs.insert_logs(user, [
+          %{
+            "level" => "warn",
+            "category" => "sync",
+            "message" => "preview_failed reason=timeout missing_live=true",
+            "platform" => "mobile",
+            "plugin_version" => plugin_version,
+            "forced" => true,
+            "context" => context
+          }
+        ])
+
+      assert_receive {^ref, _level, meta}, 1000
+      meta
+    end
+
     # config.exs requires every metadata key we emit in :default_formatter's
     # list; these reach Logger through Keyword.merge, where credo's
     # MissedMetadataKeyInLoggerConfig cannot see them.
