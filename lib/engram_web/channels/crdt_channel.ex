@@ -836,48 +836,47 @@ defmodule EngramWeb.CrdtChannel do
     :telemetry.execute([:engram, :crdt, :doc_state_failed], %{count: 1}, %{reason: kind})
   end
 
+  # Returns the task's ref. The task RETURNS its reply and the channel sends
+  # it (`handle_info({ref, reply})`), in the same step that frees the slot: a
+  # task that replied to the socket itself raced its own :DOWN against the
+  # client's next delete, which then hit the in-flight guard as `busy`.
   defp delete_off_channel(socket, note_id) do
-    ref = socket_ref(socket)
     user = socket.assigns.current_user
     vault = socket.assigns.vault
     device_id = socket.assigns[:device_id]
 
-    {:ok, pid} =
-      Task.Supervisor.start_child(Engram.TaskSupervisor, fn ->
-        reply =
-          try do
-            # Idempotent: a :not_found means the row is already gone, the
-            # desired end state, so it still replies :ok. origin_device_id
-            # (#970) lets THIS device drop its own note_changed echo.
-            _ =
-              Notes.delete_note_by_id(user, vault, note_id,
-                origin_device_id: device_id,
-                gate_timeout: Engram.Vaults.SeqGate.channel_wait_ms()
-              )
+    task =
+      Task.Supervisor.async_nolink(Engram.TaskSupervisor, fn ->
+        try do
+          # Idempotent: a :not_found means the row is already gone, the
+          # desired end state, so it still replies :ok. origin_device_id
+          # (#970) lets THIS device drop its own note_changed echo.
+          _ =
+            Notes.delete_note_by_id(user, vault, note_id,
+              origin_device_id: device_id,
+              gate_timeout: Engram.Vaults.SeqGate.channel_wait_ms()
+            )
 
-            {:ok, %{doc_id: note_id}}
-          rescue
-            # A shed wait is load, not a fault: a retryable reason, which both
-            # clients' op queues retry on backoff.
-            Engram.Vaults.SeqGate.BusyError ->
-              {:error, %{reason: "busy"}}
+          {:ok, %{doc_id: note_id}}
+        rescue
+          # A shed wait is load, not a fault: a retryable reason, which both
+          # clients' op queues retry on backoff.
+          Engram.Vaults.SeqGate.BusyError ->
+            {:error, %{reason: "busy"}}
 
-            # Anything else still answers (also retryable), rather than leaving
-            # the client to its 10s push timeout. The reason is never echoed.
-            e ->
-              Logger.error(
-                "crdt_delete failed: #{Engram.Telemetry.error_kind(e)}",
-                category: :sync
-              )
+          # Anything else still answers (also retryable), rather than leaving
+          # the client to its 10s push timeout. The reason is never echoed.
+          e ->
+            Logger.error(
+              "crdt_delete failed: #{Engram.Telemetry.error_kind(e)}",
+              category: :sync
+            )
 
-              {:error, %{reason: "delete_failed"}}
-          end
-
-        reply(ref, reply)
+            {:error, %{reason: "delete_failed"}}
+        end
       end)
 
-    # Its DOWN (normal exit or crash) frees the channel's delete slot.
-    Process.monitor(pid)
+    task.ref
   end
 
   # Run the apply on a task so the ROOM'S OBSERVER is that task, not this
@@ -1793,24 +1792,30 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  # The in-flight crdt_delete task ended, however it ended. A normal exit
-  # replied. Any other (an exit or throw its rescue does not catch, or a
-  # kill) ended it before its reply, so answer here, or the client hears
-  # nothing until its 10s push timeout (#2552).
+  # The in-flight crdt_delete task returned its reply. Reply and free the slot
+  # in this one step, so the client never hears back while the slot is still
+  # held. The flush drops the task's :DOWN, so it cannot answer a second time.
   @impl true
+  def handle_info({ref, reply}, %{assigns: %{delete_in_flight: ref}} = socket) do
+    Process.demonitor(ref, [:flush])
+    reply(socket.assigns.delete_reply_to, reply)
+    {:noreply, assign(socket, delete_in_flight: nil, delete_reply_to: nil)}
+  end
+
+  # The in-flight crdt_delete task died without returning (an exit or throw
+  # its rescue does not catch, or a kill), so answer here, or the client hears
+  # nothing until its 10s push timeout (#2552). A task that returned never
+  # reaches this clause: its result clause above flushed this :DOWN.
   def handle_info(
         {:DOWN, ref, :process, _pid, reason},
         %{assigns: %{delete_in_flight: ref}} = socket
       ) do
-    if reason != :normal do
-      Logger.error(
-        "crdt_delete task died before replying",
-        Metadata.with_category(:error, :sync, error_kind: Engram.Telemetry.error_kind(reason))
-      )
+    Logger.error(
+      "crdt_delete task died before replying",
+      Metadata.with_category(:error, :sync, error_kind: Engram.Telemetry.error_kind(reason))
+    )
 
-      reply(socket.assigns.delete_reply_to, {:error, %{reason: "delete_failed"}})
-    end
-
+    reply(socket.assigns.delete_reply_to, {:error, %{reason: "delete_failed"}})
     {:noreply, assign(socket, delete_in_flight: nil, delete_reply_to: nil)}
   end
 
