@@ -2060,7 +2060,7 @@ defmodule Engram.Notes do
             # it. Tagged so the batch leg can say so instead of reporting a create
             # -- a plain {:ok, note} here reads as success and silently discards
             # the client's body.
-            {:ok, decrypt_or_raise!(live, user), :adopted}
+            {:ok, decrypt_at(live, user, sanitized_path), :adopted}
 
           nil ->
             # Logged AFTER the insert lands, not before: genesis_insert_bare can
@@ -3888,7 +3888,7 @@ defmodule Engram.Notes do
   defp read_located(user, vault, path) do
     case Repo.with_tenant(user.id, fn -> read_with_tail(user, vault, path) end) do
       {:ok, {{%Note{} = note, tail}, named?}} ->
-        {:ok, note |> decrypt_or_raise!(user) |> Location.found_at(path), tail, named?}
+        {:ok, decrypt_at(note, user, path), tail, named?}
 
       _ ->
         {:error, :not_found}
@@ -4938,7 +4938,7 @@ defmodule Engram.Notes do
 
         held =
           for row <- rows,
-              k <- key.(row),
+              {_, k} <- key.(row),
               path = path_of[k],
               path != nil,
               into: %{},
@@ -5331,7 +5331,7 @@ defmodule Engram.Notes do
     do: from(n in Note, where: n.id == ^id and n.seq == ^seq and n.crdt_state_nonce == ^nonce)
 
   defp do_rename_note_inner({note, old_path}, user, new_path, new_folder, now, refs) do
-    decrypted_note = note |> decrypt_or_raise!(user) |> Location.found_at(old_path)
+    decrypted_note = decrypt_at(note, user, old_path)
     new_title = Helpers.extract_title(decrypted_note.content || "", new_path)
 
     # T3.6 — rename converges the row to AAD-bound. We have content
@@ -6836,25 +6836,31 @@ defmodule Engram.Notes do
     # then a note whose folder and name put it there.
     Enum.zip_with(paths, hmacs, fn path, hmac ->
       cond do
-        is_map_key(held, hmac) -> {path, serve(user, held[hmac])}
+        is_map_key(held, hmac) -> {path, serve(user, held[hmac], path)}
         MapSet.member?(over, hmac) -> {path, fn -> :over_budget end}
-        is_map_key(named, hmac) -> {path, serve(user, named[hmac])}
+        is_map_key(named, hmac) -> {path, serve(user, named[hmac], path)}
         true -> {path, fn -> nil end}
       end
     end)
   end
 
-  defp serve(user, {note, tail}),
-    do: fn -> note |> decrypt_or_raise!(user) |> then(&current_note(user, &1, tail)) end
+  # Shown at the path that found it (`decrypt_at/3`), as `get_note/3` is:
+  # a note found by its folder row and name under a folder moved without a
+  # cascade still stores its old path.
+  defp serve(user, {note, tail}, path),
+    do: fn -> note |> decrypt_at(user, path) |> then(&current_note(user, &1, tail)) end
 
-  # `{held, named}`: each row by the path it holds (its stored path, the
-  # first `key` answer) and by the paths its folder and name put it at (the
-  # rest), so one never displaces the other.
+  # `{held, named}`: each row by the path it is shown at (`path_key_of/4`):
+  # held at its stored key, a name hit at a derived one, so a name hit never
+  # displaces a holder. A row shown at no asked path answers nothing.
   defp keyed(rows, key, value \\ & &1) do
-    Enum.reduce(rows, {%{}, %{}}, fn row, {held, named} ->
-      [stored | derived] = key.(row)
+    Enum.reduce(rows, {%{}, %{}}, fn row, acc ->
       v = value.(row)
-      {Map.put(held, stored, v), Enum.reduce(derived, named, &Map.put(&2, &1, v))}
+
+      Enum.reduce(key.(row), acc, fn
+        {:held, k}, {held, named} -> {Map.put(held, k, v), named}
+        {:named, k}, {held, named} -> {held, Map.put(named, k, v)}
+      end)
     end)
   end
 
@@ -6939,7 +6945,7 @@ defmodule Engram.Notes do
       names: Enum.frequencies_by(paths, &Name.hmac(filter_key, Name.of_path(&1)))
     }
 
-  defp path_key_of(_user, _filter_key, _rows, nil), do: &[&1.path_hmac]
+  defp path_key_of(_user, _filter_key, _rows, nil), do: &[{:held, &1.path_hmac}]
 
   defp path_key_of(user, filter_key, rows, %{hmacs: hmacs, names: names}) do
     paths =
@@ -6953,17 +6959,33 @@ defmodule Engram.Notes do
         moved -> Location.paths(user, moved)
       end
 
-    # A row can answer two asked paths: its stored one (it holds it) and the
-    # one its folder and name put it at, unless another row holds that.
-    held = MapSet.new(rows, & &1.path_hmac)
+    # A row answers only the path it is shown at (`Location.shown_path/3`'s
+    # rule): its derived path when it has one, else its stored path. A
+    # moved row's stored key is its OLD path: answering it too served one
+    # note at two paths (e2e run 44284939927, MCP get_notes with both). A
+    # derived path another row holds by its stored key answers that row,
+    # but only a row shown at its stored key holds it: a stale key (a
+    # folder swap leaves one at another row's shown path) holds nothing.
+    held =
+      for row <- rows,
+          path = paths[row.id],
+          not is_binary(path) or Crypto.hmac_field(filter_key, path) == row.path_hmac,
+          into: MapSet.new(),
+          do: row.path_hmac
 
     fn row ->
-      with path when is_binary(path) <- paths[row.id],
-           derived = Crypto.hmac_field(filter_key, path),
-           true <- derived == row.path_hmac or not MapSet.member?(held, derived) do
-        Enum.uniq([row.path_hmac, derived])
-      else
-        _ -> [row.path_hmac]
+      case paths[row.id] do
+        path when is_binary(path) ->
+          derived = Crypto.hmac_field(filter_key, path)
+
+          cond do
+            derived == row.path_hmac -> [{:held, derived}]
+            MapSet.member?(held, derived) -> []
+            true -> [{:named, derived}]
+          end
+
+        _ ->
+          [{:held, row.path_hmac}]
       end
     end
   end
@@ -7976,8 +7998,12 @@ defmodule Engram.Notes do
         where: ^Keyword.get(opts, :where, dynamic(true)),
         order_by: [desc: n.updated_at, desc: n.id],
         limit: ^limit,
-        select: struct(n, @note_meta_fields)
+        select: map(n, ^@note_meta_fields)
       )
+      # Whether the vault holds a folder moved without a cascade rides the
+      # page read (`Location.moved_column/1`), so an unmoved vault reads no
+      # chains: zero extra statements.
+      |> select_merge(^Location.moved_column(vault_id(vault)))
 
     query =
       case Keyword.get(opts, :before) do
@@ -7992,9 +8018,19 @@ defmodule Engram.Notes do
           )
       end
 
-    {:ok, notes} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
+    # A moved vault's folder chains (`Location.chains/1`), so each note is
+    # listed where its folder row puts it, not at its stored path. Read in
+    # the page's tenant transaction but a second statement: under READ
+    # COMMITTED a folder move committing between the two shows the page at
+    # the newer location (where the folder now is), never a stale one.
+    {:ok, {notes, chains}} =
+      Repo.with_tenant(user.id, fn ->
+        rows = Repo.all(query)
+        notes = Enum.map(rows, &elem(NoteBody.to_note(&1, [:moved__]), 0))
+        {notes, if(Location.moved?(rows), do: Location.chains(notes))}
+      end)
 
-    {:ok, decrypt_or_raise!(notes, user)}
+    {:ok, Location.put_paths(user, decrypt_or_raise!(notes, user), chains)}
   end
 
   @doc """
@@ -10523,6 +10559,18 @@ defmodule Engram.Notes do
     {:ok, filter_key} = Crypto.dek_filter_key(user)
     filter_key |> Crypto.hmac_field(path) |> Base.encode64()
   end
+
+  # The decrypt of a note row found by a path lookup: shown at that `path`
+  # (`Location.found_at/2`), whatever its stored path still says (S5, a
+  # folder moved without a cascade). Two by-path reads skip it on purpose:
+  # - `get_note_for_update/4`: its row is the `locked_note:` a write takes,
+  #   and that write decides old and new paths by `Location.shown_path/3`
+  #   (`same_path?/4`), which needs the row's STORED path to compare.
+  # - `find_note_by_path/4` (`note_exists?/3`, `get_note_metadata/3`):
+  #   raw rows for an id, hash or existence check; it never decrypts, so
+  #   no path is shown from it.
+  defp decrypt_at(note, user, path),
+    do: note |> decrypt_or_raise!(user) |> Location.found_at(path)
 
   # Phase B.3: decryption MUST raise on failure. Returning the un-decrypted
   # struct (with virtual path/folder/tags = nil) silently serializes
