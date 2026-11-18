@@ -86,4 +86,52 @@ defmodule Engram.Folders.ChainNotHashTest do
     assert {:ok, %{notes: 0}} = Notes.delete_scanned(u, v, matches)
     assert %{deleted_at: nil} = Repo.with_tenant!(u.id, fn -> Repo.get!(Notes.Note, note.id) end)
   end
+
+  # Red/green audit gaps (S6 step 3 read switch): each leaves a stale hash on
+  # a live row and asserts the chain answer.
+  defp put_note!(u, v, path) do
+    {:ok, n} = Notes.upsert_note(u, v, %{"path" => path, "content" => "x"}, actor: "api")
+    n
+  end
+
+  defp row_id(u, v, path), do: tenant!(u, fn -> Rows.ids_by_path(u, v.id, [path]) end)[path]
+
+  defp stale_at!(fk, id, path) do
+    Repo.query!("UPDATE folders SET full_path_hmac = $1 WHERE id = $2", [
+      Rows.path_hmac(fk, path),
+      Ecto.UUID.dump!(id)
+    ])
+  end
+
+  test "unmark_explicit finds the row by chain, not by a stale hash", ctx do
+    %{user: u, vault: v, fk: fk} = ctx
+    {:ok, _} = Notes.create_folder_marker(u, v, "C/M")
+    m = row_id(u, v, "C/M")
+    stale_at!(fk, m, "A/M")
+
+    :ok = tenant!(u, fn -> Rows.unmark_explicit(u, v.id, "C/M") end)
+    assert %{explicit: false} = Engram.FolderRows.row(m)
+  end
+
+  test "a folder delete keeps a row a live marker names by its chain path", ctx do
+    %{user: u, vault: v, fk: fk} = ctx
+    {:ok, _} = Notes.create_folder_marker(u, v, "C/B")
+    b = row_id(u, v, "C/B")
+    stale_at!(fk, b, "A/B")
+
+    _ = tenant!(u, fn -> Rows.soft_delete(u, v.id, ["C"], Ecto.UUID.generate()) end)
+    assert %{deleted_at: nil} = Engram.FolderRows.row(b)
+  end
+
+  test "a folder name that will not decrypt: its notes are still scanned, with no row path",
+       ctx do
+    %{user: u, vault: v} = ctx
+    note = put_note!(u, v, "A/B/n.md")
+    b = row_id(u, v, "A/B")
+
+    Repo.query!("UPDATE folders SET name_ciphertext = '\\x00' WHERE id = $1", [Ecto.UUID.dump!(b)])
+
+    {:ok, rows} = Notes.scan_folders(u, v, ["A"])
+    assert [%{folder_row_path: nil, folder: "A/B"}] = Enum.filter(rows, &(&1.id == note.id))
+  end
 end
