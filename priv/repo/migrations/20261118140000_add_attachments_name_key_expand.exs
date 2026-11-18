@@ -40,8 +40,19 @@ defmodule Engram.Repo.Migrations.AddAttachmentsNameKeyExpand do
   index. ADD COLUMN with no default is catalog-only; rows written before
   this release keep a NULL key until a writer touches an input or the
   `attachment_name_key` ledger (`Engram.DataMigrations.AttachmentNameKey`)
-  touches them. The CONCURRENTLY build runs inside BoundedIndexBuild's
-  budget and holds only the keyed rows (none at boot).
+  touches them. Both CONCURRENTLY builds share one BoundedIndexBuild budget
+  (110 s; an overrun is cancelled, left INVALID, and the next boot drops and
+  rebuilds it). `attachments_name_key_live` holds only the keyed rows (none
+  at boot, so it reads the heap and writes nothing).
+  `attachments_folder_ref_live_id` indexes EVERY live attachment: its build
+  is the cost, one heap pass plus a sort of (vault_id, folder_ref_id, id,
+  user_id) per live row.
+
+  The trigger inlines the name stamp's version byte (`'\\x01'`,
+  `Engram.Crypto.NameKeys.version/0`) as `notes_set_name_key` does: a bump
+  of that version ships a new trigger, or the `attachment_name_key` ledger
+  (which reads the version at runtime) would chase rows the trigger never
+  keys.
   """
 
   def up do

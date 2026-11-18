@@ -116,40 +116,57 @@ defmodule Engram.Attachments.Location do
   end
 
   @doc """
-  The relocations a write at `path` needs first, in a vault where `named?/2`
-  holds: `[{stored, shown}]` for the live attachment the name match finds
-  there (shown at `path`, stored elsewhere) and for one whose stored key is
-  `path` but which is shown elsewhere (it holds the unique path slot a write
-  at `path` needs). Holders first. One statement plus, per row found, its
-  chain read and decrypts. `[]` when every row is at its stored path.
+  The rows a write at `paths` must repoint first, in a vault where
+  `named?/2` holds: `[{row, stored, shown}]` for each live attachment whose
+  stored path differs from where it is shown and that either holds one of
+  `paths` by its stored key (a write there needs that unique slot) or is
+  shown at one of them by name. Holders first. A batch costs a fixed
+  number of statements whatever its size: the stored-key read, the folder
+  walk and name probes (`Engram.Notes.Location.named_ids_at/4`), the rows,
+  and their chains; plus one batch path decrypt. Run it in `user`'s tenant
+  transaction.
   """
-  @spec stale_at(map(), Ecto.UUID.t(), binary(), String.t()) :: [{String.t(), String.t()}]
-  def stale_at(user, vault_id, filter_key, path) do
-    hmac = Crypto.hmac_field(filter_key, path)
+  @spec stale_rows(map(), Ecto.UUID.t(), binary(), [String.t()]) :: [
+          {map(), String.t(), String.t()}
+        ]
+  def stale_rows(_user, _vault_id, _filter_key, []), do: []
 
-    where =
-      case name_match(filter_key, vault_id, path, hmac) do
-        nil -> dynamic([a], a.path_hmac == ^hmac)
-        match -> dynamic([a], a.path_hmac == ^hmac or a.id == ^match)
-      end
+  def stale_rows(user, vault_id, filter_key, paths) do
+    hmacs = Enum.map(paths, &Crypto.hmac_field(filter_key, &1))
+    named = NoteLocation.named_ids_at(user, vault_id, paths, :attachments)
 
     rows =
-      Engram.Repo.with_tenant!(user.id, fn ->
-        Engram.Repo.all(
-          from(a in Engram.Attachments.scoped_live(user, vault_id),
-            where: ^where,
-            select: struct(a, ^[:id, :path_ciphertext, :path_hmac, :dek_version | fields()])
-          )
+      Engram.Repo.all(
+        from(a in Engram.Attachments.scoped_live(user, vault_id),
+          where: a.path_hmac in ^hmacs or a.id in ^Map.values(named),
+          select: struct(a, ^row_fields())
         )
-      end)
+      )
 
+    stale_of(user, rows, MapSet.new(hmacs))
+  end
+
+  @doc "The columns a repoint reads from a row (`stale_rows/4`, `stale_of/3`)."
+  @spec row_fields() :: [atom(), ...]
+  def row_fields, do: [:id, :path_ciphertext, :path_hmac, :dek_version | fields()]
+
+  @doc """
+  `rows` (with `row_fields/0`) whose stored path differs from where they are
+  shown, as `[{row, stored, shown}]`, the rows holding a key in `holders`
+  first. One chain read, one batch decrypt.
+  """
+  @spec stale_of(map(), [map()], MapSet.t()) :: [{map(), String.t(), String.t()}]
+  def stale_of(_user, [], _holders), do: []
+
+  def stale_of(user, rows, holders) do
     shown = shown_paths(user, rows)
 
-    for row <- Enum.sort_by(rows, &(&1.path_hmac != hmac)),
+    for row <- Enum.sort_by(rows, &(not MapSet.member?(holders, &1.path_hmac))),
+        moved = shown[row.id],
+        moved != nil,
         {:ok, %{path: stored}} <- [Crypto.maybe_decrypt_attachment_fields(row, user)],
-        moved = Map.get(shown, row.id, stored),
         moved != stored,
-        do: {stored, moved}
+        do: {row, stored, moved}
   end
 
   @doc "`at/4` for any of `paths` (a batch op's few hundred at most: one walk each when named)."

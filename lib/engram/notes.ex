@@ -1621,7 +1621,7 @@ defmodule Engram.Notes do
   # transaction.
   @spec free_stale_slot(map(), Ecto.UUID.t(), String.t(), Ecto.UUID.t() | nil, non_neg_integer()) ::
           :freed | :none
-  def free_stale_slot(user, vault_id, path, except \\ nil, depth \\ 64)
+  def free_stale_slot(user, vault_id, path, except \\ nil, depth \\ Location.stale_chain_depth())
   def free_stale_slot(_user, _vault_id, _path, _except, 0), do: :none
 
   def free_stale_slot(user, vault_id, path, except, depth) do

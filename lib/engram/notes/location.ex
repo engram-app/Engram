@@ -191,8 +191,9 @@ defmodule Engram.Notes.Location do
   statements. The lowest id per path. Callers merge their stored-key
   holders over it (a holder wins, as in the lookup).
   """
-  @spec named_ids_at(map(), Ecto.UUID.t(), [String.t()]) :: %{String.t() => Ecto.UUID.t()}
-  def named_ids_at(user, vault_id, paths) do
+  @spec named_ids_at(map(), Ecto.UUID.t(), [String.t()], :notes | :attachments) ::
+          %{String.t() => Ecto.UUID.t()}
+  def named_ids_at(user, vault_id, paths, table \\ :notes) do
     with {:ok, fk} <- Crypto.dek_filter_key(user),
          split when split != [] <- folder_split(paths) do
       Repo.with_tenant!(user.id, fn ->
@@ -205,7 +206,7 @@ defmodule Engram.Notes.Location do
               fid != nil,
               do: {path, Name.ci_hmac(fk, name) <> Ecto.UUID.dump!(fid), Name.hmac(fk, name)}
 
-        if wanted == [], do: %{}, else: name_holders(vault_id, wanted)
+        if wanted == [], do: %{}, else: name_holders(table, vault_id, wanted)
       end)
     else
       _ -> %{}
@@ -223,7 +224,7 @@ defmodule Engram.Notes.Location do
   # schemaless. One `notes_name_key_live` probe per key (a LATERAL, LIMIT 1,
   # lowest id): a plain join or `= ANY(...)` plans as a vault read under
   # FORCE RLS (the RLS plan spec).
-  defp name_holders(vault_id, wanted) do
+  defp name_holders(table, vault_id, wanted) do
     paths = Enum.map(wanted, &elem(&1, 0))
 
     from(
@@ -234,25 +235,41 @@ defmodule Engram.Notes.Location do
         ^Enum.map(wanted, &elem(&1, 2))
       ),
       as: :k,
-      inner_lateral_join:
-        n in subquery(
-          from(n in "notes",
-            where:
-              n.vault_id == type(^vault_id, Ecto.UUID) and n.name_key == parent_as(:k).key and
-                not is_nil(n.name_key) and is_nil(n.deleted_at) and n.kind == "note" and
-                n.name_hmac == parent_as(:k).exact and
-                fragment(WalkSql.moved_chain(), n.folder_ref_id),
-            order_by: n.id,
-            limit: 1,
-            select: %{id: n.id}
-          )
-        ),
+      inner_lateral_join: n in subquery(holder_probe(table, vault_id)),
       on: true,
       select: {k.i, type(n.id, Ecto.UUID)}
     )
     |> Repo.all()
     |> Map.new(fn {i, id} -> {Enum.at(paths, i), id} end)
   end
+
+  # One `*_name_key_live` probe (S6 step 6: attachments carry the same key).
+  defp holder_probe(:notes, vault_id),
+    do: holder_probe(from(n in "notes", where: n.kind == "note"), vault_id)
+
+  defp holder_probe(:attachments, vault_id), do: holder_probe(from(n in "attachments"), vault_id)
+
+  defp holder_probe(query, vault_id) do
+    from(n in query,
+      where:
+        n.vault_id == type(^vault_id, Ecto.UUID) and n.name_key == parent_as(:k).key and
+          not is_nil(n.name_key) and is_nil(n.deleted_at) and
+          n.name_hmac == parent_as(:k).exact and
+          fragment(WalkSql.moved_chain(), n.folder_ref_id),
+      order_by: n.id,
+      limit: 1,
+      select: %{id: n.id}
+    )
+  end
+
+  @doc """
+  How many stale stored path slots a writer frees in a chain (a slot held by
+  a row whose own slot is held, and so on) before it gives up: notes
+  (`Engram.Notes.free_stale_slot/5`) and attachments
+  (`Engram.Attachments.settle/3`).
+  """
+  @spec stale_chain_depth() :: 64
+  def stale_chain_depth, do: 64
 
   # The stored path's row, or the row the path's folder row and name name
   # (`WalkSql.name_match_by_id/0`): `path_key OR id = <name match>`. Both
