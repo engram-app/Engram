@@ -18,6 +18,8 @@ defmodule Engram.Folders.RootRowReadTest do
     new = put!(user, vault, "new.md")
     put!(user, vault, "A/a.md")
     root = FolderRows.insert_root!(user, vault, [new.id])
+    # `old` as a previous-release writer leaves it, whatever this one wrote.
+    Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [Ecto.UUID.dump!(old.id)])
     %{user: user, vault: vault, old: old, new: new, root: root}
   end
 
