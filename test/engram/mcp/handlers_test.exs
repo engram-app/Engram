@@ -100,6 +100,23 @@ defmodule Engram.MCP.HandlersTest do
     end
   end
 
+  describe "rename_folder handler: nested collision" do
+    # Only the nested markers collide (S/sub onto D/sub), which the cascade's
+    # pre-checks cannot see: the unique_violation it raised is a conflict.
+    test "is a path_conflict and nothing moves", %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      {:ok, _} = Engram.Folders.create_markers(user, vault, ["S/sub", "D/sub"])
+
+      assert {:error, {:path_conflict, _}} =
+               Handlers.handle("rename_folder", user, vault, %{
+                 "old_folder" => "S",
+                 "new_folder" => "D"
+               })
+
+      assert "S/sub" in Enum.map(Notes.list_folder_markers(user, vault), & &1.folder)
+    end
+  end
+
   describe "rename_folder handler: target sanitizing" do
     for {input, expected} <- [
           {"../evil", "evil"},
