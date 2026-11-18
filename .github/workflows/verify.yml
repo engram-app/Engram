@@ -3565,7 +3565,7 @@ jobs:
         # bypasses ci/bin/ci-docker, or a compose service without the labels.
         run: bash test/scripts/ci_docker_labels_test.sh
 
-      - name: docker run port-race retry self-check
+      - name: CI port-race retry self-check
         # Guards ci/bin/ci-docker-run-retry: retries only bind errors, cleans
         # up by name, bounded. Stub docker on PATH, no daemon needed.
         run: bash test/scripts/ci_docker_run_retry_test.sh
