@@ -7802,11 +7802,8 @@ defmodule Engram.Notes do
     # page of `list_notes_in_folder_page/4`.
     explicit =
       if Rows.explicit_reads?() do
-        from(f in Engram.Folders.Folder,
-          # `user_id` bound: `Rows.explicit_rows/3`.
-          where:
-            f.user_id == ^user.id and f.vault_id == ^vault.id and f.explicit and
-              is_nil(f.deleted_at),
+        from(f in Rows.scoped(user.id, vault.id),
+          where: f.explicit and is_nil(f.deleted_at),
           select: %{
             leg: fragment("6"),
             id: fragment("NULL::uuid"),
@@ -7840,9 +7837,7 @@ defmodule Engram.Notes do
       )
 
     folders =
-      from(f in Engram.Folders.Folder,
-        # `user_id` bound: `Rows.explicit_rows/3`.
-        where: f.user_id == ^user.id and f.vault_id == ^vault.id,
+      from(f in Rows.scoped(user.id, vault.id),
         select: %{
           leg: fragment("5"),
           id: f.id,

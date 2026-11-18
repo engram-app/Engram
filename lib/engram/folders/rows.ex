@@ -962,6 +962,16 @@ defmodule Engram.Folders.Rows do
   end
 
   @doc """
+  Composable tenant-scope query: the `folders` rows of `user_id` in
+  `vault_id`, as `Engram.Notes.scoped/2` is for notes. A bound `user_id`
+  (not only the RLS policy's) lets the planner cost this tenant's real
+  size (docs/context/notes-generic-plan-mis-pick.md, third instance).
+  """
+  @spec scoped(Ecto.UUID.t(), Ecto.UUID.t()) :: Ecto.Query.t()
+  def scoped(user_id, vault_id),
+    do: from(f in Folder, where: f.user_id == ^user_id and f.vault_id == ^vault_id)
+
+  @doc """
   Whether folder listings read explicit folders from `folders.explicit`
   instead of the `kind = 'folder'` marker rows (S6 step 4, Engram#2523):
   once the flag equals the markers. `FolderTable`'s marker step SETS it for
@@ -1006,10 +1016,8 @@ defmodule Engram.Folders.Rows do
 
   def explicit_rows(user_id, vault_id, ids) do
     query =
-      from(f in Folder,
-        where:
-          f.user_id == ^user_id and f.vault_id == ^vault_id and f.explicit and
-            is_nil(f.deleted_at),
+      from(f in scoped(user_id, vault_id),
+        where: f.explicit and is_nil(f.deleted_at),
         select: f.id
       )
 
