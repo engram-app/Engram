@@ -52,6 +52,69 @@ defmodule Engram.Folders.RootRowReadTest do
     assert Enum.sort([first.path, second.path]) == ["new.md", "old.md"]
   end
 
+  # Audit gap: the two keyset arms merged over several pages. Root notes
+  # alternate between the arms in id order, so every page of 3 takes rows
+  # from both, and a cursor that skipped or repeated one arm's rows shows.
+  test "the root page keyset pages across both arms with no gap or repeat", ctx do
+    %{user: u, vault: v, old: old, new: new} = ctx
+    more = for i <- 1..8, do: put!(u, v, "r#{i}.md")
+    by_id = Enum.sort_by([old, new | more], & &1.id)
+    {at_row, at_none} = by_id |> Enum.with_index() |> Enum.split_with(&(rem(elem(&1, 1), 2) == 0))
+    FolderRows.insert_root!(u, v, Enum.map(at_row, &elem(&1, 0).id))
+    set_null!(Enum.map(at_none, &elem(&1, 0).id))
+
+    pages = pages!(u, v, 3)
+    assert length(pages) == 4
+    assert Enum.all?(pages, &(length(&1) <= 3))
+    ids = Enum.concat(pages)
+    assert ids == Enum.map(by_id, & &1.id)
+    assert ids == Enum.uniq(ids)
+    # Stable: the same walk again gives the same pages.
+    assert pages!(u, v, 3) == pages
+  end
+
+  # Rollback window: release E (step 1b) wrote the root row and pointed root
+  # notes at it, then the fleet rolled back to 0.89.0, which writes NULL root
+  # references. This branch's writers are 0.89.0's (`git diff
+  # release-v0.89.0 -- lib` touches only readers; 1a writes nothing), so the
+  # writes below run 0.89.0's code. Release D's reads must take both kinds.
+  test "a rollback to 0.89.0 writes beside root-row references; D reads both", ctx do
+    %{user: u, vault: v, old: old, new: new} = ctx
+    late = put!(u, v, "late.md")
+    {:ok, _} = Notes.rename_note(u, v, "new.md", "A/new.md")
+    {:ok, _} = Notes.rename_note(u, v, "A/a.md", "a.md")
+    kept = put!(u, v, "kept.md")
+    FolderRows.insert_root!(u, v, [kept.id])
+
+    assert FolderRows.ref("notes", late.id) == nil
+    assert FolderRows.ref("notes", new.id) not in [nil, v.id]
+
+    {:ok, %{notes: notes, next_cursor: nil}} = Notes.list_notes_in_folder_page(u, v, "")
+    assert notes |> Enum.map(& &1.path) |> Enum.sort() == ["a.md", "kept.md", "late.md", "old.md"]
+    assert old.id in Enum.map(notes, & &1.id)
+    {:ok, a} = Notes.list_notes_in_folder(u, v, "A")
+    assert Enum.map(a, & &1.path) == ["A/new.md"]
+    {:ok, counts} = Notes.list_folders_with_counts(u, v)
+    assert Map.new(counts, &{&1.folder, &1.count}) == %{"" => 4, "A" => 1}
+    assert {:ok, ["A"]} = Notes.list_folders_implied_by_notes(u, v)
+  end
+
+  defp set_null!(ids),
+    do:
+      Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE id = ANY($1)", [
+        Enum.map(ids, &Ecto.UUID.dump!/1)
+      ])
+
+  defp pages!(u, v, limit, cursor \\ nil, acc \\ []) do
+    {:ok, %{notes: notes, next_cursor: next}} =
+      Notes.list_notes_in_folder_page(u, v, "", limit: limit, cursor: cursor)
+
+    # A page is sorted by title (`list_notes_in_folder_page/4`); the keyset
+    # is the id, so each page is an id range.
+    acc = [notes |> Enum.map(& &1.id) |> Enum.sort() | acc]
+    if next, do: pages!(u, v, limit, next, acc), else: Enum.reverse(acc)
+  end
+
   test "folder counts give the root both kinds, once", %{user: u, vault: v} do
     {:ok, counts} = Notes.list_folders_with_counts(u, v)
     assert Map.new(counts, &{&1.folder, &1.count}) == %{"" => 2, "A" => 1}
