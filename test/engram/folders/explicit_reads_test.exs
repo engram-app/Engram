@@ -116,7 +116,7 @@ defmodule Engram.Folders.ExplicitReadsTest do
   # CLUSTER): the plan must hold on them too. The visibility map is left as
   # the inserts left it, so the partial index wins on its keys, not on an
   # index-only read a restore or CLUSTER would take away.
-  defp tenant_shape!(users \\ 40, vaults \\ 40) do
+  defp tenant_shape!(users, vaults) do
     for {col, n} <- [user_id: users, vault_id: vaults],
         do: Repo.query!("ALTER TABLE folders ALTER COLUMN #{col} SET (n_distinct = #{n})")
 
