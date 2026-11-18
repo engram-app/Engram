@@ -39,7 +39,8 @@ def _claim(lock_dir: Path, family="clerk", stride=10, offset=3509, slots=15) -> 
 def _alive(pid: int) -> bool:
     try:
         state = Path(f"/proc/{pid}/stat").read_text().split()[2]
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # /proc/<pid>/stat of a pid that exits mid-read raises ESRCH, not ENOENT.
         return False
     return state != "Z"
 
