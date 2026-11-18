@@ -245,6 +245,28 @@ defmodule Engram.Folders.ExplicitReadsTest do
 
       assert {:ok, %{notes: 0, attachments: 0, folders: 0}} =
                Engram.Folders.rename(u, v, "D", "E")
+
+      assert {:error, {:folder_not_found, _}} =
+               Engram.MCP.Handlers.handle("rename_folder", u, v, %{
+                 "old_folder" => "D",
+                 "new_folder" => "E"
+               })
+    end
+
+    # The #2639 review: content written under the folder after the rename's
+    # scan, before its lock. The move sees it under the vault lock and asks
+    # for a re-plan, so the note is cascaded, never left at the old path.
+    test "a note that lands after the scan is cascaded, not left behind", %{user: u, vault: v} do
+      explicit_without_marker!(u, v, "Late")
+      put_note(u, v, "Late/n.md")
+
+      assert {:error, :claims_stale} =
+               Repo.with_tenant!(u.id, fn ->
+                 Rows.move_bare_explicit(u, v.id, "Late", "Moved")
+               end)
+
+      assert {:ok, %{notes: 1, folders: 0}} = Engram.Folders.rename(u, v, "Late", "Moved")
+      assert {:ok, _} = Notes.get_note(u, v, "Moved/n.md")
     end
   end
 end
