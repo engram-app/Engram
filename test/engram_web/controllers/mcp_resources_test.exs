@@ -341,8 +341,10 @@ defmodule EngramWeb.McpResourcesTest do
     } do
       # Build the name index first, so the burst below is all fast searches.
       complete(conn, "path", "warm", %{"vault" => slug})
-      # Starts the burst at the head of a fresh window, so it cannot straddle one.
-      EngramWeb.RateLimiter.reset_buckets!()
+      # Starts the burst at the head of a fresh window, so it cannot straddle
+      # one. Waits only: this module is async, so it must not wipe the
+      # buckets of the tests beside it (the warm-up's one hit stays counted).
+      EngramWeb.RateLimiter.await_fresh_window!()
       # 65 > two windows' worth (2 x 30): even if a slow burst crosses one
       # window edge, at least 5 must be refused.
       results = for _ <- 1..65, do: complete(conn, "path", "engr", %{"vault" => slug})
