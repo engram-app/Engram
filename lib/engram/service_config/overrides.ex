@@ -107,7 +107,9 @@ defmodule Engram.ServiceConfig.Overrides do
     note_folder_hash_null_max_fixed: {:integer, 1..1_000_000},
     # S6 step 6: the attachment name key fill ledger, kill switch and pace.
     attachment_name_key: :boolean,
-    attachment_name_key_max_fixed: {:integer, 1..1_000_000}
+    attachment_name_key_max_fixed: {:integer, 1..1_000_000},
+    # S6 step 1b: the root folder reference fill (`DataMigrations.RootRefs`).
+    root_refs: :boolean
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})

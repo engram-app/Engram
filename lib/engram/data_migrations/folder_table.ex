@@ -235,7 +235,12 @@ defmodule Engram.DataMigrations.FolderTable do
   # user row, and this transaction's user-row lock followed by the folders FK's
   # vault-row lock is the opposite order, a deadlock Postgres broke by killing
   # the delete (#2339). A vault held by a delete defers the user instead.
-  defp gated(repo, ctx, fun) do
+  # Shared with `RootRefs`, which writes a folder row (the root's) the same way.
+  @doc false
+  @spec gated(module(), %{user_id: Ecto.UUID.t(), dek_version: integer()}, (module() -> t)) ::
+          t
+        when t: var
+  def gated(repo, ctx, fun) do
     :ok = Vaults.lock_user_vaults_nowait!(repo, ctx.user_id)
     # A folder rename or batch move in flight holds its vault's folder-write
     # lock across its scan and writes: skip the user (blocked, retried).

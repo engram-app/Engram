@@ -37,6 +37,16 @@ and a root-row reference as the same root:
   skip the root row.
 - `Engram.Folders.RootRowReadTest` pins all of the above.
 
+Writers (1b): every note writer resolves its folder through
+`Rows.ensure/4` / `ensure_all/4` with `root: true`, so a root note names the
+root row, created on first use by `Rows.ensure_root/2` (one `INSERT .. ON
+CONFLICT DO NOTHING`). Attachments still pass no option and keep NULL at the
+root until their own step. The `root_refs` ledger
+(`Engram.DataMigrations.RootRefs`, kill switch `root_refs`, re-verified
+daily) creates missing root rows (gated like `FolderTable`) and fills live
+root notes left NULL by older writers. Tombstones keep NULL: S6 step 9's
+`NOT NULL` must deal with them.
+
 ## One module owns the table
 
 `Engram.Folders.Rows`: hashes, name encryption, `ensure/4` (find-or-create a
