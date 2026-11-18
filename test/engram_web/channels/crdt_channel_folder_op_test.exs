@@ -148,6 +148,29 @@ defmodule EngramWeb.CrdtChannelFolderOpTest do
       assert_reply ref, :error, %{reason: "conflict"}
     end
 
+    # A collision the pre-checks cannot see (S/sub onto D/sub: only nested
+    # rows collide) raised a unique_violation from the cascade, which crashed
+    # the channel process (e2e run 44283703701). It is a conflict refusal now:
+    # the transaction rolls back, nothing moved, and the channel takes the
+    # next op.
+    test "a nested collision is a conflict and the channel stays up",
+         %{user: user, vault: vault, b: b} do
+      {:ok, _} = Folders.create_markers(user, vault, ["S/sub", "D/sub"])
+      s = id_of(user, vault, "S")
+      socket = join!(user, vault)
+      Process.flag(:trap_exit, true)
+
+      ref = push(socket, "folder_op", move(s, nil, "D"))
+      assert_reply ref, :error, %{reason: "conflict"}
+      assert Process.alive?(socket.channel_pid)
+      assert id_of(user, vault, "S") == s
+      assert id_of(user, vault, "S/sub")
+
+      ref = push(socket, "folder_op", move(s, b, "S"))
+      assert_reply ref, :ok, %{folder_id: ^s}
+      assert id_of(user, vault, "B/S") == s
+    end
+
     test "an unknown folder or parent is not_found", %{user: user, vault: vault, a: a} do
       socket = join!(user, vault)
 

@@ -20,6 +20,20 @@ defmodule EngramWeb.FoldersControllerTest do
     end
   end
 
+  describe "POST /api/folders/rename: nested collision" do
+    # Only the nested markers collide (S/sub onto D/sub), which the cascade's
+    # pre-checks cannot see: the unique_violation it raised was a 500.
+    test "is a 409 and nothing moves", %{conn: conn, user: user, vault: vault} do
+      {:ok, _} = Engram.Folders.create_markers(user, vault, ["S/sub", "D/sub"])
+
+      conn
+      |> post(~p"/api/folders/rename", %{"old_path" => "S", "new_path" => "D"})
+      |> json_response(409)
+
+      assert "S/sub" in Enum.map(Engram.Notes.list_folder_markers(user, vault), & &1.folder)
+    end
+  end
+
   describe "GET /api/folders" do
     test "response includes id and parent_id per folder marker", %{
       conn: conn,

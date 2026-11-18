@@ -103,15 +103,34 @@ defmodule Engram.Folders do
     # `Rows.with_deferred_retires/1`: a merge's source folder rows are retired
     # after BOTH legs have moved their rows, inside this transaction (#2468).
     Broadcast.deferred(fn ->
-      Repo.transaction_after_commit(fn ->
-        :ok = Vaults.lock_folder_writes!(vault.id)
+      conflict_on_unique(fn ->
+        Repo.transaction_after_commit(fn ->
+          :ok = Vaults.lock_folder_writes!(vault.id)
 
-        case Rows.with_deferred_retires(fun) do
-          {:ok, result} -> result
-          {:error, reason} -> Repo.rollback(reason)
-        end
+          case Rows.with_deferred_retires(fun) do
+            {:ok, result} -> result
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
       end)
     end)
+  end
+
+  # A unique violation the legs' pre-checks cannot see (a nested collision:
+  # `S/sub` onto an existing `D/sub` marker) raises from the cascade's
+  # `BulkRename.update!`. It is the same refusal as the pre-checked
+  # `:conflict`, so every caller (REST 409, MCP `path_conflict`, the wire's
+  # `conflict`) answers it, instead of a 500 or a crashed crdt channel (e2e run
+  # 44283703701). Rescued only here, OUTSIDE the transaction: the raise has
+  # already rolled it back whole. Inside it, the next statement would fail
+  # with 25P02 (docs/context/rls-enforcement-testing-traps.md, trap 8).
+  defp conflict_on_unique(fun) do
+    fun.()
+  rescue
+    e in Postgrex.Error ->
+      if e.postgres[:code] == :unique_violation,
+        do: {:error, :conflict},
+        else: reraise(e, __STACKTRACE__)
   end
 
   @doc """
