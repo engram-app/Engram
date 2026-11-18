@@ -79,9 +79,9 @@ defmodule Engram.Folders.WriteStopTest do
       refute row.notes_cascaded
       assert row.seq == seq
       assert seq == current_seq(v)
-      # The renamed row, its name-terms stamp (same row), and its subfolders'
-      # path keys in one statement (O(subfolders); S6 drops the column).
-      assert length(writes_to(queries, "folders")) == 3
+      # The renamed row and its name-terms stamp (same row). No subfolder
+      # write: S6 step 3 stopped the descendant path-hash rewrite.
+      assert length(writes_to(queries, "folders")) == 2
     end
 
     test "a move across parents is the same one row", %{user: u, vault: v} do
