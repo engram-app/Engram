@@ -34,7 +34,10 @@ defmodule Engram.NotesScopeLintTest do
     "engram/workers/embed_note.ex",
     # Wave 3 catch-up: folder markers need their derived keys too
     # (`is_folder`, `folder_id`), so the touch is kind-agnostic.
-    "engram/data_migrations/note_split.ex"
+    "engram/data_migrations/note_split.ex",
+    # S6 step 4: it deletes folder markers, so its one Ecto query
+    # (`done?/2`'s probe) selects `kind == "folder"` on purpose.
+    "engram/data_migrations/folder_marker_delete.ex"
   ]
 
   test "every from(_ in Note, ...) in lib/ filters by kind or is allowlisted" do

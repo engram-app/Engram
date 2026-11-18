@@ -165,7 +165,9 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
 
     for plan <- [unmatched.custom, unmatched.generic] do
       assert plan =~ "notes_user_vault_folder_marker", plan
-      assert plan =~ "folders_full_path", plan
+      # The folder probe: by path hash, or the live explicit rows of the
+      # vault (both bounded by the vault; the planner picks by statistics).
+      assert plan =~ ~r/folders_(full_path|explicit_live)/, plan
       refute plan =~ ~r/Seq Scan on (notes|folders)/, plan
     end
   end
