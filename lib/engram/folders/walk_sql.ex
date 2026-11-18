@@ -91,13 +91,19 @@ defmodule Engram.Folders.WalkSql do
   #
   # Params: vault id (moved), vault id, the walk's four, the casefolded
   # name hash, the depth, the exact name hash, then the holder's.
-  name_match = fn holder ->
+  # `table` is `notes` or `attachments` (S6 step 6: the same name key,
+  # `attachments_set_name_key`), `kind` the extra predicate on `m`.
+  name_match = fn table, kind, holder ->
     "(CASE WHEN " <>
       @moved <>
-      " THEN (SELECT m.id FROM notes m WHERE m.vault_id = ? AND m.name_key = (" <>
+      " THEN (SELECT m.id FROM " <>
+      table <>
+      " m WHERE m.vault_id = ? AND m.name_key = (" <>
       @walk <>
       " SELECT ? || uuid_send(w.id) FROM w WHERE w.i = ?) AND m.name_hmac = ? " <>
-      "AND m.deleted_at IS NULL AND m.kind = 'note' AND " <>
+      "AND m.deleted_at IS NULL " <>
+      kind <>
+      " AND " <>
       moved_chain.("m.folder_ref_id") <>
       " AND NOT EXISTS (" <>
       holder <> ") ORDER BY m.id LIMIT 1) END)"
@@ -109,14 +115,31 @@ defmodule Engram.Folders.WalkSql do
   @here "AND (p.folder_ref_id IS NULL OR NOT " <> moved_chain.("p.folder_ref_id") <> ")"
 
   @by_id name_match.(
+           "notes",
+           "AND m.kind = 'note'",
            "SELECT 1 FROM notes p WHERE p.vault_id = ? AND p.path_id = ? " <>
              "AND p.deleted_at IS NULL AND NOT p.is_folder " <> @here
          )
 
   @by_hmac name_match.(
+             "notes",
+             "AND m.kind = 'note'",
              "SELECT 1 FROM notes p WHERE p.vault_id = ? AND p.path_hmac = ? " <>
                "AND p.deleted_at IS NULL AND p.kind = 'note' " <> @here
            )
+
+  # S6 step 6: an attachment is read at its stored path unless its name key
+  # is current (`name_key`, kept by `attachments_set_name_key`: folder
+  # reference and name both current) AND its own chain moved; a stale row
+  # keeps answering at its stored path (`Engram.Attachments.Location`).
+  @att_here "AND (p.name_key IS NULL OR NOT " <> moved_chain.("p.folder_ref_id") <> ")"
+
+  @att_by_hmac name_match.(
+                 "attachments",
+                 "",
+                 "SELECT 1 FROM attachments p WHERE p.vault_id = ? AND p.path_hmac = ? " <>
+                   "AND p.deleted_at IS NULL " <> @att_here
+               )
 
   # Many paths in one statement: their distinct prefixes as a trie, one row
   # each (`i`, its parent prefix `p`, 0 at the root, and its segment's
@@ -174,6 +197,12 @@ defmodule Engram.Folders.WalkSql do
 
   @doc "`name_match_by_id/0` with the holder keyed on `path_hmac` (before `note_split`)."
   defmacro name_match_by_hmac, do: @by_hmac
+
+  @doc """
+  `name_match_by_hmac/0` for an attachment (S6 step 6), same params: the
+  live attachment a path's folder row and name name, or NULL.
+  """
+  defmacro attachment_name_match, do: @att_by_hmac
 
   @doc "`EXISTS` a live folder of the vault renamed without a cascade (param: vault id)."
   defmacro moved, do: @moved

@@ -15,9 +15,12 @@ defmodule Engram.Notes.MovedFeedSql do
   # each send their own).
   @moved_children 256
 
+  # `{table, predicate}` per leg. `:attachments` (S6 step 6) is the live
+  # attachments of the folder, on `attachments_folder_ref_live_id`.
   @moved_preds %{
-    live: "deleted_at IS NULL AND kind = 'note' AND seq < $3",
-    dead: "deleted_at IS NOT NULL AND kind = 'note' AND seq > $3"
+    live: {"notes", "deleted_at IS NULL AND kind = 'note' AND seq < $3"},
+    dead: {"notes", "deleted_at IS NOT NULL AND kind = 'note' AND seq > $3"},
+    attachments: {"attachments", "deleted_at IS NULL AND seq < $3"}
   }
 
   @doc """
@@ -38,7 +41,7 @@ defmodule Engram.Notes.MovedFeedSql do
   @spec ids(
           Ecto.UUID.t(),
           [Ecto.UUID.t()],
-          :live | :dead,
+          :live | :dead | :attachments,
           integer(),
           Ecto.UUID.t() | nil,
           pos_integer()
@@ -81,14 +84,15 @@ defmodule Engram.Notes.MovedFeedSql do
   @type width :: 1..unquote(@moved_children)
 
   @doc "The statement `ids/6` sends for `n` subfolders (also the plan test's)."
-  @spec sql(:live | :dead, width()) :: String.t()
-  # Only fixed predicates and integers are ever spliced into the text.
-  def sql(which, n) when which in [:live, :dead] and is_integer(n) and n in 1..@moved_children do
-    pred = Map.fetch!(@moved_preds, which)
+  @spec sql(:live | :dead | :attachments, width()) :: String.t()
+  # Only fixed tables, predicates and integers are ever spliced into the text.
+  def sql(which, n)
+      when which in [:live, :dead, :attachments] and is_integer(n) and n in 1..@moved_children do
+    {table, pred} = Map.fetch!(@moved_preds, which)
 
     children =
       Enum.map_join(1..n, " UNION ALL ", fn i ->
-        "(SELECT id FROM notes WHERE vault_id = $1 AND folder_ref_id = ($2::uuid[])[#{i}] " <>
+        "(SELECT id FROM #{table} WHERE vault_id = $1 AND folder_ref_id = ($2::uuid[])[#{i}] " <>
           "AND #{pred} AND id > $4 ORDER BY id LIMIT $5)"
       end)
 
