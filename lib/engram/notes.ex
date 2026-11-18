@@ -8925,16 +8925,16 @@ defmodule Engram.Notes do
 
   # The live folder markers a cascade must see, in one read on
   # `notes_user_vault_folder_marker` (the vault's markers, not its notes): those
-  # at the subtree rows' path hashes, and those with no live folder row at
-  # their path at all (a row that died under a marker, a marker the previous
-  # release wrote before its row), which nothing else finds. The caller's
-  # final path filter keeps only the target's.
+  # at the subtree rows' current path hashes, and those whose own folder row
+  # (a marker's row keeps its UUID, `Rows.ensure_markers/3`) is not live (a
+  # row that died under a marker, a marker the previous release wrote before
+  # its row), which nothing else finds. One primary-key probe per marker,
+  # never `folders.full_path_hmac` (S6 step 3). The caller's final path
+  # filter keeps only the target's.
   defp folder_markers_in(live, row_hmacs) do
     live_row =
       from(f in Engram.Folders.Folder,
-        where:
-          f.vault_id == parent_as(:n).vault_id and f.full_path_hmac == parent_as(:n).folder_hmac and
-            is_nil(f.deleted_at)
+        where: f.id == parent_as(:n).id and is_nil(f.deleted_at)
       )
 
     Repo.all(
@@ -10046,8 +10046,7 @@ defmodule Engram.Notes do
   #     stale delete of the old path removes nothing. The second half is
   #     `placed_now/3`, read after the vault row lock every folder writer
   #     takes, so no rename lands between it and the update. Never
-  #     `notes.folder_hmac` (R9) nor `folders.full_path_hmac` (S6 step 3:
-  #     stale below a folder renamed in one row).
+  #     `notes.folder_hmac` (R9) nor a stored folder path hash (S6 step 3).
   #   * a drift note (no reference at scan, or one to a row the scan did not
   #     walk; placed by its own folder envelope): its `folder_nonce` is
   #     unchanged. Every path change

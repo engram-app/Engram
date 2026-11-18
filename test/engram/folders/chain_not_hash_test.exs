@@ -10,7 +10,7 @@ defmodule Engram.Folders.ChainNotHashTest do
   use Engram.DataCase, async: false
 
   alias Engram.Crypto
-  alias Engram.Folders.{Folder, Rows}
+  alias Engram.Folders.Rows
   alias Engram.Notes
   alias Engram.Repo
 
@@ -27,6 +27,15 @@ defmodule Engram.Folders.ChainNotHashTest do
     result
   end
 
+  # The hash a one-row rename leaves on a descendant (raw SQL: the column is
+  # out of the schema since S6 step 3's write stop).
+  defp stale!(fk, ids) do
+    Repo.query!("UPDATE folders SET full_path_hmac = $1 WHERE id = ANY($2)", [
+      Rows.path_hmac(fk, "A/B"),
+      Enum.map(ids, &Ecto.UUID.dump!/1)
+    ])
+  end
+
   # "A/B" then A renamed to C, with B left holding the hash of "A/B": the
   # state a one-row rename leaves. Returns B's id.
   defp stale_descendant(%{user: u, vault: v, fk: fk}) do
@@ -34,9 +43,7 @@ defmodule Engram.Folders.ChainNotHashTest do
       {:ok, b} = Rows.ensure(u, v.id, "A/B")
       :ok = Rows.rename(u, v.id, "A", "C")
 
-      from(f in Folder, where: f.id == ^b)
-      |> Repo.update_all(set: [full_path_hmac: Rows.path_hmac(fk, "A/B")])
-
+      stale!(fk, [b])
       b
     end)
   end
@@ -79,11 +86,33 @@ defmodule Engram.Folders.ChainNotHashTest do
       b = Rows.ids_at(u, v.id, ["A/B"])
       :ok = Rows.rename(u, v.id, "A", "C")
 
-      from(f in Folder, where: f.id in ^b)
-      |> Repo.update_all(set: [full_path_hmac: Rows.path_hmac(fk, "A/B")])
+      stale!(fk, b)
     end)
 
     assert {:ok, %{notes: 0}} = Notes.delete_scanned(u, v, matches)
     assert %{deleted_at: nil} = Repo.with_tenant!(u.id, fn -> Repo.get!(Notes.Note, note.id) end)
+  end
+
+  # S6 step 3 write stop: a rename writes the renamed row only. Red before:
+  # every descendant's `full_path_hmac` (and `updated_at`) was rewritten.
+  test "a folder rename writes one folder row, not its descendants", %{user: u, vault: v} do
+    tenant!(u, fn -> {:ok, _} = Rows.ensure_all(u, v.id, ["A/B/C", "A/D"]) end)
+
+    stamps = fn ->
+      %{rows: rows} =
+        Repo.query!("SELECT id, updated_at FROM folders WHERE vault_id = $1", [
+          Ecto.UUID.dump!(v.id)
+        ])
+
+      Map.new(rows, fn [id, at] -> {Ecto.UUID.load!(id), at} end)
+    end
+
+    [a] = tenant!(u, fn -> Rows.ids_at(u, v.id, ["A"]) end)
+    before = stamps.()
+    :ok = tenant!(u, fn -> Rows.rename(u, v.id, "A", "Z") end)
+    changed = for {id, at} <- stamps.(), before[id] != at, do: id
+
+    assert changed == [a]
+    assert %{"Z/B/C" => _, "Z/D" => _} = Engram.FolderRows.tree(u)
   end
 end

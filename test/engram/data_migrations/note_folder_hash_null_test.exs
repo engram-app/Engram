@@ -1,7 +1,7 @@
 defmodule Engram.DataMigrations.NoteFolderHashNullTest do
-  # R9 release E null batch: clears `notes.folder_hmac` on notes whose live
-  # folder row holds the same hash, keeps roots, markers, drift and
-  # disagreeing rows, refuses to run while `note_payload_stamps` is open, and
+  # R9 release E null batch: clears `notes.folder_hmac` on notes whose
+  # reference names a live folder row, keeps roots, markers and drift,
+  # refuses to run while `note_payload_stamps` is open, and
   # honours its kill switch and per-pass cap.
   use Engram.DataCase, async: false
 
@@ -61,7 +61,7 @@ defmodule Engram.DataMigrations.NoteFolderHashNullTest do
     assert is_binary(hash_at(n.id))
   end
 
-  test "nulls placed notes, keeps roots, markers, drift and disagreeing rows", %{
+  test "nulls placed notes (any live reference), keeps roots, markers and drift", %{
     user: u,
     vault: v
   } do
@@ -73,7 +73,9 @@ defmodule Engram.DataMigrations.NoteFolderHashNullTest do
     {:ok, marker} = Notes.create_folder_marker(u, v, "M")
 
     Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [dump(drift.id)])
-    # A row whose hash and folder row disagree (a reference to another folder).
+    # A row whose hash and folder row disagree (a reference to another
+    # folder): placed by its reference like every note, so nulled too. Kept
+    # before S6 step 3, when the row's `full_path_hmac` had to match.
     Repo.query!(
       "UPDATE notes SET folder_ref_id = (SELECT folder_ref_id FROM notes WHERE id = $2) WHERE id = $1",
       [dump(other.id), dump(placed.id)]
@@ -85,7 +87,8 @@ defmodule Engram.DataMigrations.NoteFolderHashNullTest do
 
     assert hash_at(placed.id) == nil
     assert hash_at(nested.id) == nil
-    for kept <- [root, drift, other, marker], do: assert(is_binary(hash_at(kept.id)))
+    assert hash_at(other.id) == nil
+    for kept <- [root, drift, marker], do: assert(is_binary(hash_at(kept.id)))
     assert Repo.query!("SELECT id, folder_ref_id FROM notes ORDER BY id").rows == refs_before
   end
 

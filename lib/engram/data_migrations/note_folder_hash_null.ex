@@ -5,11 +5,12 @@ defmodule Engram.DataMigrations.NoteFolderHashNull do
   kept on old rows either. Markers keep theirs (their path identity).
 
   A note's hash is nulled only when its `folder_ref_id` names a live folder
-  row whose `full_path_hmac` equals it: the hash is then provably redundant
-  with the row. No Qdrant payload is touched (R3a stopped writing and reading
-  the chunk `f`). A root note (no reference, it keeps its hash), a drift note (no
-  reference or a dead one) and a note whose row disagrees are left as they
-  are and do not keep the ledger open.
+  row: every reader from C on places a note by that reference, so the hash
+  is redundant. (Until S6 step 3 the row's `full_path_hmac` also had to equal
+  it; that column is no longer read or written.) No Qdrant payload is
+  touched (R3a stopped writing and reading the chunk `f`). A root note (no
+  reference, it keeps its hash) and a drift note (no reference or a dead
+  one) are left as they are and do not keep the ledger open.
 
   Blocked (the pass walks nothing, resets its walk and stays open) while
   `NotePayloadStamps` is not done: until every point has `n`, the write stop
@@ -107,11 +108,11 @@ defmodule Engram.DataMigrations.NoteFolderHashNull do
     end
   end
 
-  # A note whose live folder row holds the same hash. `n` the note, `f` its
+  # A note whose reference names a live folder row. `n` the note, `f` its
   # folder row, probed by primary key.
   @redundant """
   n.id = ANY($1) AND n.kind = 'note' AND n.folder_hmac IS NOT NULL
-    AND f.id = n.folder_ref_id AND f.deleted_at IS NULL AND f.full_path_hmac = n.folder_hmac
+    AND f.id = n.folder_ref_id AND f.deleted_at IS NULL
   """
 
   # Lock the window's redundant rows (skipping a row a writer holds) in a

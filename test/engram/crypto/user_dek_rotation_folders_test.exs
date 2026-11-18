@@ -1,6 +1,6 @@
 defmodule Engram.Crypto.UserDekRotationFoldersTest do
   # A DEK rotation re-keys `folders` like every other encrypted table: the
-  # name envelope, `name_hmac` and `full_path_hmac`. Without it the
+  # name envelope and `name_hmac` (the chain walk's key). Without it the
   # `notes_set_folder_ref` trigger, firing when the notes sweep rewrites
   # `folder_hmac`, resolves no folder row and NULLs `folder_ref_id`.
   use Engram.DataCase, async: false
@@ -98,13 +98,24 @@ defmodule Engram.Crypto.UserDekRotationFoldersTest do
         {name, f}
       end)
 
-    assert by_name["Gamma"].full_path_hmac ==
-             Crypto.hmac_field(fk, "Projects/Alpha/Beta/Gamma")
+    # Every live folder is found by its chain under the NEW key (S6 step 3:
+    # there is no path hash to re-key).
+    walked =
+      Repo.with_tenant!(user.id, fn ->
+        Engram.Folders.Rows.ids_by_path(user, vault.id, [
+          "Projects",
+          "Projects/Alpha",
+          "Projects/Alpha/Beta/Gamma"
+        ])
+      end)
 
-    assert by_name["Gone"].full_path_hmac == Crypto.hmac_field(fk, "Old/Gone")
+    assert walked == %{
+             "Projects" => by_name["Projects"].id,
+             "Projects/Alpha" => by_name["Alpha"].id,
+             "Projects/Alpha/Beta/Gamma" => by_name["Gamma"].id
+           }
+
     assert by_name["Gone"].deleted_at
-    assert by_name["Projects"].full_path_hmac == Crypto.hmac_field(fk, "Projects")
-    assert by_name["Alpha"].full_path_hmac == Crypto.hmac_field(fk, "Projects/Alpha")
 
     # The trigger found the re-keyed row: same folder, no orphan, no duplicate.
     assert ref_id(note.id) == Ecto.UUID.dump!(by_name["Alpha"].id)

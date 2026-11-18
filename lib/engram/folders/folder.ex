@@ -6,11 +6,10 @@ defmodule Engram.Folders.Folder do
 
   The name is one path SEGMENT, encrypted under the owning account's DEK like
   `notes.folder_ciphertext` (AAD `Crypto.aad_for_row(:folders, :name, id)`).
-  `full_path_hmac` is the HMAC of the whole path, equal to a marker's
-  `folder_hmac` (and a note's, while note writes still set it).
-
-  Filled by the `DataMigrations.FolderTable` backfill; no reader or writer
-  uses it yet.
+  A row has no path column: its path is its chain of names
+  (`Engram.Folders.Rows`). The table's `full_path_hmac` column is no longer
+  in the schema (S6 step 3: nothing reads or writes it; dropped in the next
+  release).
   """
   use Engram.Schema
 
@@ -65,7 +64,6 @@ defmodule Engram.Folders.Folder do
     # does). Written from S5 on; nothing reads them yet.
     field :seq, :integer
     field :notes_cascaded, :boolean, default: true
-    field :full_path_hmac, :binary
     field :dek_version, :integer
     field :explicit, :boolean, default: false
     field :deleted_at, :utc_datetime_usec

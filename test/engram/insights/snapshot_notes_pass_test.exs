@@ -46,7 +46,8 @@ defmodule Engram.Insights.SnapshotNotesPassTest do
     note.(folder_hmac: f4, folder_ref_id: r4, tags_hmac: [t3, t3])
     note.(folder_hmac: f2, folder_ref_id: r2, tags_hmac: [])
     # A folder marker counts as a folder; its tags never count.
-    note.(@marker ++ [folder_hmac: f3, tags_hmac: [h()]])
+    marker = note.(@marker ++ [folder_hmac: f3, tags_hmac: [h()]])
+    marker_row!(user, rich, marker.id)
     # Deleted rows count for neither.
     note.(folder_hmac: h(), tags_hmac: [h()], deleted_at: DateTime.utc_now())
 
@@ -55,10 +56,28 @@ defmodule Engram.Insights.SnapshotNotesPassTest do
     insert(:note, user: user, vault: untagged, folder_hmac: f2, folder_ref_id: u2, tags_hmac: [])
 
     markers_only = insert(:vault, user: user)
-    insert(:note, @marker ++ [user: user, vault: markers_only, folder_hmac: f1, tags_hmac: []])
+
+    m =
+      insert(:note, @marker ++ [user: user, vault: markers_only, folder_hmac: f1, tags_hmac: []])
+
+    marker_row!(user, markers_only, m.id)
 
     empty = insert(:vault, user: user)
     [rich, untagged, markers_only, empty]
+  end
+
+  # A marker's explicit folder row, keeping the marker's UUID, as
+  # `Rows.ensure_markers/3` writes it in the marker's own transaction: an
+  # empty folder counts by that row (S6 step 3).
+  defp marker_row!(user, vault, id) do
+    Repo.query!(
+      """
+      INSERT INTO folders (id, vault_id, user_id, name_ciphertext, name_nonce, name_hmac,
+                           dek_version, explicit)
+      VALUES ($1, $2, $3, '\\x00', '\\x00', $4, 2, true)
+      """,
+      [Ecto.UUID.dump!(id), Ecto.UUID.dump!(vault.id), Ecto.UUID.dump!(user.id), h()]
+    )
   end
 
   # The pre-change queries, verbatim in shape: the reference the new single
