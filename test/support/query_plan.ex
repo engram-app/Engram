@@ -207,7 +207,8 @@ defmodule Engram.QueryPlan do
   sweeps' login, whose `maintenance_all` policy is `USING (true)`; the
   tenant setting is then inert). `sort: false` plans with both sort methods
   off, as a statement the app runs under those `SET LOCAL`s
-  (`OrphanSweep`'s trashed page).
+  (`OrphanSweep`'s trashed page). `costs: true` keeps the cost estimates
+  (a failing plan test's diagnostics).
   """
   @spec rls_plans(Ecto.UUID.t(), String.t(), list(), keyword()) :: %{
           custom: String.t(),
@@ -215,7 +216,8 @@ defmodule Engram.QueryPlan do
         }
   def rls_plans(user_id, sql, params, opts \\ []) do
     name = "rls_plan_#{System.unique_integer([:positive])}"
-    explain = "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF) "
+    costs = if Keyword.get(opts, :costs, false), do: "ON", else: "OFF"
+    explain = "EXPLAIN (ANALYZE, BUFFERS, COSTS #{costs}, TIMING OFF, SUMMARY OFF) "
 
     rolled_back(fn ->
       Repo.query!("SET LOCAL SESSION AUTHORIZATION #{Keyword.get(opts, :role, "engram_app")}")

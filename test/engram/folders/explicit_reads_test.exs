@@ -106,7 +106,7 @@ defmodule Engram.Folders.ExplicitReadsTest do
     for i <- 1..400, do: put_note(u, v, "F#{i}/n.md")
     {:ok, _} = Notes.create_folder_markers(u, v, ["E1", "E2"])
 
-    assert_explicit_index!(u, fn -> Notes.list_explicit_folders(u, v) end, fn s ->
+    assert_vault_bound_plans!(u, fn -> Notes.list_explicit_folders(u, v) end, fn s ->
       s =~ ~r/FROM "folders".*"explicit"/s
     end)
   end
@@ -123,75 +123,120 @@ defmodule Engram.Folders.ExplicitReadsTest do
     Repo.query!("ANALYZE folders")
   end
 
-  # The explicit read (the statement of `fun` that `pick` matches) reads
-  # `folders_explicit_live_v2` in its custom plan, at the 40-tenant shape and
-  # at one where every tenant looks unique. #2639's CI picked `folders_user`
-  # (every folder of the tenant, 400 rows removed by filter) in the FORCED
-  # GENERIC plan only, on its polluted statistics; its custom plans read the
-  # partial index. The statement runs unnamed, so prod plans it per
-  # execution and a generic plan never occurs: `assert_never_named!/2` pins
-  # that property instead of asserting a plan that cannot run.
-  defp assert_explicit_index!(user, fun, pick) do
+  # The explicit read (the statement of `fun` that `pick` matches) is bound
+  # to the vault in its custom AND its forced generic plan, at the 40-tenant
+  # statistics shape, at one where every tenant looks unique, and with dead
+  # explicit entries in the partial index (a probe: from 1,500 rolled-back
+  # rows on, the planner costs the partial index as a read of all its pages
+  # and, without `folders_user_vault`, read `folders_user`, every folder of
+  # the tenant: #2639's CI). Whichever index wins, it reads one vault.
+  defp assert_vault_bound_plans!(user, fun, pick) do
     me = self()
+    other_vault_folders!(user)
 
-    for {users, vaults} <- [{40, 40}, {-1, 40}] do
+    for {users, vaults, dead} <- [{40, 40, 0}, {-1, 40, 0}, {40, 40, 1500}] do
+      if dead > 0, do: dead_explicit_rows!(dead)
       tenant_shape!(users, vaults)
       {_, queries} = QueryRecorder.record(fun)
       [{sql, params}] = for %{sql: s, params: p, pid: ^me} <- queries, pick.(s), do: {s, p}
-      %{custom: custom} = QueryPlan.rls_plans(user.id, sql, params)
+      %{custom: custom, generic: generic} = QueryPlan.rls_plans(user.id, sql, params)
 
-      assert custom =~ ~r/\bfolders_explicit_live_v2\b/,
-             "n_distinct #{users}/#{vaults}:\n" <> custom
-
-      refute custom =~ "Seq Scan on folders", custom
+      for {kind, plan} <- [custom: custom, generic: generic] do
+        assert_scans_vault_bound!(plan, fn ->
+          "#{kind} plan, n_distinct #{users}/#{vaults}, #{dead} dead rows\n" <>
+            plan_diagnostics(user, sql, params)
+        end)
+      end
     end
 
     assert_never_named!(fun, pick)
   end
 
-  # Every scan node on folders (seq, index, index-only, bitmap heap) has a
-  # condition naming the vault: no read of the tenant's other vaults
-  # (`folders_user` has only `user_id`), and no unconditioned full scan.
-  defp assert_scans_vault_bound!(plan) do
-    nodes = Regex.scan(~r/(?:Scan|Scan using \w+) on folders\b/, plan)
+  # A second vault of the tenant holding folder rows. With one vault, a
+  # `folders_user` read IS the vault's folders and costs the same as a
+  # vault-keyed one, so the check could not tell a tenant-wide plan from a
+  # vault-bound one; with these, a tenant-wide read visibly crosses vaults.
+  defp other_vault_folders!(user) do
+    other = insert(:vault, user: user)
+
+    for chunk <- Enum.chunk_every(1..250, 50),
+        do: {:ok, _} = Notes.create_folder_markers(user, other, Enum.map(chunk, &"X#{&1}"))
+
+    %{rows: [[n]]} =
+      Repo.query!("SELECT count(*) FROM folders WHERE vault_id = $1 AND deleted_at IS NULL", [
+        Ecto.UUID.dump!(other.id)
+      ])
+
+    assert n >= 200, "precondition: the other vault holds #{n} folder rows"
+  end
+
+  # Dead explicit entries in the folder indexes: `n` explicit folder rows of
+  # another tenant, inserted and rolled back (a savepoint inside the test's
+  # transaction). The sandbox never vacuums them, as CI's runs never do.
+  defp dead_explicit_rows!(n) do
+    other = insert(:user)
+    vault = insert(:vault, user: other)
+
+    Repo.transaction(fn ->
+      Repo.query!(
+        "INSERT INTO folders (vault_id, user_id, name_ciphertext, name_nonce, name_hmac, " <>
+          "dek_version, explicit) SELECT $1, $2, '\\x00', '\\x00', " <>
+          "decode(md5(i::text), 'hex'), 1, true FROM generate_series(1, $3) i",
+        [Ecto.UUID.dump!(vault.id), Ecto.UUID.dump!(other.id), n]
+      )
+
+      Repo.rollback(:dead)
+    end)
+  end
+
+  # On a failing plan test: the plan with cost estimates, and the statistics
+  # the planner costed it from (pg_class sizes of folders and its indexes,
+  # pg_stats of the key columns), so a CI-only red reads from the log.
+  defp plan_diagnostics(user, sql, params) do
+    %{custom: costed} = QueryPlan.rls_plans(user.id, sql, params, costs: true)
+
+    sizes =
+      Repo.query!(
+        "SELECT c.relname, c.relpages, c.reltuples::bigint FROM pg_class c " <>
+          "WHERE c.relname = 'folders' OR c.oid IN " <>
+          "(SELECT indexrelid FROM pg_index WHERE indrelid = 'folders'::regclass) ORDER BY 1"
+      ).rows
+
+    stats =
+      Repo.query!(
+        "SELECT attname, n_distinct, null_frac, " <>
+          "(SELECT array_agg(round(f::numeric, 4)) FROM unnest(most_common_freqs[1:3]) f) " <>
+          "FROM pg_stats WHERE tablename = 'folders' " <>
+          "AND attname IN ('user_id', 'vault_id', 'explicit', 'deleted_at', 'parent_id')"
+      ).rows
+
+    "costed custom plan:\n#{costed}\nsizes #{inspect(sizes)}\npg_stats #{inspect(stats)}"
+  end
+
+  # Every read of folders is bound to the vault: each index scan, index-only
+  # scan and bitmap index scan (a BitmapAnd/BitmapOr arm included) on a
+  # folders index has a condition naming `vault_id`; `folders_user`
+  # (`user_id` alone, every folder of the tenant) is refused outright, and
+  # so is a seq scan or an index scan with no condition at all.
+  defp assert_scans_vault_bound!(plan, diag \\ fn -> "" end) do
+    msg = fn why -> why <> "\n" <> plan <> "\n" <> diag.() end
+
+    refute plan =~ ~r/\bfolders_user\b(?!_)/, msg.("folders_user read")
+    refute plan =~ "Seq Scan on folders", msg.("seq scan")
+
+    scans = Regex.scan(~r/Scan using (folders\w*) on folders\b/, plan)
+    bitmaps = Regex.scan(~r/Bitmap Index Scan on (folders\w*)/, plan)
 
     conds =
       Regex.scan(
-        ~r/(?:Scan using \w+|Bitmap Heap Scan) on folders\b[^\n]*\n\s*(?:Index|Recheck) Cond: ([^\n]*)/,
+        ~r/(?:Scan using folders\w* on folders\b|Bitmap Index Scan on folders\w*)[^\n]*\n\s*(?:Index|Recheck) Cond: ([^\n]*)/,
         plan,
         capture: :all_but_first
       )
 
-    assert nodes != [], plan
-    assert length(conds) == length(nodes), "a folders scan with no condition:\n" <> plan
-    for [cond] <- conds, do: assert(cond =~ "vault_id =", cond <> "\n" <> plan)
-  end
-
-  test "the folders scan check refuses tenant-wide, unconditioned and seq scans" do
-    vault = "Index Cond: ((user_id = 'u'::uuid) AND (vault_id = 'v'::uuid))"
-
-    good = """
-    ->  Index Only Scan using folders_explicit_live_v2 on folders f0 (actual rows=2.00 loops=1)
-          #{vault}
-    ->  Bitmap Heap Scan on folders f0_1 (actual rows=40.00 loops=1)
-          Recheck Cond: (vault_id = 'v'::uuid)
-    """
-
-    assert_scans_vault_bound!(good)
-
-    for bad <- [
-          # the tenant's whole folder index
-          "->  Index Scan using folders_user on folders f0 (actual rows=2.00 loops=1)\n" <>
-            "      Index Cond: (user_id = 'u'::uuid)\n",
-          # a full index scan, no condition at all
-          "->  Index Scan using folders_pkey on folders f0 (actual rows=2.00 loops=1)\n" <>
-            "      Filter: (vault_id = 'v'::uuid)\n",
-          # a seq scan
-          "->  Seq Scan on folders f0 (actual rows=2.00 loops=1)\n" <>
-            "      Filter: (vault_id = 'v'::uuid)\n"
-        ] do
-      assert_raise ExUnit.AssertionError, fn -> assert_scans_vault_bound!(good <> bad) end
-    end
+    assert scans ++ bitmaps != [], msg.("no folders scan")
+    assert length(conds) == length(scans) + length(bitmaps), msg.("a scan with no condition")
+    for [cond] <- conds, do: assert(cond =~ "vault_id =", msg.("not vault-bound: " <> cond))
   end
 
   # Past the 5 custom plans a named statement gets before Postgres may switch
@@ -297,7 +342,7 @@ defmodule Engram.Folders.ExplicitReadsTest do
     for i <- 1..400, do: put_note(u, v, "F#{i}/n.md")
     {:ok, _} = Notes.create_folder_markers(u, v, ["E1", "E2"])
 
-    assert_explicit_index!(
+    assert_vault_bound_plans!(
       u,
       fn ->
         # The listing caches the counts under the vault seq.
@@ -321,27 +366,56 @@ defmodule Engram.Folders.ExplicitReadsTest do
     other = insert(:vault, user: u)
     for i <- 1..400, do: put_note(u, other, "G#{i}/n.md")
     tenant_shape!()
-    Engram.DataCase.clear_request_caches()
 
-    {_, queries} = QueryRecorder.record(fn -> Notes.list_folders_with_counts(u, v) end)
-    me = self()
-
-    [{sql, params}] =
-      for %{sql: s, params: p, pid: ^me} <- queries,
-          s =~ "UNION ALL" and s =~ ~r/"explicit"/,
-          do: {s, p}
-
-    %{custom: custom} = QueryPlan.rls_plans(u.id, sql, params)
-
-    assert_never_named!(
+    assert_vault_bound_plans!(
+      u,
       fn ->
         Engram.Cache.clear_local(:vault_scan)
+        Engram.DataCase.clear_request_caches()
         Notes.list_folders_with_counts(u, v)
       end,
-      &(&1 == sql)
+      &(&1 =~ "UNION ALL" and &1 =~ ~r/"explicit"/)
     )
+  end
 
-    assert_scans_vault_bound!(custom)
+  test "the folders scan check refuses tenant-wide, unconditioned and seq scans" do
+    good = """
+    ->  Index Only Scan using folders_explicit_vault_live on folders f0 (actual rows=2.00 loops=1)
+          Index Cond: (vault_id = 'v'::uuid)
+    ->  Bitmap Heap Scan on folders f0_1 (actual rows=40.00 loops=1)
+          Recheck Cond: ((user_id = 'u'::uuid) AND (vault_id = 'v'::uuid))
+          ->  Bitmap Index Scan on folders_user_vault (actual rows=40.00 loops=1)
+                Index Cond: ((user_id = 'u'::uuid) AND (vault_id = 'v'::uuid))
+    """
+
+    assert_scans_vault_bound!(good)
+
+    for bad <- [
+          # the tenant's whole folder index
+          "->  Index Scan using folders_user on folders f2 (actual rows=2.00 loops=1)\n" <>
+            "      Index Cond: (user_id = 'u'::uuid)\n",
+          # folders_user as one arm of a BitmapAnd whose other arm is vault-bound
+          "->  Bitmap Heap Scan on folders f2 (actual rows=2.00 loops=1)\n" <>
+            "      Recheck Cond: ((vault_id = 'v'::uuid) AND (user_id = 'u'::uuid))\n" <>
+            "      ->  BitmapAnd\n" <>
+            "            ->  Bitmap Index Scan on folders_parent_all_ids\n" <>
+            "                  Index Cond: (vault_id = 'v'::uuid)\n" <>
+            "            ->  Bitmap Index Scan on folders_user\n" <>
+            "                  Index Cond: (user_id = 'u'::uuid)\n",
+          # a bitmap arm on another index with no vault condition
+          "->  Bitmap Heap Scan on folders f2 (actual rows=2.00 loops=1)\n" <>
+            "      Recheck Cond: (parent_id = 'p'::uuid)\n" <>
+            "      ->  Bitmap Index Scan on folders_parent_name_keys\n" <>
+            "            Index Cond: (parent_id = 'p'::uuid)\n",
+          # a full index scan, no condition at all
+          "->  Index Scan using folders_pkey on folders f2 (actual rows=2.00 loops=1)\n" <>
+            "      Filter: (vault_id = 'v'::uuid)\n",
+          # a seq scan
+          "->  Seq Scan on folders f2 (actual rows=2.00 loops=1)\n" <>
+            "      Filter: (vault_id = 'v'::uuid)\n"
+        ] do
+      assert_raise ExUnit.AssertionError, fn -> assert_scans_vault_bound!(good <> bad) end
+    end
   end
 
   # A batch move whose target is a folder ROW id (what the listings hand out
