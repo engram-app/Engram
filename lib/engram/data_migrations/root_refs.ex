@@ -9,7 +9,8 @@ defmodule Engram.DataMigrations.RootRefs do
   after a rollback (re-verified daily).
 
   Inert until the rollback floor reaches the readers' release
-  (`Rows.root_writes?/1`): a pass then reports `blocked` and writes nothing.
+  (`Rows.root_writes?/1`): `enabled?/0` is false, so no pass runs and the
+  stuck clock is held.
 
   Each pass, per vault, never a walk of `notes`:
 
@@ -67,9 +68,14 @@ defmodule Engram.DataMigrations.RootRefs do
   @impl true
   def version, do: 1
 
-  @doc "Kill switch: the `root_refs` service override (default on)."
+  @doc """
+  Kill switch: the `root_refs` service override (default on), and the
+  rollback floor at the readers' release (`Rows.root_writes?/1`). Below the
+  floor the runner runs no pass and holds the stuck clock, so the open
+  ledger does not page while it waits for the raise.
+  """
   @impl true
-  def enabled?, do: Engram.ServiceConfig.get(:root_refs, true) == true
+  def enabled?, do: Engram.ServiceConfig.get(:root_refs, true) == true and Rows.root_writes?()
 
   @doc "Re-verified daily (one probe per vault): a previous-release node writes NULL root references."
   @impl true
@@ -80,14 +86,8 @@ defmodule Engram.DataMigrations.RootRefs do
 
   @doc false
   # `batch:` / `max_fixed:` override the fill size and per-pass cap.
-  def run_pass(opts) do
-    if Rows.root_writes?() do
-      pass(Keyword.get(opts, :batch, @batch), Keyword.get(opts, :max_fixed, @max_fixed))
-    else
-      :ok = Engram.DataMigration.report(blocked: :rollback_floor)
-      {:more, rows: 0, blocked: 1}
-    end
-  end
+  def run_pass(opts),
+    do: pass(Keyword.get(opts, :batch, @batch), Keyword.get(opts, :max_fixed, @max_fixed))
 
   defp pass(batch, max_fixed) do
     case candidates() do

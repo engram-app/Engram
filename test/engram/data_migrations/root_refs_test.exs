@@ -110,7 +110,8 @@ defmodule Engram.DataMigrations.RootRefsTest do
 
       a = note!(u, v, "a.md")
       assert FolderRows.ref("notes", a.id) == nil
-      assert RootRefs.run_pass() == {:more, rows: 0, blocked: 1}
+      refute RootRefs.enabled?()
+      assert DataMigrationsRunner.run(RootRefs) == :skipped
       assert FolderRows.ref("notes", a.id) == nil
     end
 
