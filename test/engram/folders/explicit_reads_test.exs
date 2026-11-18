@@ -7,7 +7,10 @@ defmodule Engram.Folders.ExplicitReadsTest do
   # by a raw write: the reverse is what the write stop (phase 2) leaves.
   use Engram.DataCase, async: false
 
-  alias Engram.{FolderRows, Notes, QueryPlan, QueryRecorder, Repo}
+  alias Engram.Backfill.IdWindows
+  alias Engram.{DataMigrations, FolderRows, Notes, QueryPlan, QueryRecorder, Repo}
+  alias Engram.DataMigrations.{ExplicitFolderReconcile, FolderTable}
+  alias Engram.Folders.Rows
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
@@ -21,8 +24,10 @@ defmodule Engram.Folders.ExplicitReadsTest do
     note
   end
 
-  # An explicit folder with no marker row: what a writer leaves once markers
-  # stop (phase 2). The marker create makes the explicit row; the marker goes.
+  # An explicit folder row with no live marker: what a cascade before #2639
+  # left on a row it kept (stale, `ExplicitFolderReconcile` clears it), and
+  # what a writer leaves once markers stop (phase 2). The marker create makes
+  # the explicit row; the marker goes.
   defp explicit_without_marker!(user, vault, folder) do
     {:ok, %{folders: [%{id: id}]}} = Notes.create_folder_markers(user, vault, [folder])
     Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(id)])
@@ -34,7 +39,8 @@ defmodule Engram.Folders.ExplicitReadsTest do
     do: Map.new(Notes.folders_payload(user, vault), &{&1.name, &1.id})
 
   describe "listings read folders.explicit" do
-    test "an explicit folder with no marker is listed everywhere", %{user: u, vault: v} do
+    test "listings read the flag: an explicit row with no marker is listed everywhere",
+         %{user: u, vault: v} do
       id = explicit_without_marker!(u, v, "Empty/Inner")
 
       assert {:ok, ["Empty/Inner"]} = Notes.list_explicit_folders(u, v)
@@ -77,10 +83,10 @@ defmodule Engram.Folders.ExplicitReadsTest do
       end
     end
 
-    test "control: a self-host whose folder_table ledger is open reads the markers", ctx do
+    test "control: a self-host whose ledgers are open reads the markers", ctx do
       %{user: u, vault: v} = ctx
-      Engram.ServiceConfig.put_override(:folder_table_ledger, :read)
-      refute Engram.Folders.Rows.explicit_reads?()
+      Engram.ServiceConfig.put_override(:explicit_folders_ledger, :read)
+      refute Rows.explicit_reads?()
 
       explicit_without_marker!(u, v, "NoMarker")
       {:ok, %{folders: [%{id: m}]}} = Notes.create_folder_markers(u, v, ["Marked"])
@@ -102,6 +108,95 @@ defmodule Engram.Folders.ExplicitReadsTest do
     [{sql, params}] =
       for %{sql: s, params: p, pid: ^me} <- queries,
           s =~ ~r/FROM "folders".*"explicit"/s,
+          do: {s, p}
+
+    %{custom: custom, generic: generic} = QueryPlan.rls_plans(u.id, sql, params)
+
+    for plan <- [custom, generic] do
+      assert plan =~ "folders_explicit_live", plan
+      refute plan =~ "Seq Scan on folders", plan
+    end
+  end
+
+  defp reconcile! do
+    IdWindows.reset_walk(ExplicitFolderReconcile.name())
+
+    Enum.reduce_while(1..5, nil, fn _, _ ->
+      case ExplicitFolderReconcile.run_pass() do
+        :done -> {:halt, :done}
+        more -> {:cont, more}
+      end
+    end)
+  end
+
+  # The #2639 review, H1: a row a pre-#2639 cascade left explicit with its
+  # marker gone must not be listed, and a path delete must clear it.
+  describe "stale explicit rows" do
+    test "the reconcile clears a row no live marker names, and keeps a marked one", ctx do
+      %{user: u, vault: v} = ctx
+      explicit_without_marker!(u, v, "Stale")
+      {:ok, _} = Notes.create_folder_markers(u, v, ["Kept"])
+
+      assert reconcile!() == :done
+      refute FolderRows.tree(u)["Stale"].explicit
+      assert {:ok, ["Kept"]} = Notes.list_explicit_folders(u, v)
+      # A second walk finds nothing.
+      assert reconcile!() == :done
+    end
+
+    test "a path delete (DELETE /folders/<path>) clears a stale row", %{user: u, vault: v} do
+      explicit_without_marker!(u, v, "Stale")
+
+      assert {:ok, :deleted} = Notes.delete_folder_marker(u, v, "Stale")
+      assert {:ok, []} = Notes.list_explicit_folders(u, v)
+      assert {:ok, :not_found} = Notes.delete_folder_marker(u, v, "Stale")
+    end
+
+    test "the gate waits for both ledgers", %{user: _u} do
+      Engram.ServiceConfig.put_override(:explicit_folders_ledger, :read)
+      Engram.DataCase.clear_request_caches()
+      refute Rows.explicit_reads?()
+
+      for m <- [FolderTable, ExplicitFolderReconcile],
+          do: DataMigrations.mark_done(m.name(), m.version())
+
+      Engram.DataCase.clear_request_caches()
+      assert Rows.explicit_reads?()
+    end
+
+    test "kill switch: off, the reconcile is disabled" do
+      Engram.ServiceConfig.put_override(:explicit_folder_reconcile, false)
+      refute ExplicitFolderReconcile.enabled?()
+    end
+  end
+
+  # The #2639 review, M1: the cascade's marker leg clears the flag even when
+  # the folder row is kept (here: content, and no rows leg at all).
+  test "a cascade that deletes a marker clears the flag on the row it keeps", ctx do
+    %{user: u, vault: v} = ctx
+    {:ok, _} = Notes.create_folder_markers(u, v, ["K"])
+    put_note(u, v, "K/n.md")
+    {:ok, rows} = Notes.scan_folders(u, v, ["K"])
+    marker_rows = Enum.filter(rows, &(&1.kind == "folder"))
+
+    assert {:ok, %{deleted: 1}} = Notes.delete_scanned(u, v, marker_rows)
+    assert {:ok, []} = Notes.list_explicit_folders(u, v)
+    {:ok, counts} = Notes.list_folders_with_counts(u, v)
+    assert %{"K" => 1} = Map.new(counts, &{&1.folder, &1.count})
+  end
+
+  # The #2639 review, L2: the folder counts' explicit leg as the app role.
+  test "plan: the counts' explicit leg is the partial index under RLS", %{user: u, vault: v} do
+    for i <- 1..40, do: put_note(u, v, "F#{i}/n.md")
+    {:ok, _} = Notes.create_folder_markers(u, v, ["E1", "E2"])
+    Engram.DataCase.clear_request_caches()
+
+    {_, queries} = QueryRecorder.record(fn -> Notes.list_folders_with_counts(u, v) end)
+    me = self()
+
+    [{sql, params}] =
+      for %{sql: s, params: p, pid: ^me} <- queries,
+          s =~ "UNION ALL" and s =~ ~r/"explicit"/,
           do: {s, p}
 
     %{custom: custom, generic: generic} = QueryPlan.rls_plans(u.id, sql, params)
