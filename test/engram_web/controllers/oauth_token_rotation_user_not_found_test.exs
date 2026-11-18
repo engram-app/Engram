@@ -71,7 +71,9 @@ defmodule EngramWeb.OAuthTokenRotationUserNotFoundTest do
       :telemetry.attach(
         {__MODULE__, ref, event},
         event,
-        fn name, _measure, meta, _ -> send(pid, {ref, name, meta}) end,
+        # The handler is global and this suite is async: drop events from
+        # other tests' processes (ConnTest dispatches in the test process).
+        fn name, _measure, meta, _ -> if self() == pid, do: send(pid, {ref, name, meta}) end,
         nil
       )
     end
