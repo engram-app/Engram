@@ -318,7 +318,14 @@ def _assert_mcp_shows(api, vid: str, root: str, folder: str, gone: str, tag: str
     assert f"{folder}/sub" in subfolders, f"list_folder({folder}) folders: {subfolders}"
     assert _mcp_list(api, vid, gone)[0] == set(), f"list_folder({gone}) still lists notes"
     assert _recent_paths(api, vid, folder=folder) == {n1, n2}
-    assert _recent_paths(api, vid, tags=[tag]) == {n1}
+    # Tags resolve through `note_attrs`, which the index pass writes
+    # (`Engram.Search.NoteFilter`): as fresh as the vector index, so poll. A
+    # moved note found by tag at any other path still fails at once.
+    deadline = time.monotonic() + 90
+    while (got := _recent_paths(api, vid, tags=[tag])) != {n1}:
+        assert not got or got == {n1}, f"tag filter shows the note at {got}, want {n1}"
+        assert time.monotonic() < deadline, f"tag filter never found {n1} (index lag or a bug)"
+        time.sleep(3)
     assert _recent_paths(api, vid, folder=gone) == set()
 
 
