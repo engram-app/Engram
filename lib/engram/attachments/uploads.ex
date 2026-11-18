@@ -92,6 +92,7 @@ defmodule Engram.Attachments.Uploads do
          {:ok, filter_key} <- Crypto.dek_filter_key(user),
          {:ok, dek} <- Crypto.get_dek(user),
          path_hmac = Crypto.hmac_field(filter_key, path),
+         :ok <- Attachments.settle(user, vault, [path]),
          existing = Attachments.fetch_existing(user, vault.id, path_hmac),
          # Early refusal before the multipart starts; authoritative under the
          # lock at the insert.
@@ -517,16 +518,19 @@ defmodule Engram.Attachments.Uploads do
 
   defp write_attachment(user, vault, up, path, keys, file_key, hash, opts) do
     # Bytes the live row already holds (a retry after a lost response): keep
-    # the row, as a single-request upload does.
-    existing = Attachments.fetch_existing(user, vault.id, up.path_hmac)
+    # the row, as a single-request upload does. A folder moved since the
+    # start may have left the row stored elsewhere (`Attachments.settle/3`).
+    with :ok <- Attachments.settle(user, vault, [path]) do
+      existing = Attachments.fetch_existing(user, vault.id, up.path_hmac)
 
-    case Attachments.identical_or_changed(existing, hash, path, up.mime_type) do
-      {:ok, att} ->
-        {:unchanged, att}
+      case Attachments.identical_or_changed(existing, hash, path, up.mime_type) do
+        {:ok, att} ->
+          {:unchanged, att}
 
-      :changed ->
-        opts = Attachments.own_write_opts(existing, hash, up.mime_type) ++ opts
-        commit_attachment(user, vault, up, path, keys, file_key, hash, opts)
+        :changed ->
+          opts = Attachments.own_write_opts(existing, hash, up.mime_type) ++ opts
+          commit_attachment(user, vault, up, path, keys, file_key, hash, opts)
+      end
     end
   end
 

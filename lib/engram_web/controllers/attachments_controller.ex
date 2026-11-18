@@ -807,6 +807,9 @@ defmodule EngramWeb.AttachmentsController do
     parameters: [path: [in: :path, type: :string, required: true, description: "Attachment path"]],
     responses: [
       ok: {"Deleted", "application/json", Schemas.AttachmentDeleted},
+      conflict:
+        {"`conflict`: a file left under a moved folder could not be settled; retry",
+         "application/json", Schemas.MessageError},
       internal_server_error: {"Delete failed", "application/json", Schemas.MessageError}
     ]
   )
@@ -820,6 +823,9 @@ defmodule EngramWeb.AttachmentsController do
            origin_device_id: EngramWeb.OriginDevice.from_conn(conn)
          ) do
       :ok -> json(conn, %{deleted: true, path: path})
+      # An attachment heal conflict (`Engram.Attachments.settle/3`): the
+      # retryable 409 via the fallback, not a 500.
+      {:error, :conflict} = err -> err
       {:error, _} -> conn |> put_status(500) |> json(%{error: "failed to delete attachment"})
     end
   end

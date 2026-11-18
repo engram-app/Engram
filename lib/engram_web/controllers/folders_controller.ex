@@ -303,6 +303,10 @@ defmodule EngramWeb.FoldersController do
       {:error, :root_delete_refused} ->
         conn |> put_status(422) |> json(%{error: "Refusing to delete the vault root."})
 
+      # An attachment heal conflict (`Engram.Attachments.settle/3`): retryable.
+      {:error, :conflict} = err ->
+        EngramWeb.FallbackController.call(conn, err)
+
       {:error, reason} = err ->
         # A transient DEK failure is the shared retryable 503.
         if Engram.Crypto.transient_dek_error?(reason),

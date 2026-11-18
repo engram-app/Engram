@@ -23,9 +23,11 @@ defmodule Engram.Migrations.AddNamesLockTest do
   # migration's object that depends on a column it drops goes first, as a
   # rollback in order would drop it first. 20261113100000's
   # `notes_set_name_key` fires on `UPDATE OF ... name_stamp`, so it depends
-  # on S2's columns. Inside the test's transaction, rolled back with it.
+  # on S2's columns, as does 20261118140000's `attachments_set_name_key`.
+  # Inside the test's transaction, rolled back with it.
   defp run_down! do
     Engram.Repo.query!("DROP TRIGGER IF EXISTS notes_set_name_key ON notes")
+    Engram.Repo.query!("DROP TRIGGER IF EXISTS attachments_set_name_key ON attachments")
     migration().run_down(Engram.Repo)
   end
 
