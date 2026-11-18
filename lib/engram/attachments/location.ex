@@ -42,6 +42,16 @@ defmodule Engram.Attachments.Location do
 
   require WalkSql
 
+  @doc """
+  This build's attachment-reader level (S6 step 6): 1 reads, writes next
+  to and serves (the moved-folder feed's attachment leg) attachments left
+  under a folder moved without a cascade. the next release's write stop
+  leaves them only while every node answers at least its level; an older
+  build has no such function and counts as behind.
+  """
+  @spec s6_reads() :: 1
+  def s6_reads, do: 1
+
   @doc "The columns `shown_paths/3` reads from a row, beside `id`."
   @spec fields() :: [
           :vault_id

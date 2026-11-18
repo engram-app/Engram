@@ -388,10 +388,9 @@ defmodule Engram.Folders do
           true ->
             log_orphaned_attachments(user, vault, folder, unreadable)
 
-            {:ok, %{notes: n, attachments: a}} =
-              delete_scanned(user, vault, [folder], note_rows, att_paths, opts)
-
-            {:ok, %{notes: n, attachments: a}}
+            with {:ok, %{notes: n, attachments: a}} <-
+                   delete_scanned(user, vault, [folder], note_rows, att_paths, opts),
+                 do: {:ok, %{notes: n, attachments: a}}
         end
       end
     end
@@ -407,7 +406,14 @@ defmodule Engram.Folders do
   # is aspirational.
   defp delete_scanned(user, vault, folders, note_rows, att_paths, opts) do
     op = Keyword.take(opts, [:op_id])
-    {:ok, attachments} = Attachments.delete_scanned_paths(user, vault, att_paths, op)
+    # A heal conflict on the attachments (`Attachments.settle/3`) stops the
+    # delete before any note goes: a retryable `{:error, :conflict}`.
+    with {:ok, attachments} <- Attachments.delete_scanned_paths(user, vault, att_paths, op) do
+      delete_note_legs(user, vault, folders, note_rows, attachments, op)
+    end
+  end
+
+  defp delete_note_legs(user, vault, folders, note_rows, attachments, op) do
     {content, markers} = Enum.split_with(note_rows, &(&1.kind == "note"))
 
     %{deleted: d1, notes: n} = delete_note_chunks(user, vault, content, op)
@@ -468,10 +474,9 @@ defmodule Engram.Folders do
          user = Crypto.fresh_user(user),
          {:ok, note_rows} <- Notes.scan_folders(user, vault, folders),
          {:ok, att_paths} <- attachment_paths_under(user, vault, folders) do
-      {:ok, %{deleted: notes, attachments: atts}} =
-        delete_scanned(user, vault, folders, note_rows, att_paths, opts)
-
-      {:ok, %{notes: notes, attachments: atts}}
+      with {:ok, %{deleted: notes, attachments: atts}} <-
+             delete_scanned(user, vault, folders, note_rows, att_paths, opts),
+           do: {:ok, %{notes: notes, attachments: atts}}
     end
   end
 

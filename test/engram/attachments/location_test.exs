@@ -156,6 +156,10 @@ defmodule Engram.Attachments.LocationTest do
              })
 
     assert {:error, :conflict} = Attachments.delete_attachment(u, v, "B/x.png")
+    # A folder delete reaching it stops with the same retryable error, before
+    # any note goes (not a MatchError 500).
+    assert {:error, :conflict} = Engram.Folders.delete(u, v, "B", recursive: true)
+    assert {:ok, %{}} = Notes.get_note(u, v, "B/n.md")
     assert before == live(v) |> Enum.map(&{&1.id, &1.path_hmac, &1.storage_key}) |> Enum.sort()
     assert Enum.any?(live(v), &(&1.id == att.id))
   end
