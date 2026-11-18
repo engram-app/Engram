@@ -515,7 +515,7 @@ defmodule Engram.Folders do
          {:ok, atts} <- Attachments.plan_restore(user, vault, op_id, cutoff),
          # Folder rows before anything that points at them. The plans above
          # refuse without writing, so a refused restore leaves them deleted.
-         _ = Repo.with_tenant!(user.id, fn -> Rows.restore_op(vault.id, op_id) end),
+         _ = Repo.with_tenant!(user.id, fn -> Rows.restore_op(user, vault.id, op_id) end),
          {:ok, folders} <- restore_markers(user, vault, notes.folders),
          {:ok, n} <- Notes.restore_notes(user, vault, op_id, notes.notes),
          {:ok, a} <- Attachments.restore_attachments(user, vault, atts.attachments) do

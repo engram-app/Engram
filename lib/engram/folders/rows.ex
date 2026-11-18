@@ -293,8 +293,9 @@ defmodule Engram.Folders.Rows do
       :new
     )
 
-    # The rows are inserted without a hash; `PathHmacs.put/2` sets it.
-    PathHmacs.put(
+    # The rows carry their hash (`PathHmacs.with_hash/2`); release it from
+    # any stale holder, one statement.
+    PathHmacs.release(
       ctx.user_id,
       for({path, _, _, id, _} <- rows, MapSet.member?(written, id), do: {id, hmacs[path]})
     )
@@ -322,7 +323,7 @@ defmodule Engram.Folders.Rows do
          ) do
       1 ->
         put_names(ctx, [{id, segment}], :new)
-        PathHmacs.put(ctx.user_id, [{id, full_h}])
+        PathHmacs.release(ctx.user_id, [{id, full_h}])
         id
 
       0 ->
@@ -397,8 +398,9 @@ defmodule Engram.Folders.Rows do
     :ok
   end
 
-  # No `full_path_hmac`: the caller sets it through `PathHmacs.put/2`.
-  defp build_row(ctx, id, parent_id, segment, _full_h, explicit?) do
+  # The hash rides the INSERT (`PathHmacs.with_hash/2`, written once); the
+  # caller then releases it (`PathHmacs.release/3`).
+  defp build_row(ctx, id, parent_id, segment, full_h, explicit?) do
     {ct, nonce} = encrypt_name(ctx.dek, id, segment)
     now = now()
 
@@ -417,6 +419,7 @@ defmodule Engram.Folders.Rows do
       updated_at: now
     }
     |> Map.merge(Map.new(Folder.name_keys(ctx.fk, segment, nonce)))
+    |> PathHmacs.with_hash(full_h)
   end
 
   defp insert(ctx, id, parent_id, segment, full_h, explicit?) do
@@ -1445,8 +1448,8 @@ defmodule Engram.Folders.Rows do
   parent's outcome is known when its children are placed. A top row of the op
   whose own parent is no longer live stays deleted, with its subtree.
   """
-  @spec restore_op(Ecto.UUID.t(), Ecto.UUID.t()) :: non_neg_integer()
-  def restore_op(vault_id, op_id) do
+  @spec restore_op(map(), Ecto.UUID.t(), Ecto.UUID.t()) :: non_neg_integer()
+  def restore_op(user, vault_id, op_id) do
     _ = Engram.Vaults.lock_seq(vault_id)
 
     rows =
@@ -1469,7 +1472,7 @@ defmodule Engram.Folders.Rows do
         end
       end)
 
-    write_revived(vault_id, revive)
+    write_revived(user, vault_id, revive)
   end
 
   defp depth(_row, _by_id, 0), do: 0
@@ -1506,9 +1509,9 @@ defmodule Engram.Folders.Rows do
 
   defp live?(id), do: Repo.exists?(from(f in Folder, where: f.id == ^id and is_nil(f.deleted_at)))
 
-  defp write_revived(_vault_id, []), do: 0
+  defp write_revived(_user, _vault_id, []), do: 0
 
-  defp write_revived(vault_id, revive) do
+  defp write_revived(user, vault_id, revive) do
     {ids, parents} = Enum.unzip(revive)
 
     {n, _} =
@@ -1531,10 +1534,15 @@ defmodule Engram.Folders.Rows do
       )
       |> Repo.update_all([])
 
-    # A revived row keeps the hash it died with, which may be stale (a row
-    # renamed away from that path while dead, or never rewritten): it yields
-    # it to a live row that holds it, so no two live rows share one.
-    PathHmacs.yield(vault_id, ids)
+    # A revived row's stored hash is the one it died with, which may be
+    # stale. It takes its CURRENT path's hash like any live writer (from a
+    # stale holder too). One whose path will not resolve (a name that will
+    # not decrypt) yields a hash a live row holds instead.
+    dek = dek!(user)
+    fk = Crypto.dek_filter_key_from_bytes(dek)
+    paths = paths_by_ids(dek, vault_id, ids)
+    PathHmacs.put(user.id, for({id, p} <- paths, is_binary(p), do: {id, path_hmac(fk, p)}))
+    PathHmacs.yield(vault_id, for(id <- ids, not is_binary(paths[id]), do: id))
     n
   end
 

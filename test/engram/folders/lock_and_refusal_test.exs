@@ -34,7 +34,7 @@ defmodule Engram.Folders.LockAndRefusalTest do
     {_, queries} =
       QueryRecorder.record(fn ->
         Repo.with_tenant!(u.id, fn -> Rows.soft_delete(u, v.id, ["A"], op) end)
-        Repo.with_tenant!(u.id, fn -> Rows.restore_op(v.id, op) end)
+        Repo.with_tenant!(u.id, fn -> Rows.restore_op(u, v.id, op) end)
       end)
 
     for tx <- QueryRecorder.transactions(queries) do

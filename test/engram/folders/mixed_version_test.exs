@@ -11,7 +11,7 @@ defmodule Engram.Folders.MixedVersionTest do
   use Engram.DataCase, async: false
 
   alias Engram.Crypto
-  alias Engram.Folders.{Rows, RowsV089}
+  alias Engram.Folders.{PathHmacs, Rows, RowsV089}
   alias Engram.Repo
 
   setup do
@@ -52,6 +52,13 @@ defmodule Engram.Folders.MixedVersionTest do
     paths = Map.keys(tree)
     assert length(paths) == length(Enum.uniq(paths))
     tree
+  end
+
+  defp row_hash(id) do
+    %{rows: [[h]]} =
+      Repo.query!("SELECT full_path_hmac FROM folders WHERE id = $1", [Ecto.UUID.dump!(id)])
+
+    h
   end
 
   defp stale!(fk, id, path) do
@@ -131,10 +138,45 @@ defmodule Engram.Folders.MixedVersionTest do
       assert tenant!(u, fn -> Rows.soft_delete(u, v.id, ["C"], op) end) >= 1
 
       {:ok, n} = tenant!(u, fn -> Rows.ensure(u, v.id, "A/B") end)
-      _ = tenant!(u, fn -> Rows.restore_op(v.id, op) end)
+      _ = tenant!(u, fn -> Rows.restore_op(u, v.id, op) end)
 
       assert d_path(u, v, b) == "C/B"
       assert d_path(u, v, n) == "A/B"
+      assert_consistent!(ctx)
+    end
+
+    # Review probe 1: a put aimed at a DEAD row (a DEK rotation re-keys dead
+    # rows, in chunks) must not cost the live row at that path its hash. Red
+    # on ccbb518a1: the live row was left with none.
+    test "a put on a dead row keeps the live row's hash", %{user: u, vault: v, fk: fk} = ctx do
+      {:ok, dead} = tenant!(u, fn -> Rows.ensure(u, v.id, "A/B") end)
+      assert tenant!(u, fn -> Rows.soft_delete(u, v.id, ["A"], Ecto.UUID.generate()) end) >= 1
+      {:ok, live} = tenant!(u, fn -> Rows.ensure(u, v.id, "A/B") end)
+
+      _ = tenant!(u, fn -> PathHmacs.put(u.id, [{dead, Rows.path_hmac(fk, "A/B")}]) end)
+
+      assert row_hash(live) == Rows.path_hmac(fk, "A/B")
+      assert_consistent!(ctx)
+    end
+
+    # Review probe 2: a restored row back at its path takes that path's hash
+    # from a stale live holder, so 0.89.0 resolves the path to it. Red on
+    # ccbb518a1: it yielded its correct hash to the stale row.
+    test "a restored row takes its current path's hash from a stale holder",
+         %{user: u, vault: v, fk: fk} = ctx do
+      {:ok, r} = tenant!(u, fn -> Rows.ensure(u, v.id, "A/B") end)
+      op = Ecto.UUID.generate()
+      assert tenant!(u, fn -> Rows.soft_delete(u, v.id, ["A"], op) end) >= 1
+      {:ok, s} = tenant!(u, fn -> Rows.ensure(u, v.id, "A/B") end)
+      :ok = tenant!(u, fn -> Rows.rename(u, v.id, "A", "C") end)
+      stale!(fk, s, "A/B")
+
+      _ = tenant!(u, fn -> Rows.restore_op(u, v.id, op) end)
+
+      assert d_path(u, v, r) == "A/B"
+      assert d_path(u, v, s) == "C/B"
+      assert row_hash(r) == Rows.path_hmac(fk, "A/B")
+      assert {:ok, ^r} = tenant!(u, fn -> RowsV089.ensure(u, v.id, "A/B") end)
       assert_consistent!(ctx)
     end
 
