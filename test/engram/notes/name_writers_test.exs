@@ -47,7 +47,7 @@ defmodule Engram.Notes.NameWritersTest do
   end
 
   # The folder row a path's folder resolves to, by walking the live tree.
-  defp folder_id(_user, ""), do: nil
+  defp folder_id(_user, :none), do: nil
 
   defp folder_id(user, folder) do
     %{^folder => %{id: id}} = Engram.FolderRows.tree(user)
@@ -67,7 +67,8 @@ defmodule Engram.Notes.NameWritersTest do
     assert row.hmac == Name.hmac(fk, name)
     assert row.ci == Name.ci_hmac(fk, name)
     assert row.stamp == Name.stamp(row.path_nonce)
-    assert row.ref == folder_id(user, folder)
+    # A root note names the root row (S6 step 1b); an attachment none yet.
+    assert row.ref == folder_id(user, if(table == "notes" or folder != "", do: folder, else: :none))
   end
 
   describe "Name" do

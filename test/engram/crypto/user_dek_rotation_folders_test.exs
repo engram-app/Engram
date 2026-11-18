@@ -69,7 +69,8 @@ defmodule Engram.Crypto.UserDekRotationFoldersTest do
     Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(trashed.id)])
 
     before = folders(user.id)
-    assert length(before) == 7
+    # Six folders and the root row (S6 step 1b, `Rows.root_id/1`).
+    assert length(before) == 7 + 1
     deep_before = ref_id(deep.id)
     ref_before = ref_id(note.id)
     assert ref_before
