@@ -108,4 +108,23 @@ defmodule Engram.Folders.PathHmacsPlanTest do
       assert QueryPlan.buffers(plan) <= 30, plan
     end
   end
+
+  # The restore's read of each revived row's current path
+  # (`Rows.paths_by_ids/4`, a chain walk up from each id).
+  test "the restore's path read walks by id", %{user: u, vault: v} do
+    ids = tenant!(u, fn -> Rows.ids_at(u, v.id, ["A", "A/S1"]) end)
+    {:ok, dek} = Crypto.get_dek(u)
+
+    {_, queries} =
+      QueryRecorder.record(fn -> tenant!(u, fn -> Rows.paths_by_ids(dek, v.id, ids) end) end)
+
+    me = self()
+    [{sql, params}] = for %{sql: s, params: p, pid: ^me} <- queries, s =~ "folders", do: {s, p}
+    plans = QueryPlan.rls_plans(u.id, sql, params)
+
+    for plan <- [plans.custom, plans.generic] do
+      assert_keyed!(plan)
+      assert QueryPlan.buffers(plan) <= 30, plan
+    end
+  end
 end
