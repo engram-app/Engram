@@ -12,8 +12,15 @@ defmodule EngramWeb.RequestLoggerTest do
     Logger.configure(level: :info)
     RequestLogger.attach()
 
+    # Re-attach, never detach: the handler is the app's own (attached at boot
+    # by `Engram.Application`), global to the BEAM. Detaching it here left
+    # every later test without request logs, so a sync test that runs after
+    # this module and asserts a "request exception" line saw an empty log
+    # (`UsersControllerTest` "a cascade past its bound leaves the account
+    # retryable", seed-dependent). `attach/0` detaches first, so this is
+    # idempotent.
     on_exit(fn ->
-      :telemetry.detach(:engram_request_logger)
+      RequestLogger.attach()
       Logger.configure(level: previous_level)
     end)
 
