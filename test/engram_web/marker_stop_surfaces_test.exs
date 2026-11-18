@@ -7,7 +7,7 @@ defmodule EngramWeb.MarkerStopSurfacesTest do
   use EngramWeb.ConnCase, async: false
 
   alias Engram.{Folders, Notes, Repo}
-  alias Engram.Folders.Wire
+  alias Engram.Folders.{Rows, Wire}
   alias Engram.MCP.Handlers
 
   setup :authed_api_conn
@@ -68,7 +68,7 @@ defmodule EngramWeb.MarkerStopSurfacesTest do
   defp surface(:wire, conn, user, vault) do
     id_of = fn name ->
       Repo.with_tenant!(user.id, fn ->
-        Engram.Folders.Rows.ids_by_path(user, vault.id, [name])[name]
+        Rows.ids_by_path(user, vault.id, [name])[name]
       end)
     end
 
@@ -114,7 +114,7 @@ defmodule EngramWeb.MarkerStopSurfacesTest do
     vault: v
   } do
     conn |> post(~p"/api/folders", %{"folder" => "E"}) |> response(201)
-    id = Repo.with_tenant!(u.id, fn -> Engram.Folders.Rows.ids_by_path(u, v.id, ["E"])["E"] end)
+    id = Repo.with_tenant!(u.id, fn -> Rows.ids_by_path(u, v.id, ["E"])["E"] end)
 
     body = conn |> get(~p"/api/folders") |> json_response(200)
     assert Enum.find(body["folders"], &(&1["name"] == "E"))["id"] == id
@@ -124,7 +124,7 @@ defmodule EngramWeb.MarkerStopSurfacesTest do
   test "REST: a batch delete by id, then its undo, brings the folder back", ctx do
     %{conn: conn, user: u, vault: v} = ctx
     conn |> post(~p"/api/folders", %{"folder" => "B"}) |> response(201)
-    id = Repo.with_tenant!(u.id, fn -> Engram.Folders.Rows.ids_by_path(u, v.id, ["B"])["B"] end)
+    id = Repo.with_tenant!(u.id, fn -> Rows.ids_by_path(u, v.id, ["B"])["B"] end)
     op = Ecto.UUID.generate()
 
     assert {:ok, _} = Folders.batch_delete(u, v, [id], op_id: op)
