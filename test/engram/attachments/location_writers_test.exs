@@ -180,6 +180,47 @@ defmodule Engram.Attachments.LocationWritersTest do
     end
   end
 
+  describe "folder restore (Folders.restore_op/3)" do
+    test "a folder deleted under its moved name comes back whole" do
+      %{user: u, vault: v, att: att} = moved_world()
+      other = put_att(u, v, "B/y.png", "second file")
+      op = Ecto.UUID.generate()
+      {:ok, _} = Folders.delete(u, v, "B", recursive: true, op_id: op)
+      assert live(v) == []
+
+      assert {:ok, %{attachments: 2, skipped: []}} = Folders.restore_op(u, v, op)
+      assert at(u, v, "B/x.png") == %{id: att.id, content: "old bytes"}
+      assert at(u, v, "B/y.png") == %{id: other.id, content: "second file"}
+      assert at(u, v, "A/x.png") == nil
+    end
+
+    # The stale row holding A/x.png by its stored key cannot be repointed
+    # (its shown slot B/x.png is another file's): that one tombstone is
+    # skipped and reported, every other row of the op comes back.
+    test "a row whose slot cannot be settled is skipped, the rest restored" do
+      %{user: u, vault: v} = world()
+      _gone = put_att(u, v, "A/x.png", "deleted file")
+      kept = put_att(u, v, "A/y.png", "restorable file")
+      op = Ecto.UUID.generate()
+      {:ok, %{deleted: 2}} = Attachments.batch_delete(u, v, ["A/x.png", "A/y.png"], op_id: op)
+      moved = put_att(u, v, "A/x.png", "moved file")
+      move!(u, v, "A", "B")
+      blocker = put_att(u, v, "C/z.png", "blocker")
+      {:ok, fk} = Crypto.dek_filter_key(u)
+
+      Repo.query!(
+        "UPDATE attachments SET path_hmac = $2, folder_ref_stamp = NULL WHERE id = $1",
+        [Ecto.UUID.dump!(blocker.id), Crypto.hmac_field(fk, "B/x.png")]
+      )
+
+      assert {:ok, %{attachments: 1, skipped: skipped}} = Folders.restore_op(u, v, op)
+      assert skipped == [%{path: "A/x.png", kind: "attachment", reason: :conflict}]
+      assert at(u, v, "A/y.png") == %{id: kept.id, content: "restorable file"}
+      assert at(u, v, "A/x.png") == nil
+      assert Enum.any?(live(v), &(&1.id == moved.id))
+    end
+  end
+
   # Rollback / mixed window: rows the way 0.89.0 leaves them, read by D.
   describe "rows written the way 0.89.0 writes them" do
     # 0.89.0 has no `name_key` column nor trigger: a row it wrote before
