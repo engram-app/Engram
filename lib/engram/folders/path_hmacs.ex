@@ -8,12 +8,15 @@ defmodule Engram.Folders.PathHmacs do
   either (S6 step 3, Engram#2523). Every write therefore keeps one live row
   per hash per vault:
 
-    * `put/2`: a writer that knows a row's CURRENT path hash takes it from
+    * `put/3`: a writer that knows a row's CURRENT path hash takes it from
       any other live row still holding it (a stale hash, left below a folder
       whose rename could not rewrite it), then sets it. That row then reads
       as "no hash", which 0.89.0 repairs on its next ensure and D never reads.
-    * `yield/2`: rows whose stored hash may be stale (a restore revives a row
-      as it was) drop it when another live row holds it.
+      A dead target only sets its own hash: it never costs a live row one.
+    * `with_hash/2` + `release/3`: a new row carries its hash in its INSERT
+      (written once), then the hash is released from other holders.
+    * `yield/3`: a revived row whose current path will not resolve (a name
+      that will not decrypt) drops a hash another live row holds.
 
   One statement each, on `folders_full_path` (vault_id, full_path_hmac).
   Runs on the caller's connection: `Engram.Repo` inside a tenant
@@ -23,24 +26,32 @@ defmodule Engram.Folders.PathHmacs do
 
   alias Engram.Repo
 
+  # Live targets only release: a dead row's hash names no folder a reader
+  # can reach, so it must never cost a live row its hash (a DEK rotation
+  # re-keys dead rows too, in chunks).
+  @targets """
+  SELECT v.id, v.fh, f.vault_id, f.deleted_at IS NULL AS live
+  FROM unnest($1::uuid[], $2::bytea[]) AS v(id, fh)
+  JOIN folders f ON f.id = v.id AND f.user_id = $3
+  WHERE f.id = ANY($1::uuid[])
+  """
+
+  @release_from """
+  UPDATE folders h SET full_path_hmac = NULL
+  FROM t
+  WHERE t.live AND h.vault_id = t.vault_id AND h.full_path_hmac = t.fh AND h.user_id = $3
+    AND h.deleted_at IS NULL AND h.id <> ALL($1::uuid[])
+  """
+
   @put """
-  WITH t AS (
-    SELECT v.id, v.fh, f.vault_id
-    FROM unnest($1::uuid[], $2::bytea[]) AS v(id, fh)
-    JOIN folders f ON f.id = v.id AND f.user_id = $3
-    WHERE f.id = ANY($1::uuid[])
-  ), released AS (
-    UPDATE folders h SET full_path_hmac = NULL
-    FROM t
-    WHERE h.vault_id = t.vault_id AND h.full_path_hmac = t.fh AND h.user_id = $3
-      AND h.deleted_at IS NULL AND h.id <> ALL($1::uuid[])
-    RETURNING h.id
-  )
+  WITH t AS (#{@targets}), released AS (#{@release_from} RETURNING h.id)
   UPDATE folders f SET full_path_hmac = t.fh, updated_at = now()
   FROM t
   WHERE f.id = t.id AND f.id = ANY($1::uuid[]) AND f.user_id = $3
     AND f.full_path_hmac IS DISTINCT FROM t.fh
   """
+
+  @release "WITH t AS (#{@targets}) #{@release_from}"
 
   @yield """
   UPDATE folders r SET full_path_hmac = NULL
@@ -59,20 +70,41 @@ defmodule Engram.Folders.PathHmacs do
   # Every read is then a primary-key or `folders_full_path` probe.
 
   @doc """
+  An insert row (a map for `Repo.insert_all/3`) carrying `hash`: the one
+  place a new folder row gets it, so it is written once. The caller then
+  runs `release/3` for the rows it inserted, in the same transaction.
+  """
+  @spec with_hash(map(), binary() | nil) :: map()
+  def with_hash(row, hash), do: Map.put(row, :full_path_hmac, hash)
+
+  @doc """
+  Releases each `{id, hash}` (a nil hash is skipped) from any other live row
+  of the vault, for rows that already carry it (`with_hash/2`). Only a live
+  target releases.
+  """
+  @spec release(module(), Ecto.UUID.t(), [{Ecto.UUID.t() | binary(), binary() | nil}]) ::
+          non_neg_integer()
+  def release(repo \\ Repo, user_id, pairs), do: run(repo, @release, user_id, pairs)
+
+  @doc """
   Sets each `{id, hash}` of `user_id`'s rows (a nil hash is skipped), first
-  releasing that hash from any other live row of the same vault. Returns
-  the rows set.
+  releasing that hash from any other live row of the same vault (only
+  for a live target). Returns the rows set.
   """
   @spec put(module(), Ecto.UUID.t(), [{Ecto.UUID.t() | binary(), binary() | nil}]) ::
           non_neg_integer()
   def put(repo \\ Repo, user_id, pairs) do
+    run(repo, @put, user_id, pairs)
+  end
+
+  defp run(repo, sql, user_id, pairs) do
     case for({id, h} <- pairs, is_binary(h), do: {uuid(id), h}) do
       [] ->
         0
 
       pairs ->
         {ids, hmacs} = Enum.unzip(pairs)
-        %{num_rows: n} = repo.query!(@put, [ids, hmacs, uuid(user_id)])
+        %{num_rows: n} = repo.query!(sql, [ids, hmacs, uuid(user_id)])
         n
     end
   end

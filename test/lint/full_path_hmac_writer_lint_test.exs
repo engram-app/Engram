@@ -22,7 +22,9 @@ defmodule Engram.FullPathHmacWriterLintTest do
     ~r/\bfull_path_hmac:\s/,
     ~r/\bSET\b[^;]*\bfull_path_hmac\s*=(?!=)/i,
     ~r/,\s*full_path_hmac\s*=(?!=)/i,
-    ~r/^\s*"?\s*full_path_hmac\s*=(?!=)/i
+    ~r/^\s*"?\s*full_path_hmac\s*=(?!=)/i,
+    # A changeset or map write by atom (`put_change/3`, `Map.put/3`, `cast/3`).
+    ~r/\b(put_change|change|cast|Map\.put|Map\.merge)\b.*:full_path_hmac\b/
   ]
   @insert ~r/INSERT\s+INTO\s+folders\s*\([^)]*\bfull_path_hmac\b/is
 

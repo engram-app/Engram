@@ -216,7 +216,7 @@ defmodule Engram.Folders.RowsTest do
       assert at.("Keep")
       assert Enum.count(rows(u, v), &(&1.delete_op_id == op and &1.deleted_at)) == 3
 
-      assert in_tenant(u, fn -> Rows.restore_op(v.id, op) end) == 3
+      assert in_tenant(u, fn -> Rows.restore_op(u, v.id, op) end) == 3
       assert by_path(u, v, fk).("A/B/C")
       assert Enum.all?(rows(u, v), &is_nil(&1.deleted_at))
     end
@@ -228,7 +228,7 @@ defmodule Engram.Folders.RowsTest do
       in_tenant(u, fn -> Rows.soft_delete(u, v.id, ["A"], op) end)
       taken = ensure!(u, v, "A")
 
-      assert in_tenant(u, fn -> Rows.restore_op(v.id, op) end) == 0
+      assert in_tenant(u, fn -> Rows.restore_op(u, v.id, op) end) == 0
       assert %{id: ^taken} = by_path(u, v, fk).("A")
     end
 
