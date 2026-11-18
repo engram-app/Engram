@@ -1544,6 +1544,12 @@ defmodule Engram.Folders.Rows do
     from(f in Folder, where: f.id == ^keeper and not f.explicit and exists(explicit))
     |> Repo.update_all(set: [explicit: true, updated_at: now()])
 
+    # Stamped like a merge restore's (`mark_explicit_stamped/1`): the keeper
+    # may have no marker, so the reconcile must never clear it.
+
+    from(f in Folder, where: f.id == ^keeper and f.explicit and is_nil(f.explicit_seq))
+    |> Repo.update_all(set: [explicit_seq: 0])
+
     from(f in Folder, where: f.id == ^row.id)
     |> Repo.update_all(set: [deleted_at: now(), updated_at: now()])
 
@@ -1688,16 +1694,6 @@ defmodule Engram.Folders.Rows do
     end
   end
 
-  @doc "The explicit folder rows `soft_delete/5` stamped with `op_id` (for `restore_op/2`'s caller)."
-  @spec op_explicit_ids(Ecto.UUID.t(), Ecto.UUID.t()) :: [Ecto.UUID.t()]
-  def op_explicit_ids(vault_id, op_id) do
-    from(f in Folder,
-      where: f.vault_id == ^vault_id and f.delete_op_id == ^op_id and f.explicit,
-      select: f.id
-    )
-    |> Repo.all()
-  end
-
   @doc """
   Brings back every folder row `soft_delete/5` stamped with `op_id`. Returns
   how many came back.
@@ -1712,7 +1708,19 @@ defmodule Engram.Folders.Rows do
   whose own parent is no longer live stays deleted, with its subtree.
   """
   @spec restore_op(map(), Ecto.UUID.t(), Ecto.UUID.t()) :: non_neg_integer()
-  def restore_op(user, vault_id, op_id) do
+  def restore_op(user, vault_id, op_id),
+    do: user |> restore_op_explicit(vault_id, op_id) |> elem(0)
+
+  @doc """
+  `restore_op/3`, also returning the live rows that came back EXPLICIT: the
+  op's explicit rows revived in place, and the live siblings an explicit row
+  merged into (it stays deleted; its flag moves there). What a caller tells
+  peers about (`Engram.Folders.restore_op/3`). Any of these moves the vault
+  seq once (an empty explicit folder coming back moves no notes row).
+  """
+  @spec restore_op_explicit(map(), Ecto.UUID.t(), Ecto.UUID.t()) ::
+          {non_neg_integer(), [Ecto.UUID.t()]}
+  def restore_op_explicit(user, vault_id, op_id) do
     _ = Engram.Vaults.lock_seq(vault_id)
 
     rows =
@@ -1738,9 +1746,28 @@ defmodule Engram.Folders.Rows do
     {merges, revive} = Enum.split_with(revive, &match?({:merge, _, _}, &1))
     # An explicit row that merges into a live sibling makes it explicit (the
     # flag a marker re-create gave it before markers stopped).
-    mark_explicit(for {:merge, %{explicit: true}, into} <- merges, uniq: true, do: into)
+    targets = for {:merge, %{explicit: true}, into} <- merges, uniq: true, do: into
+    marked = mark_explicit_stamped(targets)
     n = write_revived(user, vault_id, revive)
-    if n > 0, do: Engram.Vaults.next_seq!(vault_id)
+    if n > 0 or marked > 0, do: Engram.Vaults.next_seq!(vault_id)
+    revived_explicit = for {id, _parent} <- revive, by_id[id].explicit, do: id
+    {n, Enum.uniq(targets ++ revived_explicit)}
+  end
+
+  # The flag a merge moves onto a live row, stamped (`explicit_seq` 0 unless
+  # set) so `ExplicitFolderReconcile` never clears it: the row has no marker.
+  # 0 never passes `soft_delete/5`'s guard, which is for creates. Returns how
+  # many rows changed.
+  defp mark_explicit_stamped([]), do: 0
+
+  defp mark_explicit_stamped(ids) do
+    {n, _} =
+      from(f in Folder, where: f.id in ^ids and not f.explicit)
+      |> Repo.update_all(set: [explicit: true, updated_at: now()])
+
+    from(f in Folder, where: f.id in ^ids and is_nil(f.explicit_seq))
+    |> Repo.update_all(set: [explicit_seq: 0])
+
     n
   end
 

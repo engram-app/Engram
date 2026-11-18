@@ -630,8 +630,8 @@ defmodule Engram.Folders do
   # re-poll `/folders/explicit`). Markers on: none, `restore_markers/3` does it.
   defp restore_rows(user, vault, op_id) do
     if MarkerStop.on?() do
-      ids = Rows.op_explicit_ids(vault.id, op_id)
-      _ = Rows.restore_op(user, vault.id, op_id)
+      # Revived explicit rows and the live rows an explicit one merged into.
+      {_n, ids} = Rows.restore_op_explicit(user, vault.id, op_id)
       {:ok, dek} = Crypto.get_dek(user)
       live = Rows.paths_by_ids(dek, vault.id, ids)
       for {id, name} <- live, do: %{created: true, id: id, name: name}
