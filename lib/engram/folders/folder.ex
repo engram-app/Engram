@@ -68,6 +68,9 @@ defmodule Engram.Folders.Folder do
     field :full_path_hmac, :binary
     field :dek_version, :integer
     field :explicit, :boolean, default: false
+    # The vault seq a create made it explicit at with no marker (phase 2,
+    # `Engram.Folders.MarkerStop`); `ExplicitFolderReconcile` never clears such a row.
+    field :explicit_seq, :integer
     field :deleted_at, :utc_datetime_usec
     field :delete_op_id, Ecto.UUID
     # `Engram.Search.NameTerms`: `<<version>> <> name_hmac` its terms were written for.

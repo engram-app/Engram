@@ -356,4 +356,73 @@ defmodule Engram.Folders.ExplicitReadsTest do
       assert {:ok, ["U"]} = Notes.list_explicit_folders(u, v)
     end
   end
+
+  # The 2639 / 2649 re-review: after a rollback E -> D, D's daily walk must
+  # not clear a folder E made explicit with no marker (`explicit_seq` set),
+  # or the plugin trashes it.
+  test "rollback E -> D: the walk keeps an E-style folder (explicit_seq, no marker)", ctx do
+    %{user: u, vault: v} = ctx
+    {:ok, %{folders: [%{id: m}]}} = Notes.create_folder_markers(u, v, ["FromE"])
+    %{id: row} = FolderRows.tree(u)["FromE"]
+    Repo.query!("UPDATE folders SET explicit_seq = 7 WHERE id = $1", [Ecto.UUID.dump!(row)])
+    Repo.query!("DELETE FROM notes WHERE id = $1", [Ecto.UUID.dump!(m)])
+
+    assert reconcile!() == :done
+    assert FolderRows.tree(u)["FromE"].explicit
+    assert {:ok, ["FromE"]} = Notes.list_explicit_folders(u, v)
+  end
+
+  # The re-review: a closed ledger's walk repairs a ghost in place and stays
+  # closed, so listings never flap back to the markers.
+  test "a closed ledger's walk repairs a ghost and stays closed", %{user: u, vault: v} do
+    explicit_without_marker!(u, v, "Ghost2")
+    DataMigrations.mark_done(ExplicitFolderReconcile.name(), ExplicitFolderReconcile.version())
+
+    on_exit(fn ->
+      DataMigrations.forget(ExplicitFolderReconcile.name(), ExplicitFolderReconcile.version())
+    end)
+
+    IdWindows.reset_walk(ExplicitFolderReconcile.name())
+
+    assert ExplicitFolderReconcile.run_pass() == :done
+    refute FolderRows.tree(u)["Ghost2"].explicit
+
+    assert DataMigrations.completed_at(
+             ExplicitFolderReconcile.name(),
+             ExplicitFolderReconcile.version()
+           )
+  end
+
+  # The re-review: the walk's statements as the fleet role, on a realistic
+  # vault (notes, markers, explicit rows; ANALYZE): index probes, no scan.
+  test "plans: the reconcile's statements as engram_maintenance", %{user: u, vault: v} do
+    for i <- 1..200 do
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"path" => "F#{rem(i, 20)}/n#{i}.md", "content" => "x"},
+          actor: "api"
+        )
+    end
+
+    {:ok, _} = Notes.create_folder_markers(u, v, Enum.map(1..10, &"M#{&1}"))
+    for t <- ["notes", "folders", "vaults"], do: Repo.query!("ANALYZE #{t}")
+
+    ids =
+      u |> FolderRows.tree() |> Map.values() |> Enum.map(&Ecto.UUID.dump!(&1.id)) |> Enum.take(20)
+
+    vaults = [Ecto.UUID.dump!(v.id)]
+
+    for {sql, params} <- [
+          {ExplicitFolderReconcile.lock_vaults_sql(), [ids]},
+          {ExplicitFolderReconcile.clear_sql(), [ids, vaults]},
+          {ExplicitFolderReconcile.left_sql(), [ids]}
+        ] do
+      %{custom: custom, generic: generic} =
+        QueryPlan.rls_plans(u.id, sql, params, role: "engram_maintenance")
+
+      for plan <- [custom, generic] do
+        refute plan =~ ~r/Seq Scan on (notes|folders|vaults)/, plan
+        if sql =~ "kind = 'folder'", do: assert(plan =~ "notes_user_vault_folder_marker", plan)
+      end
+    end
+  end
 end
