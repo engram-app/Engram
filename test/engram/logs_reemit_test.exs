@@ -324,6 +324,7 @@ defmodule Engram.LogsReemitTest do
             "category" => "sync",
             "message" => "preview_failed reason=timeout missing_live=true",
             "platform" => "mobile",
+            "conn_id" => "c1",
             "plugin_version" => plugin_version,
             "forced" => true,
             "context" => context
