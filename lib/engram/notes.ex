@@ -9647,11 +9647,13 @@ defmodule Engram.Notes do
       {:ok, %{deleted: 0, notes: 0}}
     else
       now = DateTime.utc_now()
+      # Before the vault lock: a DEK load (a KMS call on a cold cache) must
+      # not run while every folder writer of the vault waits on the lock.
+      {:ok, dek} = Crypto.get_dek(user)
 
       {:ok, {deleted_ids, seq}} =
         Repo.with_tenant(user.id, fn ->
           seq = Engram.Vaults.next_seq!(vault.id)
-          {:ok, dek} = Crypto.get_dek(user)
           placed_ok = placed_now(dek, vault.id, matches)
 
           # Chunked for the reason `@rename_update_chunk` already documents in
