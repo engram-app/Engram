@@ -84,6 +84,25 @@ defmodule Engram.Folders.Rows do
   @spec parent_path(String.t()) :: String.t()
   def parent_path(path), do: path |> String.split("/") |> Enum.drop(-1) |> Enum.join("/")
 
+  @doc """
+  The id of `vault_id`'s root folder row: the vault's own id (S6 step 1,
+  Engram#2523). The root row has `parent_id` NULL and the empty name, and
+  no children: top-level folders keep `parent_id` NULL. A note at the root
+  may name it in `folder_ref_id` (a writer from step 1b on) or carry NULL
+  (every earlier writer); every reader takes both as the root, so a root
+  reference is recognized with no lookup (`n.folder_ref_id = n.vault_id`).
+  """
+  @spec root_id(Ecto.UUID.t()) :: Ecto.UUID.t()
+  def root_id(vault_id), do: vault_id
+
+  @doc """
+  A folder reference as listings and the wire show it: nil at the root,
+  whether the row names the root row (`root_id/1`) or nothing.
+  """
+  @spec public_ref(Ecto.UUID.t() | nil, Ecto.UUID.t()) :: Ecto.UUID.t() | nil
+  def public_ref(vault_id, vault_id), do: nil
+  def public_ref(ref, _vault_id), do: ref
+
   @doc "Every ancestor path of `path`, shallowest first, `path` itself last."
   @spec prefixes(String.t()) :: [String.t()]
   def prefixes(path) do
@@ -809,14 +828,15 @@ defmodule Engram.Folders.Rows do
 
   @doc """
   Every live folder row of `vault_id`, names still encrypted: what
-  `decrypt_tree/2` takes. O(folders). `extra`: more select fields (a
+  `decrypt_tree/2` takes. O(folders). Not the root row (`root_id/1`): it
+  is no folder a listing shows. `extra`: more select fields (a
   listing's `Engram.Notes.Location.moved_column/1`). Runs inside the
   caller's tenant transaction; decrypt outside it.
   """
   @spec live_rows(Ecto.UUID.t(), map()) :: [map()]
   def live_rows(vault_id, extra \\ %{}) do
     from(f in Folder,
-      where: f.vault_id == ^vault_id and is_nil(f.deleted_at),
+      where: f.vault_id == ^vault_id and is_nil(f.deleted_at) and f.id != ^root_id(vault_id),
       select: %{
         id: f.id,
         parent_id: f.parent_id,

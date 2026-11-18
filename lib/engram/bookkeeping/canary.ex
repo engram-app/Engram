@@ -143,6 +143,7 @@ defmodule Engram.Bookkeeping.Canary do
         ct: n.folder_ciphertext,
         nonce: n.folder_nonce,
         ref: n.folder_ref_id,
+        vault_id: n.vault_id,
         folder_live?: not is_nil(f.id),
         folder_hmac: f.full_path_hmac
       }
@@ -180,6 +181,7 @@ defmodule Engram.Bookkeeping.Canary do
         path_ciphertext: a.path_ciphertext,
         path_nonce: a.path_nonce,
         ref: a.folder_ref_id,
+        vault_id: a.vault_id,
         folder_live?: not is_nil(f.id),
         folder_hmac: f.full_path_hmac
       }
@@ -228,7 +230,9 @@ defmodule Engram.Bookkeeping.Canary do
     end
   end
 
-  defp wrong_ref?(row, "", _fk), do: row.ref != nil
+  # The root: no reference, or the vault's root row (`Rows.root_id/1`; both
+  # raw ids here).
+  defp wrong_ref?(row, "", _fk), do: row.ref not in [nil, Rows.root_id(row.vault_id)]
   defp wrong_ref?(%{folder_live?: false}, _folder, _fk), do: true
   defp wrong_ref?(row, folder, fk), do: row.folder_hmac != Rows.path_hmac(fk, folder)
 
