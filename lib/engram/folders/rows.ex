@@ -1600,6 +1600,32 @@ defmodule Engram.Folders.Rows do
   end
 
   @doc """
+  Moves the live EXPLICIT folder row at `old` (and its subtree) to `new` when
+  no note or marker under it carried the move: an empty folder made on
+  purpose (S6 step 4). `{:ok, 1}` when it moved, after bumping the vault seq
+  (vault row first, every writer's lock order); `{:ok, 0}`, touching nothing,
+  when the row is missing or not explicit; `{:error, :conflict}` when a live
+  folder already holds `new` (a rename onto an occupied path). Runs inside
+  the caller's tenant transaction, under its folder claims.
+  """
+  @spec move_bare_explicit(map(), Ecto.UUID.t(), String.t(), String.t()) ::
+          {:ok, 0 | 1} | {:error, term()}
+  def move_bare_explicit(user, vault_id, old, new) do
+    with %{^old => id} when is_binary(id) <- ids_by_path(user, vault_id, [old]),
+         true <- Repo.exists?(from(f in Folder, where: f.id == ^id and f.explicit)) do
+      _ = Engram.Vaults.next_seq!(vault_id)
+
+      case rename(user, vault_id, old, new) do
+        :ok -> {:ok, 1}
+        {:error, :merge} -> {:error, :conflict}
+        {:error, _} = err -> err
+      end
+    else
+      _ -> {:ok, 0}
+    end
+  end
+
+  @doc """
   Clears the explicit flag of the live row at `folder` when it is set, with
   no marker involved: `true` if it was explicit (after bumping the vault seq,
   which the listings' caches and etags key on), `false`, touching nothing,

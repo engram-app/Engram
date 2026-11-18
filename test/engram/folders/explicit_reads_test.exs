@@ -206,4 +206,45 @@ defmodule Engram.Folders.ExplicitReadsTest do
       refute plan =~ "Seq Scan on folders", plan
     end
   end
+
+  # The #2649 review, H1: an empty explicit folder with no marker is a bare
+  # folder row; every rename and move surface must move it.
+  describe "renaming an empty explicit folder with no marker" do
+    test "Folders.rename moves it and reports the folder", %{user: u, vault: v} do
+      explicit_without_marker!(u, v, "Empty")
+
+      assert {:ok, %{notes: 0, attachments: 0, folders: 1}} =
+               Engram.Folders.rename(u, v, "Empty", "Renamed")
+
+      assert {:ok, ["Renamed"]} = Notes.list_explicit_folders(u, v)
+    end
+
+    test "MCP rename_folder moves it", %{user: u, vault: v} do
+      explicit_without_marker!(u, v, "Empty")
+
+      assert {:ok, _, _} =
+               Engram.MCP.Handlers.handle("rename_folder", u, v, %{
+                 "old_folder" => "Empty",
+                 "new_folder" => "R2"
+               })
+
+      assert {:ok, ["R2"]} = Notes.list_explicit_folders(u, v)
+    end
+
+    test "a batch move by id moves it", %{user: u, vault: v} do
+      id = explicit_without_marker!(u, v, "Empty")
+      {:ok, %{folders: [%{id: _}]}} = Notes.create_folder_markers(u, v, ["Into"])
+
+      assert {:ok, _} = Engram.Folders.batch_move(u, v, [id], {:path, "Into"})
+      assert {:ok, ["Into", "Into/Empty"]} = Notes.list_explicit_folders(u, v)
+    end
+
+    test "control: a bare derived row is still not found over REST/MCP", %{user: u, vault: v} do
+      n = put_note(u, v, "D/n.md")
+      :ok = Notes.delete_note(u, v, n.path)
+
+      assert {:ok, %{notes: 0, attachments: 0, folders: 0}} =
+               Engram.Folders.rename(u, v, "D", "E")
+    end
+  end
 end

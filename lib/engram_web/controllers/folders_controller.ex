@@ -358,7 +358,7 @@ defmodule EngramWeb.FoldersController do
     vault = conn.assigns.current_vault
 
     case Folders.rename(user, vault, old_path, new_path) do
-      {:ok, %{notes: 0, attachments: 0}} ->
+      {:ok, %{notes: 0, attachments: 0, folders: 0}} ->
         conn |> put_status(404) |> json(%{error: "folder not found"})
 
       {:ok, %{notes: count, attachments: att_count}} ->
