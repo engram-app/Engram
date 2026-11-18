@@ -1,6 +1,6 @@
 # Context Doc: folder rows, who writes them, and when a reader may trust `folder_ref_id`
 
-_Last verified: 2026-11-03 (attachment reference stamp, #2413)_
+_Last verified: 2026-11-17 (S6 step 1a root row reads)_
 
 ## What this is
 
@@ -9,8 +9,33 @@ folder, `parent_id`, `full_path_hmac` (equal to `notes.folder_hmac`). Notes and
 attachments point at their folder with `folder_ref_id`. The STORED paths
 (`notes.path_*` / `folder_*`, attachment `path_*`, tombstones) are still the
 authority and are still written everywhere: the previous release is the
-rollback target and ignores the new column. Root has no row, so a root item's
-`folder_ref_id` is NULL, the same as "not resolved yet".
+rollback target and ignores the new column. A root item's `folder_ref_id` is
+NULL (the same as "not resolved yet"), or, from S6 step 1b on, the vault's
+root row (below).
+
+## The root row (S6 step 1, Engram#2523)
+
+`Rows.root_id(vault_id)` is the vault's own id: the root row has that id,
+`parent_id` NULL and the empty name, and no folder hangs under it (top-level
+folders keep `parent_id` NULL, so the walk is unchanged). A reference to it is
+recognized with no lookup (`folder_ref_id = vault_id`). Step 1a (readers)
+ships before 1b (writers + the `RootRefs` ledger), and a rolling deploy or a
+rollback runs them side by side, so every reader takes a NULL root reference
+and a root-row reference as the same root:
+
+- `Rows.live_rows/2` leaves the root row out, so listings (`Location.place/3`,
+  the manifest, the vault tree) never show an empty-named folder and a root
+  note's `folder_id` stays nil.
+- `Rows.public_ref/2` turns the root row into nil wherever a reference
+  reaches the wire (`Location.wire_fields/2`, `Wire.create_reply/3`).
+- The root page (`Notes.list_notes_in_folder_page/4` for `""`) reads two
+  keyset arms (NULL non-drift, and `= root_id`), each on
+  `notes_folder_ref_live_id`, merged in id order: an `OR` would read every
+  root note or walk the vault.
+- Folder counts name the root row's group `""` (its chain path), summed with
+  the NULL group. `list_folders_implied_by_notes/2` and the daily snapshot
+  skip the root row.
+- `Engram.Folders.RootRowReadTest` pins all of the above.
 
 ## One module owns the table
 

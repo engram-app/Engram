@@ -45,9 +45,9 @@ defmodule Engram.Notes.Location do
   A name is trusted only while `name_stamp == stamp(path_nonce)`
   (`Engram.Crypto.NameKeys`): the previous release (a rolling deploy, a
   rollback) rewrites the path without the name, which stales the stamp.
-  Rows with no `folder_ref_id` (the root, or an unresolved folder) and
-  tombstones are read and shown by their stored path. So S5 must give the
-  root a row or keep writing `path_*` for rows with no folder ref.
+  Rows with no `folder_ref_id` (the root, or an unresolved folder), rows at
+  the root row (`Rows.root_id/1`, S6 step 1: never under a moved folder) and
+  tombstones are read and shown by their stored path.
 
   Gate (`on?/0`): the S2 `note_name` ledger is done (read from the ledger
   row, cached a minute per node, so `DataMigrations.reopen/2` turns names
@@ -577,12 +577,12 @@ defmodule Engram.Notes.Location do
 
   @doc """
   The feed's additive fields for a live note while `on?/0`: its `folder_id`
-  (nil at the root or when unresolved) and its `name` (the last segment of
+  (nil at the root, its row's or none, `Rows.public_ref/2`, or when unresolved) and its `name` (the last segment of
   the path it is served at). Off, or a tombstone: none.
   """
   @spec wire_fields(struct(), boolean()) :: map()
   def wire_fields(%{deleted_at: nil, path: path} = note, true) when is_binary(path),
-    do: %{folder_id: note.folder_ref_id, name: Name.of_path(path)}
+    do: %{folder_id: Rows.public_ref(note.folder_ref_id, note.vault_id), name: Name.of_path(path)}
 
   def wire_fields(_note, _on?), do: %{}
 

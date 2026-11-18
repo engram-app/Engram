@@ -7600,7 +7600,11 @@ defmodule Engram.Notes do
 
             {Repo.all(
                from(n in scoped_live(user, vault),
-                 where: n.kind == "note" and not is_nil(n.folder_ref_id),
+                 # Not the root row's notes (`Rows.root_id/1`): the root is
+                 # no implied folder.
+                 where:
+                   n.kind == "note" and not is_nil(n.folder_ref_id) and
+                     n.folder_ref_id != ^Rows.root_id(vault.id),
                  distinct: n.folder_ref_id,
                  select: {n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
                )
@@ -7733,7 +7737,9 @@ defmodule Engram.Notes do
     # decrypted outside Postgres:
     #  * the live notes grouped by `folder_ref_id` (leg 4), the folder ROW
     #    they sit in, on `notes_folder_ref_live` (no folder envelope is
-    #    touched for them). The NULL group is the root plus the drift;
+    #    touched for them). The NULL group is the root plus the drift; the
+    #    root row's group (`Rows.root_id/1`) names the empty path, so the
+    #    two root groups sum into one entry;
     #  * the drift notes (`drift_query/2`, leg 1, count 1 each), placed by
     #    their own folder envelope: 0 rows in steady state;
     #  * the folder markers (leg 3, count 0), so an empty explicit folder is
@@ -8028,14 +8034,21 @@ defmodule Engram.Notes do
             query =
               from(n in scoped_live(user, vault),
                 where: n.kind == "note",
-                where: ^directly_in(user, vault, folder, drift),
                 order_by: [asc: n.id],
                 limit: ^(limit + 1),
                 select: struct(n, @note_meta_fields)
               )
 
             query = if after_id, do: where(query, [n], n.id > ^after_id), else: query
-            rows = Repo.all(query)
+
+            # One keyset read per arm, each on its own index range, merged:
+            # an `OR` of the arms reads all of them or walks the vault.
+            rows =
+              directly_in_arms(user, vault, folder, drift)
+              |> Enum.flat_map(&Repo.all(where(query, ^&1)))
+              |> Enum.sort_by(& &1.id)
+              |> Enum.take(limit + 1)
+
             # Their folder chains, in this snapshot (`Location.chains/1`).
             {rows, Location.chains(rows)}
           end)
@@ -8068,18 +8081,34 @@ defmodule Engram.Notes do
   # see `scan_with_drift/3` for why the order matters. Those whose
   # `folder_ref_id` names the live row at `folder`
   # (`notes_folder_ref_live`), plus the drift notes (`drift`, `placed_drift/3`) whose
-  # envelope says `folder`. The root is a NULL reference that is not drift:
-  # the drain predicate's complement within the NULL group, so a page and
-  # `raw_folder_count_rows/2`'s root agree. MUST run inside the tenant block.
-  defp directly_in(_user, _vault, "", _drift),
+  # envelope says `folder`. The root is a NULL reference that is not drift
+  # (the drain predicate's complement within the NULL group), or a
+  # reference to the root row, so a page and `raw_folder_count_rows/2`'s
+  # root agree. MUST run inside the tenant block.
+  defp directly_in(user, vault, folder, drift),
     do:
+      user
+      |> directly_in_arms(vault, folder, drift)
+      |> Enum.reduce(&dynamic(^&2 or ^&1))
+
+  # `directly_in/4` as its disjoint arms, each one index range. The root is
+  # two (S6 step 1): the NULL references that are not drift, and the
+  # references to the vault's root row (`Rows.root_id/1`), which a writer
+  # from step 1b on sets and a previous-release writer does not.
+  defp directly_in_arms(_user, vault, "", _drift),
+    do: [
       dynamic(
         [n],
         is_nil(n.folder_ref_id) and
           fragment("coalesce(octet_length(?) <= 16, true)", n.folder_ciphertext)
-      )
+      ),
+      dynamic([n], n.folder_ref_id == ^Rows.root_id(vault.id))
+    ]
 
-  defp directly_in(user, vault, folder, drift) do
+  defp directly_in_arms(user, vault, folder, drift),
+    do: [directly_in_folder(user, vault, folder, drift)]
+
+  defp directly_in_folder(user, vault, folder, drift) do
     by_ref =
       case Rows.ids_at(user, vault.id, [folder]) do
         # The usual case, one live row: an equality, costed per folder as the
