@@ -231,10 +231,13 @@ defmodule Engram.Folders.WritersTest do
     {:ok, count} =
       Repo.with_tenant(u.id, fn ->
         {:ok, fk} = Engram.Crypto.dek_filter_key(u)
-        hmac = Rows.path_hmac(fk, "Same/Dir")
+        same = tree(u)["Same"].id
+        dir = Rows.name_hmac(fk, "Dir")
 
         Repo.aggregate(
-          from(f in Engram.Folders.Folder, where: f.full_path_hmac == ^hmac),
+          from(f in Engram.Folders.Folder,
+            where: f.parent_id == ^same and f.name_hmac == ^dir and is_nil(f.deleted_at)
+          ),
           :count
         )
       end)

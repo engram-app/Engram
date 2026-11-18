@@ -3,6 +3,7 @@ defmodule Engram.Folders.RowsTest do
   use Engram.DataCase, async: false
 
   alias Engram.Crypto
+  alias Engram.FolderRows
   alias Engram.Folders.{Folder, Rows}
   alias Engram.Repo
 
@@ -35,8 +36,9 @@ defmodule Engram.Folders.RowsTest do
     %{user: u, vault: v, dek: dek, fk: fk} = ctx
     leaf = ensure!(u, v, "A/B/C")
 
-    by_path = Map.new(rows(u, v), &{&1.full_path_hmac, &1})
-    [a, b, c] = Enum.map(["A", "A/B", "A/B/C"], &Map.fetch!(by_path, Rows.path_hmac(fk, &1)))
+    by_id = Map.new(rows(u, v), &{&1.id, &1})
+    tree = FolderRows.tree(u)
+    [a, b, c] = Enum.map(["A", "A/B", "A/B/C"], &Map.fetch!(by_id, tree[&1].id))
 
     assert c.id == leaf
     assert [a.parent_id, b.parent_id, c.parent_id] == [nil, a.id, b.id]
@@ -89,26 +91,12 @@ defmodule Engram.Folders.RowsTest do
     assert length(rows(u, v)) == 1
   end
 
-  test "a row with no full_path_hmac (an older writer) is adopted, not duplicated", ctx do
-    %{user: u, vault: v} = ctx
-    id = ensure!(u, v, "Legacy")
-
-    Repo.with_tenant(u.id, fn ->
-      Repo.update_all(from(f in Folder, where: f.id == ^id), set: [full_path_hmac: nil])
-    end)
-
-    # Found by its chain (S6 step 3): no hash is read, so none is rewritten
-    # here (`FolderTable` heals it while the hash is still written).
-    assert ensure!(u, v, "Legacy") == id
-    assert length(rows(u, v)) == 1
-  end
-
   describe "subtree, rename, delete and restore" do
-    defp by_path(user, vault, fk) do
-      rows(user, vault)
-      |> Enum.reject(& &1.deleted_at)
-      |> Map.new(&{&1.full_path_hmac, &1})
-      |> then(fn m -> fn path -> Map.get(m, Rows.path_hmac(fk, path)) end end)
+    # path => live row, by each row's chain of names.
+    defp by_path(user, vault, _fk) do
+      by_id = rows(user, vault) |> Enum.reject(& &1.deleted_at) |> Map.new(&{&1.id, &1})
+      tree = FolderRows.tree(user)
+      fn path -> tree[path] && by_id[tree[path].id] end
     end
 
     defp in_tenant(user, fun) do
@@ -126,7 +114,7 @@ defmodule Engram.Folders.RowsTest do
       assert in_tenant(u, fn -> Rows.subtree(u, v.id, [""]) end) == []
     end
 
-    test "rename moves one row and rewrites the descendants' path hashes", ctx do
+    test "rename moves one row; descendants follow by their chain", ctx do
       %{user: u, vault: v, dek: dek, fk: fk} = ctx
       leaf = ensure!(u, v, "A/B/C/D")
       ensure!(u, v, "Z")
@@ -174,7 +162,7 @@ defmodule Engram.Folders.RowsTest do
       assert at.("A") == nil
       # Exactly one live row per path.
       live = rows(u, v) |> Enum.reject(& &1.deleted_at)
-      assert length(live) == length(Enum.uniq_by(live, & &1.full_path_hmac))
+      assert length(live) == map_size(FolderRows.tree(u))
     end
 
     # Two merges in one owner (`Folders.atomic/1`'s queue), the second's
@@ -315,17 +303,9 @@ defmodule Engram.Folders.RowsTest do
       assert length(Map.keys(live)) == 4
     end
 
-    test "a batch adopts a live row with no full_path_hmac as a parent", ctx do
+    test "a batch adopts an existing row as a parent", ctx do
       %{user: u, vault: v} = ctx
-      # A live row for the name whose full_path_hmac is missing (an older
-      # writer): the walk finds it by its chain and the batch adopts it
-      # instead of duplicating it. (A row a racing creator commits after the
-      # walk takes the insert-conflict read: `WalkIndexCondTest`.)
       id = ensure!(u, v, "Legacy")
-
-      Repo.with_tenant(u.id, fn ->
-        Repo.update_all(from(f in Folder, where: f.id == ^id), set: [full_path_hmac: nil])
-      end)
 
       ids = ensure_all!(u, v, ["Legacy/Child", "Other"])
       assert length(rows(u, v)) == 3

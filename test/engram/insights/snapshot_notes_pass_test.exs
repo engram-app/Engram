@@ -46,7 +46,8 @@ defmodule Engram.Insights.SnapshotNotesPassTest do
     note.(folder_hmac: f4, folder_ref_id: r4, tags_hmac: [t3, t3])
     note.(folder_hmac: f2, folder_ref_id: r2, tags_hmac: [])
     # A folder marker counts as a folder; its tags never count.
-    note.(@marker ++ [folder_hmac: f3, tags_hmac: [h()]])
+    marker = note.(@marker ++ [folder_hmac: f3, tags_hmac: [h()]])
+    marker_row!(user, rich, marker.id)
     # Deleted rows count for neither.
     note.(folder_hmac: h(), tags_hmac: [h()], deleted_at: DateTime.utc_now())
 
@@ -55,10 +56,28 @@ defmodule Engram.Insights.SnapshotNotesPassTest do
     insert(:note, user: user, vault: untagged, folder_hmac: f2, folder_ref_id: u2, tags_hmac: [])
 
     markers_only = insert(:vault, user: user)
-    insert(:note, @marker ++ [user: user, vault: markers_only, folder_hmac: f1, tags_hmac: []])
+
+    m =
+      insert(:note, @marker ++ [user: user, vault: markers_only, folder_hmac: f1, tags_hmac: []])
+
+    marker_row!(user, markers_only, m.id)
 
     empty = insert(:vault, user: user)
     [rich, untagged, markers_only, empty]
+  end
+
+  # A marker's explicit folder row, keeping the marker's UUID, as
+  # `Rows.ensure_markers/3` writes it in the marker's own transaction: an
+  # empty folder counts by that row (S6 step 3).
+  defp marker_row!(user, vault, id) do
+    Repo.query!(
+      """
+      INSERT INTO folders (id, vault_id, user_id, name_ciphertext, name_nonce, name_hmac,
+                           dek_version, explicit)
+      VALUES ($1, $2, $3, '\\x00', '\\x00', $4, 2, true)
+      """,
+      [Ecto.UUID.dump!(id), Ecto.UUID.dump!(vault.id), Ecto.UUID.dump!(user.id), h()]
+    )
   end
 
   # The pre-change queries, verbatim in shape: the reference the new single
@@ -145,6 +164,36 @@ defmodule Engram.Insights.SnapshotNotesPassTest do
     Snapshot.run(day: day)
 
     assert Repo.get_by!(VaultDailyMetric, vault_id: vault.id, date: day).folders == 4
+  end
+
+  # S6 step 3 edges of a count by rows: a folder with a marker AND notes
+  # (its explicit row holds them) counts once, whichever came first; a live
+  # marker whose row died is not a folder until `FolderTable` gives it one
+  # back (an accepted under-count, a heal state).
+  test "an explicit folder with notes counts once; a marker with a dead row does not" do
+    {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
+    vault = insert(:vault, user: user)
+
+    # Marker first (the row keeps its id), then a note into it.
+    {:ok, _} = Notes.create_folder_marker(user, vault, "M")
+    # Note first, then a marker on its row (the marker gets its own id).
+    up =
+      &Notes.upsert_note(user, vault, %{"path" => &1, "content" => "x", "mtime" => 1.0},
+        actor: "api"
+      )
+
+    {:ok, _} = up.("M/a.md")
+    {:ok, _} = up.("N/b.md")
+    {:ok, _} = Notes.create_folder_marker(user, vault, "N")
+    {:ok, dead} = Notes.create_folder_marker(user, vault, "Dead")
+
+    Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(dead.id)])
+
+    day = Date.add(Date.utc_today(), -1)
+    Snapshot.run(day: day)
+
+    # M and N, once each; Dead not at all.
+    assert Repo.get_by!(VaultDailyMetric, vault_id: vault.id, date: day).folders == 2
   end
 
   # Red before: the statement planned two scans of `notes`, one per subquery.
