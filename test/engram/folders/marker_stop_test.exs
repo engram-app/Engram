@@ -6,8 +6,8 @@ defmodule Engram.Folders.MarkerStopTest do
   use Engram.DataCase, async: false
 
   alias Engram.Backfill.IdWindows
-  alias Engram.{FolderRows, Folders, Notes, Repo, Vaults}
   alias Engram.DataMigrations.ExplicitFolderReconcile
+  alias Engram.{FolderRows, Folders, Notes, Repo, Vaults}
   alias Engram.Folders.{MarkerStop, Rows}
 
   setup do
