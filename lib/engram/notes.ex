@@ -3888,7 +3888,7 @@ defmodule Engram.Notes do
   defp read_located(user, vault, path) do
     case Repo.with_tenant(user.id, fn -> read_with_tail(user, vault, path) end) do
       {:ok, {{%Note{} = note, tail}, named?}} ->
-        {:ok, note |> decrypt_or_raise!(user) |> Location.found_at(path), tail, named?}
+        {:ok, decrypt_at(note, user, path), tail, named?}
 
       _ ->
         {:error, :not_found}
@@ -5331,7 +5331,7 @@ defmodule Engram.Notes do
     do: from(n in Note, where: n.id == ^id and n.seq == ^seq and n.crdt_state_nonce == ^nonce)
 
   defp do_rename_note_inner({note, old_path}, user, new_path, new_folder, now, refs) do
-    decrypted_note = note |> decrypt_or_raise!(user) |> Location.found_at(old_path)
+    decrypted_note = decrypt_at(note, user, old_path)
     new_title = Helpers.extract_title(decrypted_note.content || "", new_path)
 
     # T3.6 — rename converges the row to AAD-bound. We have content
@@ -6836,16 +6836,19 @@ defmodule Engram.Notes do
     # then a note whose folder and name put it there.
     Enum.zip_with(paths, hmacs, fn path, hmac ->
       cond do
-        is_map_key(held, hmac) -> {path, serve(user, held[hmac])}
+        is_map_key(held, hmac) -> {path, serve(user, held[hmac], path)}
         MapSet.member?(over, hmac) -> {path, fn -> :over_budget end}
-        is_map_key(named, hmac) -> {path, serve(user, named[hmac])}
+        is_map_key(named, hmac) -> {path, serve(user, named[hmac], path)}
         true -> {path, fn -> nil end}
       end
     end)
   end
 
-  defp serve(user, {note, tail}),
-    do: fn -> note |> decrypt_or_raise!(user) |> then(&current_note(user, &1, tail)) end
+  # Shown at the path that found it (`decrypt_at/3`), as `get_note/3` is:
+  # a note found by its folder row and name under a folder moved without a
+  # cascade still stores its old path.
+  defp serve(user, {note, tail}, path),
+    do: fn -> note |> decrypt_at(user, path) |> then(&current_note(user, &1, tail)) end
 
   # `{held, named}`: each row by the path it holds (its stored path, the
   # first `key` answer) and by the paths its folder and name put it at (the
@@ -7986,9 +7989,15 @@ defmodule Engram.Notes do
           )
       end
 
-    {:ok, notes} = Repo.with_tenant(user.id, fn -> Repo.all(query) end)
+    # Their folder chains in this snapshot (`Location.chains/1`), so each
+    # note is listed where its folder row puts it, not at its stored path.
+    {:ok, {notes, chains}} =
+      Repo.with_tenant(user.id, fn ->
+        notes = Repo.all(query)
+        {notes, Location.chains(notes)}
+      end)
 
-    {:ok, decrypt_or_raise!(notes, user)}
+    {:ok, Location.put_paths(user, decrypt_or_raise!(notes, user), chains)}
   end
 
   @doc """
@@ -10438,6 +10447,12 @@ defmodule Engram.Notes do
     {:ok, filter_key} = Crypto.dek_filter_key(user)
     filter_key |> Crypto.hmac_field(path) |> Base.encode64()
   end
+
+  # THE decrypt of a note row found by a path lookup: shown at that `path`
+  # (`Location.found_at/2`), whatever its stored path still says (S5, a
+  # folder moved without a cascade). Every by-path read goes through it.
+  defp decrypt_at(note, user, path),
+    do: note |> decrypt_or_raise!(user) |> Location.found_at(path)
 
   # Phase B.3: decryption MUST raise on failure. Returning the un-decrypted
   # struct (with virtual path/folder/tags = nil) silently serializes
