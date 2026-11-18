@@ -91,6 +91,143 @@ defmodule Engram.Folders.MarkerStopTest do
     assert explicit(u, v) == ["F", "F/New"]
   end
 
+  # A create that lands between a delete's scan and its row delete, through
+  # the public deletes: the seq read before the scan (`since_seq`) is what
+  # keeps it. The create runs from a query hook on the first attachments read
+  # (the scan's last leg), so it is after the seq read and before the rows go.
+  defp create_during_scan(user, vault, folder, fun) do
+    me = self()
+    id = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      id,
+      [:engram, :repo, :query],
+      fn _, _, meta, _ ->
+        if self() == me and meta[:source] == "attachments" and !Process.get(id) do
+          Process.put(id, true)
+          {:ok, _} = Folders.create_markers(user, vault, [folder])
+        end
+      end,
+      nil
+    )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(id)
+    end
+
+    assert Process.get(id), "the hook never ran"
+  end
+
+  test "Folders.delete keeps a folder made explicit during its scan", %{user: u, vault: v} do
+    {:ok, _} = Folders.create_markers(u, v, ["F"])
+
+    create_during_scan(u, v, "F/New", fn ->
+      assert {:ok, _} = Folders.delete(u, v, "F", recursive: true)
+    end)
+
+    assert "F/New" in explicit(u, v)
+  end
+
+  test "Folders.batch_delete keeps a folder made explicit during its scan", %{user: u, vault: v} do
+    {:ok, %{folders: [%{id: id}]}} = Folders.create_markers(u, v, ["G"])
+
+    create_during_scan(u, v, "G/New", fn ->
+      assert {:ok, _} = Folders.batch_delete(u, v, [id], [])
+    end)
+
+    assert "G/New" in explicit(u, v)
+  end
+
+  test "kill switch: folder_marker_stop off, creates insert markers again", %{user: u, vault: v} do
+    Engram.ServiceConfig.put_override(:folder_marker_stop, false)
+    {:ok, _} = Folders.create_markers(u, v, ["K"])
+    assert markers(v) == 1
+    assert explicit(u, v) == ["K"]
+  end
+
+  test "an undo announces the explicit folders it brings back", %{user: u, vault: v} do
+    {:ok, _} = Folders.create_markers(u, v, ["U"])
+    op = Ecto.UUID.generate()
+    {:ok, _} = Folders.delete(u, v, "U", recursive: true, op_id: op)
+    :ok = EngramWeb.Endpoint.subscribe("sync:#{u.id}:#{v.id}")
+
+    assert {:ok, _} = Folders.restore_op(u, v, op)
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      event: "folders.batch",
+      payload: %{op: "create", folders: ["U"]}
+    }
+  end
+
+  # The retire keeper of a rename merge and an undo's merge target are made
+  # explicit with no marker, so a reconcile walk must leave them explicit.
+  test "a rename merge's keeper survives a reconcile", %{user: u, vault: v} do
+    {:ok, _} = Folders.create_markers(u, v, ["A"])
+    # B: a live row with nothing under it (its only note gone), so a rename
+    # onto it merges A's row into B's.
+    {:ok, n} = Notes.upsert_note(u, v, %{"path" => "B/n.md", "content" => "x"}, actor: "api")
+    Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(n.id)])
+    refute "B" in explicit(u, v)
+
+    assert {:ok, _} = Folders.rename(u, v, "A", "B")
+    assert "B" in explicit(u, v)
+
+    assert reconcile!() == :done
+    assert "B" in explicit(u, v)
+  end
+
+  test "an undo's merge target survives a reconcile", %{user: u, vault: v} do
+    {:ok, _} = Folders.create_markers(u, v, ["M"])
+    op = Ecto.UUID.generate()
+    {:ok, _} = Folders.delete(u, v, "M", recursive: true, op_id: op)
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "M/n.md", "content" => "x"}, actor: "api")
+    {:ok, _} = Folders.restore_op(u, v, op)
+    assert "M" in explicit(u, v)
+
+    assert reconcile!() == :done
+    assert "M" in explicit(u, v)
+  end
+
+  test "Materialization counts a marker-less explicit folder as existing", %{user: u, vault: v} do
+    {:ok, _} = Folders.create_markers(u, v, ["Mat"])
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "Mat/n.md", "content" => "x"}, actor: "api")
+
+    assert markers(v) == 0
+    assert {:ok, %{inserted: 0, existing: 1}} = Engram.Notes.Materialization.run(u, v)
+    assert Engram.Notes.Materialization.orphans(u, v) == []
+    assert markers(v) == 0
+  end
+
+  # A cleared folder whose flag a stale writer sets again (a pre-#2639
+  # cascade's leftover) has no marker: the reconcile must still clear it,
+  # which it does only when the clear dropped the create's `explicit_seq`.
+  test "a cleared flag set again without a marker is reconciled away", %{user: u, vault: v} do
+    {:ok, _} = Folders.create_markers(u, v, ["C"])
+    assert {:ok, :deleted} = Notes.delete_folder_marker(u, v, "C")
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "C/n.md", "content" => "x"}, actor: "api")
+
+    Repo.query!("UPDATE folders SET explicit = true WHERE id = $1", [
+      Ecto.UUID.dump!(FolderRows.tree(u)["C"].id)
+    ])
+
+    assert "C" in explicit(u, v)
+    assert reconcile!() == :done
+    refute "C" in explicit(u, v)
+  end
+
+  defp reconcile! do
+    IdWindows.reset_walk(ExplicitFolderReconcile.name())
+
+    Enum.reduce_while(1..5, nil, fn _, _ ->
+      case ExplicitFolderReconcile.run_pass() do
+        :done -> {:halt, :done}
+        more -> {:cont, more}
+      end
+    end)
+  end
+
   test "control: with the floor enforced, creates still insert markers", %{user: u, vault: v} do
     Engram.ServiceConfig.put_override(:marker_stop_floors, :enforce)
     {:ok, _} = Folders.create_markers(u, v, ["M"])
