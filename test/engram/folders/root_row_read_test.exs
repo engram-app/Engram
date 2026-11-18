@@ -155,6 +155,50 @@ defmodule Engram.Folders.RootRowReadTest do
     assert Repo.get_by!(VaultDailyMetric, vault_id: v.id, date: day).folders == 2
   end
 
+  # Audit gap (snapshot.ex:408/:420). The setup's vault mixes both kinds,
+  # which hides the join: two more vaults, one whose only root note names
+  # the root row, one mixing both kinds under a root row with a path hash.
+  test "the daily snapshot counts a root-row-only root and a hashed root row once",
+       %{user: u} do
+    {:ok, fk} = Crypto.dek_filter_key(u)
+    only = insert(:vault, user: u)
+    r = put!(u, only, "r.md")
+    FolderRows.insert_root!(u, only, [r.id])
+    mixed = insert(:vault, user: u)
+    a = put!(u, mixed, "a.md")
+    _ = put!(u, mixed, "b.md")
+    root = FolderRows.insert_root!(u, mixed, [a.id])
+
+    Repo.query!("UPDATE folders SET full_path_hmac = $2 WHERE id = $1", [
+      Ecto.UUID.dump!(root),
+      Rows.path_hmac(fk, "")
+    ])
+
+    day = Date.add(Date.utc_today(), -1)
+    Snapshot.run(day: day)
+
+    for v <- [only, mixed],
+        do: assert(Repo.get_by!(VaultDailyMetric, vault_id: v.id, date: day).folders == 1)
+  end
+
+  # Audit gap (canary.ex:184): a root attachment naming the root row is no
+  # drift.
+  test "the canary takes a root attachment at the root row as the root", %{user: u, vault: v} do
+    {:ok, att} =
+      Engram.Attachments.upsert_attachment(u, v, %{
+        "path" => "pic.png",
+        "content_base64" => Base.encode64("x")
+      })
+
+    Repo.query!("UPDATE attachments SET folder_ref_id = $2 WHERE id = $1", [
+      Ecto.UUID.dump!(att.id),
+      Ecto.UUID.dump!(v.id)
+    ])
+
+    assert FolderRows.ref("attachments", att.id) == v.id
+    assert Engram.Bookkeeping.Canary.run().drift.folder_ref == 0
+  end
+
   # The new arm is the folder page's own shape (`folder_ref_id = $n`, id
   # order, LIMIT) on a folder reference index: never a walk of the vault.
   test "the root-row arm reads the folder reference index under RLS", %{user: u, vault: v} do
