@@ -6,9 +6,9 @@ defmodule EngramWeb.FileTimeWriterEntryPointsTest do
   plugin push and web create (`POST /api/notes`, the one note upsert both
   use), the ctime batch (`POST /api/notes/ctime`), attachment upload
   (`POST /api/attachments`) and the chunked upload session plus its
-  finalize. MCP `write_note` sends the server's own time, so its twin is
-  checked against its stored double. The CRDT checkpoint writes no file
-  time.
+  finalize. MCP `write_note` sends the server's own time, a whole second.
+  The CRDT checkpoint writes no file time. Twins are compared as sorted
+  sets: the doubles are no longer stored to key them by.
   """
   use EngramWeb.ConnCase, async: false
 
@@ -17,7 +17,6 @@ defmodule EngramWeb.FileTimeWriterEntryPointsTest do
   alias Engram.Attachments.Attachment
   alias Engram.Attachments.Upload
   alias Engram.Attachments.Uploads
-  alias Engram.FileTime
   alias Engram.FileTimeFixtures
   alias Engram.MCP.Handlers
   alias Engram.Notes.Note
@@ -31,21 +30,19 @@ defmodule EngramWeb.FileTimeWriterEntryPointsTest do
     Repo.with_tenant!(user.id, fn -> Repo.all(from(r in schema, select: ^select)) end)
   end
 
-  defp by_double(rows, field), do: Map.new(rows, &{Map.fetch!(&1, field), &1})
+  defp sorted(rows, field), do: rows |> Enum.map(&Map.fetch!(&1, field)) |> Enum.sort(DateTime)
+  defp want, do: @times |> Enum.map(&FileTimeFixtures.rounded_twin/1) |> Enum.sort(DateTime)
 
   test "POST /api/notes (plugin push, web create): mtime and ctime twins", ctx do
-    for {{t, _} = v, i} <- Enum.with_index(@times) do
+    for {{t, _}, i} <- Enum.with_index(@times) do
       ctx.conn
       |> post("/api/notes", %{path: "n#{i}.md", content: "x\n", mtime: t, ctime: t})
       |> json_response(200)
-
-      [row] =
-        twins(ctx.user, Note, [:mtime, :mtime_at, :ctime, :ctime_at])
-        |> Enum.filter(&(&1.mtime == t))
-
-      want = FileTimeFixtures.rounded_twin(v)
-      assert {row.mtime_at, row.ctime_at} == {want, want}, inspect(t)
     end
+
+    rows = twins(ctx.user, Note, [:mtime_at, :ctime_at])
+    assert sorted(rows, :mtime_at) == want()
+    assert sorted(rows, :ctime_at) == want()
   end
 
   test "POST /api/notes/ctime: the batch writes rounded twins", ctx do
@@ -58,10 +55,7 @@ defmodule EngramWeb.FileTimeWriterEntryPointsTest do
     assert %{"updated" => 12} =
              ctx.conn |> post("/api/notes/ctime", %{entries: entries}) |> json_response(200)
 
-    rows = ctx.user |> twins(Note, [:ctime, :ctime_at]) |> by_double(:ctime)
-
-    for {t, _} = v <- @times,
-        do: assert(rows[t].ctime_at == FileTimeFixtures.rounded_twin(v), inspect(t))
+    assert ctx.user |> twins(Note, [:ctime_at]) |> sorted(:ctime_at) == want()
   end
 
   test "POST /api/attachments: upload twins", ctx do
@@ -75,10 +69,7 @@ defmodule EngramWeb.FileTimeWriterEntryPointsTest do
       |> json_response(200)
     end
 
-    rows = ctx.user |> twins(Attachment, [:mtime, :mtime_at]) |> by_double(:mtime)
-
-    for {t, _} = v <- @times,
-        do: assert(rows[t].mtime_at == FileTimeFixtures.rounded_twin(v), inspect(t))
+    assert ctx.user |> twins(Attachment, [:mtime_at]) |> sorted(:mtime_at) == want()
   end
 
   test "chunked upload: the session and the finalized attachment", ctx do
@@ -93,10 +84,7 @@ defmodule EngramWeb.FileTimeWriterEntryPointsTest do
       assert {up.mtime_at, att.mtime_at} == {want, want}, inspect(t)
     end
 
-    rows = ctx.user |> twins(Upload, [:mtime, :mtime_at]) |> by_double(:mtime)
-
-    for {t, _} = v <- @times,
-        do: assert(rows[t].mtime_at == FileTimeFixtures.rounded_twin(v), inspect(t))
+    assert ctx.user |> twins(Upload, [:mtime_at]) |> sorted(:mtime_at) == want()
   end
 
   test "MCP write_note: the server's time, twin rounded from its double", ctx do
@@ -105,7 +93,8 @@ defmodule EngramWeb.FileTimeWriterEntryPointsTest do
     assert {:ok, _, _} =
              Handlers.handle("write_note", user, ctx.vault, %{"path" => "m.md", "content" => "x"})
 
-    [row] = twins(user, Note, [:mtime, :mtime_at])
-    assert row.mtime_at == FileTime.normalize(row.mtime)
+    [row] = twins(user, Note, [:mtime_at])
+    assert row.mtime_at.microsecond == {0, 6}
+    assert abs(DateTime.diff(row.mtime_at, DateTime.utc_now())) < 60
   end
 end

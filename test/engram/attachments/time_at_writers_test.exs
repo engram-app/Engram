@@ -1,9 +1,9 @@
 defmodule Engram.Attachments.TimeAtWritersTest do
   @moduledoc """
-  Every writer of `attachments.mtime` / `attachment_uploads.mtime` also
-  writes `mtime_at` (`Engram.FileTime`): upload (single request and
-  chunked), move (its tombstone), delete and restore. The double is stored
-  as sent; `mtime_at == FileTime.to_at(mtime)` on every row.
+  Every writer of an attachment's file time writes `mtime_at`
+  (`Engram.FileTime`), normalized: upload (single request and chunked),
+  move (its tombstone), delete and restore. Since R25 contract step (b) no
+  writer stores the `mtime` double.
   """
   use Engram.DataCase, async: false
 
@@ -26,48 +26,43 @@ defmodule Engram.Attachments.TimeAtWritersTest do
         "mtime" => mtime
       })
 
-  defp rows(ctx) do
-    Repo.with_tenant!(ctx.user.id, fn ->
-      Repo.all(
-        from(a in Attachment, where: a.vault_id == ^ctx.vault.id, select: {a.mtime, a.mtime_at})
-      )
-    end)
-  end
-
-  defp assert_parity!(ctx) do
-    rows = rows(ctx)
-    assert rows != []
-    for {mtime, at} <- rows, do: assert({:ok, at} == FileTime.to_at(mtime), inspect(mtime))
-    length(rows)
+  # Every row's `{mtime double, mtime_at}`, by raw SQL: the schema no
+  # longer maps the double column.
+  defp rows(ctx, table \\ "attachments") do
+    Repo.query!("SELECT mtime, mtime_at FROM #{table} WHERE vault_id = $1", [
+      Ecto.UUID.dump!(ctx.vault.id)
+    ]).rows
+    |> Enum.map(fn [m, at] -> {m, at} end)
   end
 
   test "an upload stores the double as sent and the timestamp normalized", ctx do
     {:ok, _} = put(ctx, "s.png", 1_776_072_500.928)
     {:ok, _} = put(ctx, "ms.png", 1_776_072_500_928.0)
 
-    assert Enum.sort(rows(ctx)) == [
-             {1_776_072_500.928, ~U[2026-04-13 09:28:20.928000Z]},
-             {1_776_072_500_928.0, ~U[2026-04-13 09:28:20.928000Z]}
+    assert rows(ctx) == [
+             {nil, ~U[2026-04-13 09:28:20.928000Z]},
+             {nil, ~U[2026-04-13 09:28:20.928000Z]}
            ]
   end
 
-  test "the plugin's 0 for an unknown time is the epoch timestamp", ctx do
+  test "the plugin's 0 for an unknown time is the epoch, served as 0", ctx do
     {:ok, _} = put(ctx, "z.png", 0)
-    assert rows(ctx) == [{0.0, ~U[1970-01-01 00:00:00.000000Z]}]
+    assert rows(ctx) == [{nil, ~U[1970-01-01 00:00:00.000000Z]}]
+    {:ok, att} = Attachments.get_attachment(ctx.user, ctx.vault, "z.png")
+    assert FileTime.mtime(att) === 0.0
   end
 
-  # A legacy out-of-range double (REST refuses new ones with a 422) never
-  # blocks a server-side copy, and is not copied: the copy carries the
-  # twin, the authority since R25 contract step (a).
-  test "a move copies a legacy out-of-range time instead of failing", ctx do
+  # A legacy row with no timestamp (an out-of-range double the backfill
+  # left NULL) never blocks a server-side copy.
+  test "a move copies a NULL timestamp instead of failing", ctx do
     {:ok, att} = put(ctx, "old.png", 1.0)
 
     Repo.with_tenant!(ctx.user.id, fn ->
-      Repo.update_all(from(a in Attachment, where: a.id == ^att.id), set: [mtime: 1.0e19])
+      Repo.update_all(from(a in Attachment, where: a.id == ^att.id), set: [mtime_at: nil])
     end)
 
     assert {:ok, _} = Attachments.move_attachment(ctx.user, ctx.vault, "old.png", "new.png")
-    assert {1.0, ~U[1970-01-01 00:00:01.000000Z]} in rows(ctx)
+    assert Enum.uniq(rows(ctx)) == [{nil, nil}]
   end
 
   test "a move's tombstone, a delete and a restore keep the timestamp with the double", ctx do
@@ -77,7 +72,9 @@ defmodule Engram.Attachments.TimeAtWritersTest do
     {:ok, _} = Engram.Folders.delete(ctx.user, ctx.vault, "D", recursive: true, op_id: op)
     {:ok, _} = Engram.Folders.restore_op(ctx.user, ctx.vault, op)
 
-    assert assert_parity!(ctx) >= 2
+    rows = rows(ctx)
+    assert length(rows) >= 2
+    assert Enum.uniq(rows) == [{nil, ~U[2026-04-13 09:28:20.928000Z]}]
   end
 
   test "a chunked upload writes the session's and the attachment's timestamp", ctx do
@@ -95,7 +92,10 @@ defmodule Engram.Attachments.TimeAtWritersTest do
 
     {:ok, _} = Uploads.put_part(ctx.user, ctx.vault, up.id, 1, "abc")
     {:ok, %Attachment{} = att} = Uploads.complete(ctx.user, ctx.vault, up.id)
-    # The finalize copies the session's time from its twin (as seconds).
-    assert {att.mtime, att.mtime_at} == {1_776_072_500.928, ~U[2026-04-13 09:28:20.928000Z]}
+    assert att.mtime_at == ~U[2026-04-13 09:28:20.928000Z]
+
+    assert Enum.uniq(rows(ctx) ++ rows(ctx, "attachment_uploads")) == [
+             {nil, ~U[2026-04-13 09:28:20.928000Z]}
+           ]
   end
 end

@@ -1811,7 +1811,7 @@ defmodule Engram.OnboardingTest do
         LogCapture.with_events(fn ->
           Onboarding.log_gate_opening(user, "test", fn ->
             # A row the status read cannot handle: the after-read raises.
-            Engram.Cache.put(:user, user.id, :not_a_user)
+            Engram.Cache.put(:user, user.id, %{not_a: :user})
             {:ok, :sentinel}
           end)
         end)

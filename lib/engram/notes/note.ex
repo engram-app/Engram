@@ -121,10 +121,11 @@ defmodule Engram.Notes.Note do
     # A v5 rebuild pass got its vectors from Voyage and has not committed yet
     # (`Engram.Indexing`, chunker v5 Task 16.3).
     field :rebuild_paid_at, :utc_datetime_usec
-    field :mtime, :float
-    field :ctime, :float
-    # The file times as timestamps (`Engram.FileTime`), derived from the
-    # doubles above by `changeset/2`: phase expand of the timestamptz move.
+    # The client's epoch numbers, cast and never stored (R25 contract step
+    # (b)): `changeset/2` derives the stored timestamps below from them.
+    field :mtime, :float, virtual: true
+    field :ctime, :float, virtual: true
+    # The file times (`Engram.FileTime`); readers go through `FileTime.mtime/1`.
     field :mtime_at, :utc_datetime_usec
     field :ctime_at, :utc_datetime_usec
     field :deleted_at, :utc_datetime_usec

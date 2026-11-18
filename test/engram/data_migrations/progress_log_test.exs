@@ -10,34 +10,19 @@ defmodule Engram.DataMigrations.ProgressLogTest do
   import Ecto.Query
 
   alias Engram.Backfill.IdWindows
-  alias Engram.DataMigrations.{EffectiveDates, FileTimes}
+  alias Engram.DataMigrations.EffectiveDates
   alias Engram.Notes
   alias Engram.Test.LogCapture
 
   require Logger
 
-  defp old_fleet,
-    do: [
-      peers: fn -> [:"engram@10.0.0.9"] end,
-      sync: fn -> :ok end,
-      multicall: fn _ -> [{:error, {:exception, :undef, []}}] end
-    ]
-
   setup do
     previous = Logger.level()
     Logger.configure(level: :info)
     on_exit(fn -> Logger.configure(level: previous) end)
-    FileTimes.forget()
     IdWindows.reset_walks()
     {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
     %{user: user, vault: insert(:vault, user: user)}
-  end
-
-  defp shipped?(events, text) do
-    case Enum.filter(events, &(IO.chardata_to_string(message(&1)) =~ text)) do
-      [] -> flunk("no #{inspect(text)} line in #{length(events)} events")
-      found -> Enum.all?(found, &(&1.meta[:loki_ship] == true and &1.meta[:ship] == "loki"))
-    end
   end
 
   defp message(%{msg: {:string, s}}), do: s
@@ -62,20 +47,6 @@ defmodule Engram.DataMigrations.ProgressLogTest do
     assert meta[:loki_ship] == true
     assert meta[:ship] == "loki"
     assert meta[:total_count] == 3
-  end
-
-  test "FileTimes: the waiting and repaired lines ship", ctx do
-    n = note!(ctx, "t.md")
-
-    Repo.with_tenant!(ctx.user.id, fn ->
-      Repo.update_all(from(x in Notes.Note, where: x.id == ^n.id), set: [mtime_at: nil])
-    end)
-
-    {_, events} = LogCapture.with_events(fn -> FileTimes.run_pass(fleet: old_fleet()) end)
-    assert shipped?(events, "file times waiting for the fleet")
-
-    {_, events} = LogCapture.with_events(fn -> FileTimes.run_pass() end)
-    assert shipped?(events, "file times repaired")
   end
 
   describe "the runner's per-pass summary line" do
@@ -134,20 +105,11 @@ defmodule Engram.DataMigrations.ProgressLogTest do
       assert meta[:blocked] == "test_guard"
     end
 
-    test "FileTimes reports its open and clean tables", ctx do
-      note!(ctx, "t.md")
-      {_, events} = LogCapture.with_events(fn -> DataMigrationsRunner.run(FileTimes) end)
-      meta = summary(events)
-      assert meta[:migration] == "file_times"
-      assert is_binary(meta[:open]) and is_binary(meta[:clean])
-      assert meta[:walks] =~ "file_times:notes"
-    end
-
     test "a migration that is already done logs nothing" do
-      :ok = Engram.DataMigrations.mark_done(FileTimes.name(), FileTimes.version())
+      :ok = Engram.DataMigrations.mark_done(EffectiveDates.name(), EffectiveDates.version())
 
       {:skipped, events} =
-        LogCapture.with_events(fn -> DataMigrationsRunner.run(FileTimes) end)
+        LogCapture.with_events(fn -> DataMigrationsRunner.run(EffectiveDates) end)
 
       refute Enum.any?(events, &(IO.chardata_to_string(message(&1)) == "data migration pass"))
     end

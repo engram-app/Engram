@@ -94,11 +94,11 @@ defmodule Engram.DataMigrations.NoteName do
 
   @doc """
   True while every cluster node writes names (`Name.writer_level/0`, through
-  `Engram.Cluster.Readiness.peers_report/4`, the gate `FileTimes` and
-  `CompressionGate` use): a walk starts, and the ledger closes, only then, so
+  `Engram.Cluster.Readiness.peers_report/4`, the gate
+  `CompressionGate` uses): a walk starts, and the ledger closes, only then, so
   no older node in a rolling deploy can add unnamed rows behind the closing
   walk. `fleet` overrides the gate's collaborators (tests). No `:global.sync/0`
-  (as `FileTimes`): a sync stalls on a partition.
+  (as `CompressionGate`): a sync stalls on a partition.
   """
   @spec fleet_ready?(keyword()) :: boolean()
   def fleet_ready?(fleet \\ []) do

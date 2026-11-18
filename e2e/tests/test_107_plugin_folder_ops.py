@@ -536,6 +536,9 @@ async def test_offline_create_and_folder_rename_converge(
             vault_a, vault_b, api_sync, old, with_attachment=False
         )
         await _wait_folders_known(cdp_a, old, "E2E")
+        # Setup starts converged on both devices; B lacking the folder is a
+        # separate plugin bug, covered by the plugin fix.
+        await _wait_folders_known(cdp_b, old, "E2E", teach=True)
 
         arm_routes(old)
         await cdp_a.arm_vault_spy()
@@ -583,6 +586,9 @@ async def test_offline_edit_then_folder_rename_lands_at_new_path(
             vault_a, vault_b, api_sync, old, with_attachment=False
         )
         await _wait_folders_known(cdp_a, old, "E2E")
+        # Setup starts converged on both devices; B lacking the folder is a
+        # separate plugin bug, covered by the plugin fix.
+        await _wait_folders_known(cdp_b, old, "E2E", teach=True)
         marker = f"offline edit {uuid.uuid4().hex[:8]}"
 
         arm_routes(old)
@@ -623,6 +629,9 @@ async def test_restart_with_folder_op_pending(
             vault_a, vault_b, api_sync, old, with_attachment=False
         )
         await _wait_folders_known(cdp_a, old, "E2E")
+        # Setup starts converged on both devices; B lacking the folder is a
+        # separate plugin bug, covered by the plugin fix.
+        await _wait_folders_known(cdp_b, old, "E2E", teach=True)
         marker = f"peer edit {uuid.uuid4().hex[:8]}"
 
         arm_routes(old)

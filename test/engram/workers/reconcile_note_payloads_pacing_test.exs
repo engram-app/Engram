@@ -319,7 +319,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsPacingTest do
     assert length(Enum.uniq(waits)) > 1
   end
 
-  # The runner pauses the ledger on the switch (`enabled?/0`, as FileTimes):
+  # The runner pauses the ledger on the switch (`enabled?/0`):
   # no pass, so no notes walk, no jobs, no Qdrant scroll, and no stuck alert.
   test "with the kill switch off, the runner runs no ledger pass", _ctx do
     alias Engram.DataMigrations.NotePayloadStamps

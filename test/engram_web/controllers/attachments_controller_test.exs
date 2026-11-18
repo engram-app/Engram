@@ -930,7 +930,7 @@ defmodule EngramWeb.AttachmentsControllerTest do
           path: att.path,
           mime_type: att.mime_type,
           size_bytes: att.size_bytes,
-          mtime: att.mtime,
+          mtime: Engram.FileTime.mtime(att),
           content_hash: att.content_hash,
           content_base64: Base.encode64(bytes),
           created_at: att.created_at,
@@ -1267,9 +1267,11 @@ defmodule EngramWeb.AttachmentsControllerTest do
       {:ok, att} = Attachments.get_attachment(user, vault, "n.png")
       resp = get(conn, "/api/attachments/n.png?raw=1")
 
-      if is_nil(att.mtime),
+      mtime = Engram.FileTime.mtime(att)
+
+      if is_nil(mtime),
         do: assert(get_resp_header(resp, "x-engram-mtime") == []),
-        else: assert(get_resp_header(resp, "x-engram-mtime") == [Jason.encode!(att.mtime)])
+        else: assert(get_resp_header(resp, "x-engram-mtime") == [Jason.encode!(mtime)])
 
       assert [_] = get_resp_header(resp, "x-engram-updated-at")
     end

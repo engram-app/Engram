@@ -101,8 +101,6 @@ defmodule Engram.Notes do
     :dek_version,
     :content_hash,
     :embed_hash,
-    :mtime,
-    :ctime,
     :mtime_at,
     :ctime_at,
     :deleted_at,
@@ -750,7 +748,6 @@ defmodule Engram.Notes do
               vault_id: vault.id,
               version: 1,
               dek_version: Crypto.row_version_aad_bound(),
-              mtime: DateTime.to_unix(now) + 0.0,
               mtime_at: FileTime.to_at!(DateTime.to_unix(now)),
               folder_ciphertext: ct,
               folder_nonce: nonce,
@@ -1267,29 +1264,28 @@ defmodule Engram.Notes do
   def set_client_ctimes(user, vault, entries) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
-      # `ctime_at` beside the double (`Engram.FileTime`; the controller
-      # refused an out-of-range ctime, so `to_at!/1` holds). The stored
+      # `ctime_at` (`Engram.FileTime`; the controller refused an
+      # out-of-range ctime, so `to_at!/1` holds). The stored
       # created date is the frontmatter's when the note has one, else this
-      # ctime: with ctime NULL until now it is the frontmatter's or NULL, so
+      # ctime: with no ctime until now it is the frontmatter's or NULL, so
       # `COALESCE(eff_created, ctime)` is its new value. Rows with a
       # frontmatter date keep `eff_created`; the others change one indexed
       # value, once per note.
-      {hmacs, ctimes, ats, effs} =
+      {hmacs, ats, effs} =
         entries
         |> Map.new(fn %{path: path, ctime: ctime} ->
           {Crypto.hmac_field(filter_key, PathSanitizer.sanitize(path)), ctime * 1.0}
         end)
-        |> Enum.reduce({[], [], [], []}, fn {h, c}, {hs, cs, as, es} ->
-          {[h | hs], [c | cs], [FileTime.to_at!(c) | as], [EffectiveDates.stored(nil, c) | es]}
+        |> Enum.reduce({[], [], []}, fn {h, c}, {hs, as, es} ->
+          {[h | hs], [FileTime.to_at!(c) | as], [EffectiveDates.stored(nil, c) | es]}
         end)
 
       query =
         from(n in scoped_live(user, vault),
           join:
             v in fragment(
-              "SELECT * FROM unnest(?::bytea[], ?::float8[], ?::timestamptz[], ?::bigint[]) AS t(h, c, a, e)",
+              "SELECT * FROM unnest(?::bytea[], ?::timestamptz[], ?::bigint[]) AS t(h, a, e)",
               ^hmacs,
-              ^ctimes,
               ^ats,
               ^effs
             ),
@@ -1297,7 +1293,6 @@ defmodule Engram.Notes do
           where: is_nil(n.ctime_at) and n.kind == "note",
           update: [
             set: [
-              ctime: field(v, :c),
               ctime_at: field(v, :a),
               eff_created: fragment("COALESCE(?, ?)", n.eff_created, field(v, :e))
             ]
@@ -5397,7 +5392,6 @@ defmodule Engram.Notes do
       # never enqueues EmbedNote — only the renamed live note does.
       old_path = decrypted_note.path
       tomb_id = mint_id()
-      mtime_float = DateTime.to_unix(now) + 0.0
 
       tomb_kw =
         full_aad_bound_kw(user, tomb_id, "", "", old_path, Helpers.extract_folder(old_path), [])
@@ -5407,8 +5401,7 @@ defmodule Engram.Notes do
           %{
             id: tomb_id,
             content_hash: "",
-            mtime: mtime_float,
-            mtime_at: FileTime.to_at!(mtime_float),
+            mtime_at: FileTime.to_at!(DateTime.to_unix(now)),
             user_id: user.id,
             vault_id: note.vault_id,
             created_at: now,
@@ -9126,8 +9119,6 @@ defmodule Engram.Notes do
           {note, note.path, new_path, new_note_folder, new_title}
         end)
 
-      mtime_float = DateTime.to_unix(now) + 0.0
-
       real_note_updates =
         Enum.reject(updates, fn {note, _, _, _, _} -> note.kind == "folder" end)
 
@@ -9220,8 +9211,7 @@ defmodule Engram.Notes do
                   %{
                     id: tomb_id,
                     content_hash: "",
-                    mtime: mtime_float,
-                    mtime_at: FileTime.to_at!(mtime_float),
+                    mtime_at: FileTime.to_at!(DateTime.to_unix(now)),
                     user_id: user.id,
                     vault_id: vault.id,
                     created_at: now,

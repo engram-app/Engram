@@ -1,16 +1,15 @@
 defmodule Engram.Notes.TimeAtWritersTest do
   @moduledoc """
-  Every writer of `notes.mtime` / `notes.ctime` also writes `mtime_at` /
-  `ctime_at` (`Engram.FileTime`): the doubles are stored as sent, the
-  timestamps normalized. A copy (rename, restore, edit, tombstone, folder
-  marker) keeps the two in step: `*_at == FileTime.to_at(double)` on every
-  row of the vault.
+  Every writer of a note's file times writes `mtime_at` / `ctime_at`
+  (`Engram.FileTime`), normalized, and since R25 contract step (b) never
+  the `mtime` / `ctime` doubles: no row of the vault (live, tombstone,
+  folder marker) holds one. A copy (rename, restore, edit, tombstone)
+  keeps the timestamp.
   """
   use Engram.DataCase, async: false
 
   alias Engram.FileTime
   alias Engram.Notes
-  alias Engram.Notes.Note
 
   setup do
     {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
@@ -26,27 +25,24 @@ defmodule Engram.Notes.TimeAtWritersTest do
     Repo.with_tenant!(ctx.user.id, fn -> Engram.Fixtures.raw_note!(id) end)
   end
 
-  # Every row of the vault, live, tombstoned and folder markers alike.
-  defp assert_parity!(ctx) do
-    rows =
-      Repo.with_tenant!(ctx.user.id, fn ->
-        Repo.all(
-          from(n in Note,
-            where: n.vault_id == ^ctx.vault.id,
-            select: {n.kind, n.deleted_at, n.mtime, n.mtime_at, n.ctime, n.ctime_at}
-          )
-        )
-      end)
+  # Every row of the vault, live, tombstoned and folder markers alike: the
+  # double columns are never written (they exist until the contract drop).
+  defp assert_no_doubles!(ctx) do
+    %{rows: [[rows, doubles]]} =
+      Repo.query!(
+        "SELECT count(*), count(*) FILTER (WHERE mtime IS NOT NULL OR ctime IS NOT NULL) " <>
+          "FROM notes WHERE vault_id = $1",
+        [Ecto.UUID.dump!(ctx.vault.id)]
+      )
 
-    assert rows != []
+    assert rows > 0
+    assert doubles == 0
+    rows
+  end
 
-    for {kind, deleted, mtime, mtime_at, ctime, ctime_at} <- rows do
-      label = inspect({kind, deleted, mtime, ctime})
-      assert {:ok, mtime_at} == FileTime.to_at(mtime), label
-      assert {:ok, ctime_at} == FileTime.to_at(ctime), label
-    end
-
-    length(rows)
+  defp served(ctx, path) do
+    {:ok, note} = Notes.get_note(ctx.user, ctx.vault, path)
+    {FileTime.mtime(note), FileTime.ctime(note)}
   end
 
   test "a save stores the double as sent and the timestamp normalized", ctx do
@@ -55,7 +51,6 @@ defmodule Engram.Notes.TimeAtWritersTest do
 
     s = row(ctx, s.id)
     ms = row(ctx, ms.id)
-    assert ms.mtime == 1_776_072_500_928.0
     assert s.mtime_at == ms.mtime_at
     assert s.mtime_at == ~U[2026-04-13 09:28:20.928000Z]
     assert s.ctime_at == ~U[2017-11-17 05:45:28.861000Z]
@@ -74,7 +69,7 @@ defmodule Engram.Notes.TimeAtWritersTest do
   test "an out-of-range file time past the boundary saves with a NULL timestamp", ctx do
     {:ok, n} = put(ctx, "big.md", %{"mtime" => 1.0e19, "ctime" => 1.0e19})
     n = row(ctx, n.id)
-    assert {n.mtime, n.mtime_at, n.ctime_at} == {1.0e19, nil, nil}
+    assert {n.mtime_at, n.ctime_at} == {nil, nil}
   end
 
   test "the ctime batch writes ctime_at, normalized", ctx do
@@ -89,7 +84,7 @@ defmodule Engram.Notes.TimeAtWritersTest do
 
     assert row(ctx, a.id).ctime_at == ~U[2017-11-17 05:45:28.861000Z]
     assert row(ctx, b.id).ctime_at == ~U[2017-11-17 05:45:28.861000Z]
-    assert row(ctx, b.id).ctime == 1_510_897_528_861.0
+    assert_no_doubles!(ctx)
   end
 
   # Contract step (a): a step (b) node stops writing the doubles, so a row
@@ -99,11 +94,10 @@ defmodule Engram.Notes.TimeAtWritersTest do
     {:ok, n} = put(ctx, "h.md", %{"mtime" => 1_776_072_500.5, "ctime" => 1_510_897_528.0})
     before = row(ctx, n.id)
 
-    Repo.with_tenant!(ctx.user.id, fn ->
-      Repo.update_all(from(x in Note, where: x.id == ^n.id),
-        set: [mtime: 1_000_000_000.0, ctime: nil]
-      )
-    end)
+    # Raw SQL: the schema no longer maps the double columns.
+    Repo.query!("UPDATE notes SET mtime = 1000000000.0, ctime = NULL WHERE id = $1", [
+      Ecto.UUID.dump!(n.id)
+    ])
 
     # The ctime batch fills only a note with no ctime: this one has one.
     assert {:ok, 0} =
@@ -120,7 +114,7 @@ defmodule Engram.Notes.TimeAtWritersTest do
     assert {n.eff_updated, n.eff_created} == {before.eff_updated, before.eff_created}
   end
 
-  test "rename, folder rename and edit keep the timestamps with the doubles", ctx do
+  test "rename, folder rename and edit keep the timestamps, write no double", ctx do
     {:ok, _} = put(ctx, "F/a.md", %{"mtime" => 1_776_072_500_928.0, "ctime" => 1_510_897_528.0})
     {:ok, _} = put(ctx, "F/b.md", %{"mtime" => 1_776_072_500.5})
 
@@ -131,10 +125,12 @@ defmodule Engram.Notes.TimeAtWritersTest do
              Notes.rmw_note(ctx.user, ctx.vault, "G/a.md", &(&1 <> "y"), actor: "api")
 
     # Live notes, rename tombstones and folder markers.
-    assert assert_parity!(ctx) >= 5
+    assert assert_no_doubles!(ctx) >= 5
+    assert served(ctx, "G/a.md") === {1_776_072_500.928, 1_510_897_528.0}
+    assert served(ctx, "G/c.md") === {1_776_072_500.5, nil}
   end
 
-  test "delete and restore keep the timestamps with the doubles", ctx do
+  test "delete and restore keep the timestamps, write no double", ctx do
     {:ok, _} = put(ctx, "D/a.md", %{"mtime" => 1_776_072_500_928.0, "ctime" => 1_510_897_528.0})
     op = Ecto.UUID.generate()
     {:ok, _} = Engram.Folders.delete(ctx.user, ctx.vault, "D", recursive: true, op_id: op)
@@ -143,6 +139,7 @@ defmodule Engram.Notes.TimeAtWritersTest do
       Notes.plan_restore(ctx.user, ctx.vault, op, DateTime.add(DateTime.utc_now(), -1, :day))
 
     {:ok, %{restored: [_]}} = Notes.restore_notes(ctx.user, ctx.vault, op, plan.notes)
-    assert_parity!(ctx)
+    assert_no_doubles!(ctx)
+    assert served(ctx, "D/a.md") === {1_776_072_500.928, 1_510_897_528.0}
   end
 end

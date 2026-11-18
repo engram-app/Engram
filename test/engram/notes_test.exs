@@ -30,15 +30,18 @@ defmodule Engram.NotesTest do
 
   defp stored_ctime(id),
     do:
-      Repo.one(from(n in Engram.Notes.Note, where: n.id == ^id, select: n.ctime),
-        skip_tenant_check: true
+      Engram.FileTime.ctime(
+        Repo.one(
+          from(n in Engram.Notes.Note, where: n.id == ^id, select: %{ctime_at: n.ctime_at}),
+          skip_tenant_check: true
+        )
       )
 
   describe "client ctime" do
     test "is stored on create and kept when a later push omits it", %{user: user, vault: vault} do
       attrs = %{"path" => "ct.md", "content" => "one", "mtime" => 1.0, "ctime" => 500.0}
       {:ok, note} = Notes.upsert_note(user, vault, attrs, actor: "api")
-      assert note.ctime == 500.0
+      assert Engram.FileTime.ctime(note) == 500.0
 
       # older plugin: no ctime key, must not null it
       {:ok, note} =
@@ -46,7 +49,7 @@ defmodule Engram.NotesTest do
           actor: "api"
         )
 
-      assert note.ctime == 500.0
+      assert Engram.FileTime.ctime(note) == 500.0
     end
 
     # ctime is the file's creation time. Another device's local copy has its
@@ -65,7 +68,7 @@ defmodule Engram.NotesTest do
           actor: "api"
         )
 
-      assert note.ctime == 500.0
+      assert Engram.FileTime.ctime(note) == 500.0
       assert stored_ctime(note.id) == 500.0
     end
 
@@ -126,7 +129,7 @@ defmodule Engram.NotesTest do
           actor: "api"
         )
 
-      assert note.ctime == nil
+      assert Engram.FileTime.ctime(note) == nil
     end
   end
 
@@ -156,8 +159,8 @@ defmodule Engram.NotesTest do
 
       a2 = Engram.Fixtures.raw_note!(a.id)
       b2 = Engram.Fixtures.raw_note!(b.id)
-      assert a2.ctime == 11.0
-      assert b2.ctime == 7.0
+      assert Engram.FileTime.ctime(a2) == 11.0
+      assert Engram.FileTime.ctime(b2) == 7.0
       assert {a2.version, a2.seq, a2.updated_at} == {a.version, a.seq, a.updated_at}
     end
   end
