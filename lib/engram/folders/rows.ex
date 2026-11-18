@@ -1589,15 +1589,23 @@ defmodule Engram.Folders.Rows do
     n
   end
 
-  @doc "A deleted folder marker no longer makes its folder explicit; the row stays for its content."
-  @spec unmark_explicit(map(), Ecto.UUID.t(), String.t()) :: :ok
-  def unmark_explicit(user, vault_id, folder) do
+  @doc """
+  A deleted folder marker no longer makes its folder explicit; the row stays
+  for its content. Takes one folder or a list (a cascade's markers).
+  """
+  @spec unmark_explicit(map(), Ecto.UUID.t(), String.t() | [String.t()]) :: :ok
+  def unmark_explicit(user, vault_id, folder) when is_binary(folder),
+    do: unmark_explicit(user, vault_id, [folder])
+
+  def unmark_explicit(_user, _vault_id, []), do: :ok
+
+  def unmark_explicit(user, vault_id, folders) do
     with {:ok, fk} <- Crypto.dek_filter_key(user) do
-      hmac = path_hmac(fk, folder)
+      hmacs = Enum.map(folders, &path_hmac(fk, &1))
 
       from(f in Folder,
         where:
-          f.vault_id == ^vault_id and f.full_path_hmac == ^hmac and is_nil(f.deleted_at) and
+          f.vault_id == ^vault_id and f.full_path_hmac in ^hmacs and is_nil(f.deleted_at) and
             f.explicit
       )
       |> Repo.update_all(set: [explicit: false, updated_at: now()])

@@ -93,9 +93,9 @@ defmodule Engram.NotesVaultScanTest do
 
       {payload, reads} = notes_reads(fn -> Notes.folders_payload(u, v) end)
       assert [%{name: "Work", count: 1}] = payload
-      # Only the folder markers are read; the count came from the cache.
-      assert [marker_read] = reads
-      assert marker_read =~ ~s("kind" = 'folder')
+      # No notes read at all: the count came from the cache, and the
+      # explicit folders are read from `folders` (S6 step 4).
+      assert reads == []
 
       put!(u, v, "Work/B.md", "b")
       assert {:ok, [%{folder: "Work", count: 2}]} = Notes.list_folders_with_counts(u, v)
