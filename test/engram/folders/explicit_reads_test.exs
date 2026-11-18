@@ -174,6 +174,14 @@ defmodule Engram.Folders.ExplicitReadsTest do
       Engram.DataCase.clear_request_caches()
       refute Rows.explicit_reads?()
 
+      # Either ledger alone is not enough.
+      for m <- [FolderTable, ExplicitFolderReconcile] do
+        DataMigrations.mark_done(m.name(), m.version())
+        Engram.DataCase.clear_request_caches()
+        refute Rows.explicit_reads?(), "#{m.name()} alone opened the gate"
+        DataMigrations.reopen(m.name(), m.version())
+      end
+
       for m <- [FolderTable, ExplicitFolderReconcile],
           do: DataMigrations.mark_done(m.name(), m.version())
 
@@ -274,6 +282,17 @@ defmodule Engram.Folders.ExplicitReadsTest do
       for [index] <- used, do: assert(index in vault_led, plan)
       refute plan =~ "Seq Scan on folders", plan
     end
+  end
+
+  # A batch move whose target is a folder ROW id (what the listings hand out
+  # since the flag reads) with no marker behind it.
+  test "batch_move_notes into an explicit folder given by its row id", %{user: u, vault: v} do
+    explicit_without_marker!(u, v, "Target")
+    row_id = FolderRows.tree(u)["Target"].id
+    note = put_note(u, v, "n.md")
+
+    assert {:ok, %{moved: 1}} = Notes.batch_move_notes(u, v, [note.id], row_id)
+    assert {:ok, %{path: "Target/n.md"}} = Notes.get_note(u, v, "Target/n.md")
   end
 
   # The #2649 review, H1: an empty explicit folder with no marker is a bare
