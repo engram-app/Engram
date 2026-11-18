@@ -236,9 +236,8 @@ defmodule Engram.DataMigrations.FolderTable do
   # the delete (#2339). A vault held by a delete defers the user instead.
   # Shared with `RootRefs`, which writes a folder row (the root's) the same way.
   @doc false
-  @spec gated(module(), %{user_id: Ecto.UUID.t(), dek_version: integer()}, (module() -> t)) ::
-          t
-        when t: var
+  # `ctx`: at least `user_id` and `dek_version`.
+  @spec gated(module(), map(), (module() -> t)) :: t when t: var
   def gated(repo, ctx, fun) do
     :ok = Vaults.lock_user_vaults_nowait!(repo, ctx.user_id)
     # A folder rename or batch move in flight holds its vault's folder-write
