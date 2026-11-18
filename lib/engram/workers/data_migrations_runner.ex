@@ -46,6 +46,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
     # NoteFolderHashNull only because that one's test pins it right after
     # FolderTable.
     Engram.DataMigrations.ExplicitFolderReconcile,
+    Engram.DataMigrations.FolderMarkerDelete,
     Engram.DataMigrations.KeyAliases,
     Engram.DataMigrations.PersonOriginBackfill,
     Engram.DataMigrations.EffectiveDates,

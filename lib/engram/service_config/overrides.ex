@@ -74,6 +74,9 @@ defmodule Engram.ServiceConfig.Overrides do
     # S6 step 4 phase 2 kill switch: off, folder creates insert marker rows
     # again (`Engram.Folders.MarkerStop`).
     folder_marker_stop: :boolean,
+    # S6 step 4 marker delete (`Engram.DataMigrations.FolderMarkerDelete`),
+    # ships OFF: switched on after release E is verified.
+    folder_marker_delete: :boolean,
     # Every paced backfill chain's pressure gate (`Engram.Backfill.Throttle`).
     backfill_max_queue_ms: {:integer, 1..60_000},
     backfill_max_xact_s: {:integer, 1..86_400},
