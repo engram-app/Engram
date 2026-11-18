@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.89.0](https://github.com/engram-app/Engram/compare/0.88.0...0.89.0) (2026-11-18)
+
+
+### Features
+
+* **file-time:** stop writing the doubles (R25 contract b) ([#2626](https://github.com/engram-app/Engram/issues/2626)) ([131f1e0](https://github.com/engram-app/Engram/commit/131f1e0e9dcafb15ca005e514774c863729a40ea))
+* **notes:** R8(e) drop notes body ciphertexts ([#2629](https://github.com/engram-app/Engram/issues/2629)) ([5b06192](https://github.com/engram-app/Engram/commit/5b06192bf01b4361acf94c2de4fa187660dcb973))
+
+
+### Bug Fixes
+
+* **crdt:** re-read the announce path after commit ([#2632](https://github.com/engram-app/Engram/issues/2632)) ([97b7158](https://github.com/engram-app/Engram/commit/97b7158085088956ae345268e08a39359f2fc175))
+* **search:** per-user admission, pool busy=429 ([#2634](https://github.com/engram-app/Engram/issues/2634)) ([0f2b495](https://github.com/engram-app/Engram/commit/0f2b495b1e837d64e19f013de149c699aefbc751))
+* **test:** isolate oauth rotation telemetry by pid ([#2638](https://github.com/engram-app/Engram/issues/2638)) ([ee08e6b](https://github.com/engram-app/Engram/commit/ee08e6bf9b16e92169feb993e40965714dc80c43))
+
 ## [0.88.0](https://github.com/engram-app/Engram/compare/0.87.1...0.88.0) (2026-11-17)
 
 
