@@ -297,14 +297,25 @@ defmodule Engram.Notes.Location do
     end
   end
 
-  # S5: a row found by its stored path key is at that path unless a folder
-  # on its own chain was renamed without a cascade (then its stored path is
-  # the old one, and it is shown, and found by name, where its folder row
-  # puts it). Drift rows and rows with no folder reference keep their stored
-  # path, as in S3. O(depth) primary-key probes, for the row(s) the path key
-  # matched only.
-  defp here do
-    dynamic([n], is_nil(n.folder_ref_id) or not fragment(WalkSql.moved_chain(), n.folder_ref_id))
+  @doc """
+  S5: a row found by its stored path key is at that path unless a folder
+  on its own chain was renamed without a cascade (then its stored path is
+  the old one, and it is shown, and found by name, where its folder row
+  puts it). Drift rows, rows with no folder reference and rows whose name
+  stamp is not current keep their stored path, as in S3: the display's
+  rule (`derivable?/1`), so a stale row (a `note_name` refill, a
+  previous-release rename) is found where it is shown. A filter on the
+  rows the path key matched: no index, O(depth) primary-key probes for
+  them only. Every by-path reader uses it (`at/5`, `Notes` batch lookups).
+  """
+  @spec here() :: Ecto.Query.dynamic_expr()
+  def here do
+    dynamic(
+      [n],
+      is_nil(n.folder_ref_id) or
+        fragment(NameKeys.not_current_sql(), n.name_stamp, n.path_nonce, ^NameKeys.version()) or
+        not fragment(WalkSql.moved_chain(), n.folder_ref_id)
+    )
   end
 
   defp name_match(vault_id, segs, ci, exact, hmac, true) do
