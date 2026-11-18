@@ -313,6 +313,30 @@ defmodule Engram.Notes.LocationRlsPlanTest do
         )
       end
 
+      # Search's recent and filter modes and the MCP recent resource. The
+      # page reads `notes_recent_index` by design (newest first, stops at the
+      # limit), so it is checked apart from the chain read. The moved bit
+      # rides the page, so an unmoved vault sends no other statement.
+      # `where:` (a filter's narrowing) keeps the page to the real notes; the
+      # seeded ones do not decrypt.
+      test "list_recent_notes", ctx do
+        real = dynamic([n], n.seq > ^ctx.after_seq)
+
+        plans =
+          plans(ctx.user, fn ->
+            {:ok, [_ | _]} = Notes.list_recent_notes(ctx.user, ctx.vault, 20, where: real)
+          end)
+
+        {page, rest} = Map.split_with(plans, fn {sql, _} -> sql =~ "title_ciphertext" end)
+        assert [%{custom: custom}] = Map.values(page)
+        assert custom =~ "notes_recent_index", custom
+        refute_vault_scan!(rest)
+
+        if unquote(moved?),
+          do: assert(rest != %{}, "no chain read in a moved vault"),
+          else: assert(rest == %{}, inspect(Map.keys(rest)))
+      end
+
       test "list_folder", ctx do
         refute_vault_scan!(
           plans(ctx.user, fn -> Notes.list_notes_in_folder_page(ctx.user, ctx.vault, "A/B") end)

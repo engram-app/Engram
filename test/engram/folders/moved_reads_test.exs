@@ -121,6 +121,17 @@ defmodule Engram.Folders.MovedReadsTest do
       assert id == ns[1].id
       assert row(u, ns[1].id) == before
     end
+
+    test "under a fresh id adopts the moved note at its shown path", %{
+      user: u,
+      vault: v,
+      notes: ns
+    } do
+      id = ns[1].id
+
+      assert {:adopted, %{id: ^id, path: "B/n1.md", folder: "B"}} =
+               Notes.genesis_crdt_note(u, v, Ecto.UUID.generate(), "B/n1.md")
+    end
   end
 
   describe "deletes leave the tombstone where the note was shown" do
