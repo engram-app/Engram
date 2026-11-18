@@ -6,8 +6,10 @@ defmodule Engram.DataMigrations.RootRefsTest do
   # touched; the kill switch stops every pass.
   use Engram.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Engram.Backfill.IdWindows
-  alias Engram.{Crypto, FolderRows, Notes, ServiceConfig}
+  alias Engram.{Crypto, FolderRows, Folders, Notes, ServiceConfig}
   alias Engram.DataMigrations.RootRefs
   alias Engram.Folders.Rows
   alias Engram.Workers.DataMigrationsRunner
@@ -69,6 +71,24 @@ defmodule Engram.DataMigrations.RootRefsTest do
       assert FolderRows.ref("notes", n.id) == v.id
     end
 
+    # Audit gap (notes.ex batch move and restore, `ensure_all ... root: true`).
+    test "a batch move to the root names the root row", %{user: u, vault: v} do
+      n = note!(u, v, "A/n.md")
+      assert {:ok, %{moved: 1}} = Notes.batch_move_notes(u, v, [n.id], {:path, ""})
+      assert FolderRows.ref("notes", n.id) == v.id
+    end
+
+    test "a restore to the root names the root row", %{user: u, vault: v} do
+      n = note!(u, v, "r.md")
+      op = Ecto.UUID.generate()
+      :deleted = Notes.delete_note_reporting(u, v, "r.md", op_id: op)
+      old_release!(n)
+      _ = Folders.restore_op(u, v, op)
+      assert {:ok, %{id: id}} = Notes.get_note(u, v, "r.md")
+      assert id == n.id
+      assert FolderRows.ref("notes", n.id) == v.id
+    end
+
     test "a second root note reuses the row", %{user: u, vault: v} do
       note!(u, v, "a.md")
       note!(u, v, "b.md")
@@ -102,6 +122,21 @@ defmodule Engram.DataMigrations.RootRefsTest do
       # Readers see one root holding both notes.
       {:ok, %{notes: page}} = Notes.list_notes_in_folder_page(u, v, "")
       assert page |> Enum.map(& &1.path) |> Enum.sort() == ["a.md", "b.md"]
+    end
+
+    # Audit gap (root_refs.ex `root!/2`, `failed/2`): a root row that cannot
+    # be made (here no DEK to encrypt its name) is logged and counted
+    # blocked, and its notes keep their NULL reference.
+    test "a root row that cannot be made is logged and counted blocked", %{user: u, vault: v} do
+      a = note!(u, v, "a.md")
+      old_release!(a)
+      drop_root!(v)
+      Repo.query!("UPDATE users SET encrypted_dek = NULL WHERE id = $1", [dump(u.id)])
+
+      log = capture_log(fn -> assert {:more, rows: 0, blocked: 1} = RootRefs.run_pass() end)
+
+      assert log =~ "root_refs: root row not created"
+      assert FolderRows.ref("notes", a.id) == nil
     end
 
     test "below the rollback floor: writers and the ledger stay off", %{user: u, vault: v} do
