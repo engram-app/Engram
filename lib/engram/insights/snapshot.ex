@@ -395,16 +395,17 @@ defmodule Engram.Insights.Snapshot do
     # `folder_hmac`), counted by that row's path hash so it dedupes with a
     # marker's own `folder_hmac` (a marker made on an existing folder is not
     # that row's id). Plus one for the root when a live note has no reference
-    # (the root has no row; a drift note, rare and healed by the drain,
-    # counts there too). Cost: one `folders` primary-key probe per live note.
+    # or names the root row (S6 step 1; a drift note, rare and healed by the
+    # drain, counts there too). Cost: one `folders` primary-key probe per live note.
     # Both kinds on purpose: a marker is a folder (an empty one counts).
     folders_tags =
       from(n in Note,
         where: n.kind == "note" or n.kind == "folder",
         left_lateral_join: t in fragment("SELECT unnest(?) AS tag", n.tags_hmac),
         on: true,
+        # The root row (`Rows.root_id/1`) is the root: no folder row here.
         left_join: f in Folder,
-        on: f.id == n.folder_ref_id,
+        on: f.id == n.folder_ref_id and f.id != n.vault_id,
         where: n.vault_id in ^ids and is_nil(n.deleted_at),
         group_by: n.vault_id,
         select: %{
@@ -416,7 +417,7 @@ defmodule Engram.Insights.Snapshot do
               n.folder_hmac,
               f.full_path_hmac,
               n.kind,
-              n.folder_ref_id
+              fragment("NULLIF(?, ?)", n.folder_ref_id, n.vault_id)
             ),
           tags: filter(count(t.tag, :distinct), n.kind == "note")
         }

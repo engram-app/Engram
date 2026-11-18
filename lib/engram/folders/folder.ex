@@ -2,7 +2,9 @@ defmodule Engram.Folders.Folder do
   @moduledoc """
   A folder as a row (migration 20261029000000): an id, its parent, and its own
   name, so a child points at it by `folder_ref_id` instead of repeating the
-  path. `parent_id` nil is the vault root (there is no root row).
+  path. `parent_id` nil is the vault root. The root's own row (S6 step 1,
+  `Engram.Folders.Rows.root_id/1`) has the vault's id, `parent_id` nil and the
+  empty name; no folder hangs under it.
 
   The name is one path SEGMENT, encrypted under the owning account's DEK like
   `notes.folder_ciphertext` (AAD `Crypto.aad_for_row(:folders, :name, id)`).
