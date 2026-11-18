@@ -4881,8 +4881,10 @@ defmodule Engram.Notes do
             # probe is an InitPlan, so a vault with no moved folder walks no
             # chain.
             where:
-              not fragment(WalkSql.moved(), type(^vid, Ecto.UUID)) or
-                is_nil(n.folder_ref_id) or not fragment(WalkSql.moved_chain(), n.folder_ref_id),
+              ^dynamic(
+                [n],
+                not fragment(WalkSql.moved(), type(^vid, Ecto.UUID)) or ^Location.here()
+              ),
             select: {n.path_hmac, n.id, false},
             union_all: ^probe
           )

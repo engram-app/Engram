@@ -111,8 +111,11 @@ defmodule Engram.Folders.WalkSql do
 
   @moved_chain moved_chain.("?")
 
-  # A holder whose own chain moved holds only a stale key (above).
-  @here "AND (p.folder_ref_id IS NULL OR NOT " <> moved_chain.("p.folder_ref_id") <> ")"
+  # A holder whose own chain moved holds only a stale key (above), unless its
+  # name stamp is not current: then it is still at its stored path
+  # (`Engram.Notes.Location.here/0`, `NameKeys.stamp/1`'s version byte 1).
+  @here "AND (p.folder_ref_id IS NULL OR p.name_stamp IS DISTINCT FROM (p.path_nonce || '\\x01'::bytea) " <>
+          "OR NOT " <> moved_chain.("p.folder_ref_id") <> ")"
 
   @by_id name_match.(
            "notes",

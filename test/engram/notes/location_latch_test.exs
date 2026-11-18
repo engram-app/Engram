@@ -63,4 +63,22 @@ defmodule Engram.Notes.LocationLatchTest do
     assert id == note.id
     assert {:error, :not_found} = Notes.get_note(u, v, "A/x.md")
   end
+
+  # Review H1 on #2648: during a `note_name` refill (or after a
+  # previous-release rename) a moved row's name stamp is stale, so it is
+  # shown at its stored (old) path. The lookup must find it there too, or a
+  # write at the shown path mints a second live note.
+  test "a moved row with a stale name stamp is found where it is shown", %{user: u, vault: v} do
+    {:ok, note} = Notes.upsert_note(u, v, %{"path" => "A/x.md", "content" => "old"}, actor: "api")
+    FolderRows.move_uncascaded!(u, FolderRows.tree(u)["A"].id, "B")
+    Repo.query!("UPDATE notes SET name_stamp = NULL WHERE id = $1", [Ecto.UUID.dump!(note.id)])
+
+    {:ok, written} =
+      Notes.upsert_note(u, v, %{"path" => "A/x.md", "content" => "new"}, actor: "api")
+
+    assert written.id == note.id
+    assert live_count(v) == 1
+    assert {:ok, %{id: id}} = Notes.get_note(u, v, "A/x.md")
+    assert id == note.id
+  end
 end
