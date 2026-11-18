@@ -33,8 +33,8 @@ defmodule Engram.FolderRows do
   @doc """
   The vault's root folder row as a step 1b writer leaves it
   (`Engram.Folders.Rows.root_id/1`: the vault's id, no parent, the empty
-  name, encrypted and keyed like any row), and `notes` (ids) pointed at it.
-  Returns the root id.
+  name, encrypted and keyed like any row; kept if a writer made it), and
+  `notes` (ids) pointed at it. Returns the root id.
   """
   def insert_root!(user, vault, note_ids \\ []) do
     alias Engram.Folders.{Folder, Rows}
@@ -45,19 +45,23 @@ defmodule Engram.FolderRows do
     {ct, nonce} = Rows.encrypt_name(dek, id, "")
 
     Repo.with_tenant!(user.id, fn ->
-      Repo.insert_all(Folder, [
-        Map.new(
-          [
-            id: id,
-            user_id: user.id,
-            vault_id: vault.id,
-            name_ciphertext: ct,
-            name_nonce: nonce,
-            full_path_hmac: Rows.path_hmac(fk, ""),
-            dek_version: Crypto.row_version_aad_bound()
-          ] ++ Folder.name_keys(fk, "", nonce)
-        )
-      ])
+      Repo.insert_all(
+        Folder,
+        [
+          Map.new(
+            [
+              id: id,
+              user_id: user.id,
+              vault_id: vault.id,
+              name_ciphertext: ct,
+              name_nonce: nonce,
+              full_path_hmac: Rows.path_hmac(fk, ""),
+              dek_version: Crypto.row_version_aad_bound()
+            ] ++ Folder.name_keys(fk, "", nonce)
+          )
+        ],
+        on_conflict: :nothing
+      )
     end)
 
     Repo.query!("UPDATE notes SET folder_ref_id = $1 WHERE id = ANY($2)", [
