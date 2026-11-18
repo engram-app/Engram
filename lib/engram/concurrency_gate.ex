@@ -21,7 +21,9 @@ defmodule Engram.ConcurrencyGate do
 
   NOT re-entrant: one slot per holder pid. A second `acquire/3` from a pid
   that already holds a slot raises `ArgumentError` in the caller instead of
-  silently double-counting its key. No caller nests.
+  silently double-counting its key. No caller nests acquires of the SAME
+  gate. `Engram.Search` holds a `Search.Gate` slot inside its admission,
+  which is safe only because they are two different gate processes.
 
   A gate restart forgets its holders: the new process starts empty while the
   old holders still run, so for a while up to twice the limit can run.

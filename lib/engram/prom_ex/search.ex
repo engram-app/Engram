@@ -17,8 +17,8 @@ defmodule Engram.PromEx.Search do
     * `engram_prom_ex_search_request_total` — tags `[:status,
       :cross_vault, :rerank]`. Latency is read from Tempo spans, not a
       histogram here.
-    * `engram_prom_ex_search_gate_total` (tag `[:outcome]`, `ok` or
-      `busy`) and `engram_prom_ex_search_gate_wait_milliseconds`: every
+    * `engram_prom_ex_search_gate_total` (tags `[:outcome, :gate,
+      :upstream]`: `ok` or `busy`; `admission`, `qdrant` or `pool`) and `engram_prom_ex_search_gate_wait_milliseconds`: every
       search through `Engram.Search.Gate`, `[:engram, :search, :gate]`.
     * `engram_prom_ex_search_hits_dropped_total`: sum of `count` from
       `[:engram, :search, :hit_dropped]`, tag `[:reason]`.
@@ -100,8 +100,10 @@ defmodule Engram.PromEx.Search do
         counter(
           metric_prefix ++ [:gate, :total],
           event_name: @gate_event,
-          description: "Searches through the concurrency gate, by outcome (ok or busy).",
-          tags: [:outcome]
+          description:
+            "Searches through the concurrency gates, by outcome (ok or busy), gate " <>
+              "(admission, qdrant, pool) and pool upstream.",
+          tags: [:outcome, :gate, :upstream]
         ),
         distribution(
           metric_prefix ++ [:gate, :wait, :milliseconds],
@@ -109,7 +111,9 @@ defmodule Engram.PromEx.Search do
           measurement: :wait,
           description: "Time a search waited for a concurrency slot (or until refused).",
           reporter_options: Engram.PromEx.Buckets.opts(Engram.PromEx.Search.GateWaitBuckets),
-          tags: [:outcome],
+          # A pool-busy refusal never waited on a gate.
+          keep: &(&1[:gate] != :pool),
+          tags: [:outcome, :gate],
           unit: {:native, :millisecond}
         ),
         # Search silently fell back to keyword-only because the query embed

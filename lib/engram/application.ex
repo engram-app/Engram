@@ -414,7 +414,9 @@ defmodule Engram.Application do
       # Bounds concurrent MCP markdown parses (dirty-CPU NIF). Its tasks run
       # under Engram.TaskSupervisor, so it starts after it.
       Engram.MCP.ParseGate,
-      # Bounds concurrent searches per user and per node (Qdrant's search pool).
+      # Bounds concurrent searches per user and per node: whole searches
+      # (admission), and each Qdrant request inside one (Qdrant's search pool).
+      {Engram.Search.Gate, kind: :admission},
       Engram.Search.Gate,
       # Pyroscope continuous CPU profiler. Returns nil when GRAFANA_PYROSCOPE_URL
       # is unset (dev, test, self-host), and Enum.reject below filters it out.

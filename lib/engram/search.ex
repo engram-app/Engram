@@ -39,10 +39,12 @@ defmodule Engram.Search do
     # so a bulk indexing burst can't starve synchronous user search. `model`
     # comes from the per-user SearchProfile; nil falls back to the global
     # query-embed model (or the embedder default when that too is unset).
-    case model || query_embed_model() do
-      nil -> embedder().embed_texts([query], purpose: :query)
-      m -> embedder().embed_texts([query], model: m, purpose: :query)
-    end
+    Gate.pool_busy(:query_embed, fn ->
+      case model || query_embed_model() do
+        nil -> embedder().embed_texts([query], purpose: :query)
+        m -> embedder().embed_texts([query], model: m, purpose: :query)
+      end
+    end)
   end
 
   @doc """
@@ -54,12 +56,14 @@ defmodule Engram.Search do
   def similar(user, vault, point_ids, opts \\ []) when is_list(point_ids) and point_ids != [] do
     with :ok <- vault_ids_present?(vault, opts),
          :ok <- cross_vault_entitlement(user, opts) do
-      do_search_instrumented(
-        user,
-        vault,
-        {:similar, point_ids},
-        Keyword.merge(opts, mode: :similar, group_by_note: true)
-      )
+      Gate.admit(user.id, fn ->
+        do_search_instrumented(
+          user,
+          vault,
+          {:similar, point_ids},
+          Keyword.merge(opts, mode: :similar, group_by_note: true)
+        )
+      end)
     end
   end
 
@@ -99,9 +103,25 @@ defmodule Engram.Search do
     with :ok <- vault_ids_present?(vault, opts),
          :ok <- validate_input(query, opts),
          :ok <- cross_vault_entitlement(user, opts),
-         {:ok, opts} <- resolve_field_filters(user, opts),
-         :ok <- spend_search_budget(user, opts) do
-      do_search_instrumented(user, vault, query, opts)
+         {:ok, opts} <- resolve_field_filters(user, opts) do
+      # The budget is checked before the search (an over-cap user is refused
+      # before any embed) and charged after it, whatever it returned or
+      # raised, unless it came back busy: admission, a Qdrant slot or our own
+      # connection pool turned it away, so it served nothing and costs no token.
+      Gate.admit(user.id, fn ->
+        with :ok <- check_search_budget(user, opts) do
+          try do
+            do_search_instrumented(user, vault, query, opts)
+          catch
+            kind, reason ->
+              charge_search_budget(user)
+              :erlang.raise(kind, reason, __STACKTRACE__)
+          else
+            {:error, :search_busy} = busy -> busy
+            result -> tap(result, fn _ -> charge_search_budget(user) end)
+          end
+        end
+      end)
     end
   end
 
@@ -1000,9 +1020,10 @@ defmodule Engram.Search do
   # Every Qdrant request of a search holds a slot of `Engram.Search.Gate`
   # (per user, per node) for that request only. The query embed and the
   # Postgres reads around it hold none: a slow embedder must degrade search,
-  # never turn it into busy refusals for everyone. A busy refusal comes after
-  # the budget was spent, as the embed it meters may already have run.
-  defp qdrant(user, fun), do: Gate.run(user.id, fun)
+  # never turn it into busy refusals for everyone. A busy refusal costs no
+  # budget token (`search/4` charges after the search), though the embed may
+  # already have run.
+  defp qdrant(user, fun), do: Gate.run(user.id, fn -> Gate.pool_busy(:qdrant, fun) end)
 
   # Bounded label for telemetry AND for the degradation log — the raw reason can
   # carry a whole provider response body, and metric tags must stay
@@ -1407,16 +1428,20 @@ defmodule Engram.Search do
   # Fixed window, not a rolling bucket: Hammer keys buckets by
   # `div(now, scale)`, so the 24-hour window is epoch-aligned and a user can
   # spend the budget either side of a boundary. Same permissive bias.
-  defp spend_search_budget(user, opts) do
+  #
+  # Checked with `peek` and charged with `hit` after the search, so a busy
+  # refusal is free (see `search/4`). Concurrent searches of one user can each
+  # pass the peek, overshooting the cap by at most its in-flight admissions
+  # (`:admission_per_user` per node): the same permissive bias.
+  defp check_search_budget(user, opts) do
     case Billing.cap(user, :ai_searches_per_day) do
       nil ->
         :ok
 
       limit when is_integer(limit) and limit > 0 ->
-        case RateLimiter.hit("ai_search:#{user.id}", @budget_scale_ms, limit, :ai_search) do
-          {:allow, _count} -> :ok
-          {:deny, _retry} -> refuse_search(user, limit, opts)
-        end
+        if RateLimiter.peek(budget_key(user), @budget_scale_ms, limit) > 0,
+          do: :ok,
+          else: refuse_search(user, limit, opts)
 
       # `Billing.cap/2` answers `integer | nil` and maps every "no cap" spelling
       # (including a malformed override) to nil, so what reaches here is an
@@ -1425,6 +1450,22 @@ defmodule Engram.Search do
         refuse_search(user, limit, opts)
     end
   end
+
+  # Charge one search after it ran. A deny here means concurrent searches
+  # overshot the cap (`check_search_budget/2`); the search already ran, so
+  # its result stands.
+  defp charge_search_budget(user) do
+    case Billing.cap(user, :ai_searches_per_day) do
+      limit when is_integer(limit) and limit > 0 ->
+        _ = RateLimiter.hit(budget_key(user), @budget_scale_ms, limit, :ai_search)
+        :ok
+
+      _no_cap ->
+        :ok
+    end
+  end
+
+  defp budget_key(user), do: "ai_search:#{user.id}"
 
   # Reported here, at the one funnel, so MCP refusals count as well as REST.
   # Throttled like `limit_hit` (one per user and surface per hour): a client

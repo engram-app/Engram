@@ -224,7 +224,7 @@ defmodule Engram.Search.GateTest do
     gate(limit: 1)
     assert Gate.run("a", fn -> :ok end) == :ok
     assert_receive {:gate_event, %{wait: w}, %{outcome: :ok} = meta}
-    assert is_integer(w) and map_size(meta) == 1
+    assert is_integer(w) and meta == %{outcome: :ok, gate: :qdrant, upstream: :none}
 
     holder = hold("a")
     assert Gate.run("b", fn -> :ran end) == {:error, :search_busy}

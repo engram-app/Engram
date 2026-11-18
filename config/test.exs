@@ -302,4 +302,8 @@ config :engram, :search_gate,
   limit: 10_000,
   per_user: 10_000,
   max_waiting: 10_000,
-  max_waiting_per_user: 10_000
+  max_waiting_per_user: 10_000,
+  admission_limit: 10_000,
+  admission_per_user: 10_000,
+  admission_max_waiting: 10_000,
+  admission_max_waiting_per_user: 10_000
