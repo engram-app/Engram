@@ -42,8 +42,11 @@ defmodule Engram.Attachments.LocationWritersTest do
   end
 
   defp move!(user, vault, old, new) do
-    {:ok, {:ok, 1}} =
+    # The folder row moves; the count is its notes and markers.
+    {:ok, {:ok, n}} =
       Repo.with_tenant(user.id, fn -> Notes.rename_folder_uncascaded(user, vault, old, new) end)
+
+    true = n > 0
   end
 
   defp live(vault) do
@@ -136,6 +139,53 @@ defmodule Engram.Attachments.LocationWritersTest do
       assert Enum.sort(feed(u, v, c)) == [{"B/x.png", true}, {"C/x.png", false}]
     end
   end
+
+  # D's own folder ops still cascade attachments: each must move the row it
+  # finds at the shown path, not skip it as missing at its stored key.
+  describe "folder rename and folder batch move of the moved folder" do
+    test "Folders.rename carries the moved row to the new name" do
+      %{user: u, vault: v, att: att, cursor: c} = moved_world()
+
+      assert {:ok, %{attachments: 1}} = Folders.rename(u, v, "B", "C")
+      assert at(u, v, "C/x.png") == %{id: att.id, content: "old bytes"}
+      assert at(u, v, "B/x.png") == nil
+      refute_stale_path(u, v, c)
+    end
+
+    test "Folders.batch_move carries the moved row under the target" do
+      %{user: u, vault: v} = world()
+      {:ok, marker} = Notes.create_folder_marker(u, v, "A")
+      {:ok, _} = Notes.create_folder_marker(u, v, "Z")
+      att = put_att(u, v, "A/x.png", "old bytes")
+      c = Repo.with_tenant!(u.id, fn -> Engram.Vaults.raw_current_seq(v.id) end)
+      move!(u, v, "A", "B")
+
+      assert {:ok, %{attachments: 1}} = Folders.batch_move(u, v, [marker.id], {:path, "Z"})
+      assert at(u, v, "Z/B/x.png") == %{id: att.id, content: "old bytes"}
+      assert at(u, v, "B/x.png") == nil
+      refute_stale_path(u, v, c)
+    end
+  end
+
+  # A client older than S4 must be able to reach the head the moved-folder
+  # feed serves, and the head must count a folder that holds only an
+  # attachment.
+  test "feed_head counts a moved folder that holds only an attachment" do
+    {:ok, u} = Engram.Fixtures.user_with_dek_fixture()
+    v = insert(:vault, user: u)
+    {:ok, _} = Notes.create_folder_marker(u, v, "A")
+    _ = put_att(u, v, "A/x.png", "old bytes")
+    own = Repo.with_tenant!(u.id, fn -> Sync.feed_head(u, v, moved: false) end)
+    move!(u, v, "A", "B")
+
+    assert Repo.with_tenant!(u.id, fn -> Sync.feed_head(u, v, moved: false) end) == own
+    head = Repo.with_tenant!(u.id, fn -> Sync.feed_head(u, v) end)
+    assert head > own
+    assert head == Enum.max(Enum.map(feed_rows(u, v, own), & &1.seq))
+  end
+
+  defp feed_rows(user, vault, cursor),
+    do: Sync.merged_changes_page(user, vault, cursor, nil, 500, :all, nil, []).page
 
   describe "restore" do
     defp cutoff, do: DateTime.add(DateTime.utc_now(), -1, :day)

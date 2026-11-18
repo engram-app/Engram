@@ -51,6 +51,10 @@ defmodule Engram.DataMigrations.AttachmentNameKeyTest do
   end
 
   test "a stale folder reference clears the key", %{att: att} do
+    # Keyed by the trigger at the write, or "cleared" below proves nothing.
+    assert [[k]] = key(att.id)
+    assert is_binary(k)
+
     Repo.query!("UPDATE attachments SET folder_ref_stamp = NULL WHERE id = $1", [
       Ecto.UUID.dump!(att.id)
     ])
