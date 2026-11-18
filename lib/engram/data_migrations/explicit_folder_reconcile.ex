@@ -16,15 +16,22 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
 
   Discovery and writes go through `Engram.Backfill.IdWindows.heal_pass/4`
   (`folders` primary-key windows of 200; one fleet walk on the maintenance
-  pool on SaaS, per tenant on self-host). Each window is one statement under
-  `SET LOCAL lock_timeout = '2s'` and `statement_timeout = '5s'`. It first
-  takes the window's vault rows `FOR SHARE SKIP LOCKED`: every marker writer
-  takes its vault row (the seq lock) before it inserts a marker and sets the
-  flag, so a marker that is being written is never missed and its flag never
-  cleared after it. A row in a vault held by a writer, or a row a writer
+  pool on SaaS, per tenant on self-host). Each window is one transaction under
+  `SET LOCAL lock_timeout = '2s'` and `statement_timeout = '5s'`: first the
+  window's vault rows `FOR SHARE SKIP LOCKED` in their own statement, then
+  the marker probe and the update in a later one (see `@lock_vaults_sql` for
+  why the order makes a marker being written impossible to miss). A row in a vault held by a writer, or a row a writer
   holds, is skipped and counts as left (the next pass retries it). The
   marker probe is `notes_user_vault_folder_marker`, one index probe a row.
   Steady state is 0 rows: a clean walk writes nothing.
+
+  Not re-verified (`reverify?/0` stays false), on purpose: a re-verify that
+  finds a row reopens the ledger, and an open ledger sends every listing back
+  to the markers (`Rows.explicit_reads?/0`). Once markers stop (phase 2) the
+  folders created since have none, so for that walk they would drop out of
+  `/folders/explicit` and the plugin would trash them locally. A stale flag
+  left by a 0.88 node mid-rollout stays deletable: a path delete with no live
+  marker clears it (`Notes.delete_folder_marker/3`).
 
   Kill switch: `enabled?/0` is the `explicit_folder_reconcile` service
   override (default on). Off, no pass runs and the ledger stays open, so
@@ -68,17 +75,30 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
       AND n.deleted_at IS NULL AND n.folder_hmac = f.full_path_hmac)
   """
 
-  # The window's vault rows FOR SHARE (a marker writer holds its vault row
-  # FOR UPDATE through its write, see the moduledoc), then its stale rows,
-  # each in a MATERIALIZED CTE evaluated once, then the update.
+  # Statement 1: the window's vault rows FOR SHARE SKIP LOCKED. Its own
+  # statement on purpose: under READ COMMITTED a statement's snapshot is
+  # taken when it starts, so a marker probe in the SAME statement could miss
+  # a marker committed after that snapshot but before the lock was reached
+  # (`FOR SHARE` follows the update chain; the probe does not), and clear a
+  # flag a live marker now names (#2639 re-review, M-A). Every marker writer
+  # takes its vault row FOR UPDATE (`Vaults.next_seq!/1`) before it inserts
+  # a marker and holds it to commit, so once statement 1 holds a vault row:
+  # a writer that committed before it is visible to statement 2's fresh
+  # snapshot, a writer still holding the row made SKIP LOCKED skip the vault
+  # (its rows count as left), and a writer that starts later waits for this
+  # transaction. No interleaving clears the flag of a live marker.
+  @lock_vaults_sql """
+  SELECT id FROM vaults
+  WHERE id IN (SELECT vault_id FROM folders WHERE id = ANY($1))
+  FOR SHARE SKIP LOCKED
+  """
+
+  # Statement 2, a later snapshot: the stale rows of the locked vaults
+  # (`$2`), in a MATERIALIZED CTE evaluated once, then the update.
   @clear_sql """
-  WITH v AS MATERIALIZED (
-    SELECT id FROM vaults
-    WHERE id IN (SELECT vault_id FROM folders WHERE id = ANY($1))
-    FOR SHARE SKIP LOCKED
-  ), c AS MATERIALIZED (
+  WITH c AS MATERIALIZED (
     SELECT f.id FROM folders AS f
-    WHERE #{@stale} AND f.vault_id IN (SELECT id FROM v)
+    WHERE #{@stale} AND f.vault_id = ANY($2)
     ORDER BY f.id
     FOR NO KEY UPDATE OF f SKIP LOCKED
   )
@@ -97,7 +117,8 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
     ids = Enum.map(ids, &Ecto.UUID.dump!/1)
     _ = repo.query!("SET LOCAL lock_timeout = '2s'", [])
     _ = repo.query!("SET LOCAL statement_timeout = '5s'", [])
-    %{num_rows: fixed} = repo.query!(@clear_sql, [ids])
+    %{rows: locked} = repo.query!(@lock_vaults_sql, [ids])
+    %{num_rows: fixed} = repo.query!(@clear_sql, [ids, List.flatten(locked)])
     %{rows: [[left]]} = repo.query!(@left_sql, [ids])
     {fixed, left > 0}
   end
