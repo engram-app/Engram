@@ -104,6 +104,16 @@ defmodule Engram.DataMigrations.RootRefsTest do
       assert page |> Enum.map(& &1.path) |> Enum.sort() == ["a.md", "b.md"]
     end
 
+    test "below the rollback floor: writers and the ledger stay off", %{user: u, vault: v} do
+      Application.put_env(:engram, :root_refs_floor, :enforce)
+      on_exit(fn -> Application.put_env(:engram, :root_refs_floor, :assume) end)
+
+      a = note!(u, v, "a.md")
+      assert FolderRows.ref("notes", a.id) == nil
+      assert RootRefs.run_pass() == {:more, rows: 0, blocked: 1}
+      assert FolderRows.ref("notes", a.id) == nil
+    end
+
     test "the kill switch runs no pass", %{user: u, vault: v} do
       a = note!(u, v, "a.md")
       old_release!(a)

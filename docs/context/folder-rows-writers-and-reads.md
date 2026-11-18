@@ -42,8 +42,8 @@ Writers (1b): every note writer resolves its folder through
 root row, created on first use by `Rows.ensure_root/2` (one `INSERT .. ON
 CONFLICT DO NOTHING`). Attachments still pass no option and keep NULL at the
 root until their own step. The `root_refs` ledger
-(`Engram.DataMigrations.RootRefs`, kill switch `root_refs`, re-verified
-daily) creates missing root rows (gated like `FolderTable`) and fills live
+(`Engram.DataMigrations.RootRefs`, kill switch `root_refs`, inert until the rollback floor reaches 1a (`Rows.root_writes?/1`), re-verified
+daily by one index probe per vault) creates missing root rows (gated like `FolderTable`) and fills live
 root notes left NULL by older writers. Tombstones keep NULL: S6 step 9's
 `NOT NULL` must deal with them.
 

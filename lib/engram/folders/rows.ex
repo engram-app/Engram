@@ -95,6 +95,27 @@ defmodule Engram.Folders.Rows do
   @spec root_id(Ecto.UUID.t()) :: Ecto.UUID.t()
   def root_id(vault_id), do: vault_id
 
+  # The release holding the root-row readers (S6 step 1a, #2641). SENTINEL
+  # that no floor reaches, so root writes stay off whatever the floor says
+  # until the floor-raise PR sets this to 1a's real tag, lists 2641's merge
+  # commit in `priv/release_floor_contains`, and flips
+  # `Engram.Folders.RootRefsFloorTest` to assert (as 2630 did for S5).
+  @root_reads_release "release-v999.0.0"
+
+  @doc "The first release whose readers take a root-row reference: the rollback floor must reach it."
+  @spec root_reads_release() :: String.t()
+  def root_reads_release, do: @root_reads_release
+
+  @doc """
+  Whether note writers (and the `RootRefs` ledger) write root-row
+  references: only once the rollback floor reaches `root_reads_release/0`,
+  so no rollback lands on a release that does not read them. `:assume`
+  (test config) skips the floor.
+  """
+  @spec root_writes?(:assume | :enforce) :: boolean()
+  def root_writes?(mode \\ Application.get_env(:engram, :root_refs_floor, :enforce)),
+    do: mode == :assume or Engram.Release.Floor.at_least?(@root_reads_release)
+
   @doc """
   A folder reference as listings and the wire show it: nil at the root,
   whether the row names the root row (`root_id/1`) or nothing.
@@ -191,7 +212,7 @@ defmodule Engram.Folders.Rows do
   def ensure(user, vault_id, folder, opts) do
     case normalize(folder) do
       "" ->
-        if opts[:root], do: ensure_root(user, vault_id), else: {:ok, nil}
+        if opts[:root] && root_writes?(), do: ensure_root(user, vault_id), else: {:ok, nil}
 
       path ->
         with {:ok, ids} <- ensure_set(user, vault_id, %{path => Keyword.get(opts, :explicit)}),
@@ -209,6 +230,13 @@ defmodule Engram.Folders.Rows do
   """
   @spec ensure_root(map(), Ecto.UUID.t()) :: {:ok, Ecto.UUID.t()} | {:error, term()}
   def ensure_root(user, vault_id) do
+    # The common case, the row exists: one primary-key probe, no encrypt.
+    if Repo.exists?(from(f in Folder, where: f.id == ^root_id(vault_id))),
+      do: {:ok, root_id(vault_id)},
+      else: create_root(user, vault_id)
+  end
+
+  defp create_root(user, vault_id) do
     with {:ok, dek} <- Crypto.get_dek(user),
          {:ok, fk} <- Crypto.dek_filter_key(user) do
       ctx = %{user_id: user.id, vault_id: vault_id, dek: dek, fk: fk}
@@ -260,7 +288,7 @@ defmodule Engram.Folders.Rows do
   end
 
   defp root_ref(user, vault_id, folders, opts) do
-    if opts[:root] && Enum.any?(folders, &(normalize(&1) == "")),
+    if opts[:root] && root_writes?() && Enum.any?(folders, &(normalize(&1) == "")),
       do: ensure_root(user, vault_id),
       else: {:ok, nil}
   end
