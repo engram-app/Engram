@@ -40,6 +40,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.NoteSizes,
     Engram.DataMigrations.FolderTable,
     Engram.DataMigrations.NoteFolderHashNull,
+    Engram.DataMigrations.RootRefs,
     Engram.DataMigrations.KeyAliases,
     Engram.DataMigrations.PersonOriginBackfill,
     Engram.DataMigrations.EffectiveDates,
