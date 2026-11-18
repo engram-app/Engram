@@ -74,8 +74,8 @@ defmodule Engram.Search.CrossVaultGateTest do
     # tiers (Free has one vault; Starter has no search cap), which is exactly
     # why it needs a test — an override on either key makes it live.
     user = insert(:user)
+    # A fresh user's budget bucket is empty; no global reset (async module).
     insert(:user_limit_override, user: user, key: "ai_searches_per_day", value: %{"v" => 1})
-    EngramWeb.RateLimiter.reset_buckets!()
 
     assert {:error, _} = Search.search(user, nil, "anything", cross_vault: true)
 

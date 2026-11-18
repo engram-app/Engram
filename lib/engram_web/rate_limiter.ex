@@ -126,7 +126,15 @@ defmodule EngramWeb.RateLimiter do
     """
     def reset_buckets!(burst_ms \\ @window_margin_ms) when burst_ms < @window_edge_ms do
       clear_buckets!()
+      await_fresh_window!(burst_ms)
+    end
 
+    @doc """
+    `reset_buckets!/1`'s wait alone, wiping nothing: for an ASYNC test, whose
+    buckets are its own (keyed by its fresh user) and which must not wipe the
+    buckets of tests running beside it (`test/lint/async_bucket_reset_lint_test.exs`).
+    """
+    def await_fresh_window!(burst_ms \\ @window_margin_ms) when burst_ms < @window_edge_ms do
       case fresh_window_wait_ms(System.system_time(:millisecond), burst_ms) do
         0 -> :ok
         wait -> Process.sleep(wait)

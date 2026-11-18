@@ -1882,8 +1882,10 @@ defmodule EngramWeb.McpControllerTest do
     # it is charged because it calls `Engram.Search.search/4` like anything
     # else, which is the property worth a regression test.
     setup %{user: user} do
+      # The user is fresh, so its budget bucket is too. No global bucket
+      # reset: this module is async, and a wipe beside it (or one beside this
+      # test) would erase the token `search_notes` spent.
       insert(:user_limit_override, user: user, key: "ai_searches_per_day", value: %{"v" => 1})
-      EngramWeb.RateLimiter.reset_buckets!()
       :ok
     end
 
