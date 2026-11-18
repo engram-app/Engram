@@ -3740,19 +3740,7 @@ jobs:
       # cost is irreducible — it is what tracking latest means.
       - name: Resolve latest bun version
         id: bun
-        run: |
-          set -euo pipefail
-          v=$(curl -sSfL --max-time 20 \
-                -H "Authorization: Bearer ${{ github.token }}" \
-                https://api.github.com/repos/oven-sh/bun/releases/latest \
-              | jq -r '.tag_name' | sed 's/^bun-v//')
-          # Fail loud rather than silently falling back to `latest` — a
-          # sloppy fallback would restore the every-run download and nobody
-          # would notice until CI got slow again.
-          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
-            echo "::error::could not resolve latest bun version (got '$v')"; exit 1; }
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "Resolved bun latest -> $v"
+        uses: ./.github/actions/resolve-bun-version
 
       # HOME is pointed at runner.temp on EVERY setup-bun step in this repo, and
       # that is load-bearing. setup-bun@v2 installs to `homedir()/.bun/bin/bun`,
@@ -4457,16 +4445,7 @@ jobs:
       - name: Resolve latest bun version
         id: bun
         if: steps.guard.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          v=$(curl -sSfL --max-time 20 \
-                -H "Authorization: Bearer ${{ github.token }}" \
-                https://api.github.com/repos/oven-sh/bun/releases/latest \
-              | jq -r '.tag_name' | sed 's/^bun-v//')
-          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
-            echo "::error::could not resolve latest bun version (got '$v')"; exit 1; }
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "Resolved bun latest -> $v"
+        uses: ./.github/actions/resolve-bun-version
 
       # Private HOME: never rewrite the shared ~/.bun (see the first setup-bun
       # step in this file for the Text-file-busy race this prevents).

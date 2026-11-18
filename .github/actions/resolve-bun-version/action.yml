@@ -1,0 +1,42 @@
+name: Resolve latest bun version
+description: >
+  Resolve bun's `latest` release to a concrete semver, so setup-bun can key
+  its cache on it (a literal `latest` is unkeyable and re-downloads ~35 MB
+  per run). One place for the lookup, with retries: a single-shot call timed
+  out on api.github.com and failed the whole `ci` aggregate.
+
+  Fails loud on a bad answer. There is deliberately NO fallback to `latest`:
+  it would silently restore the every-run download.
+
+  Requires actions/checkout first (local `uses: ./` action).
+
+inputs:
+  token:
+    description: Token for api.github.com (avoids the anonymous rate limit).
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  version:
+    description: Concrete bun version, e.g. 1.4.2
+    value: ${{ steps.resolve.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      env:
+        GH_API_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        # Retry transient network errors (timeouts, 5xx, resets) up to ~60s total.
+        v=$(curl -sSfL --connect-timeout 10 --max-time 20 \
+              --retry 4 --retry-all-errors --retry-delay 3 --retry-max-time 60 \
+              -H "Authorization: Bearer ${GH_API_TOKEN}" \
+              "${BUN_RELEASE_URL:-https://api.github.com/repos/oven-sh/bun/releases/latest}" \
+            | jq -r '.tag_name' | sed 's/^bun-v//')
+        [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+          echo "::error::could not resolve latest bun version (got '$v')"; exit 1; }
+        echo "version=$v" >> "$GITHUB_OUTPUT"
+        echo "Resolved bun latest -> $v"
