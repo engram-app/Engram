@@ -1621,17 +1621,22 @@ defmodule Engram.Folders.Rows do
           {:ok, 0 | 1} | {:error, term()}
   def move_bare_explicit(user, vault_id, old, new) do
     with %{^old => id} when is_binary(id) <- ids_by_path(user, vault_id, [old]),
-         true <- Repo.exists?(from(f in Folder, where: f.id == ^id and f.explicit)),
-         _ = Engram.Vaults.next_seq!(vault_id),
-         {:bare, true} <- {:bare, bare?(user, vault_id, old)} do
-      case rename(user, vault_id, old, new) do
-        :ok -> {:ok, 1}
-        {:error, :merge} -> {:error, :conflict}
-        {:error, _} = err -> err
-      end
+         true <- Repo.exists?(from(f in Folder, where: f.id == ^id and f.explicit)) do
+      _ = Engram.Vaults.next_seq!(vault_id)
+
+      if bare?(user, vault_id, old),
+        do: rename_bare(user, vault_id, old, new),
+        else: {:error, :claims_stale}
     else
-      {:bare, false} -> {:error, :claims_stale}
       _ -> {:ok, 0}
+    end
+  end
+
+  defp rename_bare(user, vault_id, old, new) do
+    case rename(user, vault_id, old, new) do
+      :ok -> {:ok, 1}
+      {:error, :merge} -> {:error, :conflict}
+      {:error, _} = err -> err
     end
   end
 
