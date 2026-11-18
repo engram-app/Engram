@@ -340,9 +340,6 @@ defmodule Engram.Attachments do
   defp commit_txn(user, vault, {path, path_hmac, size}, dek_version, build, limit, opts) do
     Repo.transaction(fn ->
       :ok = acquire_path_lock(user.id, path_hmac)
-      # Under the path lock, in this transaction (`settle/3`): the pre-lock
-      # settle is only for the cheap checks before the upload.
-      with {:error, reason} <- settle(user, vault, [path]), do: Repo.rollback(reason)
       existing = fetch_existing(user, vault.id, path_hmac)
 
       # The stale-base and own-write checks run before the cap check: a stale
@@ -365,6 +362,12 @@ defmodule Engram.Attachments do
            # here was a 40P01 cycle with it (#2339). write_row's next_seq!
            # re-enters this lock.
            :ok <- Repo.with_tenant!(user.id, fn -> Engram.Vaults.lock_seq!(vault.id) end),
+           # Under the vault lock no folder moves (`settle_count/3`): heal the
+           # path here, in the write's transaction. A row it repointed onto
+           # the path is not the `existing` the gates above judged: a
+           # retryable conflict, and the retry's pre-lock settle already
+           # finds it in place.
+           :ok <- settle_unchanged(user, vault, path),
            # Under the locks and before anything is written: a row committed
            # after a DEK rotation's sweep went by would stay under the
            # retiring key.
@@ -620,6 +623,19 @@ defmodule Engram.Attachments do
   def settle(_user, _vault, []), do: :ok
 
   def settle(user, vault, paths) do
+    with {:ok, _repointed} <- settle_count(user, vault, paths), do: :ok
+  end
+
+  # `settle/3`, saying how many rows it repointed: `{:ok, n}` or the conflict.
+  #
+  # Lock order (#2339): the vault row (`Vaults.lock_seq!/1`) BEFORE the first
+  # attachment row a repoint locks, as every writer and the cascading folder
+  # rename take them (vault, then rows). Repointing first and taking the vault
+  # in the write's `next_seq!` after it was the reverse order: a deadlock with
+  # a concurrent cascade (40P01). Holding the vault lock also means no folder
+  # moves between the heal and the write that follows in the same transaction
+  # (a rename takes the same lock).
+  defp settle_count(user, vault, paths) do
     vid = vault_id(vault)
 
     with true <- Location.named?(user.id, vid),
@@ -628,22 +644,11 @@ defmodule Engram.Attachments do
       Repo.with_tenant!(user.id, fn ->
         user
         |> stale_at(vid, filter_key, paths)
-        |> Enum.reduce_while(:ok, fn stale, :ok ->
-          case repoint(
-                 user,
-                 vid,
-                 {dek, filter_key},
-                 stale,
-                 Engram.Notes.Location.stale_chain_depth()
-               ) do
-            :ok -> {:cont, :ok}
-            err -> {:halt, err}
-          end
-        end)
+        |> repoint_all(user, vid, {dek, filter_key})
       end)
     else
       # No moved folder in the vault, or no key (nothing to repoint).
-      _ -> :ok
+      _ -> {:ok, 0}
     end
   end
 
@@ -655,6 +660,19 @@ defmodule Engram.Attachments do
     |> Enum.uniq()
     |> Enum.chunk_every(500)
     |> Enum.flat_map(&Location.stale_rows(user, vid, filter_key, &1))
+  end
+
+  defp repoint_all([], _user, _vid, _keys), do: {:ok, 0}
+
+  defp repoint_all(stale, user, vid, keys) do
+    :ok = Engram.Vaults.lock_seq!(vid)
+
+    Enum.reduce_while(stale, {:ok, 0}, fn row, {:ok, n} ->
+      case repoint(user, vid, keys, row, Engram.Notes.Location.stale_chain_depth()) do
+        :ok -> {:cont, {:ok, n + 1}}
+        err -> {:halt, err}
+      end
+    end)
   end
 
   defp repoint(_user, _vid, _keys, _stale, 0), do: {:error, :conflict}
@@ -1017,12 +1035,24 @@ defmodule Engram.Attachments do
     settled(user, vault, [path], fn -> delete_settled(user, vault, path, opts) end)
   end
 
+  defp settle_unchanged(user, vault, path) do
+    case settle_count(user, vault, [path]) do
+      {:ok, 0} -> :ok
+      {:ok, _repointed} -> {:error, :conflict}
+      err -> err
+    end
+  end
+
   # `fun` (a write at `paths`) in ONE transaction with `settle/3` before it,
   # under the vault's seq gate: a folder moved between the heal and the write
   # cannot leave the write on a row stored elsewhere. `fun`'s result, or the
   # settle's `{:error, :conflict}` (nothing written).
   defp settled(user, vault, paths, fun) do
     SeqGate.with_tenant(user.id, vault_id(vault), fn ->
+      # The vault row first (`settle_count/3`'s lock order): no folder moves
+      # between the probe and the write. Every one of these writes takes it
+      # for its seq anyway.
+      :ok = Engram.Vaults.lock_seq!(vault_id(vault))
       with :ok <- settle(user, vault, paths), do: fun.()
     end)
     |> case do
@@ -1690,7 +1720,7 @@ defmodule Engram.Attachments do
 
   @doc """
   `folder_rename_pairs/4` plus whether every attachment under the folder is
-  keyed (`Location.derivable?/1`), so a rename may leave them in place
+  keyed (`name_key` set), so a rename may leave them in place
   (`Engram.Attachments.WriteStop`).
   """
   @spec folder_rename_plan(map(), map(), String.t(), String.t()) ::
@@ -2517,10 +2547,11 @@ defmodule Engram.Attachments do
            metas: metas,
            unreadable: length(rows) - length(decrypted),
            # Every row in the folders can be found by its folder row and
-           # name (`Location.derivable?/1`), and none failed to decrypt.
+           # name: `name_key`, the trigger's verdict, which the by-name lookup
+           # itself reads. And none failed to decrypt.
            keyed?:
              length(rows) == length(decrypted) and
-               Enum.all?(rows, &(not MapSet.member?(found, &1.id) or Location.derivable?(&1)))
+               Enum.all?(rows, &(not MapSet.member?(found, &1.id) or is_binary(&1.name_key)))
          }}
 
       err ->
@@ -2535,7 +2566,12 @@ defmodule Engram.Attachments do
   # caller's snapshot, and right for a READ COMMITTED caller (a row stamped
   # after the stale read is placed by the time the placed read runs).
   defp candidate_rows(user, vault, folders, direct?) do
-    base = from(a in scoped_live(user, vault), as: :a, select: struct(a, @tree_attachment_fields))
+    # `name_key` too: whether a folder rename may leave the row in place.
+    base =
+      from(a in scoped_live(user, vault),
+        as: :a,
+        select: struct(a, ^[:name_key | @tree_attachment_fields])
+      )
 
     if not direct? and "" in folders do
       Repo.all(base)

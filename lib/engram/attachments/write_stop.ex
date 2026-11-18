@@ -26,7 +26,8 @@ defmodule Engram.Attachments.WriteStop do
       plugins older than S4 through the moved-folder feed's attachment leg.
 
   The op itself also falls back to the cascade when any attachment under
-  the folder is not keyed (`Location.derivable?/1`): such a row is read at
+  the folder has no `name_key` (the trigger keys it only while its name and
+  folder reference are current): such a row is read at
   its stored path, which the move would orphan.
 
   Turning it off needs no re-cascade: every release at or above the floor
