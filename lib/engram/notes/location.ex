@@ -52,8 +52,20 @@ defmodule Engram.Notes.Location do
   Gate (`on?/0`): the S2 `note_name` ledger is done (read from the ledger
   row, cached a minute per node, so `DataMigrations.reopen/2` turns names
   off within the minute) and the `name_reads` service override is not
-  false (a kill switch, no deploy). Off, every function here answers exactly
-  what the path read did.
+  false (a kill switch, no deploy). Off, a vault with no folder moved
+  without a cascade is read exactly as the path read did.
+
+  Latch: a vault holding a folder moved without a cascade (`named?/2`,
+  `WalkSql.moved/0`, one `folders_moved_live` probe per operation, no vault
+  scan) ALWAYS reads names, whatever `on?/0` says. Its moved notes' stored
+  paths are their OLD paths, so a path-only read would serve them at the old
+  place and let a create at the shown path mint a second row with the same
+  folder row and name: two notes at one shown path once names come back.
+  Per row, a name is still trusted only while its stamp is current
+  (`derivable?/1`, the `name_key` trigger), so a reopened or bumped
+  `note_name` ledger only drops the rows it has not refilled back to their
+  stored paths. `on?/0` still gates the S3 wire extras and new uncascaded
+  moves (`Engram.Folders.WriteStop.on?/0`).
 
   Not read here: `notes.folder_hmac` (release E stops writing it).
   """
@@ -143,7 +155,7 @@ defmodule Engram.Notes.Location do
   in-statement probe (`WalkSql.moved/0`) turns them off.
   """
   @spec named?(Ecto.UUID.t(), Ecto.UUID.t()) :: boolean()
-  def named?(user_id, vault_id), do: on?() and moved_vault?(user_id, vault_id)
+  def named?(user_id, vault_id), do: moved_vault?(user_id, vault_id)
 
   defp moved_vault?(user_id, vault_id) do
     Repo.with_tenant!(user_id, fn ->
@@ -359,7 +371,7 @@ defmodule Engram.Notes.Location do
   names are off or no row has a folder.
   """
   @spec chains([map()]) :: [map()] | nil
-  def chains(rows), do: if(on?(), do: read_chains(rows))
+  def chains(rows), do: read_chains(rows)
 
   # `chains/1` past the names gate (a caller that already read it).
   defp read_chains(rows) do
@@ -378,16 +390,13 @@ defmodule Engram.Notes.Location do
 
   @doc """
   The select extra a page query of `vault_id` carries so it needs no
-  `chains/1` read while nothing in the vault moved (`moved?/1`): `%{}` with
-  names off (`names?`, read once per request by a caller that reads it
-  again).
+  `chains/1` read while nothing in the vault moved (`moved?/1`). Sent
+  whatever `on?/0` says: a moved vault always derives (the moduledoc's
+  latch).
   """
-  @spec moved_column(Ecto.UUID.t(), boolean()) :: map()
-  def moved_column(vault_id, names? \\ on?()) do
-    if names?,
-      do: %{moved__: dynamic(fragment(WalkSql.moved(), type(^vault_id, Ecto.UUID)))},
-      else: %{}
-  end
+  @spec moved_column(Ecto.UUID.t()) :: map()
+  def moved_column(vault_id),
+    do: %{moved__: dynamic(fragment(WalkSql.moved(), type(^vault_id, Ecto.UUID)))}
 
   @doc "Whether a page read with `moved_column/1` must read `chains/1`."
   @spec moved?([map()]) :: boolean()
@@ -416,7 +425,7 @@ defmodule Engram.Notes.Location do
     named = if derive?, do: Enum.filter(rows, &derivable?/1), else: []
 
     derived =
-      if dek && named != [] and on?() do
+      if dek && named != [] do
         chains =
           Repo.with_tenant!(user.id, fn ->
             named
@@ -448,7 +457,7 @@ defmodule Engram.Notes.Location do
   """
   @spec shown_path(map(), map(), boolean() | :probe) :: String.t() | nil
   def shown_path(user, row, moved? \\ :probe) do
-    moved? = if moved? == :probe, do: named?(user.id, row.vault_id), else: moved? and on?()
+    moved? = if moved? == :probe, do: named?(user.id, row.vault_id), else: moved?
     derive? = derivable?(row) and moved?
     Map.get(paths(user, [row], derive?), row.id)
   end
@@ -465,7 +474,7 @@ defmodule Engram.Notes.Location do
 
   def put_paths(user, notes, chains) do
     chains =
-      if chains == :read and on?(),
+      if chains == :read,
         do: Repo.with_tenant!(user.id, fn -> chains(notes) end),
         else: chains
 
@@ -487,7 +496,7 @@ defmodule Engram.Notes.Location do
   @doc """
   What a whole-vault listing (`/sync/manifest`, `/vault/tree`) reads, in
   its own tenant transaction, to serve its notes where their folder rows
-  put them, given rows it already read with `moved_column/2` (so they say
+  put them, given rows it already read with `moved_column/1` (so they say
   whether the vault holds a folder moved without a cascade, which no vault
   does before S5; rows read without it, or none, say no): nil, reading
   nothing, unless one does. Then the vault's live notes' location columns
@@ -499,7 +508,7 @@ defmodule Engram.Notes.Location do
   end
 
   @doc """
-  `listing_moves/3` for a listing that read no rows with `moved_column/2`:
+  `listing_moves/3` for a listing that read no rows with `moved_column/1`:
   one probe (`named?/2`) first, nil when the vault never moved a folder
   without a cascade. Inside the caller's tenant transaction.
   """
