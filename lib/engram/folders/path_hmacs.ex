@@ -83,16 +83,16 @@ defmodule Engram.Folders.PathHmacs do
   target releases.
   """
   @spec release(module(), Ecto.UUID.t(), [{Ecto.UUID.t() | binary(), binary() | nil}]) ::
-          non_neg_integer()
+          {:ok, non_neg_integer()}
   def release(repo \\ Repo, user_id, pairs), do: run(repo, @release, user_id, pairs)
 
   @doc """
   Sets each `{id, hash}` of `user_id`'s rows (a nil hash is skipped), first
   releasing that hash from any other live row of the same vault (only
-  for a live target). Returns the rows set.
+  for a live target). Returns `{:ok, rows set}`.
   """
   @spec put(module(), Ecto.UUID.t(), [{Ecto.UUID.t() | binary(), binary() | nil}]) ::
-          non_neg_integer()
+          {:ok, non_neg_integer()}
   def put(repo \\ Repo, user_id, pairs) do
     run(repo, @put, user_id, pairs)
   end
@@ -100,23 +100,23 @@ defmodule Engram.Folders.PathHmacs do
   defp run(repo, sql, user_id, pairs) do
     case for({id, h} <- pairs, is_binary(h), do: {uuid(id), h}) do
       [] ->
-        0
+        {:ok, 0}
 
       pairs ->
         {ids, hmacs} = Enum.unzip(pairs)
         %{num_rows: n} = repo.query!(sql, [ids, hmacs, uuid(user_id)])
-        n
+        {:ok, n}
     end
   end
 
   @doc "The rows of `vault_id` among `ids` drop a hash another live row of the vault holds."
-  @spec yield(module(), Ecto.UUID.t(), [Ecto.UUID.t() | binary()]) :: non_neg_integer()
+  @spec yield(module(), Ecto.UUID.t(), [Ecto.UUID.t() | binary()]) :: {:ok, non_neg_integer()}
   def yield(repo \\ Repo, vault_id, ids)
-  def yield(_repo, _vault_id, []), do: 0
+  def yield(_repo, _vault_id, []), do: {:ok, 0}
 
   def yield(repo, vault_id, ids) do
     %{num_rows: n} = repo.query!(@yield, [Enum.map(ids, &uuid/1), uuid(vault_id)])
-    n
+    {:ok, n}
   end
 
   defp uuid(<<_::128>> = raw), do: raw

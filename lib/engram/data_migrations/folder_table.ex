@@ -323,7 +323,7 @@ defmodule Engram.DataMigrations.FolderTable do
         if existing? do
           # The marker's folder row exists at another place: an older release
           # renamed the marker. Move it here (the place is free).
-          update_row(repo, ctx, row, true)
+          :ok = update_row(repo, ctx, row, true)
           tree = %{tree | by_key: Map.delete(tree.by_key, tree.by_id[id])}
           {id, {put(tree, key, id, full), bump(stats)}}
         else
@@ -341,7 +341,7 @@ defmodule Engram.DataMigrations.FolderTable do
                   ensure_one(repo, ctx, {tree, stats}, vault, parent, segment, full_path, leaf)
 
                 nil ->
-                  update_row(repo, ctx, row, true)
+                  :ok = update_row(repo, ctx, row, true)
                   {id, {put(tree, key, id, full), bump(stats)}}
               end
           end
@@ -361,7 +361,8 @@ defmodule Engram.DataMigrations.FolderTable do
           )
 
         # The hash through its one writer (released from any stale holder).
-        n = marked + PathHmacs.put(repo, ctx.user_id, [{id, full}])
+        {:ok, set} = PathHmacs.put(repo, ctx.user_id, [{id, full}])
+        n = marked + set
 
         if n > 0,
           do: {id, {put(tree, key, id, full), bump(stats)}},
@@ -412,7 +413,9 @@ defmodule Engram.DataMigrations.FolderTable do
       )
 
     # Inserted without a hash; its one writer sets it.
-    if n == 1, do: PathHmacs.put(repo, ctx.user_id, [{row.id, row.full}])
+    {:ok, _} =
+      if n == 1, do: PathHmacs.put(repo, ctx.user_id, [{row.id, row.full}]), else: {:ok, 0}
+
     n
   end
 
@@ -445,7 +448,8 @@ defmodule Engram.DataMigrations.FolderTable do
       ]
     )
 
-    PathHmacs.put(repo, ctx.user_id, [{row.id, row.full}])
+    {:ok, _} = PathHmacs.put(repo, ctx.user_id, [{row.id, row.full}])
+    :ok
   end
 
   # Moving or reviving a folder row changes where its notes are shown when

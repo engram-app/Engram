@@ -314,10 +314,11 @@ defmodule Engram.Folders.Rows do
 
     # The rows carry their hash (`PathHmacs.with_hash/2`); release it from
     # any stale holder, one statement.
-    PathHmacs.release(
-      ctx.user_id,
-      for({path, _, _, id, _} <- rows, MapSet.member?(written, id), do: {id, hmacs[path]})
-    )
+    {:ok, _} =
+      PathHmacs.release(
+        ctx.user_id,
+        for({path, _, _, id, _} <- rows, MapSet.member?(written, id), do: {id, hmacs[path]})
+      )
 
     Enum.reduce(rows, ids, fn {path, parent, marker, id, _row}, ids ->
       if MapSet.member?(written, id),
@@ -342,7 +343,7 @@ defmodule Engram.Folders.Rows do
          ) do
       1 ->
         put_names(ctx, [{id, segment}], :new)
-        PathHmacs.release(ctx.user_id, [{id, full_h}])
+        {:ok, _} = PathHmacs.release(ctx.user_id, [{id, full_h}])
         id
 
       0 ->
@@ -404,7 +405,9 @@ defmodule Engram.Folders.Rows do
       |> Repo.update_all(set: [explicit: true, updated_at: now()])
     end
 
-    if full != full_h, do: PathHmacs.put(ctx.user_id, [{id, full_h}])
+    {:ok, _} =
+      if full != full_h, do: PathHmacs.put(ctx.user_id, [{id, full_h}]), else: {:ok, 0}
+
     :ok
   end
 
@@ -480,7 +483,9 @@ defmodule Engram.Folders.Rows do
 
     # Only a row that moved here takes this path's hash (a 0-row update must
     # not release a live sibling's).
-    if moved == 1, do: PathHmacs.put(ctx.user_id, [{id, full_h}])
+    {:ok, _} =
+      if moved == 1, do: PathHmacs.put(ctx.user_id, [{id, full_h}]), else: {:ok, 0}
+
     put_names(ctx, [{id, segment}])
   end
 
@@ -1190,10 +1195,11 @@ defmodule Engram.Folders.Rows do
         :ok = put_names(ctx, [{root.id, new_segment}])
         rest = for r <- rows, r.id != root.id, Map.has_key?(paths, r.id), do: {r.id, paths[r.id]}
         # The root's new path hash and every descendant's, one statement.
-        PathHmacs.put(
-          ctx.user_id,
-          for({id, p} <- [{root.id, new_folder} | rest], do: {id, path_hmac(ctx.fk, p)})
-        )
+        {:ok, _} =
+          PathHmacs.put(
+            ctx.user_id,
+            for({id, p} <- [{root.id, new_folder} | rest], do: {id, path_hmac(ctx.fk, p)})
+          )
 
         :ok = recascade(ctx, rows)
         :ok
@@ -1273,7 +1279,9 @@ defmodule Engram.Folders.Rows do
       end)
 
     # Every moved row's new path hash, one statement.
-    PathHmacs.put(ctx.user_id, for({id, path} <- moved, do: {id, path_hmac(ctx.fk, path)}))
+    {:ok, _} =
+      PathHmacs.put(ctx.user_id, for({id, path} <- moved, do: {id, path_hmac(ctx.fk, path)}))
+
     retire_later(ctx.user_id, Enum.reverse(merged))
   end
 
@@ -1561,8 +1569,11 @@ defmodule Engram.Folders.Rows do
     dek = dek!(user)
     fk = Crypto.dek_filter_key_from_bytes(dek)
     paths = paths_by_ids(dek, vault_id, ids)
-    PathHmacs.put(user.id, for({id, p} <- paths, is_binary(p), do: {id, path_hmac(fk, p)}))
-    PathHmacs.yield(vault_id, for(id <- ids, not is_binary(paths[id]), do: id))
+
+    {:ok, _} =
+      PathHmacs.put(user.id, for({id, p} <- paths, is_binary(p), do: {id, path_hmac(fk, p)}))
+
+    {:ok, _} = PathHmacs.yield(vault_id, for(id <- ids, not is_binary(paths[id]), do: id))
     n
   end
 
