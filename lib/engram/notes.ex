@@ -977,11 +977,13 @@ defmodule Engram.Notes do
                      err
                  end
 
-               {:ok, _already_soft_deleted} ->
-                 {:ok, :not_found}
-
-               :not_found ->
-                 {:ok, :not_found}
+               # No live marker: a row left explicit without one (before the
+               # `ExplicitFolderReconcile` heal, or once markers stop) is still
+               # listed, so the delete clears it (S6 step 4, #2639 review H1).
+               _no_live_marker ->
+                 if Rows.clear_explicit(user, vault.id, folder),
+                   do: {:ok, :deleted},
+                   else: {:ok, :not_found}
              end
            end) do
         {:ok, inner} -> inner
@@ -7411,8 +7413,21 @@ defmodule Engram.Notes do
           {:folders, {[Ecto.UUID.t()], [map()]}} | {:markers, [Note.t()]},
           binary()
         ) :: [%{id: Ecto.UUID.t(), folder: String.t()}]
-  def decrypt_explicit_folder_rows({:folders, {ids, rows}}, dek),
-    do: for({id, path} <- Rows.chain_paths(dek, rows, ids), do: %{id: id, folder: path})
+  def decrypt_explicit_folder_rows({:folders, {ids, rows}}, dek) do
+    paths = Rows.chain_paths(dek, rows, ids)
+
+    # A row whose name or ancestor chain will not open is left out, as the
+    # folder counts leave it out; say so (a count, no ids or names), since an
+    # empty folder missing here is one the plugin may trash locally.
+    if (dropped = length(ids) - map_size(paths)) > 0,
+      do:
+        Logger.warning(
+          "explicit folders: rows whose path did not open left out of the listing",
+          Metadata.with_category(:warning, :sync, count: dropped)
+        )
+
+    for {id, path} <- paths, do: %{id: id, folder: path}
+  end
 
   def decrypt_explicit_folder_rows({:markers, markers}, dek),
     do: Enum.map(markers, &(&1 |> hydrate_folder_marker(dek) |> Map.take([:id, :folder])))

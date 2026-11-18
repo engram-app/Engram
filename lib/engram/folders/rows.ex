@@ -28,6 +28,7 @@ defmodule Engram.Folders.Rows do
 
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.DataMigrations.{ExplicitFolderReconcile, FolderTable}
   alias Engram.Folders.{Folder, WalkSql}
   alias Engram.Logger.Metadata
   alias Engram.Repo
@@ -831,18 +832,27 @@ defmodule Engram.Folders.Rows do
 
   @doc """
   Whether folder listings read explicit folders from `folders.explicit`
-  instead of the `kind = 'folder'` marker rows (S6 step 4, Engram#2523).
-  Every marker writer has set the flag since the folders table shipped
-  (`ensure_markers/3`, `unmark_explicit/3`), and `FolderTable`'s marker step
-  fills it for markers written before that, so the flag is complete once
-  that ledger is done. Until then (a self-host that skipped releases) the
-  markers are read. `:folder_table_ledger` `:done` is the test suite's stand-in
-  for prod's closed ledger (`config/test.exs`).
+  instead of the `kind = 'folder'` marker rows (S6 step 4, Engram#2523):
+  once the flag equals the markers. `FolderTable`'s marker step SETS it for
+  every live marker (every marker writer has set it since the folders table
+  shipped), and `ExplicitFolderReconcile` CLEARS it on every row no live
+  marker names, so both ledgers done means the two agree. Until then (a
+  self-host that skipped releases, or the reconcile's first walk) the
+  markers are read.
+
+  Read from the ledger rows, cached a minute per node (`:explicit_folders`),
+  so an open ledger costs one read a minute, not one a call, and a reopened
+  one is honoured within the minute. `:explicit_folders_ledger` `:done` is
+  the test suite's stand-in for prod's closed ledgers (`config/test.exs`).
   """
   @spec explicit_reads?() :: boolean()
   def explicit_reads? do
-    Engram.ServiceConfig.get(:folder_table_ledger, :read) == :done or
-      Engram.DataMigrations.FolderTable.done?()
+    Engram.ServiceConfig.get(:explicit_folders_ledger, :read) == :done or
+      Engram.Cache.fetch(:explicit_folders, :done, fn ->
+        Enum.all?([FolderTable, ExplicitFolderReconcile], fn m ->
+          Engram.DataMigrations.completed_at(m.name(), m.version()) != nil
+        end)
+      end)
   end
 
   @doc """
@@ -1587,6 +1597,28 @@ defmodule Engram.Folders.Rows do
       |> Repo.update_all([])
 
     n
+  end
+
+  @doc """
+  Clears the explicit flag of the live row at `folder` when it is set, with
+  no marker involved: `true` if it was explicit (after bumping the vault seq,
+  which the listings' caches and etags key on), `false`, touching nothing,
+  if not. The vault row is taken before the folder row, every writer's lock
+  order. Runs inside the caller's tenant transaction.
+  """
+  @spec clear_explicit(map(), Ecto.UUID.t(), String.t()) :: boolean()
+  def clear_explicit(user, vault_id, folder) do
+    with %{^folder => id} when is_binary(id) <- ids_by_path(user, vault_id, [folder]),
+         true <- Repo.exists?(from(f in Folder, where: f.id == ^id and f.explicit)) do
+      _ = Engram.Vaults.next_seq!(vault_id)
+
+      from(f in Folder, where: f.id == ^id and f.explicit)
+      |> Repo.update_all(set: [explicit: false, updated_at: now()])
+
+      true
+    else
+      _ -> false
+    end
   end
 
   @doc """

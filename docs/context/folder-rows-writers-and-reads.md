@@ -80,9 +80,14 @@ the `kind = 'folder'` marker rows: `GET /folders/explicit`, `GET /folders`,
 `folders_explicit_live`). The id a listing hands out is the folder row's;
 the id-keyed operations (batch delete/move, notes by folder id) resolve it,
 and still resolve a marker's id (a marker made after its folder's row keeps
-its own id, and the previous release listed it). Until the `folder_table`
-ledger is done (`Rows.explicit_reads?/0`, a self-host that skipped releases)
-the markers are read. Phases: D reads (writers still insert markers), E
+its own id, and the previous release listed it). The flag is trusted only
+once it equals the markers (`Rows.explicit_reads?/0`): `FolderTable` sets it
+for every live marker, and `ExplicitFolderReconcile` clears it on every row
+no live marker names (a cascade before #2639 deleted markers without clearing
+the flag on rows it kept, and listed from the flag those would put deleted
+empty folders back on disk). Until both ledgers are done the markers are read.
+A path delete (`Notes.delete_folder_marker/3`) with no live marker clears the
+flag too. Phases: D reads (writers still insert markers), E
 writers stop inserting markers, F a ledger deletes them. The catch-up feed
 never carried markers (#976), and the plugin learns explicit folders only
 from `GET /folders/explicit`, whose shape is unchanged: no plugin shim.

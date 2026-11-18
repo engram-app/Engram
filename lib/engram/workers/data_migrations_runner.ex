@@ -39,6 +39,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.NoteIndexState,
     Engram.DataMigrations.NoteSizes,
     Engram.DataMigrations.FolderTable,
+    Engram.DataMigrations.ExplicitFolderReconcile,
     Engram.DataMigrations.NoteFolderHashNull,
     Engram.DataMigrations.KeyAliases,
     Engram.DataMigrations.PersonOriginBackfill,
