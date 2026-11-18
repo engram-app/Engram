@@ -78,7 +78,11 @@ defmodule Engram.Folders.DeltaFixesTest do
   end
 
   describe "move guard" do
-    test "also refuses by row, where a stale path hash would let it through", %{user: u, vault: v} do
+    # Until S6 step 3 the writer resolved the new parent by `full_path_hmac`,
+    # so a stale hash could place A under its own subtree and the guard had
+    # to refuse. The writer now walks the chain: X/Y does not exist, so it
+    # is created and A moves under it, no cycle.
+    test "a stale path hash does not steer the move", %{user: u, vault: v} do
       put_note(u, v, "A/B/x.md")
       t = FolderRows.tree(u)
       {:ok, fk} = Engram.Crypto.dek_filter_key(u)
@@ -88,8 +92,11 @@ defmodule Engram.Folders.DeltaFixesTest do
         dump(t["A/B"].id)
       ])
 
-      assert {:error, :invalid_path} = Notes.rename_folder(u, v, "A", "X/Y/Z")
-      assert FolderRows.tree(u)["A"].id == t["A"].id
+      assert {:ok, _} = Notes.rename_folder(u, v, "A", "X/Y/Z")
+      tree = FolderRows.tree(u)
+      assert tree["X/Y/Z"].id == t["A"].id
+      assert tree["X/Y/Z/B"].id == t["A/B"].id
+      refute tree["X/Y"].id in [t["A"].id, t["A/B"].id]
     end
 
     test "an empty path is a clean error, not a crash after the claim", %{user: u, vault: v} do

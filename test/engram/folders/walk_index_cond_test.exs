@@ -98,6 +98,25 @@ defmodule Engram.Folders.WalkIndexCondTest do
     assert QueryPlan.buffers(big.custom) <= 3 * 3, big.custom
   end
 
+  # S6 step 3: the writers find a path's rows with the same walk (no
+  # `full_path_hmac` read), so `ensure/4` costs one probe a level too.
+  test "ensure's walk (the writers' read): name_hmac keys every level, buffers flat",
+       %{user: u, vault: v} do
+    walk = fn path ->
+      plans(u, fn -> Rows.ensure(u, v.id, path) end, "WITH RECURSIVE q")
+    end
+
+    big = walk.("Big/S250/Leaf")
+    small = walk.("Small/S3/Leaf")
+
+    for plan <- [big.custom, big.generic, small.custom, small.generic],
+        do: assert_name_in_index_cond(plan)
+
+    assert QueryPlan.buffers(big.custom) == QueryPlan.buffers(small.custom), big.custom
+    assert QueryPlan.buffers(big.generic) == QueryPlan.buffers(small.generic), big.generic
+    assert QueryPlan.buffers(big.custom) <= 3 * 3, big.custom
+  end
+
   # Staging 0.87.1 (2026-11-17, row 11c): with pages not all-visible, an
   # index-only scan costs a heap page like any other, so the live name
   # index tied a non-partial `(vault_id, parent_id, id)` index (#2609's
@@ -185,19 +204,26 @@ defmodule Engram.Folders.WalkIndexCondTest do
        %{user: u, vault: v} do
     {:ok, fk} = Crypto.dek_filter_key(u)
 
-    # A live row the path-hash read misses (no `full_path_hmac`) under each
-    # parent, so the insert conflicts and `ensure_all` reads it by
+    # A racing creator commits the row right after `ensure_all`'s walk
+    # missed it, so the insert conflicts and `ensure_all` reads it by
     # `(parent, name)`. The probe statement (the only one keyed by name and
     # parent and not by id) is matched on main's shape too, so main fails
     # on its plan, not on a missing statement.
     conflict_plans = fn parent ->
       parent_id = Repo.with_tenant!(u.id, fn -> Rows.id_by_walk(u, v.id, parent) end)
-      orphan = FolderRows.insert!(u, v, Rows.name_hmac(fk, "Orphan"), parent: parent_id)
       path = parent <> "/Orphan"
 
       plans(
         u,
-        fn -> assert {:ok, %{^path => ^orphan}} = Rows.ensure_all(u, v.id, [path]) end,
+        fn ->
+          orphan =
+            after_walk(fn ->
+              FolderRows.insert!(u, v, Rows.name_hmac(fk, "Orphan"), parent: parent_id)
+            end)
+
+          assert {:ok, %{^path => id}} = Rows.ensure_all(u, v.id, [path])
+          assert id == orphan.()
+        end,
         ~r/^SELECT f0\."id"(, f0\."full_path_hmac", f0\."explicit")? FROM "folders" AS f0 WHERE (?!.*f0\."id" = ).*"name_hmac" = .*"parent_id" = /
       )
     end
@@ -220,12 +246,17 @@ defmodule Engram.Folders.WalkIndexCondTest do
     # predicate, or it hands back a dead row as live.
     {:ok, fk} = Crypto.dek_filter_key(u)
     big = Repo.with_tenant!(u.id, fn -> Rows.id_by_walk(u, v.id, "Big") end)
-    orphan = FolderRows.insert!(u, v, Rows.name_hmac(fk, "Orphan"), parent: big)
+    # A racing creator, right after the walk missed the row (see above).
+    orphan_id =
+      after_walk(fn -> FolderRows.insert!(u, v, Rows.name_hmac(fk, "Orphan"), parent: big) end)
 
+    orphan = fn -> orphan_id.() end
     me = self()
 
     tombstone = fn ->
-      Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(orphan)])
+      Repo.query!("UPDATE folders SET deleted_at = now() WHERE id = $1", [
+        Ecto.UUID.dump!(orphan.())
+      ])
 
       send(me, :tombstoned)
     end
@@ -246,9 +277,35 @@ defmodule Engram.Folders.WalkIndexCondTest do
 
       assert_received :tombstoned
       # The tombstoned row is not handed back as live: a fresh row is made.
-      refute id == orphan
+      refute id == orphan.()
     after
       :telemetry.detach("tombstone-after-probe")
     end
+  end
+
+  # Runs `insert` (a racing creator) once, right after the next walk
+  # statement (`WalkSql.walk_many/0`) of this process; returns a fun that
+  # gives the id it made. The writers find rows by that walk (S6 step 3), so
+  # a row is missed only when it lands after it.
+  defp after_walk(insert) do
+    me = self()
+    key = {__MODULE__, :after_walk, make_ref()}
+    name = "after-walk-#{inspect(key)}"
+
+    :telemetry.attach(
+      name,
+      [:engram, :repo, :query],
+      fn _, _, %{query: sql}, _ ->
+        if self() == me and sql =~ "WITH RECURSIVE q" and Process.get(key) == nil do
+          Process.put(key, :running)
+          Process.put(key, insert.())
+          :telemetry.detach(name)
+        end
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(name) end)
+    fn -> Process.get(key) end
   end
 end

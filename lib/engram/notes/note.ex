@@ -30,10 +30,10 @@ defmodule Engram.Notes.Note do
     field :tags, {:array, :string}, virtual: true, default: [], redact: true
     field :title, :string, virtual: true, redact: true
     field :content, :string, virtual: true, redact: true
-    # Set by a folder scan only (`Notes.scan_folders/3`): the
-    # `full_path_hmac` the row named by `folder_ref_id` had when the scan
-    # walked it, which the delete fence re-checks.
-    field :folder_row_hmac, :binary, virtual: true
+    # Set by a folder scan only (`Notes.scan_folders/3`): the path the row
+    # named by `folder_ref_id` had when the scan walked it, which the delete
+    # fence re-checks.
+    field :folder_row_path, :string, virtual: true, redact: true
 
     # OKF v0.1 fields (spec 2026-07-02). type/description/resource are
     # encrypted (virtuals below); the two dates are the ONLY plaintext

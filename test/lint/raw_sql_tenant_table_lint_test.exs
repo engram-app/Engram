@@ -96,6 +96,11 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # `user_id` and runs inside the rotation's per-user `Repo.with_tenant/2`
     # batches, never cross-tenant.
     "engram/crypto/user_dek_rotation.ex",
+    # Folders.PathHmacs: the one writer of `folders.full_path_hmac`, a
+    # writable-CTE UPDATE (release the hash from stale holders, then set it)
+    # Ecto cannot express. Runs on the caller's connection: inside its
+    # `Repo.with_tenant/2` (RLS) or on the maintenance repo per user.
+    "engram/folders/path_hmacs.ex",
     # CrdtBloatSweep.measure/0 — one whole-table aggregate over `notes`
     # computing size percentiles for the history/trash epic (#1706). Genuinely
     # cross-tenant by design: the question is "how much is CRDT state costing

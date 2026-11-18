@@ -146,10 +146,12 @@ defmodule Engram.Folders.ChainReadsTest do
       assert d in sub(u, v, ["A/B/C/D"])
     end
 
-    test "a move is refused when a stale hash on the new parent's ANCESTOR is in the subtree",
+    test "a stale hash naming the new parent's ANCESTOR does not steer the move",
          %{user: u, vault: v} do
-      # A/B carries a stale hash equal to "X": the writer would resolve the
-      # new parent's ancestor X to A/B, inside the subtree being moved.
+      # A/B carries a stale hash equal to "X". Until S6 step 3 the writer
+      # resolved X by that hash to A/B, inside the subtree being moved, so the
+      # move had to be refused. The writer now walks the chain: X does not
+      # exist, so it is created and A moves under it.
       {:ok, fk} = Crypto.dek_filter_key(u)
       t = FolderRows.tree(u)
 
@@ -158,9 +160,11 @@ defmodule Engram.Folders.ChainReadsTest do
         Ecto.UUID.dump!(t["A/B"].id)
       ])
 
-      assert {:error, :invalid_path} = Notes.rename_folder(u, v, "A", "X/Y/Z")
-      assert FolderRows.tree(u)["A"].id == t["A"].id
-      assert FolderRows.tree(u)["A/B"].id == t["A/B"].id
+      assert {:ok, _} = Notes.rename_folder(u, v, "A", "X/Y/Z")
+      tree = FolderRows.tree(u)
+      assert tree["X/Y/Z"].id == t["A"].id
+      assert tree["X/Y/Z/B"].id == t["A/B"].id
+      refute tree["X"].id in [t["A"].id, t["A/B"].id]
     end
 
     test "a live row under a dead ancestor has no path", %{user: u, vault: v} do
