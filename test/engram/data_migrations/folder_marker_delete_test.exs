@@ -22,7 +22,11 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
   end
 
   # Markers are written with the stop off (the test default), then it goes on.
-  defp stop_on!, do: Engram.ServiceConfig.put_override(:marker_stop_floors, :assume)
+  # And the rollback floor at E (`FolderMarkerDelete.floors?/0`).
+  defp stop_on! do
+    Engram.ServiceConfig.put_override(:marker_stop_floors, :assume)
+    Engram.ServiceConfig.put_override(:marker_delete_floors, :assume)
+  end
 
   defp markers(vault, live \\ true) do
     %{rows: [[n]]} =
@@ -223,5 +227,17 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
         refute plan =~ "Seq Scan on notes", plan
       end
     end
+  end
+
+  # #2652 re-review: the delete is irreversible, so it also needs the rollback
+  # floor at E (no rollback target reads markers), not just the stop on.
+  test "blocked while the rollback floor is below E, even with markers stopped", ctx do
+    %{user: _u, vault: v} = ctx
+    {:ok, _} = Folders.create_markers(ctx.user, v, ["Fl"])
+    Engram.ServiceConfig.put_override(:marker_stop_floors, :assume)
+    refute FolderMarkerDelete.floors?(:enforce)
+
+    assert FolderMarkerDelete.run_pass() == {:more, rows: 0, blocked: 1}
+    assert markers(v) == 1
   end
 end

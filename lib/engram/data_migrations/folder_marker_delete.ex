@@ -8,7 +8,12 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   none are left.
 
   Blocked (the pass walks nothing, resets its walk and stays open) unless
-  `MarkerStop.on?/0`: never while any writer can still insert a marker.
+  `MarkerStop.on?/0` (no writer can still insert a marker) AND the rollback
+  floor is at or above release E (`@stop_release`), so no release a rollback
+  can land on still READS markers: a marker deleted here is gone for good.
+  A SENTINEL no floor can reach, so this is inert until the release that
+  raises the floor to E sets it (the `MarkerStop` pattern).
+  `:marker_delete_floors, :assume` (tests only) skips that check.
 
   Only LIVE markers are deleted. A trashed marker (`deleted_at` set) is trash
   history: it stays, as every trash row does until a trash purge is approved.
@@ -61,6 +66,8 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   require Logger
 
   @batch 200
+  # The release with the marker write stop (release E).
+  @stop_release "release-v999.0.0"
   @max_fixed 2_000
 
   @impl true
@@ -97,6 +104,15 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   @impl true
   def reverify?, do: true
 
+  @doc "The first release that writes no marker: the rollback floor must reach it."
+  @spec stop_release() :: String.t()
+  def stop_release, do: @stop_release
+
+  @doc "Whether the rollback floor covers the marker write stop release."
+  @spec floors?(:assume | :enforce) :: boolean()
+  def floors?(mode \\ Engram.ServiceConfig.env(:marker_delete_floors, :enforce)),
+    do: mode == :assume or Engram.Release.Floor.at_least?(@stop_release)
+
   @doc """
   Kill switch: the `folder_marker_delete` service override, default OFF.
   """
@@ -109,7 +125,7 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   @doc false
   # `batch:` overrides the window size.
   def run_pass(opts) do
-    if MarkerStop.on?() do
+    if MarkerStop.on?() and floors?() do
       IdWindows.heal_pass(name(), Note, &delete/2,
         batch_size: Keyword.get(opts, :batch, @batch),
         max_fixed: Keyword.get_lazy(opts, :max_fixed, &max_fixed/0)

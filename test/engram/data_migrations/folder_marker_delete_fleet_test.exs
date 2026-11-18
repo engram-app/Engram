@@ -88,6 +88,7 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteFleetTest do
   } do
     assert {:fleet, _} = Engram.Backfill.TenantScan.pool()
     Engram.ServiceConfig.put_override(:marker_stop_floors, :assume)
+    Engram.ServiceConfig.put_override(:marker_delete_floors, :assume)
     assert markers_by_user(made) == %{one.id => 2, two.id => 2}
 
     assert {:more, _} = Delete.run_pass()
