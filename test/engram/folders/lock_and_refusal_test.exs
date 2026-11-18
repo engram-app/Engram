@@ -45,7 +45,11 @@ defmodule Engram.Folders.LockAndRefusalTest do
     end
   end
 
-  test "a rename the row guard refuses after the claim returns the error and moves nothing", %{
+  # Until S6 step 3 the writer resolved the new parent "B" by its stale
+  # `full_path_hmac`, i.e. to the row the race had put inside A, and the row
+  # guard refused the cycle. The writer now walks the chain: "B" is no longer
+  # at the root, so a fresh B is made there and A moves under it. No cycle.
+  test "a parent a race moved inside the subtree is not followed after the claim", %{
     user: u,
     vault: v
   } do
@@ -54,7 +58,8 @@ defmodule Engram.Folders.LockAndRefusalTest do
     t = FolderRows.tree(u)
 
     # Between the pre-check and the write transaction (the seq bump) another
-    # move makes B a child of A: the new parent is now inside the moving subtree.
+    # move makes B a child of A: the old parent row is now inside the moving
+    # subtree.
     Repo.query!("""
     CREATE FUNCTION race_move() RETURNS trigger LANGUAGE plpgsql AS
     $$ BEGIN
@@ -68,8 +73,11 @@ defmodule Engram.Folders.LockAndRefusalTest do
     FOR EACH ROW WHEN (NEW.id = '#{v.id}') EXECUTE FUNCTION race_move()
     """)
 
-    assert {:error, :invalid_path} = Notes.rename_folder(u, v, "A", "B/Z")
-    assert live_paths(u, v) == ["A/x.md", "B/y.md"]
+    assert {:ok, _} = Notes.rename_folder(u, v, "A", "B/Z")
+    tree = FolderRows.tree(u)
+    assert tree["B/Z"].id == t["A"].id
+    refute tree["B"].id in [t["A"].id, t["B"].id]
+    assert "B/Z/x.md" in live_paths(u, v)
     _ = Folders
   end
 end
