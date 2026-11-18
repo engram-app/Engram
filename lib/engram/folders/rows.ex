@@ -1662,7 +1662,7 @@ defmodule Engram.Folders.Rows do
   if not. The vault row is taken before the folder row, every writer's lock
   order. Runs inside the caller's tenant transaction.
   """
-  @spec clear_explicit(map(), Ecto.UUID.t(), String.t()) :: boolean()
+  @spec clear_explicit(Engram.Accounts.User.t(), Ecto.UUID.t(), String.t()) :: boolean()
   def clear_explicit(user, vault_id, folder) do
     with %{^folder => id} when is_binary(id) <- ids_by_path(user, vault_id, [folder]),
          true <- Repo.exists?(from(f in Folder, where: f.id == ^id and f.explicit)) do
