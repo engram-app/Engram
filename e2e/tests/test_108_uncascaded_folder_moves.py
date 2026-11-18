@@ -528,4 +528,6 @@ async def test_rename_chain_reads_final_paths_everywhere(
         await cdp_b.trigger_full_sync()
         _assert_disk_holds(inst_b.vault_path, root, final, "fresh B")
         assert (inst_b.vault_path / f"{other}/sub/img.png").read_bytes() == TINY_PNG
+        made = [f for f in gone_folders if (inst_b.vault_path / f).exists()]
+        assert not made, f"the fresh device made folders that no longer exist: {made}"
         wait_for_content(inst_b.vault_path, f"{c}/n1.md", "first 108")
