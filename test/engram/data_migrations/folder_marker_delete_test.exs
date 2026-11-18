@@ -5,7 +5,7 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
 
   alias Engram.Backfill.IdWindows
   alias Engram.DataMigrations.{ExplicitFolderReconcile, FolderMarkerDelete}
-  alias Engram.{FolderRows, Folders, Notes, QueryPlan, Repo}
+  alias Engram.{FolderRows, Folders, Notes, QueryPlan, QueryRecorder, Repo}
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
@@ -164,11 +164,54 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
       )
 
     for plan <- [unmatched.custom, unmatched.generic] do
-      assert plan =~ "notes_user_vault_folder_marker", plan
+      # A `(user_id, vault_id)` range either way: the marker index, or (on a
+      # test vault that holds nothing but markers, where the two cost the
+      # same) the live-notes one. Never a scan of the tenant's notes.
+      assert plan =~ ~r/notes_user_vault_(folder_marker|live)/, plan
       # The folder probe: by path hash, or the live explicit rows of the
       # vault (both bounded by the vault; the planner picks by statistics).
       assert plan =~ ~r/folders_(full_path|explicit_live)/, plan
       refute plan =~ ~r/Seq Scan on (notes|folders)/, plan
+    end
+  end
+
+  # done?/2's per-vault probe runs on every folder op (PathHashStop): planned
+  # as the app role under RLS and as the fleet role, it must be one probe of
+  # the marker index, never a scan.
+  # The shape it runs against once the ledger is done: a vault of notes and
+  # no marker, where a live-notes range filtered on `kind` would read the
+  # whole vault on every folder op. Real statistics (ANALYZE), as prod has.
+  test "plans: done?/2's probe is the marker index under RLS", %{user: u, vault: v} do
+    for i <- 1..200 do
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"path" => "F#{rem(i, 20)}/n#{i}.md", "content" => "x"},
+          actor: "api"
+        )
+    end
+
+    {:ok, _} = Folders.create_markers(u, insert(:vault, user: u), ["Elsewhere"])
+    Repo.query!("ANALYZE notes")
+    Engram.DataMigrations.mark_done(FolderMarkerDelete.name(), FolderMarkerDelete.version())
+
+    {_, queries} =
+      QueryRecorder.record(fn ->
+        Repo.with_tenant!(u.id, fn -> FolderMarkerDelete.done?(u.id, v.id) end)
+      end)
+
+    me = self()
+
+    [{sql, params}] =
+      for %{sql: q, params: p, pid: ^me} <- queries,
+          q =~ ~s(FROM "notes") and q =~ "folder",
+          do: {q, p}
+
+    for role <- ["engram_app", "engram_maintenance"] do
+      %{custom: custom, generic: generic} = QueryPlan.rls_plans(u.id, sql, params, role: role)
+
+      for plan <- [custom, generic] do
+        assert plan =~ "notes_user_vault_folder_marker", plan
+        refute plan =~ "Seq Scan on notes", plan
+      end
     end
   end
 end
