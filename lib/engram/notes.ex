@@ -7436,7 +7436,9 @@ defmodule Engram.Notes do
     # A row whose name or ancestor chain will not open is left out, as the
     # folder counts leave it out; say so (a count, no ids or names), since an
     # empty folder missing here is one the plugin may trash locally.
-    if (dropped = length(ids) - map_size(paths)) > 0,
+    dropped = length(ids) - map_size(paths)
+
+    if dropped > 0,
       do:
         Logger.warning(
           "explicit folders: rows whose path did not open left out of the listing",
