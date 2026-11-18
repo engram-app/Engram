@@ -214,8 +214,10 @@ defmodule Engram.Folders.Rows do
       ctx = %{user_id: user.id, vault_id: vault_id, dek: dek, fk: fk}
       id = root_id(vault_id)
 
-      if insert(ctx, id, nil, "", path_hmac(fk, ""), false) == 1,
-        do: put_names(ctx, [{id, ""}], :new)
+      # No `full_path_hmac`: nothing finds the root by path hash, and a root
+      # note's `folder_hmac` must not look redundant to `NoteFolderHashNull`
+      # (it keeps a root's hash). A DEK rotation re-keys only rows with one.
+      if insert(ctx, id, nil, "", nil, false) == 1, do: put_names(ctx, [{id, ""}], :new)
 
       {:ok, id}
     end

@@ -123,6 +123,8 @@ defmodule Engram.Folders.NoteFolderHashNullTest do
     test "control: a root note with no hash keeps no reference", %{user: u, vault: v} do
       n = note!(u, v, "top.md")
       clear_hash!(n)
+      # As a writer before S6 step 1b left it: FolderTable never sets a root one.
+      Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [Ecto.UUID.dump!(n.id)])
 
       assert FolderTable.run_pass(user_ids: [u.id]) == :done
       assert ref(n) == nil

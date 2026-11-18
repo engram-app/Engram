@@ -55,10 +55,10 @@ defmodule Engram.Folders.WritersTest do
       refute t["A/B/C"].explicit
     end
 
-    test "a root note has no folder row and a NULL ref", %{user: u, vault: v} do
+    test "a root note names the vault's root row (S6 step 1b)", %{user: u, vault: v} do
       note = put_note(u, v, "Root.md")
-      assert tree(u) == %{}
-      assert ref("notes", note.id) == nil
+      assert tree(u) == %{"" => %{id: v.id, explicit: false}}
+      assert ref("notes", note.id) == v.id
     end
 
     test "a second note reuses the folder row", %{user: u, vault: v} do
