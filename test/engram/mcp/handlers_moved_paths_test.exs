@@ -129,6 +129,51 @@ defmodule Engram.MCP.HandlersMovedPathsTest do
     n
   end
 
+  # Review of 031f781a9: two uncascaded moves swap names (F -> G, then
+  # H -> F), so C's stale stored key `F/n.md` is B's shown path. A stale key
+  # holds nothing: one batch serves both, and a rename of C onto B's shown
+  # path conflicts before any index claim is written.
+  describe "a folder swap" do
+    setup do
+      {:ok, u} = Crypto.ensure_user_dek(insert(:user))
+      v = insert(:vault, user: u)
+      {:ok, c} = Notes.upsert_note(u, v, %{"path" => "F/n.md", "content" => "c"}, actor: "api")
+      {:ok, b} = Notes.upsert_note(u, v, %{"path" => "H/n.md", "content" => "b"}, actor: "api")
+      FolderRows.move_uncascaded!(u, FolderRows.tree(u)["F"].id, "G")
+      FolderRows.move_uncascaded!(u, FolderRows.tree(u)["H"].id, "F")
+      %{u: u, v: v, c: c, b: b}
+    end
+
+    test "one get_notes batch serves each note at its shown path", %{u: u, v: v} do
+      assert {:ok, _, %{"notes" => [g, f]}} =
+               Handlers.handle("get_notes", u, v, %{"paths" => ["G/n.md", "F/n.md"]})
+
+      assert %{"found" => true, "path" => "G/n.md", "content" => "c"} = g
+      assert %{"found" => true, "path" => "F/n.md", "content" => "b"} = f
+    end
+
+    test "a rename onto the other's shown path conflicts with no claim", %{u: u, v: v} do
+      me = self()
+      id = "swap-orphan-claim-#{System.unique_integer()}"
+
+      :telemetry.attach(
+        id,
+        [:engram, :crdt, :index_claim],
+        fn _, _, meta, _ -> send(me, {:index_claim, meta[:op], meta[:route]}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+
+      assert {:error, :conflict} = Notes.rename_note(u, v, "G/n.md", "F/n.md")
+      # No claim at all: one written before the row check refuses is an
+      # orphan (`decide_claim/5`), whether or not it is reported as one.
+      refute_received {:index_claim, :claim, _}
+      assert {:ok, %{content: "c"}} = Notes.get_note(u, v, "G/n.md")
+      assert {:ok, %{content: "b"}} = Notes.get_note(u, v, "F/n.md")
+    end
+  end
+
   describe "rename_note" do
     test "renames the moved note from its shown path", %{user: u, vault: v, note: note} do
       assert {:ok, text, %{"new_path" => "R4mcp/n2.md"}} =

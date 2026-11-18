@@ -6963,8 +6963,15 @@ defmodule Engram.Notes do
     # rule): its derived path when it has one, else its stored path. A
     # moved row's stored key is its OLD path: answering it too served one
     # note at two paths (e2e run 44284939927, MCP get_notes with both). A
-    # derived path another row holds by its stored key answers that row.
-    held = MapSet.new(rows, & &1.path_hmac)
+    # derived path another row holds by its stored key answers that row,
+    # but only a row shown at its stored key holds it: a stale key (a
+    # folder swap leaves one at another row's shown path) holds nothing.
+    held =
+      for row <- rows,
+          path = paths[row.id],
+          not is_binary(path) or Crypto.hmac_field(filter_key, path) == row.path_hmac,
+          into: MapSet.new(),
+          do: row.path_hmac
 
     fn row ->
       case paths[row.id] do
