@@ -3,7 +3,7 @@ defmodule Engram.Attachments.LocationRlsPlanTest do
   # under FORCE RLS, custom and (named statements) generic plans
   # (`QueryPlan.rls_plans/3`). The by-path lookup in a vault holding a folder
   # moved without a cascade, the relocation probe a write sends there
-  # (`Location.stale_at/4`) and the moved-folder feed's attachment leg must
+  # (`Location.stale_rows/4`) and the moved-folder feed's attachment leg must
   # each drive an index, never read the tenant's attachments
   # (docs/context/rls-leakproof-index-quals.md, the notes twin is
   # `Engram.Notes.LocationRlsPlanTest`).
@@ -107,12 +107,14 @@ defmodule Engram.Attachments.LocationRlsPlanTest do
     assert Enum.any?(plans, fn {_, p} -> p.custom =~ "attachments_name_key_live" end)
   end
 
-  test "the relocation probe a write sends", %{user: u, vault: v} do
+  test "the heal probe a write sends, one batch", %{user: u, vault: v} do
     {:ok, fk} = Engram.Crypto.dek_filter_key(u)
+    paths = ["N/x.png", "N/y.png", "M/x.png", "top.png"]
 
     plans =
       plans(u, fn ->
-        assert [{"M/x.png", "N/x.png"}] = Location.stale_at(u, v.id, fk, "N/x.png")
+        assert [{_, "M/x.png", "N/x.png"}] =
+                 Repo.with_tenant!(u.id, fn -> Location.stale_rows(u, v.id, fk, paths) end)
       end)
 
     refute_vault_scan!(plans)
