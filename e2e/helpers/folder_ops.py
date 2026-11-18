@@ -142,11 +142,37 @@ async def folder_ops_on(*cdps, write_stop: bool = False):
         body_failed = True
         raise
     finally:
+        # A failed body can leave a folder op pending. Replayed after the
+        # switch is off, it is refused `unknown_event`, which latches the
+        # plugin's `refusedForSession` for the rest of the session and fails
+        # every later folder-op test. So on failure reload each device while
+        # the switch is still on: the reload drops the in-memory latch and
+        # the rejoin replays the pending op where it can still be acked.
+        # ponytail: waits for the rejoin, not for the replay's ack; poll the
+        # plugin's pending op list here if a refusal still leaks.
+        reloads = (
+            [(f"reload {i}", lambda c=c: reload_rejoined(c)) for i, c in enumerate(cdps)]
+            if body_failed
+            else []
+        )
         await run_cleanup(
             body_failed,
+            *reloads,
             ("switch off", lambda: set_switch(False)),
             *((f"rejoin {i}", lambda c=c: rejoin(c, False)) for i, c in enumerate(cdps)),
         )
+
+
+async def reload_rejoined(cdp) -> None:
+    """Reload the plugin (a fresh engine: no session latch) and wait until it
+    has rejoined with folder ops on."""
+    await cdp.reload_plugin()
+    await cdp.wait_for_stream_connected()
+    deadline = time.monotonic() + 30
+    while not await plugin_folder_ops_enabled(cdp):
+        if time.monotonic() > deadline:
+            raise TimeoutError("plugin did not rejoin with folder ops on after a reload")
+        await asyncio.sleep(0.5)
 
 
 def wait_write_stop_on(timeout: float = 30) -> None:
