@@ -143,6 +143,53 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
     assert explicit(u, v) == ["A", "D"]
   end
 
+  test "the folder_marker_delete_max_fixed override caps a pass", %{user: u, vault: v} do
+    {:ok, _} = Folders.create_markers(u, v, ["O1", "O2", "O3"])
+    stop_on!()
+    Engram.ServiceConfig.put_override(:folder_marker_delete_max_fixed, 1)
+
+    assert {:more, _} = FolderMarkerDelete.run_pass(batch: 1)
+    assert markers(v) == 2
+  end
+
+  test "an invalid max_fixed override falls back to the default, with a warning", ctx do
+    %{user: u, vault: v} = ctx
+    {:ok, _} = Folders.create_markers(u, v, ["I1", "I2"])
+    stop_on!()
+    Engram.ServiceConfig.put_override(:folder_marker_delete_max_fixed, 0)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert until_done(FolderMarkerDelete) == :done
+      end)
+
+    assert markers(v) == 0
+    assert log =~ "folder_marker_delete_max_fixed is not a positive integer"
+  end
+
+  test "an unmatched vault is warned about once a day, not once a pass", %{user: u, vault: v} do
+    {:ok, _} = Folders.create_markers(u, v, ["W"])
+
+    Repo.query!("UPDATE folders SET explicit = false WHERE id = $1", [
+      Ecto.UUID.dump!(FolderRows.tree(u)["W"].id)
+    ])
+
+    stop_on!()
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        for _ <- 1..2 do
+          IdWindows.reset_walk(FolderMarkerDelete.name())
+          FolderMarkerDelete.run_pass()
+        end
+      end)
+
+    warnings = Regex.scan(~r/vault skipped, live markers without an explicit folder row/, log)
+    assert length(warnings) == 1, log
+    assert log =~ v.id
+    assert markers(v) == 1
+  end
+
   test "the per-pass cap stops the walk and the next pass resumes", %{user: u, vault: v} do
     {:ok, _} = Folders.create_markers(u, v, ["P1", "P2", "P3"])
     stop_on!()
