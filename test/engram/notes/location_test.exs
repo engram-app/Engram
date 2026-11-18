@@ -142,8 +142,9 @@ defmodule Engram.Notes.LocationTest do
       assert found(u, v, "A/B/x.md") == note.id
       assert Notes.note_exists?(u, v, "A/B/x.md")
 
+      # A moved vault reads names whatever the gate says (the latch).
       names_off!()
-      assert found(u, v, "A/B/x.md") == nil
+      assert found(u, v, "A/B/x.md") == note.id
     end
 
     test "a folder moved with no cascade: found at the new path, not at the stored one",
@@ -158,8 +159,10 @@ defmodule Engram.Notes.LocationTest do
       # The note reads back at the path it was found at.
       assert {:ok, %{path: "A/C/x.md", folder: "A/C"}} = Notes.get_note(u, v, "A/C/x.md")
 
+      # The latch: names off cannot send it back to its old path.
       names_off!()
-      assert found(u, v, "A/C/x.md") == nil
+      assert found(u, v, "A/C/x.md") == note.id
+      assert found(u, v, "A/B/x.md") == nil
     end
 
     test "the name is exact: another case of the same name is a different path",
@@ -193,19 +196,21 @@ defmodule Engram.Notes.LocationTest do
       assert found(u, v, "A/B/x.md") == note.id
     end
 
-    test "unfinished ledger: names are not read", %{user: u, vault: v, note: note} do
+    test "unfinished ledger in a moved vault: names are still read (the latch)",
+         %{user: u, vault: v, note: note} do
       move_folder_row!(u, folder_id(u, v, "A/B"), "C")
       names_off!()
-      assert found(u, v, "A/B/x.md") == note.id
-      assert found(u, v, "A/C/x.md") == nil
+      assert found(u, v, "A/C/x.md") == note.id
+      assert found(u, v, "A/B/x.md") == nil
     end
 
-    test "the name_reads override turns names off", %{user: u, vault: v, note: note} do
+    test "the name_reads override cannot turn a moved vault's names off",
+         %{user: u, vault: v, note: note} do
       move_folder_row!(u, folder_id(u, v, "A/B"), "C")
       ServiceConfig.put_override(:name_reads, false)
       refute Location.on?()
-      assert found(u, v, "A/C/x.md") == nil
-      assert found(u, v, "A/B/x.md") == note.id
+      assert found(u, v, "A/C/x.md") == note.id
+      assert found(u, v, "A/B/x.md") == nil
     end
 
     test "get_notes_within (MCP get_notes) resolves each path, the stored path first",
@@ -473,9 +478,10 @@ defmodule Engram.Notes.LocationTest do
       {:ok, %{changes: [meta]}} = Notes.list_changes_by_seq(u, v, 0, fields: :meta)
       assert meta.path == "A/C/x.md"
 
+      # Names off: the moved path stays (the latch); the S3 wire extras go.
       names_off!()
       {:ok, %{changes: [before]}} = Notes.list_changes_by_seq(u, v, 0)
-      assert before.path == "A/B/x.md"
+      assert before.path == "A/C/x.md"
       refute Map.has_key?(before, :folder_id)
     end
 

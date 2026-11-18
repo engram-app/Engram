@@ -33,9 +33,14 @@ defmodule Engram.Folders.WriteStop do
   Turning `folder_write_stop` off needs no re-cascade: every release at or
   above the floor serves the folders already moved this way.
 
-  Once moves exist, keep names read: `name_reads` off (or a reopened
-  `note_name` ledger) sends moved notes back to their stored, old paths in
-  every reader. That switch is for before the first move, not after.
+  Once moves exist, names stay read in those vaults whatever `name_reads`
+  or the `note_name` ledger say (`Engram.Notes.Location`'s latch): a
+  path-only read there would show moved notes at their old paths and let a
+  create at the shown path duplicate one. So `name_reads` off, a reopened
+  ledger or a `NoteName` version bump only stops NEW uncascaded moves (this
+  `on?/0` reads `Location.on?/0`) and the S3 wire extras; a bumped ledger
+  refills names while every moved vault keeps reading them, each row
+  trusted only while its name stamp is current.
   """
 
   alias Engram.Cluster.Readiness
