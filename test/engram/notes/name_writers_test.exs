@@ -68,7 +68,8 @@ defmodule Engram.Notes.NameWritersTest do
     assert row.ci == Name.ci_hmac(fk, name)
     assert row.stamp == Name.stamp(row.path_nonce)
     # A root note names the root row (S6 step 1b); an attachment none yet.
-    assert row.ref == folder_id(user, if(table == "notes" or folder != "", do: folder, else: :none))
+    assert row.ref ==
+             folder_id(user, if(table == "notes" or folder != "", do: folder, else: :none))
   end
 
   describe "Name" do

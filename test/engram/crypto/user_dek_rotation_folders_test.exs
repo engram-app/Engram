@@ -74,7 +74,9 @@ defmodule Engram.Crypto.UserDekRotationFoldersTest do
     deep_before = ref_id(deep.id)
     ref_before = ref_id(note.id)
     assert ref_before
-    assert ref_id(root_note.id) == nil
+    # S6 step 1b: a root note names the vault's root row.
+    root_ref = Ecto.UUID.dump!(vault.id)
+    assert ref_id(root_note.id) == root_ref
 
     assert :ok = UserDekRotation.rotate_user(user.id)
 
@@ -110,7 +112,10 @@ defmodule Engram.Crypto.UserDekRotationFoldersTest do
     # The trigger found the re-keyed row: same folder, no orphan, no duplicate.
     assert ref_id(note.id) == Ecto.UUID.dump!(by_name["Alpha"].id)
     assert ref_id(deep.id) == deep_before
-    assert ref_id(root_note.id) == nil
+    assert ref_id(root_note.id) == root_ref
+    # The root row's empty name is re-keyed like any other (decrypted above);
+    # it has no path hash to re-key.
+    assert by_name[""].id == vault.id and by_name[""].full_path_hmac == nil
 
     # A trashed note in a soft-deleted folder loses its ref: the
     # `notes_set_folder_ref` trigger resolves live folders only, and it fires
@@ -128,7 +133,7 @@ defmodule Engram.Crypto.UserDekRotationFoldersTest do
 
     # A second pass over the data migration has nothing to do (no duplicate tree).
     assert :done = FolderTable.run_pass(user_ids: [user.id])
-    assert length(folders(user.id)) == 7
+    assert length(folders(user.id)) == 7 + 1
   end
 
   # #2413: the rotation re-encrypts every attachment path (a fresh nonce) and
