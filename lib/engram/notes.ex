@@ -1038,7 +1038,16 @@ defmodule Engram.Notes do
     # as `bytea` ciphertext (no Postgres UTF-8 guard), and stray bytes later
     # crash Jason at every JSON boundary (search, sync Channel). Valid content
     # is unchanged, so the content_hash is stable for the common case.
-    content = (attrs["content"] || attrs[:content] || "") |> Helpers.scrub_utf8(:write)
+    # LF-convert a markdown note BEFORE hashing, the same conversion the merge
+    # applies when the text enters the doc. The stored content_hash is of the LF
+    # projection, so hashing the raw CRLF text never matched it: every re-push of
+    # a CRLF note skipped the idempotent short-circuit and bumped version + seq
+    # forever (prod 2026-11-18, ~900 writes/h/note from one client).
+    content =
+      (attrs["content"] || attrs[:content] || "")
+      |> Helpers.scrub_utf8(:write)
+      |> LineEndings.for_path(path)
+
     mtime = attrs["mtime"] || attrs[:mtime]
     client_id = attrs["id"] || attrs[:id]
 

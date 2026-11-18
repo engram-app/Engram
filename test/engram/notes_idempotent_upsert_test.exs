@@ -34,6 +34,28 @@ defmodule Engram.NotesIdempotentUpsertTest do
     assert n2.content_hash == n1.content_hash
   end
 
+  # Prod 2026-11-18: one Obsidian client re-pushed 12 CRLF notes about every 4 s,
+  # each bumping version + seq (~900 writes/h/note). The stored hash is of the
+  # LF-converted doc, the incoming one was of the raw CRLF text, so the
+  # short-circuit never matched. Fails without the LF normalisation before
+  # hashing in upsert_note/4.
+  test "re-push of identical CRLF content does not bump version or seq", %{
+    user: user,
+    vault: vault
+  } do
+    crlf = "---\r\ntitle: T\r\n---\r\nline one\r\nline two\r\n"
+
+    {:ok, n1} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => crlf}, actor: "api")
+
+    {:ok, n2} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => crlf}, actor: "api")
+
+    assert n2.version == n1.version
+    assert n2.seq == n1.seq
+    assert n2.content_hash == n1.content_hash
+  end
+
   test "re-push of identical content does not broadcast note_changed", %{
     user: user,
     vault: vault
