@@ -41,10 +41,11 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   # vault holds a folder moved without a cascade (`Location.named?/2`, one
   # cached-plan statement in the row transaction), so an unmoved vault sends
   # 0.83.0's lookup, not one whose walk and name arms cost 7 ms to plan.
-  # 20 -> 21: S6 step 3's one-hash-per-path release (`Rows.release_hmacs/2`):
-  # the new folder row takes its path hash from any stale holder, one indexed
-  # UPDATE, so a 0.89.0 node in a mixed window never sees two live rows with
-  # one hash. Gone once the hash stops being written.
+  # 20 -> 21: S6 step 3's one hash per path (`Engram.Folders.PathHmacs.put/2`):
+  # a folder row is inserted without its path hash, then one statement
+  # releases that hash from any stale holder and sets it. +1 per newly
+  # created folder LEVEL (one new folder here), not per path; 0 when the
+  # folder exists. Gone with the column.
   @statements 21
   @tenant_txns 1
   @subscription_reads 0
