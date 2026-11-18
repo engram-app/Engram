@@ -8904,10 +8904,14 @@ defmodule Engram.Notes do
       Repo.with_tenant_snapshot!(user.id, fn ->
         {drift, undecryptable} = drift_note_folders(user, vault, dek)
         if undecryptable > 0, do: raise("Phase B envelope decryption failed")
-        refs = Rows.subtree_refs(user, vault.id, folders)
+        # Each subtree row's CURRENT path (its chain of names, decrypted:
+        # folder names only, O(subtree folders)), never a stored path hash,
+        # which goes stale below a folder renamed in one row (S6 step 3).
+        row_path = Rows.subtree_paths(user, vault.id, folders)
+        fk = Crypto.dek_filter_key_from_bytes(dek)
 
-        ids = Enum.map(refs, & &1.id)
-        row_hmacs = for %{full_path_hmac: h} when is_binary(h) <- refs, do: h
+        ids = Map.keys(row_path)
+        row_hmacs = for {_id, p} when is_binary(p) <- row_path, do: Rows.path_hmac(fk, p)
         drift_ids = for {id, folder} <- drift, folder_in?(folder, folders), do: id
         # `folder_ref_id` too: the delete fence re-checks the scanned row's
         # folder reference (`fenced_delete_query/1`).
@@ -8916,15 +8920,13 @@ defmodule Engram.Notes do
             select: struct(n, ^@note_meta_fields)
           )
 
-        row_hmac = Map.new(refs, &{&1.id, &1.full_path_hmac})
-
         by_ref =
           if ids == [],
             do: [],
             else:
               from(n in live, where: n.kind == "note" and n.folder_ref_id in ^ids)
               |> Repo.all()
-              |> Enum.map(&%{&1 | folder_row_hmac: row_hmac[&1.folder_ref_id]})
+              |> Enum.map(&%{&1 | folder_row_path: row_path[&1.folder_ref_id]})
 
         drifted = if drift_ids == [], do: [], else: Repo.all(where(live, [n], n.id in ^drift_ids))
 
@@ -9649,6 +9651,8 @@ defmodule Engram.Notes do
       {:ok, {deleted_ids, seq}} =
         Repo.with_tenant(user.id, fn ->
           seq = Engram.Vaults.next_seq!(vault.id)
+          {:ok, dek} = Crypto.get_dek(user)
+          placed_ok = placed_now(dek, vault.id, matches)
 
           # Chunked for the reason `@rename_update_chunk` already documents in
           # this module: each statement binds its rows' ids AND their fence
@@ -9662,7 +9666,7 @@ defmodule Engram.Notes do
             |> Enum.reduce(MapSet.new(), fn chunk, acc ->
               {_updated, returned_ids} =
                 chunk
-                |> fenced_delete_query()
+                |> fenced_delete_query(placed_ok)
                 |> Repo.update_all(
                   set: [
                     deleted_at: now,
@@ -10103,11 +10107,14 @@ defmodule Engram.Notes do
   # by the row's primary key and re-asserting what placed it in the scan:
   #
   #   * a note with a folder reference: it still names one of the scanned
-  #     folder rows, and that row is live at a path the scan walked it at
-  #     (its `full_path_hmac` then, `folder_row_hmac`). A folder row renamed
-  #     in place (same id, new path) fails the second half, so a stale delete
-  #     of the old path removes nothing. Never `notes.folder_hmac` (R9: notes
-  #     stop carrying it).
+  #     folder rows, and that row is live at the path the scan walked it at
+  #     (`folder_row_path`). A folder row renamed or moved in place (same id,
+  #     new path: its own rename or an ancestor's) fails the second half, so a
+  #     stale delete of the old path removes nothing. The second half is
+  #     `placed_now/3`, read after the vault row lock every folder writer
+  #     takes, so no rename lands between it and the update. Never
+  #     `notes.folder_hmac` (R9) nor `folders.full_path_hmac` (S6 step 3:
+  #     stale below a folder renamed in one row).
   #   * a drift note (no reference at scan, or one to a row the scan did not
   #     walk; placed by its own folder envelope): its `folder_nonce` is
   #     unchanged. Every path change
@@ -10117,20 +10124,24 @@ defmodule Engram.Notes do
   #     is skipped, logged, and a fresh delete takes it.)
   #   * a folder marker: its `folder_hmac`, which is a marker's path identity.
   #
-  # Cost per row: one primary-key probe on `notes`, plus one on `folders` for
-  # a placed note (the EXISTS is by `f.id`).
-  defp fenced_delete_query(chunk) do
+  # Cost per row: one primary-key probe on `notes`. `placed_now/3` costs the
+  # distinct folder rows referenced and their ancestors (one chain read).
+  defp fenced_delete_query(chunk, placed_ok) do
     {markers, notes} = Enum.split_with(chunk, &(&1.kind == "folder"))
     # Placed = its reference names a folder row the scan walked. A note read
     # with a reference to a row the scan did not walk (a heal landed between
     # the scan's statements) is fenced like drift: by its own envelope.
     {placed, drift} =
-      Enum.split_with(notes, &(&1.folder_ref_id != nil and is_binary(&1.folder_row_hmac)))
+      Enum.split_with(notes, &(&1.folder_ref_id != nil and is_binary(&1.folder_row_path)))
+
+    # A placed note whose folder row has moved since the scan is not deleted.
+    placed = Enum.filter(placed, &MapSet.member?(placed_ok, &1.folder_ref_id))
 
     fence =
       [placed_arm(placed), drift_arm(drift), marker_arm(markers)]
       |> Enum.reject(&is_nil/1)
-      |> Enum.reduce(&dynamic([n], ^&2 or ^&1))
+      # Every placed row of the chunk moved since the scan: nothing to delete.
+      |> Enum.reduce(dynamic(false), &dynamic([n], ^&2 or ^&1))
 
     # Every row's id at the top level too, so the plan is a primary-key
     # lookup: an OR of the arms alone is planned as an index scan with the
@@ -10151,19 +10162,22 @@ defmodule Engram.Notes do
   defp placed_arm(rows) do
     ids = Enum.map(rows, & &1.id)
     refs = rows |> Enum.map(& &1.folder_ref_id) |> Enum.uniq()
-    paths = rows |> Enum.map(& &1.folder_row_hmac) |> Enum.uniq()
-    # One scan, one vault: bounds the subquery on `folders_full_path`.
-    vault_id = hd(rows).vault_id
+    dynamic([n], n.id in ^ids and n.folder_ref_id in ^refs)
+  end
 
-    live_row =
-      from(f in Engram.Folders.Folder,
-        where:
-          f.id == parent_as(:n).folder_ref_id and f.vault_id == ^vault_id and
-            f.full_path_hmac in ^paths and is_nil(f.deleted_at),
-        select: 1
-      )
+  # The folder rows (referenced by the scanned placed notes) still live at
+  # the path the scan walked them at: their chain read now, after the
+  # caller took the vault row lock. One chain read for all of them, O(the
+  # distinct rows and their ancestors), never notes.
+  defp placed_now(dek, vault_id, matches) do
+    scanned =
+      for %{kind: "note", folder_ref_id: ref, folder_row_path: p} <- matches,
+          ref != nil and is_binary(p),
+          into: %{},
+          do: {ref, p}
 
-    dynamic([n], n.id in ^ids and n.folder_ref_id in ^refs and exists(live_row))
+    now = Rows.paths_by_ids(dek, vault_id, Map.keys(scanned))
+    for {ref, p} <- scanned, now[ref] == p, into: MapSet.new(), do: ref
   end
 
   defp drift_arm([]), do: nil
