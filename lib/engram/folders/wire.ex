@@ -254,7 +254,11 @@ defmodule Engram.Folders.Wire do
   def create_reply(user, vault, note) do
     if enabled?() do
       folder = if is_binary(note.path), do: Rows.parent_path(note.path), else: ""
-      %{folder_id: Map.get(note, :folder_ref_id), folders: chain(user, vault, folder)}
+
+      %{
+        folder_id: Rows.public_ref(Map.get(note, :folder_ref_id), vault.id),
+        folders: chain(user, vault, folder)
+      }
     else
       %{}
     end

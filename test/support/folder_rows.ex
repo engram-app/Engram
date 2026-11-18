@@ -30,6 +30,44 @@ defmodule Engram.FolderRows do
     id
   end
 
+  @doc """
+  The vault's root folder row as a step 1b writer leaves it
+  (`Engram.Folders.Rows.root_id/1`: the vault's id, no parent, the empty
+  name, encrypted and keyed like any row), and `notes` (ids) pointed at it.
+  Returns the root id.
+  """
+  def insert_root!(user, vault, note_ids \\ []) do
+    alias Engram.Folders.{Folder, Rows}
+
+    {:ok, dek} = Crypto.get_dek(user)
+    {:ok, fk} = Crypto.dek_filter_key(user)
+    id = Rows.root_id(vault.id)
+    {ct, nonce} = Rows.encrypt_name(dek, id, "")
+
+    Repo.with_tenant!(user.id, fn ->
+      Repo.insert_all(Folder, [
+        Map.new(
+          [
+            id: id,
+            user_id: user.id,
+            vault_id: vault.id,
+            name_ciphertext: ct,
+            name_nonce: nonce,
+            full_path_hmac: Rows.path_hmac(fk, ""),
+            dek_version: Crypto.row_version_aad_bound()
+          ] ++ Folder.name_keys(fk, "", nonce)
+        )
+      ])
+    end)
+
+    Repo.query!("UPDATE notes SET folder_ref_id = $1 WHERE id = ANY($2)", [
+      Ecto.UUID.dump!(id),
+      Enum.map(note_ids, &Ecto.UUID.dump!/1)
+    ])
+
+    id
+  end
+
   @doc "`folder_ref_id` of a `notes` / `attachments` row, as a UUID string (nil = none)."
   def ref(table, id) when table in ["notes", "attachments"] do
     %{rows: [[ref]]} =
