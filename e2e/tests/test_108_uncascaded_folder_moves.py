@@ -23,7 +23,11 @@ Scenarios (one test each):
      by a fresh device
 
 All oracles are scoped to a per-test uuid prefix
-(docs/context/e2e-session-vault-scoping-trap.md). The switch is stack-global,
+(docs/context/e2e-session-vault-scoping-trap.md). These tests LEAVE folders
+moved without a cascade behind (the session vault's `E2E/*108-*` trees, and
+`E2E/Chain108-*` plus `E2E/RootMv108-*` in the resumed pair's vault), so any
+vault they ran in reads every path by name from then on; a test that needs a
+vault with no such move must check `folder_ops.moved_folder_count` first. The switch is stack-global,
 so the suite must run serially (`folder_ops.folder_ops_on` enforces it).
 """
 
@@ -295,11 +299,12 @@ async def test_mcp_reads_moved_notes_at_new_path(
                 "vault_id": vid,
             },
         )
-        after, _ = folder_ops.wait_server_paths(api_sync, root, set(rows))
+        api_sync.wait_for_note_content(f"{dst}/n1.md", edit)
+        # No second note at any poll across the settle window, same id.
+        after = folder_ops.hold_server_paths(api_sync, root, set(rows), SETTLE_SECONDS * 2)
         assert after[f"{dst}/n1.md"]["id"] == rows[f"{dst}/n1.md"]["id"], (
             "write_note at the shown path minted a second note"
         )
-        api_sync.wait_for_note_content(f"{dst}/n1.md", edit)
         # Recent mode (no query, no filter): the note just written is listed
         # at its shown path, never at a stored one.
         recent = _recent_paths(api_sync, vid)
@@ -435,25 +440,37 @@ async def test_delete_under_moved_folder_spares_old_path_decoy(
 
 @pytest.mark.asyncio
 async def test_root_notes_before_and_after_folder_move(
-    vault_a, vault_b, cdp_a, cdp_b, api_sync, sync_vault_id
+    fresh_instance_pair, resumed_api, resumed_vault_id
 ):
     """Create, rename, list and delete notes at the vault root, before and
     after a folder elsewhere moves without a cascade (the vault then reads
-    every path by name)."""
+    every path by name). Runs on the resumed pair's private vault, NOT the
+    session vault, which already holds earlier tests' moved folders: "pre"
+    must mean a vault with no uncascaded move, and is checked."""
+    inst_a, inst_b, cdp_a, cdp_b = fresh_instance_pair
+    for cdp in (cdp_a, cdp_b):
+        await cdp.wait_for_stream_connected()
+    api, vid = resumed_api, resumed_vault_id
+    va, vb = inst_a.vault_path, inst_b.vault_path
     uid = _uid()
     stem = f"Root108-{uid}"
     keep = f"{stem}-keep.md"
     async with folder_ops.folder_ops_on(cdp_a, cdp_b, write_stop=True):
-        _seed(api_sync, (vault_a, vault_b), {keep: "# Keep\n\nroot survivor 108"}, prefix=keep)
-        await _root_cycle(api_sync, sync_vault_id, vault_a, vault_b, cdp_a, stem, "pre", {keep})
+        _seed(api, (va, vb), {keep: "# Keep\n\nroot survivor 108"}, prefix=keep)
+        assert folder_ops.moved_folder_count(vid) == 0, (
+            "precondition: the 'pre' phase needs a vault with no folder moved "
+            "without a cascade; an earlier test left one in the resumed vault"
+        )
+        await _root_cycle(api, vid, va, vb, cdp_a, stem, "pre", {keep})
 
         mv = f"E2E/RootMv108-{uid}"
-        rows = _seed(api_sync, (vault_a, vault_b), {f"{mv}/src/x.md": "# X\n\nx 108"}, prefix=mv)
-        _move(api_sync, mv, rows, f"{mv}/src", f"{mv}/dst")
+        rows = _seed(api, (va, vb), {f"{mv}/src/x.md": "# X\n\nx 108"}, prefix=mv)
+        _move(api, mv, rows, f"{mv}/src", f"{mv}/dst")
+        assert folder_ops.moved_folder_count(vid) >= 1
 
-        await _root_cycle(api_sync, sync_vault_id, vault_a, vault_b, cdp_a, stem, "post", {keep})
-        _assert_get_notes(api_sync, sync_vault_id, [keep])
-        for vault in (vault_a, vault_b):
+        await _root_cycle(api, vid, va, vb, cdp_a, stem, "post", {keep})
+        _assert_get_notes(api, vid, [keep])
+        for vault in (va, vb):
             wait_for_content(vault, keep, "root survivor 108")
 
 
