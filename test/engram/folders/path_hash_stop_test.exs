@@ -222,6 +222,18 @@ defmodule Engram.Folders.PathHashStopTest do
     assert hashes(v) |> Map.values() |> Enum.all?(&is_nil/1)
   end
 
+  # A restore with the stop on writes no path hash on the rows it revives.
+  # Red before: it put each revived row's current path hash.
+  test "on: a restore writes no path hash", %{user: u, vault: v} do
+    tenant!(u, fn -> {:ok, _} = Rows.ensure_all(u, v.id, ["A/B"]) end)
+    op = Ecto.UUID.generate()
+    assert tenant!(u, fn -> Rows.soft_delete(u, v.id, ["A"], op) end) >= 1
+    assert tenant!(u, fn -> Rows.restore_op(u, v.id, op) end) >= 1
+
+    assert %{"A/B" => _} = Engram.FolderRows.tree(u)
+    assert hashes(v) |> Map.values() |> Enum.all?(&is_nil/1)
+  end
+
   # The walk_index_cond_test race: `insert` runs right after the ensure's
   # walk, as a racing creator would.
   defp after_walk(insert) do

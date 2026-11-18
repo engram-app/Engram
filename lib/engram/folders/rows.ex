@@ -1768,6 +1768,16 @@ defmodule Engram.Folders.Rows do
     # stale. It takes its CURRENT path's hash like any live writer (from a
     # stale holder too). One whose path will not resolve (a name that will
     # not decrypt) yields a hash a live row holds instead.
+    # With S6 step 3's write stop on in the vault, no hash is written.
+    :ok =
+      if PathHashStop.write?(user.id, vault_id),
+        do: put_revived_hashes(user, vault_id, ids),
+        else: :ok
+
+    n
+  end
+
+  defp put_revived_hashes(user, vault_id, ids) do
     dek = dek!(user)
     fk = Crypto.dek_filter_key_from_bytes(dek)
     paths = paths_by_ids(dek, vault_id, ids)
@@ -1776,7 +1786,7 @@ defmodule Engram.Folders.Rows do
       PathHmacs.put(user.id, for({id, p} <- paths, is_binary(p), do: {id, path_hmac(fk, p)}))
 
     {:ok, _} = PathHmacs.yield(vault_id, for(id <- ids, not is_binary(paths[id]), do: id))
-    n
+    :ok
   end
 
   @doc """
