@@ -440,6 +440,13 @@ class ApiClient:
         self._raise_for_status(resp)
         return resp.json()
 
+    def get_explicit_folders(self) -> list[str]:
+        """GET /folders/explicit: names of the explicit folder markers (what the
+        plugin's own pull reads)."""
+        resp = self.session.get(f"{self.base_url}/folders/explicit", timeout=10)
+        self._raise_for_status(resp)
+        return [f["name"] for f in resp.json().get("folders", [])]
+
     def get_folders(self) -> list:
         """GET /folders."""
         resp = self.session.get(f"{self.base_url}/folders", timeout=10)
