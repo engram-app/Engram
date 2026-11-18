@@ -90,15 +90,17 @@ defmodule Engram.Folders.RowsTest do
   end
 
   test "a row with no full_path_hmac (an older writer) is adopted, not duplicated", ctx do
-    %{user: u, vault: v, fk: fk} = ctx
+    %{user: u, vault: v} = ctx
     id = ensure!(u, v, "Legacy")
 
     Repo.with_tenant(u.id, fn ->
       Repo.update_all(from(f in Folder, where: f.id == ^id), set: [full_path_hmac: nil])
     end)
 
+    # Found by its chain (S6 step 3): no hash is read, so none is rewritten
+    # here (`FolderTable` heals it while the hash is still written).
     assert ensure!(u, v, "Legacy") == id
-    assert Enum.find(rows(u, v), &(&1.id == id)).full_path_hmac == Rows.path_hmac(fk, "Legacy")
+    assert length(rows(u, v)) == 1
   end
 
   describe "subtree, rename, delete and restore" do
@@ -313,11 +315,12 @@ defmodule Engram.Folders.RowsTest do
       assert length(Map.keys(live)) == 4
     end
 
-    test "a row that loses the insert (its name is already live) falls back to a read", ctx do
-      %{user: u, vault: v, fk: fk} = ctx
+    test "a batch adopts a live row with no full_path_hmac as a parent", ctx do
+      %{user: u, vault: v} = ctx
       # A live row for the name whose full_path_hmac is missing (an older
-      # writer): the batch insert hits the live-name index, writes nothing, and
-      # the fallback adopts the row instead of duplicating it.
+      # writer): the walk finds it by its chain and the batch adopts it
+      # instead of duplicating it. (A row a racing creator commits after the
+      # walk takes the insert-conflict read: `WalkIndexCondTest`.)
       id = ensure!(u, v, "Legacy")
 
       Repo.with_tenant(u.id, fn ->
@@ -326,7 +329,6 @@ defmodule Engram.Folders.RowsTest do
 
       ids = ensure_all!(u, v, ["Legacy/Child", "Other"])
       assert length(rows(u, v)) == 3
-      assert Enum.find(rows(u, v), &(&1.id == id)).full_path_hmac == Rows.path_hmac(fk, "Legacy")
       assert Enum.find(rows(u, v), &(&1.id == ids["Legacy/Child"])).parent_id == id
     end
   end

@@ -233,25 +233,25 @@ defmodule Engram.Folders.Rows do
   end
 
   # `targets`: %{folder => marker id | nil}. Returns %{folder => leaf id}.
-  # One read of every prefix, then one insert per depth level (parents first).
+  # One walk of every prefix down the parent chain (`walk_ids/4`, the readers'
+  # walk, so a writer and a reader always agree on which row a path names),
+  # then one insert per depth level (parents first).
   defp resolve_all(ctx, targets) do
     paths = targets |> Map.keys() |> Enum.flat_map(&prefixes/1) |> Enum.uniq()
     hmacs = Map.new(paths, &{&1, path_hmac(ctx.fk, &1)})
-    known = live_ids_by_path_hmac(ctx.vault_id, Map.values(hmacs))
-    ids = Map.new(paths, &{&1, Map.get(known, hmacs[&1])})
+    known = walk_ids(ctx.user_id, ctx.fk, ctx.vault_id, paths)
 
     ids =
       paths
-      |> Enum.filter(&is_nil(ids[&1]))
+      |> Enum.filter(&is_nil(known[&1]))
       |> Enum.group_by(&length(String.split(&1, "/")))
       |> Enum.sort()
-      |> Enum.reduce(ids, fn {_depth, level}, ids ->
+      |> Enum.reduce(known, fn {_depth, level}, ids ->
         create_level(ctx, Enum.sort(level), ids, targets, hmacs)
       end)
 
     # A row that was already there becomes explicit when a marker names it.
-    to_mark =
-      for {folder, marker} <- targets, marker, Map.has_key?(known, hmacs[folder]), do: ids[folder]
+    to_mark = for {folder, marker} <- targets, marker, id <- [known[folder]], id, do: id
 
     mark_explicit(to_mark)
 
@@ -298,17 +298,6 @@ defmodule Engram.Folders.Rows do
         do: Map.put(ids, path, id),
         else: Map.put(ids, path, step(ctx, parent, path, marker, 3, false))
     end)
-  end
-
-  defp live_ids_by_path_hmac(_vault_id, []), do: %{}
-
-  defp live_ids_by_path_hmac(vault_id, hmacs) do
-    from(f in Folder,
-      where: f.vault_id == ^vault_id and f.full_path_hmac in ^hmacs and is_nil(f.deleted_at),
-      select: {f.full_path_hmac, f.id}
-    )
-    |> Repo.all()
-    |> Map.new()
   end
 
   # One level: the live row for `path` under `parent_id`, created if absent.
@@ -491,9 +480,9 @@ defmodule Engram.Folders.Rows do
   # Every reader below finds a folder by walking its path's segments down the
   # parent chain (`ids_by_path/3`), never by `full_path_hmac`: from S5 a folder
   # rename rewrites one row, so a descendant's stored path hash goes stale
-  # (O(1) folder rename plan, Gap A, Engram#2523). Writers (`ensure/4`, the
-  # rename and delete fences, and `check_move/4`'s writer-side check) still
-  # read and write the hash until then.
+  # (O(1) folder rename plan, Gap A, Engram#2523). Writers find rows the same
+  # way (S6 step 3); they still write the hash for the previous release,
+  # which reads it.
 
   @doc """
   The live folder rows at `folders` and every live descendant, shallowest
@@ -501,24 +490,55 @@ defmodule Engram.Folders.Rows do
   over folder rows only, so its cost is the number of folders, never notes.
   """
   @spec subtree(map(), Ecto.UUID.t(), [String.t()]) :: [Folder.t()]
-  def subtree(user, vault_id, folders) do
-    user
-    |> roots(vault_id, folders)
-    |> then(&subtree_query(vault_id, &1))
+  def subtree(user, vault_id, folders), do: user |> subtree_at(vault_id, folders) |> elem(1)
+
+  # `subtree/3` plus `%{root id => the asked path}`, the seed `chain_names/3`
+  # derives every row's current path from.
+  defp subtree_at(user, vault_id, folders) do
+    at =
+      for {path, id} <- ids_by_path(user, vault_id, folders),
+          id,
+          into: %{},
+          do: {id, normalize(path)}
+
+    rows = vault_id |> subtree_query(Map.keys(at)) |> Repo.all() |> Enum.uniq_by(& &1.id)
+    {at, rows}
+  end
+
+  @doc "`subtree/3`'s ids only: what a reader joins notes on."
+  @spec subtree_refs(map(), Ecto.UUID.t(), [String.t()]) :: [%{id: Ecto.UUID.t()}]
+  def subtree_refs(user, vault_id, folders) do
+    from(f in subtree_query(vault_id, roots(user, vault_id, folders)), select: %{id: f.id})
     |> Repo.all()
     |> Enum.uniq_by(& &1.id)
   end
 
-  @doc "`subtree/3`'s ids and path hashes only: what a reader joins notes on."
-  @spec subtree_refs(map(), Ecto.UUID.t(), [String.t()]) :: [
-          %{id: Ecto.UUID.t(), full_path_hmac: binary() | nil}
-        ]
-  def subtree_refs(user, vault_id, folders) do
-    from(f in subtree_query(vault_id, roots(user, vault_id, folders)),
-      select: %{id: f.id, full_path_hmac: f.full_path_hmac}
-    )
-    |> Repo.all()
-    |> Enum.uniq_by(& &1.id)
+  @doc """
+  `%{id => path}` for every row of `subtree/3`, each row's CURRENT path: the
+  asked folder for a root, its parent's path plus its own decrypted name
+  below. A row whose name, or an ancestor's within the subtree, will not
+  open maps to nil (it is still in the subtree; it has no path to compare).
+  Costs the subtree's folders (one walk, one read, one decrypt per row),
+  never notes. Runs inside the caller's tenant transaction.
+  """
+  @spec subtree_paths(map(), Ecto.UUID.t(), [String.t()]) :: %{
+          Ecto.UUID.t() => String.t() | nil
+        }
+  def subtree_paths(user, vault_id, folders) do
+    case subtree_at(user, vault_id, folders) do
+      {_at, []} ->
+        %{}
+
+      {at, rows} ->
+        paths = chain_names(dek!(user), rows, at)
+        Map.new(rows, &{&1.id, Map.get(paths, &1.id)})
+    end
+  end
+
+  # An unreadable vault is not an empty folder: no DEK raises.
+  defp dek!(user) do
+    {:ok, dek} = Crypto.get_dek(user)
+    dek
   end
 
   @doc "The ids of the live rows at exactly `folders` (no descendants)."
@@ -551,10 +571,20 @@ defmodule Engram.Folders.Rows do
   """
   @spec ids_by_path(map(), Ecto.UUID.t(), [String.t()]) :: %{String.t() => Ecto.UUID.t() | nil}
   def ids_by_path(user, vault_id, paths) do
+    case Crypto.dek_filter_key(user) do
+      {:ok, fk} -> walk_ids(user.id, fk, vault_id, paths)
+      _ -> Map.new(paths, &{&1, nil})
+    end
+  end
+
+  # `ids_by_path/3` under a filter key the caller already holds (the writers'
+  # `resolve_all/2` too).
+  defp walk_ids(user_id, fk, vault_id, paths) do
     prefixes = paths |> Enum.flat_map(&prefixes/1) |> Enum.uniq()
 
-    with [_ | _] <- prefixes,
-         {:ok, fk} <- Crypto.dek_filter_key(user) do
+    if prefixes == [] do
+      Map.new(paths, &{&1, nil})
+    else
       index = prefixes |> Enum.with_index(1) |> Map.new()
 
       found =
@@ -564,9 +594,9 @@ defmodule Engram.Folders.Rows do
             ^Enum.to_list(1..length(prefixes)),
             ^Enum.map(prefixes, &Map.get(index, parent_path(&1), 0)),
             ^Enum.map(prefixes, &name_hmac(fk, segment(&1))),
-            type(^user.id, Ecto.UUID),
+            type(^user_id, Ecto.UUID),
             type(^vault_id, Ecto.UUID),
-            type(^user.id, Ecto.UUID),
+            type(^user_id, Ecto.UUID),
             type(^vault_id, Ecto.UUID)
           ),
           select: {w.i, type(w.id, Ecto.UUID)}
@@ -575,8 +605,6 @@ defmodule Engram.Folders.Rows do
         |> Map.new()
 
       Map.new(paths, &{&1, Map.get(found, index[normalize(&1)])})
-    else
-      _ -> Map.new(paths, &{&1, nil})
     end
   end
 
@@ -601,8 +629,11 @@ defmodule Engram.Folders.Rows do
   the account's `dek`: `chain_rows/2` then `chain_paths/3`. Runs inside the
   caller's tenant transaction.
   """
-  @spec paths_by_ids(binary(), Ecto.UUID.t(), [Ecto.UUID.t()]) :: %{Ecto.UUID.t() => String.t()}
-  def paths_by_ids(dek, vault_id, ids), do: chain_paths(dek, chain_rows(vault_id, ids), ids)
+  @spec paths_by_ids(binary(), Ecto.UUID.t(), [Ecto.UUID.t()], keyword()) :: %{
+          Ecto.UUID.t() => String.t()
+        }
+  def paths_by_ids(dek, vault_id, ids, opts \\ []),
+    do: chain_paths(dek, chain_rows(vault_id, ids, opts), ids)
 
   @doc """
   The id of the live folder at `path` in `vault_id`, by walking its
@@ -647,6 +678,7 @@ defmodule Engram.Folders.Rows do
 
   `moved_only: true` reads nothing (one probe of `folders_moved_live`) unless
   the vault holds a folder renamed without a cascade (`WalkSql.moved/0`).
+  `repo:` another repo (the canary's fleet pool).
   """
   @spec chain_rows(Ecto.UUID.t(), [Ecto.UUID.t()], keyword()) :: [map()]
   def chain_rows(vault_id, ids, opts \\ [])
@@ -720,7 +752,7 @@ defmodule Engram.Folders.Rows do
     )
     |> recursive_ctes(true)
     |> with_cte("folder_up", as: ^union(leaf, ^up))
-    |> Repo.all()
+    |> then(&Keyword.get(opts, :repo, Repo).all(&1))
   end
 
   @doc """
@@ -1053,36 +1085,11 @@ defmodule Engram.Folders.Rows do
 
       true ->
         moving = user |> subtree_refs(vault_id, [old_folder]) |> MapSet.new(& &1.id)
-        # The new parent as the readers find it (the chain) AND every row
-        # the writer may take on the way to it (`resolve_all/2` resolves the
-        # new parent's prefixes by `full_path_hmac` until S5): a stale hash on
-        # the parent or any ancestor must not let the writer place a folder
-        # under its own subtree.
-        parents = ids_at(user, vault_id, [parent_path]) ++ hash_ids(user, vault_id, parent_path)
+        # The new parent and every ancestor as the walk finds them: the rows
+        # the writer's `resolve_all/2` takes on its way there (the same walk,
+        # one statement, one probe per prefix). None may be a moving row.
+        parents = ids_at(user, vault_id, prefixes(parent_path))
         if Enum.any?(parents, &MapSet.member?(moving, &1)), do: {:error, :invalid_path}, else: :ok
-    end
-  end
-
-  # The live rows whose stored `full_path_hmac` names `path` or any of its
-  # ancestors: what the writer's `resolve_all/2` could take on its way to
-  # `path`. One statement, O(depth) keys. Only `check_move/4` reads it.
-  defp hash_ids(_user, _vault_id, ""), do: []
-
-  defp hash_ids(user, vault_id, path) do
-    case Crypto.dek_filter_key(user) do
-      {:ok, fk} ->
-        hmacs = path |> prefixes() |> Enum.map(&path_hmac(fk, &1))
-
-        Repo.all(
-          from(f in Folder,
-            where:
-              f.vault_id == ^vault_id and f.full_path_hmac in ^hmacs and is_nil(f.deleted_at),
-            select: f.id
-          )
-        )
-
-      {:error, _} ->
-        []
     end
   end
 
@@ -1124,7 +1131,7 @@ defmodule Engram.Folders.Rows do
     # Each row's NEW full path, from the decrypted segment names. A name that
     # will not open drops that row and its descendants from the rewrite: the
     # daily FolderTable pass heals them, a corrupt row must not block a rename.
-    paths = new_paths(ctx, rows, root.id, new_folder)
+    paths = chain_names(ctx.dek, rows, %{root.id => new_folder})
 
     case live_child(ctx.vault_id, new_parent, new_name_h) do
       %{id: occupant} when occupant != root.id and is_integer(ctx.uncascaded) ->
@@ -1184,31 +1191,20 @@ defmodule Engram.Folders.Rows do
   defp uncascaded(nil), do: [notes_cascaded: true]
   defp uncascaded(seq) when is_integer(seq), do: [notes_cascaded: false, seq: seq]
 
-  # id => new full path, for every row whose chain of names opens.
-  defp new_paths(ctx, rows, root_id, new_folder) do
-    by_id = Map.new(rows, &{&1.id, &1})
-
-    Enum.reduce(rows, %{}, fn row, acc ->
+  # id => full path for `subtree/3`'s `rows` (shallowest first), from `seed`
+  # (%{root id => its path}) down: a row's path is its parent's plus its own
+  # decrypted name. A row whose chain of names does not open is absent.
+  defp chain_names(dek, rows, seed) do
+    Enum.reduce(rows, seed, fn row, acc ->
       with nil <- Map.get(acc, row.id),
-           {:ok, path} <- path_of(ctx, row, by_id, root_id, new_folder, acc) do
-        Map.put(acc, row.id, path)
+           parent_path when is_binary(parent_path) <- Map.get(acc, row.parent_id),
+           {:ok, name} <-
+             decrypt_name(dek, row.id, row.dek_version, row.name_ciphertext, row.name_nonce) do
+        Map.put(acc, row.id, parent_path <> "/" <> name)
       else
         _ -> acc
       end
     end)
-  end
-
-  # Rows arrive shallowest first, so a parent's path is already in `acc`.
-  defp path_of(_ctx, %{id: id}, _by_id, id, new_folder, _acc), do: {:ok, new_folder}
-
-  defp path_of(ctx, row, _by_id, _root_id, _new_folder, acc) do
-    with parent_path when is_binary(parent_path) <- Map.get(acc, row.parent_id),
-         {:ok, name} <-
-           decrypt_name(ctx.dek, row.id, row.dek_version, row.name_ciphertext, row.name_nonce) do
-      {:ok, parent_path <> "/" <> name}
-    else
-      _ -> :error
-    end
   end
 
   defp write_path_hmacs(_ctx, []), do: :ok
@@ -1366,14 +1362,14 @@ defmodule Engram.Folders.Rows do
     # that skip this lock can deadlock (40P01).
     _ = Engram.Vaults.lock_seq(vault_id)
 
-    case subtree(user, vault_id, folders) do
-      [] ->
+    case subtree_at(user, vault_id, folders) do
+      {_at, []} ->
         0
 
-      rows ->
+      {at, rows} ->
         ids = Enum.map(rows, & &1.id)
         content = live_content_folders(ids)
-        marked = live_marker_folders(user, vault_id, rows)
+        marked = live_marker_folders(user, vault_id, rows, at)
         log_kept_by_marker(user, vault_id, MapSet.size(MapSet.difference(marked, content)))
 
         keep =
@@ -1427,11 +1423,16 @@ defmodule Engram.Folders.Rows do
     )
   end
 
-  # Folder ids (among `rows`) whose path a live folder marker names.
-  defp live_marker_folders(user, vault_id, rows) do
-    hmacs = for %{full_path_hmac: h} when is_binary(h) <- rows, do: h
-    named = Engram.Notes.live_folder_marker_hmacs(user, vault_id, hmacs)
-    for %{id: id, full_path_hmac: h} <- rows, MapSet.member?(named, h), into: MapSet.new(), do: id
+  # Folder ids (among `rows`, of the subtree at `paths`) whose path a live
+  # folder marker names: each row's current path (`chain_names/3`), hashed
+  # the way a marker's `folder_hmac` is. A row whose name will not open is
+  # not matched (its content still keeps it).
+  defp live_marker_folders(user, vault_id, rows, at) do
+    dek = dek!(user)
+    fk = Crypto.dek_filter_key_from_bytes(dek)
+    by_hmac = for {id, path} <- chain_names(dek, rows, at), do: {path_hmac(fk, path), id}
+    named = Engram.Notes.live_folder_marker_hmacs(user, vault_id, Enum.map(by_hmac, &elem(&1, 0)))
+    for {h, id} <- by_hmac, MapSet.member?(named, h), into: MapSet.new(), do: id
   end
 
   defp with_ancestors(set, parents) do
@@ -1552,18 +1553,16 @@ defmodule Engram.Folders.Rows do
   @doc "A deleted folder marker no longer makes its folder explicit; the row stays for its content."
   @spec unmark_explicit(map(), Ecto.UUID.t(), String.t()) :: :ok
   def unmark_explicit(user, vault_id, folder) do
-    with {:ok, fk} <- Crypto.dek_filter_key(user) do
-      hmac = path_hmac(fk, folder)
+    case ids_at(user, vault_id, [folder]) do
+      [] ->
+        :ok
 
-      from(f in Folder,
-        where:
-          f.vault_id == ^vault_id and f.full_path_hmac == ^hmac and is_nil(f.deleted_at) and
-            f.explicit
-      )
-      |> Repo.update_all(set: [explicit: false, updated_at: now()])
+      ids ->
+        from(f in Folder, where: f.id in ^ids and is_nil(f.deleted_at) and f.explicit)
+        |> Repo.update_all(set: [explicit: false, updated_at: now()])
+
+        :ok
     end
-
-    :ok
   end
 
   defp mint_id, do: UUIDv7.generate()

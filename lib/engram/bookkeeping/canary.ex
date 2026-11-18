@@ -142,9 +142,9 @@ defmodule Engram.Bookkeeping.Canary do
         dek_version: n.dek_version,
         ct: n.folder_ciphertext,
         nonce: n.folder_nonce,
-        ref: n.folder_ref_id,
-        folder_live?: not is_nil(f.id),
-        folder_hmac: f.full_path_hmac
+        vault_id: type(n.vault_id, Ecto.UUID),
+        ref: type(n.folder_ref_id, Ecto.UUID),
+        folder_live?: not is_nil(f.id)
       }
     )
     |> repo.all()
@@ -179,9 +179,9 @@ defmodule Engram.Bookkeeping.Canary do
         dek_version: a.dek_version,
         path_ciphertext: a.path_ciphertext,
         path_nonce: a.path_nonce,
-        ref: a.folder_ref_id,
-        folder_live?: not is_nil(f.id),
-        folder_hmac: f.full_path_hmac
+        vault_id: type(a.vault_id, Ecto.UUID),
+        ref: type(a.folder_ref_id, Ecto.UUID),
+        folder_live?: not is_nil(f.id)
       }
     )
     |> repo.all()
@@ -215,11 +215,11 @@ defmodule Engram.Bookkeeping.Canary do
   defp count_wrong(repo, user_id, rows, folder_of) do
     with %User{} = user <- repo.get(User, user_id),
          {:ok, dek} <- Crypto.get_dek(user) do
-      fk = Crypto.dek_filter_key_from_bytes(dek)
+      paths = ref_paths(repo, dek, rows)
 
       Enum.count(rows, fn row ->
         case folder_of.(row, dek) do
-          {:ok, folder} -> wrong_ref?(row, folder, fk)
+          {:ok, folder} -> wrong_ref?(row, folder, paths)
           :error -> false
         end
       end)
@@ -228,9 +228,28 @@ defmodule Engram.Bookkeeping.Canary do
     end
   end
 
-  defp wrong_ref?(row, "", _fk), do: row.ref != nil
-  defp wrong_ref?(%{folder_live?: false}, _folder, _fk), do: true
-  defp wrong_ref?(row, folder, fk), do: row.folder_hmac != Rows.path_hmac(fk, folder)
+  # The current path of each live folder row the rows name, from its chain
+  # (`Rows.paths_by_ids/4`, one read per vault), never `full_path_hmac`.
+  defp ref_paths(repo, dek, rows) do
+    rows
+    |> Enum.filter(&(&1.ref != nil and &1.folder_live?))
+    |> Enum.group_by(& &1.vault_id, & &1.ref)
+    |> Enum.reduce(%{}, fn {vault_id, refs}, acc ->
+      Map.merge(acc, Rows.paths_by_ids(dek, vault_id, refs, repo: repo))
+    end)
+  end
+
+  defp wrong_ref?(row, "", _paths), do: row.ref != nil
+  defp wrong_ref?(%{folder_live?: false}, _folder, _paths), do: true
+
+  # A live row whose chain does not open (an undecryptable name, a dead
+  # ancestor) is not judged here, as a folder that does not decrypt is not.
+  defp wrong_ref?(row, folder, paths) do
+    case Map.fetch(paths, row.ref) do
+      {:ok, path} -> path != folder
+      :error -> false
+    end
+  end
 
   # ---- sampling ------------------------------------------------------------
 
