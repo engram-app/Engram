@@ -2351,11 +2351,11 @@ defmodule Engram.Attachments do
     |> Enum.chunk_every(delete_chunk_size())
     |> Enum.reduce_while({:ok, %{restored: [], skipped: []}}, fn chunk, {:ok, acc} ->
       # A row shown elsewhere but stored at a restored path holds its unique
-      # slot: repointed first (`settle/3`), or the revive refuses the row.
-      with :ok <- settle(user, vault, Enum.map(chunk, & &1.path)) do
-        revive_tombstones(user, vault, Enum.map(chunk, & &1.id), chunk)
-      end
-      |> case do
+      # slot: repointed first (`settle/3`). One that cannot be skips only its
+      # own tombstone (never revived, so never two files at one path).
+      {chunk, conflicts} = settle_restorable(user, vault, chunk)
+
+      case revive_tombstones(user, vault, Enum.map(chunk, & &1.id), chunk) do
         {:ok, %{restored: ids, seqs: seqs}} ->
           back = MapSet.new(ids)
           {restored, refused} = Enum.split_with(chunk, &MapSet.member?(back, &1.id))
@@ -2374,13 +2374,25 @@ defmodule Engram.Attachments do
               restored: acc.restored ++ Enum.map(restored, & &1.path),
               skipped:
                 acc.skipped ++
-                  Enum.map(refused, &%{path: &1.path, kind: "attachment", reason: :unavailable})
+                  Enum.map(refused, &%{path: &1.path, kind: "attachment", reason: :unavailable}) ++
+                  Enum.map(conflicts, &%{path: &1.path, kind: "attachment", reason: :conflict})
             }}}
 
         {:error, _} = err ->
           {:halt, err}
       end
     end)
+  end
+
+  # `{settled, conflicts}` of a restore chunk's metas: the whole chunk in one
+  # `settle/3`, and only when that conflicts, each path on its own.
+  # ponytail: per-path settle on conflict, O(chunk) probes; a conflict is a
+  # rollback-from-E corner, so the rare path stays simple.
+  defp settle_restorable(user, vault, chunk) do
+    case settle(user, vault, Enum.map(chunk, & &1.path)) do
+      :ok -> {chunk, []}
+      {:error, :conflict} -> Enum.split_with(chunk, &(settle(user, vault, [&1.path]) == :ok))
+    end
   end
 
   # A restored row keeps the reference it was deleted with, which may name a
