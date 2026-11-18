@@ -120,7 +120,11 @@ defmodule Engram.Folders do
   # (20260605000353, 20261021110300): the only 23505s that mean "the target is
   # taken". Any other one is a bug and is re-raised.
   @path_uniques ~w(notes_user_vault_folder_marker notes_user_vault_path_v2
-                   notes_user_id_vault_id_path_hmac_index notes_folder_marker notes_path_live)
+                   notes_folder_marker notes_path_live)
+
+  # Read by the schema test that keeps this list to real indexes.
+  @doc false
+  def path_uniques, do: @path_uniques
 
   # The race backstop. The cascade refuses a note collision and merges a
   # marker one before it writes (`Notes.claim_or_consume/4`,

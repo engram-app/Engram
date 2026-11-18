@@ -157,5 +157,17 @@ defmodule Engram.Folders.NestedCollisionTest do
 
       assert_raise Postgrex.Error, fn -> Folders.rename(u, v, "S", "D") end
     end
+
+    # A stale or misspelled name in the allowlist never matches, so its
+    # violation would 500 instead of answering conflict, and nothing else fails.
+    test "every allowlisted name is a unique index on notes" do
+      %{rows: rows} =
+        Engram.Repo.query!(
+          "SELECT indexname FROM pg_indexes WHERE tablename = 'notes' AND indexdef LIKE 'CREATE UNIQUE INDEX%'"
+        )
+
+      live = List.flatten(rows)
+      assert Folders.path_uniques() -- live == []
+    end
   end
 end
