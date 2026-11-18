@@ -2,7 +2,7 @@
 Code.require_file("bounded_index_build.exs", __DIR__)
 Code.require_file("migration_log.exs", __DIR__)
 
-defmodule Engram.Repo.Migrations.IndexFoldersExplicitLiveExpand do
+defmodule Engram.Repo.Migrations.IndexFoldersExplicitLiveV2Expand do
   use Ecto.Migration
 
   alias Engram.Repo.Migrations.{BoundedIndexBuild, MigrationLog}
@@ -22,8 +22,10 @@ defmodule Engram.Repo.Migrations.IndexFoldersExplicitLiveExpand do
   the live explicit rows, so the planner can never cost the tenant's whole
   folder index below it (#2639's CI read `folders_user`, every folder of
   the tenant, on a `(vault_id)`-keyed version). `id` is INCLUDEd so the
-  read is index-only. `_v2`: a test or dev database that ran the earlier
-  definition of this unmerged migration keeps that index, unused.
+  read is index-only. `_v2` at a new version: a database that ran the
+  earlier `(vault_id)`-keyed `folders_explicit_live` (version
+  20261118130000, never merged) builds this one too and keeps that one,
+  unused; nothing drops it (the migration gates refuse a drop).
 
   Additive: the previous release ignores it. Its predicate holds `explicit`,
   so a write that flips the flag (a marker create or delete, rare) is not
@@ -43,13 +45,13 @@ defmodule Engram.Repo.Migrations.IndexFoldersExplicitLiveExpand do
         {"folders_explicit_live_v2",
          "ON folders (user_id, vault_id) INCLUDE (id) WHERE explicit AND deleted_at IS NULL"}
       ],
-      lock_key: 20_261_118_130_000,
-      label: "index_folders_explicit_live"
+      lock_key: 20_261_118_210_000,
+      label: "index_folders_explicit_live_v2"
     )
 
     MigrationLog.indexes(
       repo(),
-      "index_folders_explicit_live",
+      "index_folders_explicit_live_v2",
       ["folders_explicit_live_v2"],
       started
     )

@@ -124,12 +124,13 @@ defmodule Engram.Folders.ExplicitReadsTest do
   end
 
   # The explicit read (the statement of `fun` that `pick` matches) reads
-  # `folders_explicit_live_v2` in its custom and its forced generic plan, at
-  # the 40-tenant shape and at one where every tenant looks unique (a tenant
-  # index then looks like a 1-row read). #2639's CI picked `folders_user`,
-  # every folder of the tenant (400 rows removed by filter), over the
-  # earlier `(vault_id)`-keyed index; v2 narrows `folders_user`, so it is
-  # never the costlier read.
+  # `folders_explicit_live_v2` in its custom plan, at the 40-tenant shape and
+  # at one where every tenant looks unique. #2639's CI picked `folders_user`
+  # (every folder of the tenant, 400 rows removed by filter) in the FORCED
+  # GENERIC plan only, on its polluted statistics; its custom plans read the
+  # partial index. The statement runs unnamed, so prod plans it per
+  # execution and a generic plan never occurs: `assert_never_named!/2` pins
+  # that property instead of asserting a plan that cannot run.
   defp assert_explicit_index!(user, fun, pick) do
     me = self()
 
@@ -137,15 +138,83 @@ defmodule Engram.Folders.ExplicitReadsTest do
       tenant_shape!(users, vaults)
       {_, queries} = QueryRecorder.record(fun)
       [{sql, params}] = for %{sql: s, params: p, pid: ^me} <- queries, pick.(s), do: {s, p}
-      %{custom: custom, generic: generic} = QueryPlan.rls_plans(user.id, sql, params)
+      %{custom: custom} = QueryPlan.rls_plans(user.id, sql, params)
 
-      for plan <- [custom, generic] do
-        assert plan =~ ~r/\bfolders_explicit_live_v2\b/,
-               "n_distinct #{users}/#{vaults}:\n" <> plan
+      assert custom =~ ~r/\bfolders_explicit_live_v2\b/,
+             "n_distinct #{users}/#{vaults}:\n" <> custom
 
-        refute plan =~ "Seq Scan on folders", plan
-      end
+      refute custom =~ "Seq Scan on folders", custom
     end
+
+    assert_never_named!(fun, pick)
+  end
+
+  # Every scan node on folders (seq, index, index-only, bitmap heap) has a
+  # condition naming the vault: no read of the tenant's other vaults
+  # (`folders_user` has only `user_id`), and no unconditioned full scan.
+  defp assert_scans_vault_bound!(plan) do
+    nodes = Regex.scan(~r/(?:Scan|Scan using \w+) on folders\b/, plan)
+
+    conds =
+      Regex.scan(
+        ~r/(?:Scan using \w+|Bitmap Heap Scan) on folders\b[^\n]*\n\s*(?:Index|Recheck) Cond: ([^\n]*)/,
+        plan,
+        capture: :all_but_first
+      )
+
+    assert nodes != [], plan
+    assert length(conds) == length(nodes), "a folders scan with no condition:\n" <> plan
+    for [cond] <- conds, do: assert(cond =~ "vault_id =", cond <> "\n" <> plan)
+  end
+
+  test "the folders scan check refuses tenant-wide, unconditioned and seq scans" do
+    vault = "Index Cond: ((user_id = 'u'::uuid) AND (vault_id = 'v'::uuid))"
+
+    good = """
+    ->  Index Only Scan using folders_explicit_live_v2 on folders f0 (actual rows=2.00 loops=1)
+          #{vault}
+    ->  Bitmap Heap Scan on folders f0_1 (actual rows=40.00 loops=1)
+          Recheck Cond: (vault_id = 'v'::uuid)
+    """
+
+    assert_scans_vault_bound!(good)
+
+    for bad <- [
+          # the tenant's whole folder index
+          "->  Index Scan using folders_user on folders f0 (actual rows=2.00 loops=1)\n" <>
+            "      Index Cond: (user_id = 'u'::uuid)\n",
+          # a full index scan, no condition at all
+          "->  Index Scan using folders_pkey on folders f0 (actual rows=2.00 loops=1)\n" <>
+            "      Filter: (vault_id = 'v'::uuid)\n",
+          # a seq scan
+          "->  Seq Scan on folders f0 (actual rows=2.00 loops=1)\n" <>
+            "      Filter: (vault_id = 'v'::uuid)\n"
+        ] do
+      assert_raise ExUnit.AssertionError, fn -> assert_scans_vault_bound!(good <> bad) end
+    end
+  end
+
+  # Past the 5 custom plans a named statement gets before Postgres may switch
+  # it to a generic one: each of 7 runs sends the statement, and none
+  # prepares it by name (`prepare: :unnamed`), so it only ever runs on a
+  # custom plan.
+  defp assert_never_named!(fun, pick) do
+    me = self()
+
+    sqls =
+      for _ <- 1..7 do
+        {_, runs} = QueryRecorder.record(fun)
+        [sql] = for %{sql: s, pid: ^me} <- runs, pick.(s), uniq: true, do: s
+        sql
+      end
+
+    for sql <- Enum.uniq(sqls),
+        do:
+          assert(
+            Repo.query!("SELECT 1 FROM pg_prepared_statements WHERE statement = $1", [sql]).rows ==
+              [],
+            "prepared by name:\n" <> sql
+          )
   end
 
   defp reconcile! do
@@ -264,30 +333,15 @@ defmodule Engram.Folders.ExplicitReadsTest do
 
     %{custom: custom} = QueryPlan.rls_plans(u.id, sql, params)
 
-    # Past the 5 custom plans a named statement gets before it may go
-    # generic: each run sends the statement, and none prepares it by name.
-    for _ <- 1..7 do
-      # The listing caches the counts under the vault seq.
-      Engram.Cache.clear_local(:vault_scan)
-      {_, runs} = QueryRecorder.record(fn -> Notes.list_folders_with_counts(u, v) end)
-      assert Enum.any?(runs, &(&1.pid == me and &1.sql == sql))
-    end
+    assert_never_named!(
+      fn ->
+        Engram.Cache.clear_local(:vault_scan)
+        Notes.list_folders_with_counts(u, v)
+      end,
+      &(&1 == sql)
+    )
 
-    assert Repo.query!("SELECT 1 FROM pg_prepared_statements WHERE statement = $1", [sql]).rows ==
-             []
-
-    # Every folders scan's index condition names the vault: no read of the
-    # tenant's other vaults (`folders_user` has only `user_id`).
-    scans =
-      Regex.scan(
-        ~r/(?:using \w+|Bitmap Heap Scan) on folders[^\n]*\n\s*(?:Index|Recheck) Cond: ([^\n]*)/,
-        custom,
-        capture: :all_but_first
-      )
-
-    assert scans != [], custom
-    for [cond] <- scans, do: assert(cond =~ "vault_id =", cond <> "\n" <> custom)
-    refute custom =~ "Seq Scan on folders", custom
+    assert_scans_vault_bound!(custom)
   end
 
   # A batch move whose target is a folder ROW id (what the listings hand out
