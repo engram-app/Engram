@@ -8929,7 +8929,7 @@ defmodule Engram.Notes do
   # (a marker's row keeps its UUID, `Rows.ensure_markers/3`) is not live (a
   # row that died under a marker, a marker the previous release wrote before
   # its row), which nothing else finds. One primary-key probe per marker,
-  # never `folders.full_path_hmac` (S6 step 3). The caller's final path
+  # never a stored folder path hash (S6 step 3). The caller's final path
   # filter keeps only the target's.
   defp folder_markers_in(live, row_hmacs) do
     live_row =

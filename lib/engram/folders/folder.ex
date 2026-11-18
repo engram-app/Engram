@@ -7,9 +7,8 @@ defmodule Engram.Folders.Folder do
   The name is one path SEGMENT, encrypted under the owning account's DEK like
   `notes.folder_ciphertext` (AAD `Crypto.aad_for_row(:folders, :name, id)`).
   A row has no path column: its path is its chain of names
-  (`Engram.Folders.Rows`). The table's `full_path_hmac` column is no longer
-  in the schema (S6 step 3: nothing reads or writes it; dropped in the next
-  release).
+  (`Engram.Folders.Rows`). The whole-path hash column it once carried is
+  dropped (S6 step 3, 20261118120000).
   """
   use Engram.Schema
 

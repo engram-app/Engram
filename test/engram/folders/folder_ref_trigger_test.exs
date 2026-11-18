@@ -20,8 +20,8 @@ defmodule Engram.Folders.FolderRefTriggerTest do
   defp hmac(fk, text), do: Crypto.hmac_field(fk, text)
 
   # `name_hmac` is the folder-name domain's (`Rows.name_hmac/2`): writers
-  # find a row by its chain of names (S6 step 3), never by `full_path_hmac`.
-  defp folder!(user, vault, name_hmac, opts),
+  # find a row by its chain of names (S6 step 3).
+  defp folder!(user, vault, name_hmac, opts \\ []),
     do: Engram.FolderRows.insert!(user, vault, name_hmac, opts)
 
   defp write!(user, vault, path) do
@@ -60,7 +60,7 @@ defmodule Engram.Folders.FolderRefTriggerTest do
       vault: v,
       fk: fk
     } do
-      f = folder!(u, v, Rows.name_hmac(fk, "Dir"), full_path_hmac: hmac(fk, "Dir"))
+      f = folder!(u, v, Rows.name_hmac(fk, "Dir"))
       note = write!(u, v, "Dir/A.md")
       assert folder_ref(note.id) == f
 
@@ -73,7 +73,7 @@ defmodule Engram.Folders.FolderRefTriggerTest do
     end
 
     test "a folder marker row is not given a reference", %{user: u, vault: v, fk: fk} do
-      folder!(u, v, Rows.name_hmac(fk, "Dir"), full_path_hmac: hmac(fk, "Dir"))
+      folder!(u, v, Rows.name_hmac(fk, "Dir"))
       {:ok, marker} = Notes.create_folder_marker(u, v, "Dir")
 
       assert folder_ref(marker.id) == nil
@@ -84,7 +84,7 @@ defmodule Engram.Folders.FolderRefTriggerTest do
       vault: v,
       fk: fk
     } do
-      f = folder!(u, v, Rows.name_hmac(fk, "Dir"), full_path_hmac: hmac(fk, "Dir"))
+      f = folder!(u, v, Rows.name_hmac(fk, "Dir"))
       note = write!(u, v, "Dir/A.md")
       assert folder_ref(note.id) == f
 
@@ -94,7 +94,7 @@ defmodule Engram.Folders.FolderRefTriggerTest do
     end
 
     test "hard-deleting a folder nulls the reference, not the vault", %{user: u, vault: v, fk: fk} do
-      f = folder!(u, v, Rows.name_hmac(fk, "Dir"), full_path_hmac: hmac(fk, "Dir"))
+      f = folder!(u, v, Rows.name_hmac(fk, "Dir"))
       note = write!(u, v, "Dir/A.md")
       assert folder_ref(note.id) == f
 

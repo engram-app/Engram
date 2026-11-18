@@ -229,7 +229,7 @@ defmodule Engram.Bookkeeping.Canary do
   end
 
   # The current path of each live folder row the rows name, from its chain
-  # (`Rows.paths_by_ids/4`, one read per vault), never `full_path_hmac`.
+  # (`Rows.paths_by_ids/4`, one read per vault), never a stored path hash.
   defp ref_paths(repo, dek, rows) do
     rows
     |> Enum.filter(&(&1.ref != nil and &1.folder_live?))

@@ -15,8 +15,7 @@ defmodule Engram.Folders.Rows do
   AAD `Crypto.aad_for_row(:folders, :name, id)` (the key scheme of
   `notes.folder_ciphertext`). `name_hmac` lives in its own domain so a segment
   hash never equals a `path_hmac`. A folder is found by walking its path's
-  segments down the parent chain; `folders.full_path_hmac` is no longer read
-  or written (S6 step 3) and is dropped in the next release.
+  segments down the parent chain; there is no whole-path hash (S6 step 3).
 
   The stored paths (`notes.path_*` / `folder_*`, attachment `path_*`) stay
   authoritative and are still written everywhere; a folder row is a second,
@@ -470,7 +469,7 @@ defmodule Engram.Folders.Rows do
   # ---- subtree -------------------------------------------------------------
   #
   # Every reader below finds a folder by walking its path's segments down the
-  # parent chain (`ids_by_path/3`), never by `full_path_hmac`: from S5 a folder
+  # parent chain (`ids_by_path/3`), never by a stored path hash: from S5 a folder
   # rename rewrites one row, so a descendant's stored path hash goes stale
   # (O(1) folder rename plan, Gap A, Engram#2523). Writers find rows the same
   # way and no longer write the hash (S6 step 3).
@@ -553,7 +552,7 @@ defmodule Engram.Folders.Rows do
   without the create): a path with no live row maps to nil, as does the root.
 
   A path is found by walking its segments down from the root, never by
-  `full_path_hmac`, so a row under a dead or missing ancestor has no path.
+  a stored path hash, so a row under a dead or missing ancestor has no path.
   ONE statement (`WalkSql.walk_many/0`) for all of `paths`: one probe of
   `folders_live_name_ids` per distinct prefix (O(sum of depths), shared
   prefixes once), never a scan of a vault's or a tenant's folders. Sent

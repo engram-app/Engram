@@ -119,39 +119,6 @@ defmodule Engram.Folders.ChainReadsTest do
   end
 
   describe "rows other writers left behind" do
-    test "a row with no full_path_hmac (an older writer) is found by its chain", %{
-      user: u,
-      vault: v
-    } do
-      d = by_path(u, v, ["A/B/C/D"])["A/B/C/D"]
-      sql!("UPDATE folders SET full_path_hmac = NULL WHERE id = $1", [Ecto.UUID.dump!(d)])
-
-      assert by_path(u, v, ["A/B/C/D"]) == %{"A/B/C/D" => d}
-      assert at(u, v, ["A/B/C/D"]) == [d]
-      assert d in sub(u, v, ["A/B/C/D"])
-    end
-
-    test "a stale hash naming the new parent's ANCESTOR does not steer the move",
-         %{user: u, vault: v} do
-      # A/B carries a stale hash equal to "X". Until S6 step 3 the writer
-      # resolved X by that hash to A/B, inside the subtree being moved, so the
-      # move had to be refused. The writer now walks the chain: X does not
-      # exist, so it is created and A moves under it.
-      {:ok, fk} = Crypto.dek_filter_key(u)
-      t = FolderRows.tree(u)
-
-      sql!("UPDATE folders SET full_path_hmac = $1 WHERE id = $2", [
-        Rows.path_hmac(fk, "X"),
-        Ecto.UUID.dump!(t["A/B"].id)
-      ])
-
-      assert {:ok, _} = Notes.rename_folder(u, v, "A", "X/Y/Z")
-      tree = FolderRows.tree(u)
-      assert tree["X/Y/Z"].id == t["A"].id
-      assert tree["X/Y/Z/B"].id == t["A/B"].id
-      refute tree["X"].id in [t["A"].id, t["A/B"].id]
-    end
-
     test "a live row under a dead ancestor has no path", %{user: u, vault: v} do
       %{"A/B" => b} = by_path(u, v, ["A/B"])
       sql!("UPDATE folders SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(b)])

@@ -4,8 +4,9 @@ defmodule Engram.Folders.ChainNotHashTest do
   and its batch), the move cycle check and the folder delete fence find a
   folder by its parent chain, never by `folders.full_path_hmac`. From the
   next release a folder rename rewrites only the renamed row, so a
-  descendant keeps the hash of its OLD path. Each test leaves exactly that
-  stale hash and asserts the chain answer. Red before: each read the hash.
+  descendant kept the hash of its OLD path. Each test renamed an ancestor
+  and (until the column's drop, 20261118120000) planted that stale hash;
+  it asserts the chain answer. Red before: each read the hash.
   """
   use Engram.DataCase, async: false
 
@@ -18,8 +19,7 @@ defmodule Engram.Folders.ChainNotHashTest do
     user = insert(:user)
     {:ok, user} = Crypto.ensure_user_dek(user)
     vault = insert(:vault, user: user)
-    {:ok, fk} = Crypto.dek_filter_key(user)
-    %{user: user, vault: vault, fk: fk}
+    %{user: user, vault: vault}
   end
 
   defp tenant!(user, fun) do
@@ -27,23 +27,11 @@ defmodule Engram.Folders.ChainNotHashTest do
     result
   end
 
-  # The hash a one-row rename leaves on a descendant (raw SQL: the column is
-  # out of the schema since S6 step 3's write stop).
-  defp stale!(fk, ids) do
-    Repo.query!("UPDATE folders SET full_path_hmac = $1 WHERE id = ANY($2)", [
-      Rows.path_hmac(fk, "A/B"),
-      Enum.map(ids, &Ecto.UUID.dump!/1)
-    ])
-  end
-
-  # "A/B" then A renamed to C, with B left holding the hash of "A/B": the
-  # state a one-row rename leaves. Returns B's id.
-  defp stale_descendant(%{user: u, vault: v, fk: fk}) do
+  # "A/B" then A renamed to C. Returns B's id.
+  defp stale_descendant(%{user: u, vault: v}) do
     tenant!(u, fn ->
       {:ok, b} = Rows.ensure(u, v.id, "A/B")
       :ok = Rows.rename(u, v.id, "A", "C")
-
-      stale!(fk, [b])
       b
     end)
   end
@@ -71,7 +59,7 @@ defmodule Engram.Folders.ChainNotHashTest do
   end
 
   test "the delete fence spares a note whose folder an ancestor rename moved", ctx do
-    %{user: u, vault: v, fk: fk} = ctx
+    %{user: u, vault: v} = ctx
 
     {:ok, note} =
       Notes.upsert_note(u, v, %{"path" => "A/B/x.md", "content" => "x", "mtime" => 1.0},
@@ -81,13 +69,8 @@ defmodule Engram.Folders.ChainNotHashTest do
     {:ok, matches} = Notes.scan_folders(u, v, ["A/B"])
     assert note.id in Enum.map(matches, & &1.id)
 
-    # After the scan: A renamed to C in one row, B keeps the old hash.
-    tenant!(u, fn ->
-      b = Rows.ids_at(u, v.id, ["A/B"])
-      :ok = Rows.rename(u, v.id, "A", "C")
-
-      stale!(fk, b)
-    end)
+    # After the scan: A renamed to C in one row.
+    :ok = tenant!(u, fn -> Rows.rename(u, v.id, "A", "C") end)
 
     assert {:ok, %{notes: 0}} = Notes.delete_scanned(u, v, matches)
     assert %{deleted_at: nil} = Repo.with_tenant!(u.id, fn -> Repo.get!(Notes.Note, note.id) end)

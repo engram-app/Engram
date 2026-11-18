@@ -7,7 +7,6 @@ defmodule Engram.Folders.DeltaFixesTest do
   alias Engram.{Attachments, DataMigrations, Folders, Notes, Repo}
   alias Engram.DataMigrations.FolderTable
   alias Engram.FolderRows
-  alias Engram.Folders.Rows
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
@@ -78,27 +77,6 @@ defmodule Engram.Folders.DeltaFixesTest do
   end
 
   describe "move guard" do
-    # Until S6 step 3 the writer resolved the new parent by `full_path_hmac`,
-    # so a stale hash could place A under its own subtree and the guard had
-    # to refuse. The writer now walks the chain: X/Y does not exist, so it
-    # is created and A moves under it, no cycle.
-    test "a stale path hash does not steer the move", %{user: u, vault: v} do
-      put_note(u, v, "A/B/x.md")
-      t = FolderRows.tree(u)
-      {:ok, fk} = Engram.Crypto.dek_filter_key(u)
-      # A/B carries a stale hash equal to the path "X/Y".
-      Repo.query!("UPDATE folders SET full_path_hmac = $1 WHERE id = $2", [
-        Rows.path_hmac(fk, "X/Y"),
-        dump(t["A/B"].id)
-      ])
-
-      assert {:ok, _} = Notes.rename_folder(u, v, "A", "X/Y/Z")
-      tree = FolderRows.tree(u)
-      assert tree["X/Y/Z"].id == t["A"].id
-      assert tree["X/Y/Z/B"].id == t["A/B"].id
-      refute tree["X/Y"].id in [t["A"].id, t["A/B"].id]
-    end
-
     test "an empty path is a clean error, not a crash after the claim", %{user: u, vault: v} do
       put_note(u, v, "A/x.md")
       assert {:error, :invalid_path} = Notes.rename_folder(u, v, "A", "")
