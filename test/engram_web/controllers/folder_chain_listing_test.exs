@@ -250,11 +250,12 @@ defmodule EngramWeb.FolderChainListingTest do
       end
     end
 
-    test "names off: stored paths (0.86.0 behaviour)", %{conn: conn, ids: ids} do
+    test "names off: a moved vault still serves moved paths (the latch)",
+         %{conn: conn, ids: ids} do
       names_off!()
 
       for body <- [manifest(conn), tree(conn)] do
-        assert by_id(body["notes"])[ids["A/B/x.md"]]["path"] == "A/B/x.md"
+        assert by_id(body["notes"])[ids["A/B/x.md"]]["path"] == "A/Z/x.md"
       end
     end
   end

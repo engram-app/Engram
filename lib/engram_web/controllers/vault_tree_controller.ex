@@ -153,8 +153,16 @@ defmodule EngramWeb.VaultTreeController do
   # locations (nil unless a folder was moved without a cascade, never
   # before S5). Inside the tree's snapshot.
   defp with_folder_rows(raw, user, vault, names?) do
-    rows = if names?, do: Rows.live_rows(vault.id, Location.moved_column(vault.id, names?))
-    Map.merge(raw, %{folder_rows: rows, moves: Location.listing_moves(user, vault, rows)})
+    rows = if names?, do: Rows.live_rows(vault.id, Location.moved_column(vault.id))
+
+    # Names off still serves a moved vault's notes where they are
+    # (`Location`'s latch): one probe instead of the rows' moved column.
+    moves =
+      if rows,
+        do: Location.listing_moves(user, vault, rows),
+        else: Location.vault_moves(user, vault)
+
+    Map.merge(raw, %{folder_rows: rows, moves: moves})
   end
 
   defp dek_usable?({:ok, _}), do: true

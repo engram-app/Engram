@@ -111,8 +111,17 @@ defmodule Engram.Folders.WalkSql do
 
   @moved_chain moved_chain.("?")
 
-  # A holder whose own chain moved holds only a stale key (above).
-  @here "AND (p.folder_ref_id IS NULL OR NOT " <> moved_chain.("p.folder_ref_id") <> ")"
+  # `Engram.Crypto.NameKeys.stamp/1`'s version byte as a bytea literal, built
+  # from that module at compile time (one source of truth; a fragment takes
+  # only a compile-time string, so it cannot be a bound parameter here).
+  @stamp_version "'\\x" <>
+                   Base.encode16(Engram.Crypto.NameKeys.version(), case: :lower) <> "'::bytea"
+
+  # A holder whose own chain moved holds only a stale key (above), unless its
+  # name stamp is not current: then it is still at its stored path
+  # (`Engram.Notes.Location.here/0`).
+  @here "AND (p.folder_ref_id IS NULL OR p.name_stamp IS DISTINCT FROM (p.path_nonce || " <>
+          @stamp_version <> ") OR NOT " <> moved_chain.("p.folder_ref_id") <> ")"
 
   @by_id name_match.(
            "notes",

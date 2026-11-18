@@ -119,15 +119,13 @@ defmodule EngramWeb.SyncController do
     # (`Repo.with_tenant_snapshot!/2`, as /vault/tree) reads the seq and,
     # only when it moved, the rows (see manifest_rows/3): the notes, the
     # folder rows and the moved notes' locations all come from one commit.
-    names? = Location.on?()
-
     {current, rows} =
       Repo.with_tenant_snapshot!(user.id, fn ->
         current = Engram.Vaults.raw_current_seq(vault.id)
 
         if since == current,
           do: {current, :unchanged},
-          else: {current, manifest_rows(user, vault, names?)}
+          else: {current, manifest_rows(user, vault)}
       end)
 
     if rows == :unchanged do
@@ -191,7 +189,7 @@ defmodule EngramWeb.SyncController do
   end
 
   # MUST run inside the caller's with_tenant block.
-  defp manifest_rows(user, vault, names?) do
+  defp manifest_rows(user, vault) do
     # T3.6 — project `id` and `dek_version` so AAD-bound rows (v ≥ 2) can
     # reconstruct the bind string ("notes:path:<id>" / "attachments:path:<id>")
     # at decrypt time. Legacy rows (v = 1) decrypt with empty AAD.
@@ -203,9 +201,9 @@ defmodule EngramWeb.SyncController do
     # behind the 2026-07-09 CRDT pool-exhaustion incident.
     # `crdt_head` from the note's body row (`NoteBody`), the rest from notes.
     # The notes read also answers whether the vault holds a folder moved
-    # without a cascade (`Location.moved_column/2`, an uncorrelated EXISTS on
+    # without a cascade (`Location.moved_column/1`, an uncorrelated EXISTS on
     # `folders_moved_live`, once per statement), so no statement of its own.
-    moved = Location.moved_column(vault.id, names?)
+    moved = Location.moved_column(vault.id)
 
     notes =
       Repo.all(
