@@ -152,9 +152,21 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
   # #2652 review L3: the window statements as engram_maintenance (the fleet
   # role) use the marker and folder path indexes.
   test "plans as engram_maintenance", %{user: u, vault: v} do
-    for i <- 1..30, do: {:ok, _} = Folders.create_markers(u, v, ["M#{i}"])
+    # A realistic vault: many notes, some markers, real statistics (ANALYZE).
+    # A live-notes range filtered on `kind` would read the whole vault per
+    # window, O(vault) against the 5 s statement bound.
+    for i <- 1..200 do
+      {:ok, _} =
+        Notes.upsert_note(u, v, %{"path" => "F#{rem(i, 20)}/n#{i}.md", "content" => "x"},
+          actor: "api"
+        )
+    end
+
+    for i <- 1..10, do: {:ok, _} = Folders.create_markers(u, v, ["M#{i}"])
     other = insert(:vault, user: u)
-    for i <- 1..30, do: {:ok, _} = Folders.create_markers(u, other, ["O#{i}"])
+    for i <- 1..10, do: {:ok, _} = Folders.create_markers(u, other, ["O#{i}"])
+    Repo.query!("ANALYZE notes")
+    Repo.query!("ANALYZE folders")
     ids = [Ecto.UUID.dump!(v.id)]
     owners = [Ecto.UUID.dump!(u.id)]
 
@@ -164,10 +176,8 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
       )
 
     for plan <- [unmatched.custom, unmatched.generic] do
-      # A `(user_id, vault_id)` range either way: the marker index, or (on a
-      # test vault that holds nothing but markers, where the two cost the
-      # same) the live-notes one. Never a scan of the tenant's notes.
-      assert plan =~ ~r/notes_user_vault_(folder_marker|live)/, plan
+      assert plan =~ "notes_user_vault_folder_marker", plan
+      refute plan =~ "notes_user_vault_live", plan
       # The folder probe: by path hash, or the live explicit rows of the
       # vault (both bounded by the vault; the planner picks by statistics).
       assert plan =~ ~r/folders_(full_path|explicit_live)/, plan
