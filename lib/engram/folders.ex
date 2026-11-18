@@ -103,15 +103,50 @@ defmodule Engram.Folders do
     # `Rows.with_deferred_retires/1`: a merge's source folder rows are retired
     # after BOTH legs have moved their rows, inside this transaction (#2468).
     Broadcast.deferred(fn ->
-      Repo.transaction_after_commit(fn ->
-        :ok = Vaults.lock_folder_writes!(vault.id)
+      conflict_on_unique(fn ->
+        Repo.transaction_after_commit(fn ->
+          :ok = Vaults.lock_folder_writes!(vault.id)
 
-        case Rows.with_deferred_retires(fun) do
-          {:ok, result} -> result
-          {:error, reason} -> Repo.rollback(reason)
-        end
+          case Rows.with_deferred_retires(fun) do
+            {:ok, result} -> result
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
       end)
     end)
+  end
+
+  # The path and folder-marker unique indexes, legacy and current
+  # (20260605000353, 20261021110300): the only 23505s that mean "the target is
+  # taken". Any other one is a bug and is re-raised.
+  @path_uniques ~w(notes_user_vault_folder_marker notes_user_vault_path_v2
+                   notes_user_id_vault_id_path_hmac_index notes_folder_marker notes_path_live)
+
+  # The race backstop. The cascade refuses a note collision and merges a
+  # marker one before it writes (`Notes.claim_or_consume/4`,
+  # `merge_landed_markers!/5`), but a row that lands after those reads still
+  # trips the unique index from `BulkRename.update!`. That is the same refusal
+  # as the pre-checked `:conflict`, so every caller answers it (REST 409, MCP
+  # `path_conflict`, the wire's `conflict`) instead of a 500 or a crashed crdt
+  # channel (e2e run 44283703701). Rescued only here, OUTSIDE the transaction:
+  # the raise already rolled it back whole. Inside it, the next statement would
+  # fail with 25P02 (docs/context/rls-enforcement-testing-traps.md, trap 8).
+  defp conflict_on_unique(fun) do
+    fun.()
+  rescue
+    e in Postgrex.Error ->
+      constraint = e.postgres[:constraint]
+
+      if e.postgres[:code] == :unique_violation and constraint in @path_uniques do
+        Logger.warning(
+          "folder op: path taken at write, answered conflict",
+          Metadata.with_category(:warning, :sync, constraint: constraint)
+        )
+
+        {:error, :conflict}
+      else
+        reraise e, __STACKTRACE__
+      end
   end
 
   @doc """

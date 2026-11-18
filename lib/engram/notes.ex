@@ -8698,13 +8698,14 @@ defmodule Engram.Notes do
   # prefix scan is impossible (`WHERE folder LIKE 'dst/%'` cannot run against
   # ciphertext) and a full decrypt-and-scan would be O(notes) per rename.
   #
-  # THAT GAP IS NOW COVERED DOWNSTREAM, not still open: `claim_cascade/4`
-  # resolves each cascade target against the rows before claiming, so a nested
-  # collision returns `{:error, :conflict}` instead of the
-  # `Postgrex.Error{unique_violation}` it used to raise from
-  # `BulkRename.update!`. That check is O(moved notes) rather than O(vault),
-  # and it had to exist anyway: the claim commits before the rows move, so a
-  # raise below it would leave the cascade claimed at paths the rows never took.
+  # THAT GAP IS COVERED DOWNSTREAM, in two parts. A nested NOTE collision:
+  # `claim_cascade/4` resolves each cascade target against the rows before
+  # claiming, so it returns `{:error, :conflict}` (O(moved notes), and needed
+  # anyway: the claim commits before the rows move). A nested MARKER collision
+  # (`src/sub` onto an existing `dst/sub` marker; markers are never claimed)
+  # merges into the destination's marker (`merge_landed_markers!/5`). A row
+  # that lands after both reads still raises a `unique_violation` from
+  # `BulkRename.update!`, which `Folders.atomic/2` answers as `:conflict`.
   # This check stays because it is the cheaper one and it short-circuits first.
   #
   # Optimistic `{:ok, _} = dek_filter_key(user)` match: the only caller
@@ -9138,12 +9139,12 @@ defmodule Engram.Notes do
       # Validate against the ROWS before claiming, for the same reason
       # `claim_rename/5` does: `Identity.claim/3` only sees collisions recorded
       # in the map, and until a client populates it the rows are where
-      # collisions live. This also closes the NESTED-COLLISION GAP documented at
-      # `folder_target_exists?` — a nested collision surfaces as a raised
-      # Postgrex unique_violation from `BulkRename.update!` BELOW the claim,
-      # which would leave the whole cascade claimed at paths the rows never
-      # took, and projection would then apply whichever of them do not collide:
-      # a partial folder rename executing asynchronously after a 500.
+      # collisions live. This also closes the note half of the NESTED-COLLISION
+      # GAP documented at `folder_target_exists?`: unchecked, a nested note
+      # collision raises a unique_violation from `BulkRename.update!` BELOW the
+      # claim, leaving the cascade claimed at paths the rows never took, and
+      # projection would then apply whichever of them do not collide. Markers
+      # are not claimed: a landed one merges (`merge_landed_markers!/5`).
       movers = MapSet.new(real_note_updates, fn {n, _o, _np, _f, _t} -> n.id end)
 
       # A caller holding claims made before its transaction (`Engram.Folders`)
@@ -9157,7 +9158,7 @@ defmodule Engram.Notes do
         :ok ->
           # Everything below runs with the cascade's claim ALREADY COMMITTED, so
           # a raise here (BulkRename.update! can still surface a Postgrex
-          # unique_violation for a shape the row validation cannot see) leaves
+          # unique_violation for a row that landed after the checks) leaves
           # the map claiming N paths the rows never took. Report it before it
           # propagates — projection is what converges the divergence, and
           # nothing else would enqueue a pass.
@@ -9275,6 +9276,7 @@ defmodule Engram.Notes do
                   Enum.map(rows, fn {id, kw} -> {id, [{:folder_ref_id, ref_of[id]} | kw]} end)
                 end
 
+                marker_rows = merge_landed_markers!(user, vault, marker_rows, seq, now)
                 BulkRename.update!(marker_rows, @marker_rename_cols, seq, now)
                 BulkRename.update!(with_ref.(v2_rows), @v2_rename_cols, seq, now)
                 BulkRename.update!(with_ref.(v1_rows), @v1_rename_cols, seq, now)
@@ -9408,6 +9410,44 @@ defmodule Engram.Notes do
     end)
     |> then(&RewriteNoteLinks.new_for_folder(user.id, vault.id, &1))
     |> Enqueue.enqueue_all("rewrite_note_links")
+  end
+
+  # A moved marker that lands on a live marker (S/sub onto an existing D/sub,
+  # a collision `gate_folder_rename/5` and `claim_or_consume/4` cannot see:
+  # neither looks below the target or at markers) MERGES, like the folder rows
+  # do (#2468, `Rows.merge_subtree`): the destination's marker stays, the
+  # moving one is tombstoned at this op's seq. Both only say "this empty folder
+  # exists", so nothing is lost. A NOTE collision is still a conflict
+  # (`claim_or_consume/4`). One statement on the folder-marker unique index,
+  # O(moved markers), rows the cascade rewrites anyway. A marker that lands
+  # between this read and the write is left to the unique index, which
+  # `Folders.atomic/2` answers as a conflict. Returns the markers left to move.
+  defp merge_landed_markers!(_user, _vault, [], _seq, _now), do: []
+
+  defp merge_landed_markers!(user, vault, rows, seq, now) do
+    ids = Enum.map(rows, &elem(&1, 0))
+    hmacs = Enum.map(rows, fn {_id, kw} -> Keyword.fetch!(kw, :folder_hmac) end)
+
+    taken =
+      from(n in scoped_live(user, vault),
+        where: n.kind == "folder" and n.folder_hmac in ^hmacs and n.id not in ^ids,
+        select: n.folder_hmac
+      )
+      |> Repo.all()
+      |> MapSet.new()
+
+    {merged, moving} =
+      Enum.split_with(rows, fn {_id, kw} -> MapSet.member?(taken, kw[:folder_hmac]) end)
+
+    if merged != [] do
+      merged_ids = Enum.map(merged, &elem(&1, 0))
+
+      Repo.update_all(from(n in Note, where: n.id in ^merged_ids),
+        set: [deleted_at: now, seq: seq, updated_at: now]
+      )
+    end
+
+    moving
   end
 
   # Extracted from `do_rename_folder/6` so the claim above it can guard the row

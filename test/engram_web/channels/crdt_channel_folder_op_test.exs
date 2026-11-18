@@ -38,6 +38,15 @@ defmodule EngramWeb.CrdtChannelFolderOpTest do
     joined
   end
 
+  # Every sync-topic broadcast still in the mailbox, as {event, payload}.
+  defp drain(acc) do
+    receive do
+      %Phoenix.Socket.Broadcast{event: e, payload: p} -> drain([{e, p} | acc])
+    after
+      300 -> Enum.reverse(acc)
+    end
+  end
+
   defp move(folder_id, parent_id, name),
     do: %{
       "op" => "move",
@@ -146,6 +155,95 @@ defmodule EngramWeb.CrdtChannelFolderOpTest do
       socket = join!(user, vault)
       ref = push(socket, "folder_op", move(a, nil, "B"))
       assert_reply ref, :error, %{reason: "conflict"}
+    end
+
+    # Collisions below the target (S/sub onto D/sub), which the gate cannot
+    # see. A marker one raised a unique_violation from the cascade and crashed
+    # the channel process (e2e run 44283703701): it merges now (#2468), and a
+    # note one is a conflict. Either way the channel takes the next op.
+    test "a landed marker merges and the channel stays up",
+         %{user: user, vault: vault, b: b} do
+      {:ok, _} = Folders.create_markers(user, vault, ["S/sub", "D/sub"])
+
+      {:ok, _} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "S/sub/n.md", "content" => "x"},
+          actor: "api"
+        )
+
+      s = id_of(user, vault, "S")
+      socket = join!(user, vault)
+
+      ref = push(socket, "folder_op", move(s, nil, "D"))
+      assert_reply ref, :ok, _
+      assert {:ok, _} = Engram.Notes.get_note(user, vault, "D/sub/n.md")
+
+      live = user |> Engram.Notes.list_folder_markers(vault) |> Enum.map(& &1.folder)
+      assert Enum.count(live, &(&1 == "D/sub")) == 1
+      refute "S/sub" in live
+
+      d = id_of(user, vault, "D")
+      ref = push(socket, "folder_op", move(d, b, "D"))
+      assert_reply ref, :ok, %{folder_id: ^d}
+    end
+
+    # REGRESSION GUARD (passes on its introducing commit): the merge
+    # tombstones the moving S/sub marker, and no client must read that as a
+    # deletion. Markers never ride the channel or the catch-up feed, so the
+    # only delete legs are the moved note's own old-path ones, the same as a
+    # rename with no collision: each carries the id that now lives at D/.
+    test "a marker merge sends no deletion beyond the moved notes' old paths",
+         %{user: user, vault: vault} do
+      {:ok, _} = Folders.create_markers(user, vault, ["S/sub", "D/sub"])
+
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "S/sub/n.md", "content" => "x"},
+          actor: "api"
+        )
+
+      before = Vaults.current_seq(user.id, vault.id)
+      :ok = EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      socket = join!(user, vault)
+
+      ref = push(socket, "folder_op", move(id_of(user, vault, "S"), nil, "D"))
+      assert_reply ref, :ok, _
+      assert_receive %Phoenix.Socket.Broadcast{event: "folder_changed"}, 1_000
+
+      # Payloads mix atom and string keys; compare on strings.
+      events = for {e, p} <- drain([]), do: {e, Map.new(p, fn {k, v} -> {to_string(k), v} end)}
+      refute Enum.any?(events, &match?({"folder_changed", %{"deleted" => true}}, &1))
+
+      deletes =
+        for {"note_changed", %{"event_type" => "delete"} = p} <- events,
+            do: {p["path"], p["id"] || p["note_id"]}
+
+      assert [{"S/sub/n.md", note.id}] == deletes
+
+      page = Engram.Sync.merged_changes_page(user, vault, before, nil, 100, :meta).page
+      refute Enum.any?(page, &(&1[:kind] == "folder"))
+
+      gone = for %{deleted: true, path: path} <- page, do: path
+      assert gone == ["S/sub/n.md"], "catch-up page deletes: #{inspect(gone)}"
+
+      assert [%{id: live_id}] = for(%{deleted: false, path: "D/sub/n.md"} = c <- page, do: c)
+      assert live_id == note.id
+    end
+
+    test "a landed note is a conflict and the channel stays up",
+         %{user: user, vault: vault, b: b} do
+      for path <- ["S/sub/x.md", "D/sub/x.md"] do
+        {:ok, _} =
+          Engram.Notes.upsert_note(user, vault, %{"path" => path, "content" => "x"}, actor: "api")
+      end
+
+      s = id_of(user, vault, "S")
+      socket = join!(user, vault)
+
+      ref = push(socket, "folder_op", move(s, nil, "D"))
+      assert_reply ref, :error, %{reason: "conflict"}
+      assert id_of(user, vault, "S") == s
+
+      ref = push(socket, "folder_op", move(s, b, "S"))
+      assert_reply ref, :ok, %{folder_id: ^s}
     end
 
     test "an unknown folder or parent is not_found", %{user: user, vault: vault, a: a} do
