@@ -4938,7 +4938,7 @@ defmodule Engram.Notes do
 
         held =
           for row <- rows,
-              k <- key.(row),
+              {_, k} <- key.(row),
               path = path_of[k],
               path != nil,
               into: %{},
@@ -6850,14 +6850,17 @@ defmodule Engram.Notes do
   defp serve(user, {note, tail}, path),
     do: fn -> note |> decrypt_at(user, path) |> then(&current_note(user, &1, tail)) end
 
-  # `{held, named}`: each row by the path it holds (its stored path, the
-  # first `key` answer) and by the paths its folder and name put it at (the
-  # rest), so one never displaces the other.
+  # `{held, named}`: each row by the path it is shown at (`path_key_of/4`):
+  # held at its stored key, a name hit at a derived one, so a name hit never
+  # displaces a holder. A row shown at no asked path answers nothing.
   defp keyed(rows, key, value \\ & &1) do
-    Enum.reduce(rows, {%{}, %{}}, fn row, {held, named} ->
-      [stored | derived] = key.(row)
+    Enum.reduce(rows, {%{}, %{}}, fn row, acc ->
       v = value.(row)
-      {Map.put(held, stored, v), Enum.reduce(derived, named, &Map.put(&2, &1, v))}
+
+      Enum.reduce(key.(row), acc, fn
+        {:held, k}, {held, named} -> {Map.put(held, k, v), named}
+        {:named, k}, {held, named} -> {held, Map.put(named, k, v)}
+      end)
     end)
   end
 
@@ -6942,7 +6945,7 @@ defmodule Engram.Notes do
       names: Enum.frequencies_by(paths, &Name.hmac(filter_key, Name.of_path(&1)))
     }
 
-  defp path_key_of(_user, _filter_key, _rows, nil), do: &[&1.path_hmac]
+  defp path_key_of(_user, _filter_key, _rows, nil), do: &[{:held, &1.path_hmac}]
 
   defp path_key_of(user, filter_key, rows, %{hmacs: hmacs, names: names}) do
     paths =
@@ -6956,17 +6959,26 @@ defmodule Engram.Notes do
         moved -> Location.paths(user, moved)
       end
 
-    # A row can answer two asked paths: its stored one (it holds it) and the
-    # one its folder and name put it at, unless another row holds that.
+    # A row answers only the path it is shown at (`Location.shown_path/3`'s
+    # rule): its derived path when it has one, else its stored path. A
+    # moved row's stored key is its OLD path: answering it too served one
+    # note at two paths (e2e run 44284939927, MCP get_notes with both). A
+    # derived path another row holds by its stored key answers that row.
     held = MapSet.new(rows, & &1.path_hmac)
 
     fn row ->
-      with path when is_binary(path) <- paths[row.id],
-           derived = Crypto.hmac_field(filter_key, path),
-           true <- derived == row.path_hmac or not MapSet.member?(held, derived) do
-        Enum.uniq([row.path_hmac, derived])
-      else
-        _ -> [row.path_hmac]
+      case paths[row.id] do
+        path when is_binary(path) ->
+          derived = Crypto.hmac_field(filter_key, path)
+
+          cond do
+            derived == row.path_hmac -> [{:held, derived}]
+            MapSet.member?(held, derived) -> []
+            true -> [{:named, derived}]
+          end
+
+        _ ->
+          [{:held, row.path_hmac}]
       end
     end
   end
