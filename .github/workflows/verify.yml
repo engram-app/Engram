@@ -97,9 +97,9 @@ permissions:
 # once serialized because shared state collided — that's been addressed:
 #   1. Dockerfile cache mounts (`mix-deps`, `mix-build`) now use sharing=locked,
 #      so buildkit serializes mount access internally instead of corrupting.
-#   2. Xvfb cleanup is scoped to each run's owned display range
-#      (`pkill -9 -f "Xvfb :$d"` for $DISPLAY_MIN..$DISPLAY_MAX) so a
-#      concurrent e2e-clerk on a different run_number bucket isn't killed.
+#   2. Each e2e job claims a display window no other job on the host holds
+#      (ci/bin/claim-display-window, an flock) and its teardown kills only
+#      the Xvfb pids it recorded (ci/bin/release-display-window).
 
 env:
   DOCKER_BUILDKIT: "1"
@@ -1138,46 +1138,13 @@ jobs:
       # ------------------------------------------------------------------
       # Cleanup + checkout (both repos)
       # ------------------------------------------------------------------
-      - name: Compute display range for this run
-        id: display
-        run: |
-          # Display range is deterministic per GITHUB_RUN_NUMBER so two parallel
-          # runs with different run_numbers (modulo 15) get non-overlapping
-          # 10-display windows (:50..:199; e2e-crdt owns :245..:334). Pre-cleanup
-          # and tear-down both need this range so they can scope Xvfb kills to
-          # displays this run actually owns.
-          # Layout, up to 2 xdist workers (the ports step allocates for 2):
-          #   :BASE..:BASE-5    A/B/C, 3 per worker
-          #   :BASE-6..:BASE-9  resumed pair (test_82), 2 per worker
-          # Unset, conftest's resumed default :150/:149 would land in another
-          # job's window, and its Xvfb pre-flight pkill took down e2e-crdt's A
-          # and B mid-suite (run 37534181735). conftest asserts the two groups
-          # are disjoint for the actual worker count.
-          BASE=$(( (GITHUB_RUN_NUMBER % 15) * 10 + 59 ))
-          MIN=$((BASE - 9))
-          MAX=$BASE
-          echo "base=$BASE" >> "$GITHUB_OUTPUT"
-          echo "resumed_base=$((BASE - 6))" >> "$GITHUB_OUTPUT"
-          echo "min=$MIN" >> "$GITHUB_OUTPUT"
-          echo "max=$MAX" >> "$GITHUB_OUTPUT"
-          echo "Display range owned by this run: :$MIN..:$MAX"
-
       - name: Pre-cleanup stale resources
-        env:
-          DISPLAY_MIN: ${{ steps.display.outputs.min }}
-          DISPLAY_MAX: ${{ steps.display.outputs.max }}
         run: |
           docker compose -f ci/compose.yml -f ci/compose.qdrant.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
-          # Orphan Xvfb cleanup is scoped to THIS run's display range only,
-          # so a concurrent e2e-clerk on a different run_number bucket isn't
-          # killed mid-test. Xvfb processes match via the `:N` arg on the
-          # command line; lock files live at /tmp/.X{N}-lock and the socket
-          # at /tmp/.X11-unix/X{N}.
-          for d in $(seq "$DISPLAY_MIN" "$DISPLAY_MAX"); do
-            pkill -9 -f "Xvfb :$d" 2>/dev/null || true
-            rm -f "/tmp/.X${d}-lock" "/tmp/.X11-unix/X${d}" 2>/dev/null || true
-          done
+          # No Xvfb kill here: this job claims its display window after
+          # checkout, and an orphan Xvfb in it is killed per display by the
+          # harness (e2e/helpers/obsidian.py `_start_xvfb`) once the window is ours.
           sleep 1
           rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
           # Sparse-checkout leak recovery. Cross-repo plugin checkouts and the
@@ -1196,6 +1163,27 @@ jobs:
       - uses: actions/checkout@v7
         with:
           clean: false  # Preserve _build/ and deps/ for incremental compilation
+
+      - name: Claim a display window for this job
+        id: display
+        timeout-minutes: 1
+        run: |
+          # A window of Xvfb displays this job alone owns on this host, held by
+          # an flock until teardown (or the runner's end-of-job cleanup). It
+          # was `GITHUB_RUN_NUMBER % 15`: two concurrent runs 15 apart got the
+          # same window, and one's Xvfb cleanup killed the other's displays
+          # (run 44354068376; docs/context/e2e-display-window-collision.md).
+          # Windows :3500..:3649, 10 displays each (e2e-crdt owns :4000..:4089).
+          # Chosen so no old-workflow `pkill -f "Xvfb :N"` (N in :50..:199 or
+          # :245..:334, a regex prefix match) can reach them while branches
+          # still run the old workflow.
+          # Layout, up to 2 xdist workers (the ports step allocates for 2):
+          #   :BASE..:BASE-5    A/B/C, 3 per worker
+          #   :BASE-6..:BASE-9  resumed pair (test_82), 2 per worker
+          # Unset, conftest's resumed default :150/:149 would land in another
+          # job's window (run 37534181735); conftest asserts the two groups
+          # are disjoint for the actual worker count.
+          ci/bin/claim-display-window clerk 10 3509 15 >> "$GITHUB_OUTPUT"
 
       - name: Checkout plugin
         timeout-minutes: 5
@@ -1277,7 +1265,7 @@ jobs:
           # and the harness reads it back. Pre-picked ports raced other
           # processes on the runner (run 39520960336).
           read -r ENGRAM_PORT PG_PORT QDRANT_PORT <<< "$(alloc_ports 3)"
-          # DISPLAY_BASE comes from the earlier "Compute display range" step so
+          # DISPLAY_BASE comes from the earlier "Claim a display window" step so
           # pre-cleanup and tear-down can scope Xvfb kills consistently.
 
           # Validate all ports are non-empty (alloc_ports can fail silently)
@@ -1674,8 +1662,7 @@ jobs:
       - name: Tear down
         if: always()
         env:
-          DISPLAY_MIN: ${{ steps.display.outputs.min }}
-          DISPLAY_MAX: ${{ steps.display.outputs.max }}
+          DISPLAY_HOLDER: ${{ steps.display.outputs.holder_pid }}
         run: |
           # Stop the background stack bring-up first. A cancel during "Wait for
           # CI stack" otherwise races it: its `up --wait` (or the retry's second
@@ -1689,17 +1676,12 @@ jobs:
           fi
           # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
-          # Xvfb command line doesn't contain $E2E_CONFIG_PREFIX, so kill it
-          # by the display number we own. Scope is mandatory now that the
-          # workflow can run in parallel — blanket pkill would nuke neighbors.
-          for d in $(seq "$DISPLAY_MIN" "$DISPLAY_MAX"); do
-            pkill -9 -f "Xvfb :$d" 2>/dev/null || true
-          done
-          # Wait for processes to die before removing their dirs
+          # Xvfb: only the pids this job's harness recorded, then free the
+          # display window. Never `pkill -f "Xvfb :N"` across a range: that
+          # killed a neighbour job's displays (run 44354068376).
+          [ -x ci/bin/release-display-window ] && \
+            ci/bin/release-display-window "$E2E_CONFIG_PREFIX" "$DISPLAY_HOLDER" || true
           sleep 1
-          for d in $(seq "$DISPLAY_MIN" "$DISPLAY_MAX"); do
-            rm -f "/tmp/.X${d}-lock" "/tmp/.X11-unix/X${d}" 2>/dev/null || true
-          done
           # Remove only this run's temp dirs + marker files
           rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
           # Tear down only this run's Docker stack
@@ -1784,38 +1766,13 @@ jobs:
       # ------------------------------------------------------------------
       # Cleanup + checkout (both repos)
       # ------------------------------------------------------------------
-      - name: Compute display range for this run
-        id: display
-        run: |
-          # Display range is deterministic per GITHUB_RUN_NUMBER so two parallel
-          # runs with different run_numbers (modulo 15) get non-overlapping
-          # 6-display windows (:245..:334, clear of e2e-clerk's :50..:199).
-          # Pre-cleanup and tear-down both need this range so they can scope
-          # Xvfb kills to displays this run actually owns.
-          BASE=$(( (GITHUB_RUN_NUMBER % 15) * 6 + 250 ))
-          MIN=$((BASE - 5))
-          MAX=$BASE
-          echo "base=$BASE" >> "$GITHUB_OUTPUT"
-          echo "min=$MIN" >> "$GITHUB_OUTPUT"
-          echo "max=$MAX" >> "$GITHUB_OUTPUT"
-          echo "Display range owned by this run: :$MIN..:$MAX"
-
       - name: Pre-cleanup stale resources
-        env:
-          DISPLAY_MIN: ${{ steps.display.outputs.min }}
-          DISPLAY_MAX: ${{ steps.display.outputs.max }}
         run: |
           docker compose -f ci/compose.yml -f ci/compose.local.yml -f ci/compose.qdrant.yml -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
-          # Orphan Xvfb cleanup is scoped to THIS run's display range only,
-          # so a concurrent e2e-clerk on a different run_number bucket isn't
-          # killed mid-test. Xvfb processes match via the `:N` arg on the
-          # command line; lock files live at /tmp/.X{N}-lock and the socket
-          # at /tmp/.X11-unix/X{N}.
-          for d in $(seq "$DISPLAY_MIN" "$DISPLAY_MAX"); do
-            pkill -9 -f "Xvfb :$d" 2>/dev/null || true
-            rm -f "/tmp/.X${d}-lock" "/tmp/.X11-unix/X${d}" 2>/dev/null || true
-          done
+          # No Xvfb kill here: this job claims its display window after
+          # checkout, and an orphan Xvfb in it is killed per display by the
+          # harness (e2e/helpers/obsidian.py `_start_xvfb`) once the window is ours.
           sleep 1
           rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
           # Sparse-checkout leak recovery. Cross-repo plugin checkouts and the
@@ -1834,6 +1791,19 @@ jobs:
       - uses: actions/checkout@v7
         with:
           clean: false  # Preserve _build/ and deps/ for incremental compilation
+
+      - name: Claim a display window for this job
+        id: display
+        timeout-minutes: 1
+        run: |
+          # A window of Xvfb displays this job alone owns on this host, held by
+          # an flock until teardown (or the runner's end-of-job cleanup). It
+          # was `GITHUB_RUN_NUMBER % 15`: two concurrent runs 15 apart got the
+          # same window, and one's Xvfb cleanup killed the other's displays
+          # (run 44354068376; docs/context/e2e-display-window-collision.md).
+          # Windows :4000..:4089, 6 displays each, clear of e2e-clerk's
+          # :3500..:3649 and of every old-workflow range pkill.
+          ci/bin/claim-display-window crdt 6 4005 15 >> "$GITHUB_OUTPUT"
 
       - name: Checkout plugin
         timeout-minutes: 5
@@ -1913,7 +1883,7 @@ jobs:
           }
           # No CDP ports here: Obsidian binds its own (--remote-debugging-port=0).
           read -r ENGRAM_PORT PG_PORT QDRANT_PORT <<< "$(alloc_ports 3)"
-          # DISPLAY_BASE comes from the earlier "Compute display range" step so
+          # DISPLAY_BASE comes from the earlier "Claim a display window" step so
           # pre-cleanup and tear-down can scope Xvfb kills consistently.
 
           # Validate all ports are non-empty (alloc_ports can fail silently)
@@ -2226,8 +2196,7 @@ jobs:
       - name: Tear down
         if: always()
         env:
-          DISPLAY_MIN: ${{ steps.display.outputs.min }}
-          DISPLAY_MAX: ${{ steps.display.outputs.max }}
+          DISPLAY_HOLDER: ${{ steps.display.outputs.holder_pid }}
         run: |
           # Stop the background stack bring-up first. A cancel during "Wait for
           # CI stack" otherwise races it: its `up --wait` (or the retry's second
@@ -2241,17 +2210,12 @@ jobs:
           fi
           # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
           pkill -9 -f "$E2E_CONFIG_PREFIX" 2>/dev/null || true
-          # Xvfb command line doesn't contain $E2E_CONFIG_PREFIX, so kill it
-          # by the display number we own. Scope is mandatory now that the
-          # workflow can run in parallel — blanket pkill would nuke neighbors.
-          for d in $(seq "$DISPLAY_MIN" "$DISPLAY_MAX"); do
-            pkill -9 -f "Xvfb :$d" 2>/dev/null || true
-          done
-          # Wait for processes to die before removing their dirs
+          # Xvfb: only the pids this job's harness recorded, then free the
+          # display window. Never `pkill -f "Xvfb :N"` across a range: that
+          # killed a neighbour job's displays (run 44354068376).
+          [ -x ci/bin/release-display-window ] && \
+            ci/bin/release-display-window "$E2E_CONFIG_PREFIX" "$DISPLAY_HOLDER" || true
           sleep 1
-          for d in $(seq "$DISPLAY_MIN" "$DISPLAY_MAX"); do
-            rm -f "/tmp/.X${d}-lock" "/tmp/.X11-unix/X${d}" 2>/dev/null || true
-          done
           # Remove only this run's temp dirs + marker files
           rm -rf ${E2E_VAULT_PREFIX}-* ${E2E_CONFIG_PREFIX}-* ${MARKER_PREFIX}-*
           # Tear down only this run's Docker stack

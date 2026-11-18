@@ -360,7 +360,12 @@ class ObsidianInstance:
         fails) doesn't run inst.stop(), so Xvfb leaks; pytest-rerunfailures
         then recreates the fixture and the new Xvfb errors with "Server is
         already active for display N". Cleaning unconditionally is safe: only
-        this test process should ever hold a display in this range.
+        this test process should ever hold a display in this range: in CI the
+        job holds the window's lock (ci/bin/claim-display-window).
+
+        Records `<config_dir>.xvfb.pid` ("<pid> <display>"): the job's
+        teardown (ci/bin/release-display-window) kills only the Xvfb pids
+        recorded there, never every Xvfb in a display range.
         """
         display_num = self.display.lstrip(":")
         subprocess.run(
@@ -381,6 +386,9 @@ class ObsidianInstance:
             ["Xvfb", self.display, "-screen", "0", "1024x768x24", "-ac"],
             stdout=subprocess.DEVNULL,
             stderr=self._xvfb_stderr,
+        )
+        Path(f"{self.config_dir}.xvfb.pid").write_text(
+            f"{self._xvfb_proc.pid} {display_num}\n", encoding="utf-8"
         )
         time.sleep(0.5)
         if self._xvfb_proc.poll() is not None:
