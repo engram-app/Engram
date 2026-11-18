@@ -43,7 +43,17 @@ defmodule Engram.Attachments.Location do
   require WalkSql
 
   @doc "The columns `shown_paths/3` reads from a row, beside `id`."
-  @spec fields() :: [atom(), ...]
+  @spec fields() :: [
+          :vault_id
+          | :deleted_at
+          | :path_nonce
+          | :folder_ref_id
+          | :folder_ref_stamp
+          | :name_ciphertext
+          | :name_nonce
+          | :name_stamp,
+          ...
+        ]
   def fields,
     do: [
       :vault_id,
