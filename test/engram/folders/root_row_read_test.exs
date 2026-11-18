@@ -75,18 +75,19 @@ defmodule Engram.Folders.RootRowReadTest do
 
   # Rollback window: release E (step 1b) wrote the root row and pointed root
   # notes at it, then the fleet rolled back to 0.89.0, which writes NULL root
-  # references. This branch's writers are 0.89.0's (`git diff
-  # release-v0.89.0 -- lib` touches only readers; 1a writes nothing), so the
-  # writes below run 0.89.0's code. Release D's reads must take both kinds.
+  # references. The writes go through this branch's code, then the root
+  # notes are set to 0.89.0's shape (NULL) by SQL, so the test stays true
+  # once 1b's writer is underneath it. Release D's reads must take both.
   test "a rollback to 0.89.0 writes beside root-row references; D reads both", ctx do
     %{user: u, vault: v, old: old, new: new} = ctx
     late = put!(u, v, "late.md")
     {:ok, _} = Notes.rename_note(u, v, "new.md", "A/new.md")
-    {:ok, _} = Notes.rename_note(u, v, "A/a.md", "a.md")
+    {:ok, a} = Notes.rename_note(u, v, "A/a.md", "a.md")
+    set_null!([late.id, a.id])
     kept = put!(u, v, "kept.md")
     FolderRows.insert_root!(u, v, [kept.id])
 
-    assert FolderRows.ref("notes", late.id) == nil
+    assert FolderRows.ref("notes", kept.id) == v.id
     assert FolderRows.ref("notes", new.id) not in [nil, v.id]
 
     {:ok, %{notes: notes, next_cursor: nil}} = Notes.list_notes_in_folder_page(u, v, "")
