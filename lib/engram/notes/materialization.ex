@@ -44,8 +44,7 @@ defmodule Engram.Notes.Materialization do
           | {:error, term()}
   def run(user, vault) do
     Repo.transaction(fn ->
-      existing_markers = Notes.list_folder_markers(user, vault)
-      existing_paths = MapSet.new(existing_markers, & &1.folder)
+      existing_paths = existing_explicit(user, vault)
 
       paths_implied = collect_implied_folder_paths(user, vault)
       missing = Enum.reject(paths_implied, &MapSet.member?(existing_paths, &1))
@@ -86,10 +85,16 @@ defmodule Engram.Notes.Materialization do
   """
   @spec orphans(map(), map()) :: [String.t()]
   def orphans(user, vault) do
-    existing = MapSet.new(Notes.list_folder_markers(user, vault), & &1.folder)
+    existing = existing_explicit(user, vault)
 
     collect_implied_folder_paths(user, vault)
     |> Enum.reject(&MapSet.member?(existing, &1))
+  end
+
+  # Explicit folders as listings read them (`folders.explicit`, S6 step 4).
+  defp existing_explicit(user, vault) do
+    {:ok, names} = Notes.list_explicit_folders(user, vault)
+    MapSet.new(names)
   end
 
   defp collect_implied_folder_paths(user, vault) do

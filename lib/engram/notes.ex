@@ -51,6 +51,7 @@ defmodule Engram.Notes do
   }
 
   alias Engram.Folders.Drift
+  alias Engram.Folders.MarkerStop
   alias Engram.Folders.Rows
   alias Engram.Folders.WalkSql
   alias Engram.Pager
@@ -545,7 +546,7 @@ defmodule Engram.Notes do
   (`row_aad(:notes, :folder, id, dek_version)`). No new crypto surface.
   """
   @spec create_folder_marker(map(), map(), String.t()) ::
-          {:ok, Note.t()} | {:error, term()}
+          {:ok, Note.t() | %{id: Ecto.UUID.t(), folder: String.t()}} | {:error, term()}
   def create_folder_marker(user, vault, folder) when is_binary(folder) do
     # Every marker write (REST, MCP, batch, materialization) lands here, so
     # this is the one guard: same rewrite notes get, never stored as given.
@@ -556,6 +557,25 @@ defmodule Engram.Notes do
   end
 
   defp do_create_folder_marker(user, vault, folder) do
+    if MarkerStop.on?(),
+      do: create_explicit_folder(user, vault, folder),
+      else: insert_folder_marker_row(user, vault, folder)
+  end
+
+  # Markers stopped (S6 step 4, phase 2): the folder row alone is explicit.
+  # `%{id, folder}`, the row's id, whether or not this call made it explicit.
+  defp create_explicit_folder(user, vault, folder) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      Repo.with_tenant(user.id, fn ->
+        _ = Rows.make_explicit(user, vault.id, [folder])
+        %{^folder => id} = Rows.ids_by_path(user, vault.id, [folder])
+        %{id: id, folder: folder}
+      end)
+    end
+  end
+
+  # compat: the marker insert goes with the marker rows (S6 step 4, phase 3, #2523).
+  defp insert_folder_marker_row(user, vault, folder) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user),
          {:ok, dek} <- Crypto.get_dek(user) do
@@ -646,6 +666,20 @@ defmodule Engram.Notes do
   defp upsert_folder_batch(_user, _vault, []), do: {:ok, %{}}
 
   defp upsert_folder_batch(user, vault, names) do
+    if MarkerStop.on?(),
+      do: explicit_folder_batch(user, vault, names),
+      else: upsert_marker_batch(user, vault, names)
+  end
+
+  # Markers stopped: name => id for the folders this call made explicit.
+  defp explicit_folder_batch(user, vault, names) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      Repo.with_tenant(user.id, fn -> Rows.make_explicit(user, vault.id, names) end)
+    end
+  end
+
+  # compat: goes with the marker rows (S6 step 4, phase 3, #2523).
+  defp upsert_marker_batch(user, vault, names) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user),
          {:ok, dek} <- Crypto.get_dek(user) do

@@ -71,6 +71,9 @@ defmodule Engram.ServiceConfig.Overrides do
     # S6 step 4 reconcile of `folders.explicit` against the markers
     # (`Engram.DataMigrations.ExplicitFolderReconcile`) kill switch.
     explicit_folder_reconcile: :boolean,
+    # S6 step 4 phase 2 kill switch: off, folder creates insert marker rows
+    # again (`Engram.Folders.MarkerStop`).
+    folder_marker_stop: :boolean,
     # Every paced backfill chain's pressure gate (`Engram.Backfill.Throttle`).
     backfill_max_queue_ms: {:integer, 1..60_000},
     backfill_max_xact_s: {:integer, 1..86_400},

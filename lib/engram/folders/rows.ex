@@ -1015,10 +1015,20 @@ defmodule Engram.Folders.Rows do
   def explicit_reads? do
     Engram.ServiceConfig.get(:explicit_folders_ledger, :read) == :done or
       Engram.Cache.fetch(:explicit_folders, :done, fn ->
-        Enum.all?([FolderTable, ExplicitFolderReconcile], fn m ->
+        Enum.all?(gate_ledgers(), fn m ->
           Engram.DataMigrations.completed_at(m.name(), m.version()) != nil
         end)
       end)
+  end
+
+  # Once the marker stop's floor is reached (no rollback target writes
+  # markers without the flag reads) the reconcile's daily re-verify may
+  # reopen it without moving listings off the flag: folders the stop created
+  # have no marker to fall back to.
+  defp gate_ledgers do
+    if Engram.Folders.MarkerStop.floors?(),
+      do: [FolderTable],
+      else: [FolderTable, ExplicitFolderReconcile]
   end
 
   @doc """
@@ -1559,8 +1569,9 @@ defmodule Engram.Folders.Rows do
   no `folder_ref_id` (the previous release's folder counts would drop an
   empty marker folder that had one), so they are matched by path hash.
   """
-  @spec soft_delete(map(), Ecto.UUID.t(), [String.t()], Ecto.UUID.t() | nil) :: non_neg_integer()
-  def soft_delete(user, vault_id, folders, op_id) do
+  @spec soft_delete(map(), Ecto.UUID.t(), [String.t()], Ecto.UUID.t() | nil, integer() | nil) ::
+          non_neg_integer()
+  def soft_delete(user, vault_id, folders, op_id, since_seq \\ nil) do
     # The vault row first, like a rename (LOCK ORDER in `Engram.Vaults`): the
     # row updates below take their locks in no fixed order, so two writers
     # that skip this lock can deadlock (40P01).
@@ -1573,7 +1584,13 @@ defmodule Engram.Folders.Rows do
       {at, rows} ->
         ids = Enum.map(rows, & &1.id)
         content = live_content_folders(ids)
-        marked = live_marker_folders(user, vault_id, rows, at)
+
+        marked =
+          MapSet.union(
+            live_marker_folders(user, vault_id, rows, at),
+            explicit_since(ids, since_seq)
+          )
+
         log_kept_by_marker(user, vault_id, MapSet.size(MapSet.difference(marked, content)))
 
         keep =
@@ -1581,26 +1598,17 @@ defmodule Engram.Folders.Rows do
 
         doomed = Enum.reject(ids, &MapSet.member?(keep, &1))
 
-        # A trashed row keeps its flag only when it has no marker to give it
-        # back on undo: one E made (`explicit_seq` set, E -> D rollback).
-        # A D-era row still loses it; its trashed marker restores it.
-        at = now()
-
+        # `explicit` is kept: listings read live rows only, and an undo
+        # (`restore_op/2`) brings the row back explicit with no marker to
+        # re-create it from (S6 step 4, phase 2).
         {n, _} =
-          from(f in Folder,
-            where: f.id in ^doomed and is_nil(f.deleted_at),
-            update: [
-              set: [
-                deleted_at: ^at,
-                delete_op_id: ^op_id,
-                explicit: f.explicit and not is_nil(f.explicit_seq),
-                updated_at: ^at
-              ]
-            ]
-          )
-          |> Repo.update_all([])
+          from(f in Folder, where: f.id in ^doomed and is_nil(f.deleted_at))
+          |> Repo.update_all(set: [deleted_at: now(), delete_op_id: op_id, updated_at: now()])
 
         :ok = NameTerms.on_folders_deleted(doomed)
+        # The listings' caches and etags key on the vault seq: an empty
+        # explicit folder going away moves no notes row, so move it here.
+        if n > 0, do: Engram.Vaults.next_seq!(vault_id)
         n
     end
   end
@@ -1640,6 +1648,21 @@ defmodule Engram.Folders.Rows do
     )
   end
 
+  # Folder ids (among `ids`) made explicit after `since_seq`, the vault seq
+  # the delete read before its scan (`make_explicit/3` stamps it): a folder
+  # created inside the doomed one while its legs ran, which no marker marks
+  # once markers stop.
+  defp explicit_since(_ids, nil), do: MapSet.new()
+
+  defp explicit_since(ids, since_seq) do
+    from(f in Folder,
+      where: f.id in ^ids and f.explicit and f.explicit_seq > ^since_seq,
+      select: f.id
+    )
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
   # Folder ids (among `rows`, of the subtree at `paths`) whose path a live
   # folder marker names: each row's current path (`chain_names/3`), hashed
   # the way a marker's `folder_hmac` is. A row whose name will not open is
@@ -1665,8 +1688,18 @@ defmodule Engram.Folders.Rows do
     end
   end
 
+  @doc "The explicit folder rows `soft_delete/5` stamped with `op_id` (for `restore_op/2`'s caller)."
+  @spec op_explicit_ids(Ecto.UUID.t(), Ecto.UUID.t()) :: [Ecto.UUID.t()]
+  def op_explicit_ids(vault_id, op_id) do
+    from(f in Folder,
+      where: f.vault_id == ^vault_id and f.delete_op_id == ^op_id and f.explicit,
+      select: f.id
+    )
+    |> Repo.all()
+  end
+
   @doc """
-  Brings back every folder row `soft_delete/4` stamped with `op_id`. Returns
+  Brings back every folder row `soft_delete/5` stamped with `op_id`. Returns
   how many came back.
 
   A row whose place a live sibling has since taken (the unique live-name index
@@ -1685,7 +1718,7 @@ defmodule Engram.Folders.Rows do
     rows =
       from(f in Folder,
         where: f.vault_id == ^vault_id and f.delete_op_id == ^op_id and not is_nil(f.deleted_at),
-        select: %{id: f.id, parent_id: f.parent_id, name_hmac: f.name_hmac}
+        select: %{id: f.id, parent_id: f.parent_id, name_hmac: f.name_hmac, explicit: f.explicit}
       )
       |> Repo.all()
 
@@ -1697,12 +1730,18 @@ defmodule Engram.Folders.Rows do
       |> Enum.reduce({[], %{}}, fn row, {revive, placed} ->
         case place_restored(vault_id, row, by_id, placed) do
           :skip -> {revive, placed}
-          {:merge, into} -> {revive, Map.put(placed, row.id, into)}
+          {:merge, into} -> {[{:merge, row, into} | revive], Map.put(placed, row.id, into)}
           {:revive, parent} -> {[{row.id, parent} | revive], Map.put(placed, row.id, row.id)}
         end
       end)
 
-    write_revived(user, vault_id, revive)
+    {merges, revive} = Enum.split_with(revive, &match?({:merge, _, _}, &1))
+    # An explicit row that merges into a live sibling makes it explicit (the
+    # flag a marker re-create gave it before markers stopped).
+    mark_explicit(for {:merge, %{explicit: true}, into} <- merges, uniq: true, do: into)
+    n = write_revived(user, vault_id, revive)
+    if n > 0, do: Engram.Vaults.next_seq!(vault_id)
+    n
   end
 
   defp depth(_row, _by_id, 0), do: 0
@@ -1847,6 +1886,36 @@ defmodule Engram.Folders.Rows do
   end
 
   @doc """
+  Makes `folders` explicit on their rows alone, with no marker row
+  (`Engram.Folders.MarkerStop`), creating missing rows and ancestors.
+  Returns `%{folder => id}` for the folders this call made explicit (none
+  for those that already were). Takes the vault seq lock (lock order: the
+  vault row before folder rows) only when something changes, bumps the seq
+  once (the listings' caches and etags key on it) and stamps it in
+  `explicit_seq` (`soft_delete/5`'s guard). O(folders x depth). Runs inside
+  the caller's tenant transaction.
+  """
+  @spec make_explicit(map(), Ecto.UUID.t(), [String.t()]) :: %{String.t() => Ecto.UUID.t()}
+  def make_explicit(user, vault_id, folders) do
+    case not_explicit(user, vault_id, folders) do
+      [] ->
+        %{}
+
+      _ ->
+        seq = Engram.Vaults.next_seq!(vault_id)
+        # Again under the lock: a concurrent create may have done some.
+        todo = not_explicit(user, vault_id, folders)
+        :ok = ensure_markers(user, vault_id, Enum.map(todo, &{&1, mint_id()}))
+        ids = ids_by_path(user, vault_id, todo)
+
+        from(f in Folder, where: f.vault_id == ^vault_id and f.id in ^Map.values(ids))
+        |> Repo.update_all(set: [explicit_seq: seq])
+
+        ids
+    end
+  end
+
+  @doc """
   Clears the explicit flag of the live row at `folder` when it is set, with
   no marker involved: `true` if it was explicit (after bumping the vault seq,
   which the listings' caches and etags key on), `false`, touching nothing,
@@ -1860,12 +1929,27 @@ defmodule Engram.Folders.Rows do
       _ = Engram.Vaults.next_seq!(vault_id)
 
       from(f in Folder, where: f.id == ^id and f.explicit)
-      |> Repo.update_all(set: [explicit: false, updated_at: now()])
+      |> Repo.update_all(set: [explicit: false, explicit_seq: nil, updated_at: now()])
 
       true
     else
       _ -> false
     end
+  end
+
+  # The folders among `folders` whose live row is missing or not explicit.
+  defp not_explicit(user, vault_id, folders) do
+    ids = ids_by_path(user, vault_id, folders)
+
+    explicit =
+      from(f in Folder,
+        where: f.id in ^Enum.reject(Map.values(ids), &is_nil/1) and f.explicit,
+        select: f.id
+      )
+      |> Repo.all()
+      |> MapSet.new()
+
+    Enum.reject(folders, &MapSet.member?(explicit, ids[&1]))
   end
 
   @doc """
