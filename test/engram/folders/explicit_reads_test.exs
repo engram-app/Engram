@@ -225,6 +225,57 @@ defmodule Engram.Folders.ExplicitReadsTest do
     end
   end
 
+  # The counts' folder-rows leg (leg 5, every folder row of the vault) as the
+  # app role, at the 40-tenant shape, for a user with a second, bigger vault.
+  # With only the policy's tenant it read `folders_user`: every folder of
+  # every vault of the user. Each folder scan must lead with `vault_id`. Its
+  # generic plan still reads `folders_user` (a bound tenant is costed as an
+  # average one), so the statement runs unnamed: the custom plan is the
+  # only one it gets, and it never runs on a generic plan.
+  test "plan: the counts' folder rows are read by vault, not by tenant", %{user: u, vault: v} do
+    for i <- 1..40, do: put_note(u, v, "F#{i}/n.md")
+    other = insert(:vault, user: u)
+    for i <- 1..400, do: put_note(u, other, "G#{i}/n.md")
+    tenant_shape!()
+    Engram.DataCase.clear_request_caches()
+
+    {_, queries} = QueryRecorder.record(fn -> Notes.list_folders_with_counts(u, v) end)
+    me = self()
+
+    [{sql, params}] =
+      for %{sql: s, params: p, pid: ^me} <- queries,
+          s =~ "UNION ALL" and s =~ ~r/"explicit"/,
+          do: {s, p}
+
+    %{custom: custom} = QueryPlan.rls_plans(u.id, sql, params)
+
+    # Past the 5 custom plans a named statement gets before it may go
+    # generic: each run sends the statement, and none prepares it by name.
+    for _ <- 1..7 do
+      # The listing caches the counts under the vault seq.
+      Engram.Cache.clear_local(:vault_scan)
+      {_, runs} = QueryRecorder.record(fn -> Notes.list_folders_with_counts(u, v) end)
+      assert Enum.any?(runs, &(&1.pid == me and &1.sql == sql))
+    end
+
+    assert Repo.query!("SELECT 1 FROM pg_prepared_statements WHERE statement = $1", [sql]).rows ==
+             []
+
+    vault_led =
+      Repo.query!(
+        "SELECT indexname FROM pg_indexes WHERE tablename = 'folders' " <>
+          "AND indexdef ~ 'USING btree \\(vault_id[,)]'"
+      ).rows
+      |> List.flatten()
+
+    for plan <- [custom] do
+      used = Regex.scan(~r/using (\w+) on folders/, plan, capture: :all_but_first)
+      assert used != [], plan
+      for [index] <- used, do: assert(index in vault_led, plan)
+      refute plan =~ "Seq Scan on folders", plan
+    end
+  end
+
   # The #2649 review, H1: an empty explicit folder with no marker is a bare
   # folder row; every rename and move surface must move it.
   describe "renaming an empty explicit folder with no marker" do
