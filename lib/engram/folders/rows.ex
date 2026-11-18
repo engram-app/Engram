@@ -1609,9 +1609,10 @@ defmodule Engram.Folders.Rows do
   the caller's tenant transaction, under its folder claims.
 
   `{:error, :claims_stale}` when the folder is no longer bare once the vault
-  row is held: the caller's scan found nothing under it, but a note or
-  attachment written since points into its subtree. Every note and
-  attachment writer takes the vault row before it writes (the seq lock), so
+  row is held: the caller's scan found nothing under it, but a note written
+  since points into its subtree (attachments are moved by the caller's
+  attachment leg). Every note writer takes the vault row before it writes
+  (the seq lock), so
   under that lock the check sees every one committed, and none can land
   until this transaction ends. The caller's claim loop
   (`Notes.with_folder_claims/4`) then re-plans the op from a fresh scan,
@@ -1640,10 +1641,18 @@ defmodule Engram.Folders.Rows do
     end
   end
 
-  # No live note or attachment points into the subtree at `folder`.
+  # No live NOTE points into the subtree at `folder`. Attachments are not
+  # checked: the rename's attachment leg moves them (`Folders.rename/5`), so an
+  # explicit folder of images alone still moves as a bare row. (#2639 review:
+  # counting them made such a rename re-plan until it gave up.)
   defp bare?(user, vault_id, folder) do
     ids = for r <- subtree(user, vault_id, [folder]), do: r.id
-    MapSet.size(live_content_folders(ids)) == 0
+
+    not Repo.exists?(
+      from(n in Engram.Notes.Note,
+        where: n.kind == "note" and n.folder_ref_id in ^ids and is_nil(n.deleted_at)
+      )
+    )
   end
 
   @doc """

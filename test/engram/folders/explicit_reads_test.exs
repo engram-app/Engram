@@ -253,6 +253,25 @@ defmodule Engram.Folders.ExplicitReadsTest do
                })
     end
 
+    # The #2639 review: an explicit folder of attachments only (images) moves,
+    # and the attachments with it; the bare recheck counts notes only.
+    test "an explicit folder holding only attachments moves with them", %{user: u, vault: v} do
+      explicit_without_marker!(u, v, "Pics")
+
+      {:ok, _} =
+        Engram.Attachments.upsert_attachment(u, v, %{
+          "path" => "Pics/a.png",
+          "content_base64" => Base.encode64("png")
+        })
+
+      assert {:ok, %{notes: 0, attachments: 1, folders: 1}} =
+               Engram.Folders.rename(u, v, "Pics", "Photos")
+
+      assert {:ok, ["Photos"]} = Notes.list_explicit_folders(u, v)
+      {:ok, metas} = Engram.Attachments.list_attachments(u, v)
+      assert Enum.map(metas, & &1.path) == ["Photos/a.png"]
+    end
+
     # The #2639 review: content written under the folder after the rename's
     # scan, before its lock. The move sees it under the vault lock and asks
     # for a re-plan, so the note is cascaded, never left at the old path.
