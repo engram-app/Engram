@@ -7818,7 +7818,8 @@ defmodule Engram.Notes do
 
     folders =
       from(f in Engram.Folders.Folder,
-        where: f.vault_id == ^vault.id,
+        # `user_id` bound: `Rows.explicit_rows/3`.
+        where: f.user_id == ^user.id and f.vault_id == ^vault.id,
         select: %{
           leg: fragment("5"),
           id: f.id,
@@ -7836,7 +7837,10 @@ defmodule Engram.Notes do
       |> union_all(^explicit)
       |> union_all(^groups)
       |> union_all(^folders)
-      |> Repo.all()
+      # Unnamed: a generic plan costs an average tenant and reads leg 5 on
+      # `folders_user`, every folder of every vault of the user
+      # (`ExplicitReadsTest`, docs/context/notes-generic-plan-mis-pick.md).
+      |> Repo.all(prepare: :unnamed)
       |> Enum.group_by(& &1.leg)
 
     envelopes =
