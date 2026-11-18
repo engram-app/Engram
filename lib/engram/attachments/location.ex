@@ -147,7 +147,21 @@ defmodule Engram.Attachments.Location do
   end
 
   @doc "The columns a repoint reads from a row (`stale_rows/4`, `stale_of/3`)."
-  @spec row_fields() :: [atom(), ...]
+  @spec row_fields() :: [
+          :id
+          | :path_ciphertext
+          | :path_hmac
+          | :dek_version
+          | :vault_id
+          | :deleted_at
+          | :path_nonce
+          | :folder_ref_id
+          | :folder_ref_stamp
+          | :name_ciphertext
+          | :name_nonce
+          | :name_stamp,
+          ...
+        ]
   def row_fields, do: [:id, :path_ciphertext, :path_hmac, :dek_version | fields()]
 
   @doc """
