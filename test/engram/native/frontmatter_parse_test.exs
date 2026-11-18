@@ -332,7 +332,8 @@ defmodule Engram.Native.FrontmatterParseTest do
     end)
   end
 
-  # The golden-corpus test usually takes 7-10 s. One CI run (2026-10-19,
+  # The golden-corpus test took 7-10 s before it deduplicated its blocks
+  # (see that test). One CI run (2026-10-19,
   # unit-tests job 118031199807) timed out at 60 s with the test blocked in
   # :application_controller: YamlElixir calls Application.start(:yamerl) on
   # every read, so each oracle parse is two calls into that VM-wide process.
@@ -416,7 +417,12 @@ defmodule Engram.Native.FrontmatterParseTest do
 
     assert length(blocks) > 1_000
 
-    assert mismatches(blocks) |> Enum.take(10) == []
+    # The corpus repeats its frontmatter heavily (1592 blocks, 84 distinct
+    # on 2026-11-17), and the oracle is deterministic, so parsing a repeat
+    # proves nothing new. Re-parsing them all cost ~19x the oracle work and
+    # left the test at 7-10 s of a 60 s timeout; a slow runner tipped it
+    # over (run 44212004332).
+    assert blocks |> Enum.uniq() |> mismatches() |> Enum.take(10) == []
   end
 
   # Not in the generator: YamlElixir renames each `<<` key to a fresh
