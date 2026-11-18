@@ -3111,9 +3111,10 @@ defmodule Engram.Notes do
       # authority (an un-checkpointed tail edit), and comparing against it
       # skipped real edits, e.g. one that reverts a tail edit back to the facade.
       is_binary(current_text) ->
-        if base_attrs.content == current_text and not Keyword.get(opts, :force, false),
-          do: idempotent_repush(existing, base_attrs),
-          else: rewrite(existing, base_attrs, user, sanitized_path, folder, opts)
+        if LineEndings.for_path(current_text, sanitized_path) == base_attrs.content and
+             not Keyword.get(opts, :force, false),
+           do: current_text_repush(existing, base_attrs, user, current_text),
+           else: rewrite(existing, base_attrs, user, sanitized_path, folder, opts)
 
       is_binary(existing.content_hash) and
         existing.content_hash == base_attrs.content_hash and
@@ -3288,6 +3289,16 @@ defmodule Engram.Notes do
     {:ok, {existing.content_hash, existing, base_attrs.content, base_attrs.content_hash}}
   end
 
+  # base_attrs.content is LF for a markdown note (upsert_note), but the authority
+  # text may still carry a CR (a doc the room has not healed). Equal after LF
+  # conversion is a no-op; the reply hash is the served view's, i.e. of the text
+  # the reader holds as it is.
+  defp current_text_repush(existing, base_attrs, user, current_text) do
+    with {:ok, served} <- content_hash(user, current_text) do
+      {:ok, {existing.content_hash, existing, base_attrs.content, served}}
+    end
+  end
+
   # The whole read-then-write, retried ONCE when the write loses its snapshot
   # fence. #1335.
   #
@@ -3422,7 +3433,10 @@ defmodule Engram.Notes do
   defp prepare_expected(opts, base_attrs, user, sanitized_path, folder) do
     case Keyword.get(opts, :expected_note) do
       %Note{} = expected ->
-        if base_attrs.content == Keyword.get(opts, :current_text) do
+        current = Keyword.get(opts, :current_text)
+
+        if is_binary(current) and
+             LineEndings.for_path(current, sanitized_path) == base_attrs.content do
           opts
         else
           prepared =
