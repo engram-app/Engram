@@ -25,13 +25,17 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
   marker probe is `notes_user_vault_folder_marker`, one index probe a row.
   Steady state is 0 rows: a clean walk writes nothing.
 
-  Not re-verified (`reverify?/0` stays false), on purpose: a re-verify that
-  finds a row reopens the ledger, and an open ledger sends every listing back
-  to the markers (`Rows.explicit_reads?/0`). Once markers stop (phase 2) the
-  folders created since have none, so for that walk they would drop out of
-  `/folders/explicit` and the plugin would trash them locally. A stale flag
-  left by a 0.88 node mid-rollout stays deletable: a path delete with no live
-  marker clears it (`Notes.delete_folder_marker/3`).
+  Re-verified daily (`reverify?/0`): a 0.89.0 (release C) node serving during
+  the rollout to D, or after a rollback and re-roll, deletes markers through
+  its cascade without clearing the flag on a row it keeps (content written
+  meanwhile, or a delete that stops between its marker leg and its rows
+  leg), after this ledger closed. Listed from the flag, that is a ghost
+  folder the plugin re-creates. The daily walk finds it and clears it. A
+  re-verify that finds work reopens the ledger, which sends listings back to
+  the markers until the walk is clean again: correct in D, where every
+  writer still inserts markers. Once markers stop (phase 2) a reopen must
+  not move listings off the flag; that release makes the gate independent
+  of this ledger.
 
   Kill switch: `enabled?/0` is the `explicit_folder_reconcile` service
   override (default on). Off, no pass runs and the ledger stays open, so
@@ -56,6 +60,9 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
   """
   @impl true
   def enabled?, do: Engram.ServiceConfig.get(:explicit_folder_reconcile, true) == true
+
+  @impl true
+  def reverify?, do: true
 
   @impl true
   def run_pass, do: run_pass([])
