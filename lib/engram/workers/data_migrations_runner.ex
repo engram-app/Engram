@@ -45,6 +45,7 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.EffectiveDates,
     Engram.DataMigrations.NameTerms,
     Engram.DataMigrations.NoteName,
+    Engram.DataMigrations.AttachmentNameKey,
     Engram.DataMigrations.NoteMeta
   ]
 

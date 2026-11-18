@@ -4034,6 +4034,16 @@
             },
             "description": "Deleted"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "`conflict`: a file left under a moved folder could not be settled; retry"
+          },
           "500": {
             "content": {
               "application/json": {

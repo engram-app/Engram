@@ -1622,7 +1622,8 @@ defmodule Engram.MCP.Tools do
               "description" =>
                 "Items not restored and why: path_taken (another file holds the path), " <>
                   "expired (past trash retention), unavailable (attachment bytes already " <>
-                  "reaped), changed (the item changed since the delete), unreadable",
+                  "reaped), changed (the item changed since the delete), conflict (a file " <>
+                  "left under a moved folder holds the path; retry), unreadable",
               "items" => %{
                 "type" => "object",
                 "properties" => %{

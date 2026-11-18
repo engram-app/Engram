@@ -191,8 +191,9 @@ defmodule Engram.Notes.Location do
   statements. The lowest id per path. Callers merge their stored-key
   holders over it (a holder wins, as in the lookup).
   """
-  @spec named_ids_at(map(), Ecto.UUID.t(), [String.t()]) :: %{String.t() => Ecto.UUID.t()}
-  def named_ids_at(user, vault_id, paths) do
+  @spec named_ids_at(map(), Ecto.UUID.t(), [String.t()], :notes | :attachments) ::
+          %{String.t() => Ecto.UUID.t()}
+  def named_ids_at(user, vault_id, paths, table \\ :notes) do
     with {:ok, fk} <- Crypto.dek_filter_key(user),
          split when split != [] <- folder_split(paths) do
       Repo.with_tenant!(user.id, fn ->
@@ -205,7 +206,7 @@ defmodule Engram.Notes.Location do
               fid != nil,
               do: {path, Name.ci_hmac(fk, name) <> Ecto.UUID.dump!(fid), Name.hmac(fk, name)}
 
-        if wanted == [], do: %{}, else: name_holders(vault_id, wanted)
+        if wanted == [], do: %{}, else: name_holders(table, vault_id, wanted)
       end)
     else
       _ -> %{}
@@ -223,7 +224,7 @@ defmodule Engram.Notes.Location do
   # schemaless. One `notes_name_key_live` probe per key (a LATERAL, LIMIT 1,
   # lowest id): a plain join or `= ANY(...)` plans as a vault read under
   # FORCE RLS (the RLS plan spec).
-  defp name_holders(vault_id, wanted) do
+  defp name_holders(table, vault_id, wanted) do
     paths = Enum.map(wanted, &elem(&1, 0))
 
     from(
@@ -234,25 +235,41 @@ defmodule Engram.Notes.Location do
         ^Enum.map(wanted, &elem(&1, 2))
       ),
       as: :k,
-      inner_lateral_join:
-        n in subquery(
-          from(n in "notes",
-            where:
-              n.vault_id == type(^vault_id, Ecto.UUID) and n.name_key == parent_as(:k).key and
-                not is_nil(n.name_key) and is_nil(n.deleted_at) and n.kind == "note" and
-                n.name_hmac == parent_as(:k).exact and
-                fragment(WalkSql.moved_chain(), n.folder_ref_id),
-            order_by: n.id,
-            limit: 1,
-            select: %{id: n.id}
-          )
-        ),
+      inner_lateral_join: n in subquery(holder_probe(table, vault_id)),
       on: true,
       select: {k.i, type(n.id, Ecto.UUID)}
     )
     |> Repo.all()
     |> Map.new(fn {i, id} -> {Enum.at(paths, i), id} end)
   end
+
+  # One `*_name_key_live` probe (S6 step 6: attachments carry the same key).
+  defp holder_probe(:notes, vault_id),
+    do: holder_probe(from(n in "notes", where: n.kind == "note"), vault_id)
+
+  defp holder_probe(:attachments, vault_id), do: holder_probe(from(n in "attachments"), vault_id)
+
+  defp holder_probe(query, vault_id) do
+    from(n in query,
+      where:
+        n.vault_id == type(^vault_id, Ecto.UUID) and n.name_key == parent_as(:k).key and
+          not is_nil(n.name_key) and is_nil(n.deleted_at) and
+          n.name_hmac == parent_as(:k).exact and
+          fragment(WalkSql.moved_chain(), n.folder_ref_id),
+      order_by: n.id,
+      limit: 1,
+      select: %{id: n.id}
+    )
+  end
+
+  @doc """
+  How many stale stored path slots a writer frees in a chain (a slot held by
+  a row whose own slot is held, and so on) before it gives up: notes
+  (`Engram.Notes.free_stale_slot/5`) and attachments
+  (`Engram.Attachments.settle/3`).
+  """
+  @spec stale_chain_depth() :: 64
+  def stale_chain_depth, do: 64
 
   # The stored path's row, or the row the path's folder row and name name
   # (`WalkSql.name_match_by_id/0`): `path_key OR id = <name match>`. Both
@@ -597,9 +614,19 @@ defmodule Engram.Notes.Location do
   # with their decrypted names; a row whose folder has no path there is left
   # out (it keeps its stored path), and its name is never decrypted: only
   # the rows a path is derived for pay a name decrypt.
-  defp derive(_dek, [], _folder_paths), do: %{}
+  defp derive(dek, rows, folder_paths), do: derive(:notes, dek, rows, folder_paths)
 
-  defp derive(dek, rows, folder_paths) do
+  @doc """
+  `%{id => folder path <> "/" <> name}` for the `table` rows (`:notes` or
+  `:attachments`, S6 step 6) whose folder `folder_paths` (given their folder
+  ids) places; any other row is left out and keeps its stored path. One
+  batch name decrypt, for the placed rows only.
+  """
+  @spec derive(:notes | :attachments, binary(), [map()], ([Ecto.UUID.t()] -> map())) ::
+          %{Ecto.UUID.t() => String.t()}
+  def derive(_table, _dek, [], _folder_paths), do: %{}
+
+  def derive(table, dek, rows, folder_paths) do
     folders = folder_paths.(rows |> Enum.map(& &1.folder_ref_id) |> Enum.uniq())
 
     case Enum.filter(rows, &Map.has_key?(folders, &1.folder_ref_id)) do
@@ -607,7 +634,7 @@ defmodule Engram.Notes.Location do
         %{}
 
       rows ->
-        for {row, {:ok, name}} <- Enum.zip(rows, decrypt_names(dek, rows)),
+        for {row, {:ok, name}} <- Enum.zip(rows, decrypt_names(table, dek, rows)),
             into: %{},
             do: {row.id, folders[row.folder_ref_id] <> "/" <> name}
     end
@@ -616,16 +643,16 @@ defmodule Engram.Notes.Location do
   # One native call for the batch (`Envelope.decrypt_many/3`); it is
   # all-or-nothing, so a row that will not open sends the batch through the
   # per-row decrypt, which fails just that row (it falls back to its path).
-  defp decrypt_names(dek, rows) do
+  defp decrypt_names(table, dek, rows) do
     fields =
       Enum.map(rows, &{Ecto.UUID.dump!(&1.id), true, &1.name_ciphertext, &1.name_nonce})
 
-    case Envelope.decrypt_many(dek, Crypto.aad_prefix(:notes, :name), fields) do
+    case Envelope.decrypt_many(dek, Crypto.aad_prefix(table, :name), fields) do
       {:ok, names} ->
         Enum.map(names, &{:ok, &1})
 
       :error ->
-        Enum.map(rows, &Name.decrypt(:notes, dek, &1.id, &1.name_ciphertext, &1.name_nonce))
+        Enum.map(rows, &Name.decrypt(table, dek, &1.id, &1.name_ciphertext, &1.name_nonce))
     end
   end
 

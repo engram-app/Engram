@@ -34,6 +34,10 @@ defmodule Engram.Attachments.Attachment do
     field :name_hmac, :binary
     field :name_ci_hmac, :binary
     field :name_stamp, :binary
+    # `name_ci_hmac || folder_ref_id` while the name and the folder reference
+    # are both current, else NULL: kept by the `attachments_set_name_key`
+    # trigger (S6 step 6), never cast or written here, never loaded.
+    field :name_key, :binary, load_in_query: false
     # Decoded plaintext is materialized into this virtual field by the read
     # path (`Engram.Attachments.get_attachment/3`). It never persists; the
     # actual ciphertext lives in S3-compatible object storage.

@@ -20,7 +20,12 @@ defmodule Engram.Sync do
     # clients that get it (`moved: moved_feed?/1`, on by default): the S4
     # plugin pulls none, so its cursor could never reach a head counting them.
     if Keyword.get(opts, :moved, true),
-      do: max(own, Notes.moved_head(user, vault.id, own)),
+      do:
+        Enum.max([
+          own,
+          Notes.moved_head(user, vault.id, own),
+          Attachments.moved_head(user, vault.id, own)
+        ]),
       else: own
   end
 
@@ -120,9 +125,17 @@ defmodule Engram.Sync do
           ),
         else: {:ok, %{changes: [], has_more: false}}
 
+    # Its attachment twin (S6 step 6): metadata only, no budget.
+    {:ok, %{changes: att_moved, has_more: att_moved_more}} =
+      if Keyword.get(opts, :moved, true),
+        do:
+          Attachments.list_moved_changes(user, vault, after_seq, after_id: after_id, limit: limit),
+        else: {:ok, %{changes: [], has_more: false}}
+
+    # Stable: a moved attachment's delete stays before its upsert (same key).
     merged =
       (Enum.map(notes ++ moved, &Map.put(&1, :type, :note)) ++
-         Enum.map(atts, &Map.put(&1, :type, :attachment)))
+         Enum.map(atts ++ att_moved, &Map.put(&1, :type, :attachment)))
       |> Enum.sort_by(&key/1)
 
     # WATERMARK — do not emit past the point where either feed is known to be
@@ -142,7 +155,8 @@ defmodule Engram.Sync do
       [
         notes_more && List.last(notes),
         atts_more && List.last(atts),
-        moved_more && List.last(moved)
+        moved_more && List.last(moved),
+        att_moved_more && List.last(att_moved)
       ]
       |> Enum.filter(&is_map/1)
       |> Enum.map(&key/1)
@@ -152,11 +166,13 @@ defmodule Engram.Sync do
 
     {page, has_more} =
       if length(capped) > limit do
-        {Enum.take(capped, limit), true}
+        {take_pairs(capped, limit), true}
       else
         # `capped` shorter than `merged` means the watermark held rows back, so
         # there is definitionally more to serve even if neither feed said so.
-        {capped, notes_more or atts_more or moved_more or length(capped) < length(merged)}
+        {capped,
+         notes_more or atts_more or moved_more or att_moved_more or
+           length(capped) < length(merged)}
       end
 
     # One byte budget for the page: the notes feed and the moved-folder feed
@@ -166,13 +182,22 @@ defmodule Engram.Sync do
         do: {page, has_more},
         else: Notes.trim_to_budget(page, has_more, fields, max_bytes || Notes.page_max_bytes())
 
+    # A byte cut can fall between a moved attachment's halves: serve the
+    # pair on the next page instead.
+    {page, has_more} =
+      case List.last(page) do
+        %{pair: true} when length(page) > 1 -> {Enum.drop(page, -1), true}
+        _ -> {page, has_more}
+      end
+
     next =
       if has_more and page != [] do
         last = List.last(page)
         {last.seq, last.id}
       end
 
-    %{page: page, has_more: has_more, next: next}
+    # The pair marker is this module's own (`take_pairs/2`), not the wire's.
+    %{page: Enum.map(page, &Map.delete(&1, :pair)), has_more: has_more, next: next}
   end
 
   # What is left of the page for a moved folder at `seq`: `:skip` when a
@@ -201,4 +226,21 @@ defmodule Engram.Sync do
   end
 
   defp key(row), do: {row.seq, row.id}
+
+  # The first `limit` rows, plus the upsert half of a moved attachment whose
+  # delete half is the last one (`Attachments.list_moved_changes/4`): both
+  # share one `(seq, id)` key, so a cursor between them would skip the
+  # upsert. At most `limit + 1` rows.
+  defp take_pairs(rows, limit) do
+    {page, rest} = Enum.split(rows, limit)
+
+    case {List.last(page), rest} do
+      {%{pair: true} = del, [%{id: id, seq: seq} = up | _]}
+      when id == del.id and seq == del.seq ->
+        page ++ [up]
+
+      _ ->
+        page
+    end
+  end
 end

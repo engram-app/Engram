@@ -5,6 +5,7 @@ defmodule EngramWeb.SyncController do
   import Ecto.Query
 
   alias Engram.Attachments.Attachment
+  alias Engram.Attachments.Location, as: AttachmentLocation
   alias Engram.Crypto
   alias Engram.Crypto.PathCrypto
   alias Engram.Logger.Metadata
@@ -297,13 +298,38 @@ defmodule EngramWeb.SyncController do
       end)
       |> Enum.sort_by(& &1.path)
 
+    # Attachments shown under a folder moved without a cascade (S6 step 6),
+    # read only when the notes read says the vault holds one (or holds no
+    # note to say it).
+    {att_paths, att_seqs} =
+      cond do
+        moves != nil ->
+          AttachmentLocation.listing(
+            conn.assigns.current_user,
+            conn.assigns.current_vault.id,
+            true
+          )
+
+        note_rows == [] ->
+          AttachmentLocation.listing(conn.assigns.current_user, conn.assigns.current_vault.id)
+
+        true ->
+          {%{}, %{}}
+      end
+
     attachments =
       Crypto.measure_decrypt_batch(:manifest_attachments, length(attachment_rows), fn ->
         fields =
           Enum.map(attachment_rows, fn {_, raw, v, ct, nonce, _, _} -> {raw, v, ct, nonce} end)
 
         Enum.zip_with(attachment_rows, PathCrypto.decrypt_many!(:attachments, fields, dek), fn
-          {id, _, _, _, _, hash, seq}, path -> %{id: id, path: path, content_hash: hash, seq: seq}
+          {id, _, _, _, _, hash, seq}, path ->
+            %{
+              id: id,
+              path: Map.get(att_paths, id, path),
+              content_hash: hash,
+              seq: shown_seq(seq, att_seqs[id])
+            }
         end)
       end)
       |> Enum.sort_by(& &1.path)
