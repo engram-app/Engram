@@ -1771,7 +1771,7 @@ defmodule Engram.Attachments do
   # No error branch: `batch_delete/3` is hard-matched below, so this either
   # returns a count or raises.
   @spec delete_scanned_paths(map(), map(), [String.t()], keyword()) ::
-          {:ok, non_neg_integer()} | {:error, :conflict}
+          {:ok, non_neg_integer()} | {:error, term()}
   def delete_scanned_paths(user, vault, paths, opts \\ []) do
     paths
     |> Enum.sort()
@@ -1782,7 +1782,7 @@ defmodule Engram.Attachments do
       # finishes the rest, as after any mid-loop failure.
       case batch_delete(user, vault, chunk, opts) do
         {:ok, %{deleted: n}} -> {:cont, {:ok, acc + n}}
-        {:error, :conflict} = err -> {:halt, err}
+        {:error, _} = err -> {:halt, err}
       end
     end)
   end
