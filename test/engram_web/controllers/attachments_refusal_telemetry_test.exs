@@ -23,9 +23,6 @@ defmodule EngramWeb.AttachmentsRefusalTelemetryTest do
   setup %{conn: conn} do
     :application.set_env(:opentelemetry, :traces_exporter, {:otel_exporter_pid, self()})
     :otel_simple_processor.set_exporter(:otel_exporter_pid, self())
-    # request_logger_test.exs detaches the handler on exit; re-attach so this
-    # file does not depend on run order. Idempotent.
-    EngramWeb.RequestLogger.attach()
 
     user = insert(:user)
     insert(:subscription, user: user, tier: "pro", status: "active")
