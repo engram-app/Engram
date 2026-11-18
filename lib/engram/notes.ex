@@ -2060,7 +2060,7 @@ defmodule Engram.Notes do
             # it. Tagged so the batch leg can say so instead of reporting a create
             # -- a plain {:ok, note} here reads as success and silently discards
             # the client's body.
-            {:ok, decrypt_or_raise!(live, user), :adopted}
+            {:ok, decrypt_at(live, user, sanitized_path), :adopted}
 
           nil ->
             # Logged AFTER the insert lands, not before: genesis_insert_bare can
@@ -7973,8 +7973,12 @@ defmodule Engram.Notes do
         where: ^Keyword.get(opts, :where, dynamic(true)),
         order_by: [desc: n.updated_at, desc: n.id],
         limit: ^limit,
-        select: struct(n, @note_meta_fields)
+        select: map(n, ^@note_meta_fields)
       )
+      # Whether the vault holds a folder moved without a cascade rides the
+      # page read (`Location.moved_column/1`), so an unmoved vault reads no
+      # chains: zero extra statements.
+      |> select_merge(^Location.moved_column(vault_id(vault)))
 
     query =
       case Keyword.get(opts, :before) do
@@ -7989,12 +7993,16 @@ defmodule Engram.Notes do
           )
       end
 
-    # Their folder chains in this snapshot (`Location.chains/1`), so each
-    # note is listed where its folder row puts it, not at its stored path.
+    # A moved vault's folder chains (`Location.chains/1`), so each note is
+    # listed where its folder row puts it, not at its stored path. Read in
+    # the page's tenant transaction but a second statement: under READ
+    # COMMITTED a folder move committing between the two shows the page at
+    # the newer location (where the folder now is), never a stale one.
     {:ok, {notes, chains}} =
       Repo.with_tenant(user.id, fn ->
-        notes = Repo.all(query)
-        {notes, Location.chains(notes)}
+        rows = Repo.all(query)
+        notes = Enum.map(rows, &elem(NoteBody.to_note(&1, [:moved__]), 0))
+        {notes, if(Location.moved?(rows), do: Location.chains(notes))}
       end)
 
     {:ok, Location.put_paths(user, decrypt_or_raise!(notes, user), chains)}
@@ -10448,9 +10456,15 @@ defmodule Engram.Notes do
     filter_key |> Crypto.hmac_field(path) |> Base.encode64()
   end
 
-  # THE decrypt of a note row found by a path lookup: shown at that `path`
+  # The decrypt of a note row found by a path lookup: shown at that `path`
   # (`Location.found_at/2`), whatever its stored path still says (S5, a
-  # folder moved without a cascade). Every by-path read goes through it.
+  # folder moved without a cascade). Two by-path reads skip it on purpose:
+  # - `get_note_for_update/4`: its row is the `locked_note:` a write takes,
+  #   and that write decides old and new paths by `Location.shown_path/3`
+  #   (`same_path?/4`), which needs the row's STORED path to compare.
+  # - `find_note_by_path/4` (`note_exists?/3`, `get_note_metadata/3`):
+  #   raw rows for an id, hash or existence check; it never decrypts, so
+  #   no path is shown from it.
   defp decrypt_at(note, user, path),
     do: note |> decrypt_or_raise!(user) |> Location.found_at(path)
 
