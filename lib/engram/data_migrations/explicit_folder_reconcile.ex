@@ -35,10 +35,12 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
   its cascade without clearing the flag on a row it keeps (content written
   meanwhile, or a delete that stops between its marker leg and its rows
   leg), after this ledger closed. Listed from the flag, that is a ghost
-  folder the plugin re-creates. Once the ledger is closed, a walk REPAIRS
-  such rows in place and reports `:done`: it never reopens the ledger for
-  them, so listings never flap back to the markers. Only a row it could not
-  fix (a lock it skipped) or a walk cut short by its time budget reopens it.
+  folder the plugin re-creates. Once the ledger is closed it NEVER reopens:
+  a walk repairs such rows in place and reports `:done`, so listings never
+  flap back to the markers (after a rollback E -> D those markers do not
+  exist). A vault it skipped (a held lock) is logged once a day and retried
+  by the next day's walk, as is the rest of a walk its time budget cut (the
+  cursor resumes).
 
   Kill switch: `enabled?/0` is the `explicit_folder_reconcile` service
   override (default on). Off, no pass runs and the ledger stays open, so
@@ -49,6 +51,9 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
   alias Engram.Backfill.IdWindows
   alias Engram.DataMigrations
   alias Engram.Folders.Folder
+  alias Engram.Logger.Metadata
+
+  require Logger
 
   @batch 200
   # Set by a window that left a row unfixed (a skipped lock), for `run_pass/1`.
@@ -81,19 +86,29 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
     result =
       IdWindows.heal_pass(name(), Folder, &clear/2, batch_size: Keyword.get(opts, :batch, @batch))
 
-    left? = Process.delete(@left_key) == true
+    left = Process.delete(@left_key) || []
 
-    case result do
-      # A closed ledger's walk that went start to end and left nothing stuck:
-      # whatever it repaired is repaired, so it stays closed (see moduledoc).
-      {:more, found} when not left? ->
-        if DataMigrations.done?(name(), version()) and not Keyword.get(found, :hit_budget, false),
-          do: :done,
-          else: result
-
-      other ->
-        other
+    # A closed ledger never reopens (see moduledoc): what it repaired is
+    # repaired, and a vault it skipped (a held lock) or a walk its time
+    # budget cut is retried by the next day's walk (the cursor resumes).
+    if DataMigrations.done?(name(), version()) do
+      Enum.each(left, &log_skipped/1)
+      :done
+    else
+      result
     end
+  end
+
+  # Once per vault per node per day (`:reconcile_skipped_warned`, 24 h TTL).
+  defp log_skipped(vault) do
+    Engram.Cache.fetch(:reconcile_skipped_warned, vault, fn ->
+      Logger.warning(
+        "explicit_folder_reconcile: vault skipped by the re-verify walk, retried tomorrow",
+        Metadata.with_category(:warning, :data, vault_id: Ecto.UUID.load!(vault))
+      )
+
+      true
+    end)
   end
 
   # A live explicit row of the window that no live marker names. `f` the
@@ -137,8 +152,8 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
   WHERE f.id = c.id
   """
 
-  # What is left in a window: a stale row a held lock skipped.
-  @left_sql "SELECT count(*)::int FROM folders AS f WHERE #{@stale}"
+  # What is left in a window: the vaults of stale rows a held lock skipped.
+  @left_sql "SELECT DISTINCT f.vault_id FROM folders AS f WHERE #{@stale}"
 
   @doc false
   def lock_vaults_sql, do: @lock_vaults_sql
@@ -153,8 +168,9 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
     _ = repo.query!("SET LOCAL statement_timeout = '5s'", [])
     %{rows: locked} = repo.query!(@lock_vaults_sql, [ids])
     %{num_rows: fixed} = repo.query!(@clear_sql, [ids, List.flatten(locked)])
-    %{rows: [[left]]} = repo.query!(@left_sql, [ids])
-    if left > 0, do: Process.put(@left_key, true)
-    {fixed, left > 0}
+    %{rows: left} = repo.query!(@left_sql, [ids])
+    vaults = List.flatten(left)
+    if vaults != [], do: Process.put(@left_key, vaults ++ (Process.get(@left_key) || []))
+    {fixed, vaults != []}
   end
 end
