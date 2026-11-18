@@ -12,11 +12,15 @@ defmodule Engram.Folders.MovedReadsBudgetTest do
   @same 3
   # +7 for the relocate's after-transaction settle (#2622): one roomless index
   # fold reading the committed row. Constant per relocate.
-  @relocate 45
+  # +1 for S6 step 3's one hash per path (`PathHmacs.put/2`, mixed window
+  # with 0.89.0): one statement per newly created folder LEVEL (one here)
+  # sets its hash after releasing it from any stale holder.
+  @relocate 46
   # +1 for the resurrect race fix (#2609): the moved-folder bit read with the
   # row can be a stale `false`, so it is re-read under the vault seq lock
   # (`Location.named?/2`, one `folders_moved_live` index probe).
-  @resurrect 26
+  # +1, the same: one new folder level.
+  @resurrect 27
   @restore 53
 
   setup do

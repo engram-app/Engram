@@ -61,6 +61,7 @@ defmodule Engram.DataMigrations.FolderTable do
   alias Engram.Crypto.RotationInProgressError
   alias Engram.DataMigrations
   alias Engram.Folders.Folder
+  alias Engram.Folders.PathHmacs
   alias Engram.Folders.Rows
   alias Engram.Logger.Metadata
   alias Engram.Notes.Helpers
@@ -322,7 +323,7 @@ defmodule Engram.DataMigrations.FolderTable do
         if existing? do
           # The marker's folder row exists at another place: an older release
           # renamed the marker. Move it here (the place is free).
-          update_row(repo, ctx, row, true)
+          :ok = update_row(repo, ctx, row, true)
           tree = %{tree | by_key: Map.delete(tree.by_key, tree.by_id[id])}
           {id, {put(tree, key, id, full), bump(stats)}}
         else
@@ -340,7 +341,7 @@ defmodule Engram.DataMigrations.FolderTable do
                   ensure_one(repo, ctx, {tree, stats}, vault, parent, segment, full_path, leaf)
 
                 nil ->
-                  update_row(repo, ctx, row, true)
+                  :ok = update_row(repo, ctx, row, true)
                   {id, {put(tree, key, id, full), bump(stats)}}
               end
           end
@@ -352,12 +353,16 @@ defmodule Engram.DataMigrations.FolderTable do
       %{id: id} ->
         # Present: set what the marker or the trigger lookup needs. Counts as
         # a change only if a row really moved (the daily pass must find none).
-        %{num_rows: n} =
+        %{num_rows: marked} =
           repo.query!(
-            "UPDATE folders SET full_path_hmac = $2, explicit = explicit OR $3, updated_at = now() " <>
-              "WHERE id = $1 AND (full_path_hmac IS DISTINCT FROM $2 OR ($3 AND NOT explicit))",
-            [id, full, explicit?]
+            "UPDATE folders SET explicit = true, updated_at = now() " <>
+              "WHERE id = $1 AND $2 AND NOT explicit",
+            [id, explicit?]
           )
+
+        # The hash through its one writer (released from any stale holder).
+        {:ok, set} = PathHmacs.put(repo, ctx.user_id, [{id, full}])
+        n = marked + set
 
         if n > 0,
           do: {id, {put(tree, key, id, full), bump(stats)}},
@@ -388,9 +393,8 @@ defmodule Engram.DataMigrations.FolderTable do
       repo.query!(
         """
         INSERT INTO folders (id, vault_id, user_id, parent_id, name_ciphertext, name_nonce,
-                             name_hmac, full_path_hmac, dek_version, explicit,
-                             name_ci_hmac, name_stamp)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                             name_hmac, dek_version, explicit, name_ci_hmac, name_stamp)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         ON CONFLICT DO NOTHING
         """,
         [
@@ -401,13 +405,16 @@ defmodule Engram.DataMigrations.FolderTable do
           ct,
           nonce,
           row.name_hmac,
-          row.full,
           Crypto.row_version_aad_bound(),
           explicit?,
           keys[:name_ci_hmac],
           keys[:name_stamp]
         ]
       )
+
+    # Inserted without a hash; its one writer sets it.
+    {:ok, _} =
+      if n == 1, do: PathHmacs.put(repo, ctx.user_id, [{row.id, row.full}]), else: {:ok, 0}
 
     n
   end
@@ -420,10 +427,10 @@ defmodule Engram.DataMigrations.FolderTable do
     repo.query!(
       """
       UPDATE folders SET parent_id = $2, name_ciphertext = $3, name_nonce = $4, name_hmac = $5,
-             full_path_hmac = $6, dek_version = $7, explicit = explicit OR $8, updated_at = now(),
-             deleted_at = NULL, delete_op_id = NULL, name_ci_hmac = $11, name_stamp = $12,
-             seq = COALESCE($13, seq), notes_cascaded = notes_cascaded AND $13::bigint IS NULL
-      WHERE id = $1 AND vault_id = $9 AND user_id = $10
+             dek_version = $6, explicit = explicit OR $7, updated_at = now(),
+             deleted_at = NULL, delete_op_id = NULL, name_ci_hmac = $10, name_stamp = $11,
+             seq = COALESCE($12, seq), notes_cascaded = notes_cascaded AND $12::bigint IS NULL
+      WHERE id = $1 AND vault_id = $8 AND user_id = $9
       """,
       [
         row.id,
@@ -431,7 +438,6 @@ defmodule Engram.DataMigrations.FolderTable do
         ct,
         nonce,
         row.name_hmac,
-        row.full,
         Crypto.row_version_aad_bound(),
         explicit?,
         row.vault,
@@ -441,6 +447,9 @@ defmodule Engram.DataMigrations.FolderTable do
         seq
       ]
     )
+
+    {:ok, _} = PathHmacs.put(repo, ctx.user_id, [{row.id, row.full}])
+    :ok
   end
 
   # Moving or reviving a folder row changes where its notes are shown when
