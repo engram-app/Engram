@@ -2464,32 +2464,19 @@ jobs:
           # docker auto-allocates an ephemeral port, but between resolve and
           # bind another runner (or any process) can claim it. Retry the run
           # up to 5 times; each retry gets a fresh allocation.
-          for attempt in 1 2 3 4 5; do
-            # Throwaway DB: tmpfs data dir + no fsync. max_connections=300 because
-            # the test partitions each open a schedulers*2+10 pool (3 x 38 > 100).
-            if ci/bin/ci-docker run -d --name "$PG_CONTAINER" \
-                -e POSTGRES_USER=engram \
-                -e POSTGRES_PASSWORD=engram \
-                -e POSTGRES_DB=engram_test \
-                -p 0:5432 \
-                --health-cmd "pg_isready -U engram" \
-                --health-interval 3s \
-                --health-timeout 3s \
-                --health-retries 10 \
-                --tmpfs /var/lib/postgresql \
-                "$PG_IMAGE" \
-                -c max_connections=300 \
-                -c fsync=off -c synchronous_commit=off -c full_page_writes=off; then
-              break
-            fi
-            echo "Attempt $attempt: docker run failed (likely port race) — cleaning up + retrying"
-            docker rm -f "$PG_CONTAINER" 2>/dev/null || true
-            sleep 1
-            if [ "$attempt" = "5" ]; then
-              echo "::error::Postgres container failed to start after 5 attempts"
-              exit 1
-            fi
-          done
+          ci/bin/ci-docker-run-retry -d --name "$PG_CONTAINER" \
+            -e POSTGRES_USER=engram \
+            -e POSTGRES_PASSWORD=engram \
+            -e POSTGRES_DB=engram_test \
+            -p 0:5432 \
+            --health-cmd "pg_isready -U engram" \
+            --health-interval 3s \
+            --health-timeout 3s \
+            --health-retries 10 \
+            --tmpfs /var/lib/postgresql \
+            "$PG_IMAGE" \
+            -c max_connections=300 \
+            -c fsync=off -c synchronous_commit=off -c full_page_writes=off
 
           PG_PORT=$(docker port "$PG_CONTAINER" 5432/tcp | head -1 | cut -d: -f2)
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
@@ -2520,20 +2507,9 @@ jobs:
           # Storage on tmpfs: the tests need no durability, and on the shared
           # runner disk each fsync-bound payload-index build swung 0.1 to 15 s
           # with host IO, which spent the 60 s test budget in setup (#2064).
-          for attempt in 1 2 3 4 5; do
-            if ci/bin/ci-docker run -d --name "$QDRANT_CONTAINER" -p 127.0.0.1:0:6333 \
-                --tmpfs /qdrant/storage:rw,size=2g --tmpfs /qdrant/snapshots:rw,size=256m \
-                "$QDRANT_IMAGE"; then
-              break
-            fi
-            echo "Attempt $attempt: docker run failed (likely port race) — cleaning up + retrying"
-            docker rm -f "$QDRANT_CONTAINER" 2>/dev/null || true
-            sleep 1
-            if [ "$attempt" = "5" ]; then
-              echo "::error::Qdrant container failed to start after 5 attempts"
-              exit 1
-            fi
-          done
+          ci/bin/ci-docker-run-retry -d --name "$QDRANT_CONTAINER" -p 127.0.0.1:0:6333 \
+            --tmpfs /qdrant/storage:rw,size=2g --tmpfs /qdrant/snapshots:rw,size=256m \
+            "$QDRANT_IMAGE"
 
           # `awk -F: '{print $NF}'`, not `cut -d: -f2`: an IPv6 mapping line
           # ([::]:32768) has several colons and would yield an empty port.
@@ -2793,7 +2769,7 @@ jobs:
           if [ -n "${LOCAL_REGISTRY:-}" ] && docker pull "${LOCAL_REGISTRY}/${IMAGE}" 2>/dev/null; then
             IMAGE="${LOCAL_REGISTRY}/${IMAGE}"
           fi
-          ci/bin/ci-docker run -d --name "$C" -p 127.0.0.1:0:6333 \
+          ci/bin/ci-docker-run-retry -d --name "$C" -p 127.0.0.1:0:6333 \
             --tmpfs /qdrant/storage:rw,size=2g --tmpfs /qdrant/snapshots:rw,size=256m "$IMAGE"
           PORT=$(docker port "$C" 6333/tcp | head -1 | awk -F: '{print $NF}')
           for i in $(seq 1 30); do
@@ -2968,14 +2944,9 @@ jobs:
             docker pull "${LOCAL_REGISTRY}/postgres:18.4" 2>/dev/null && PG_IMAGE="${LOCAL_REGISTRY}/postgres:18.4"
           fi
           # Same port-race retry as unit-tests.
-          for attempt in 1 2 3 4 5; do
-            ci/bin/ci-docker run -d --name "$PG_CONTAINER" -e POSTGRES_USER=engram -e POSTGRES_PASSWORD=engram \
-              -e POSTGRES_DB=engram_test -p 0:5432 --tmpfs /var/lib/postgresql "$PG_IMAGE" \
-              -c fsync=off -c synchronous_commit=off -c full_page_writes=off && break
-            docker rm -f "$PG_CONTAINER" 2>/dev/null || true
-            sleep 1
-            [ "$attempt" = "5" ] && { echo "::error::Postgres failed to start"; exit 1; }
-          done
+          ci/bin/ci-docker-run-retry -d --name "$PG_CONTAINER" -e POSTGRES_USER=engram -e POSTGRES_PASSWORD=engram \
+            -e POSTGRES_DB=engram_test -p 0:5432 --tmpfs /var/lib/postgresql "$PG_IMAGE" \
+            -c fsync=off -c synchronous_commit=off -c full_page_writes=off
           echo "pg_port=$(docker port "$PG_CONTAINER" 5432/tcp | head -1 | cut -d: -f2)" >> "$GITHUB_OUTPUT"
           for i in $(seq 1 30); do
             docker exec "$PG_CONTAINER" pg_isready -U engram > /dev/null 2>&1 && break
@@ -4224,24 +4195,13 @@ jobs:
           # the worst kind of red: it costs a human a full investigation to
           # learn nothing. Observed on run 30662527833. Retry up to 5 times;
           # each attempt gets a fresh allocation.
-          for attempt in 1 2 3 4 5; do
-            if ci/bin/ci-docker run -d --name "$PG_CONTAINER" \
-                -e POSTGRES_USER=engram \
-                -e POSTGRES_PASSWORD=engram \
-                -e POSTGRES_DB=engram_n1 \
-                -P \
-                --tmpfs /var/lib/postgresql \
-                postgres:18.4; then
-              break
-            fi
-            echo "Attempt $attempt: docker run failed (likely port race) — cleaning up + retrying"
-            docker rm -f "$PG_CONTAINER" 2>/dev/null || true
-            sleep 1
-            if [ "$attempt" = "5" ]; then
-              echo "::error::Postgres container failed to start after 5 attempts"
-              exit 1
-            fi
-          done
+          ci/bin/ci-docker-run-retry -d --name "$PG_CONTAINER" \
+            -e POSTGRES_USER=engram \
+            -e POSTGRES_PASSWORD=engram \
+            -e POSTGRES_DB=engram_n1 \
+            -P \
+            --tmpfs /var/lib/postgresql \
+            postgres:18.4
           # Wait for ready
           for i in $(seq 1 30); do
             if docker exec "$PG_CONTAINER" pg_isready -U engram >/dev/null 2>&1; then
@@ -4658,29 +4618,18 @@ jobs:
           ci/bin/ci-docker network create "$PG_CONTAINER-net" >/dev/null
           echo "MIXW_NETWORK=$PG_CONTAINER-net" >> "$GITHUB_ENV"
           echo "MIXW_DATABASE_URL=postgresql://engram:engram@pg:5432/engram_dev" >> "$GITHUB_ENV"
-          for attempt in 1 2 3 4 5; do
-            if ci/bin/ci-docker run -d --name "$PG_CONTAINER" \
-                --network "$PG_CONTAINER-net" --network-alias pg \
-                -e POSTGRES_USER=engram \
-                -e POSTGRES_PASSWORD=engram \
-                -e POSTGRES_DB=engram_dev \
-                -p 0:5432 \
-                --health-cmd "pg_isready -U engram" \
-                --health-interval 3s \
-                --health-timeout 3s \
-                --health-retries 10 \
-                --tmpfs /var/lib/postgresql \
-                "$PG_IMAGE"; then
-              break
-            fi
-            echo "Attempt $attempt: docker run failed (likely port race) — cleaning up + retrying"
-            docker rm -f "$PG_CONTAINER" 2>/dev/null || true
-            sleep 1
-            if [ "$attempt" = "5" ]; then
-              echo "::error::Postgres container failed to start after 5 attempts"
-              exit 1
-            fi
-          done
+          ci/bin/ci-docker-run-retry -d --name "$PG_CONTAINER" \
+            --network "$PG_CONTAINER-net" --network-alias pg \
+            -e POSTGRES_USER=engram \
+            -e POSTGRES_PASSWORD=engram \
+            -e POSTGRES_DB=engram_dev \
+            -p 0:5432 \
+            --health-cmd "pg_isready -U engram" \
+            --health-interval 3s \
+            --health-timeout 3s \
+            --health-retries 10 \
+            --tmpfs /var/lib/postgresql \
+            "$PG_IMAGE"
           PG_PORT=$(docker port "$PG_CONTAINER" 5432/tcp | head -1 | cut -d: -f2)
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
           echo "Postgres on port $PG_PORT"

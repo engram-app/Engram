@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# `ci/bin/ci-docker run ARGS...`, retried when the host-port bind races.
+#
+# `-p 0:N` / `-p 127.0.0.1:0:N` / `-P` ask docker for an ephemeral host port,
+# but between choosing it and binding it another runner on the shared VM can
+# take it, and rootless docker surfaces that as a hard failure:
+#
+#   RootlessKit PortManager.AddPort(): listen tcp4 127.0.0.1:32774:
+#   bind: address already in use
+#
+# Each retry gets a fresh allocation. Only bind/port errors are retried; an
+# image pull failure, bad flag or daemon error fails at once (retrying those
+# only delays a real red and misdiagnoses it as a port race). Before every
+# retry the half-created container is removed by its --name. Bounded, loud.
+#
+# Usage: ci-docker-run-retry -d --name NAME -p 127.0.0.1:0:6333 ... IMAGE
+# Env:   DOCKER_RUN_RETRY_ATTEMPTS (default 5), DOCKER_RUN_RETRY_SLEEP (1)
+set -uo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+attempts="${DOCKER_RUN_RETRY_ATTEMPTS:-5}"
+pause="${DOCKER_RUN_RETRY_SLEEP:-1}"
+
+name=""
+args=("$@")
+for i in "${!args[@]}"; do
+  case "${args[$i]}" in
+    --name) name="${args[$((i + 1))]:-}" ;;
+    --name=*) name="${args[$i]#--name=}" ;;
+  esac
+done
+[ -n "$name" ] || { echo "::error::ci-docker-run-retry needs --name (cleanup before retry)" >&2; exit 2; }
+
+err="$(mktemp)"
+trap 'rm -f "$err"' EXIT
+
+for attempt in $(seq 1 "$attempts"); do
+  "$here/ci-docker" run "$@" 2> >(tee "$err" >&2)
+  rc=$?
+  [ "$rc" -eq 0 ] && exit 0
+  sleep 0.2 # let the process substitution flush "$err"
+  if ! grep -qiE 'address already in use|port is already allocated|PortManager\.AddPort' "$err"; then
+    echo "::error::docker run $name failed (exit $rc), not a port race: not retrying" >&2
+    exit "$rc"
+  fi
+  echo "Attempt $attempt/$attempts: docker run $name hit a port race - cleaning up + retrying" >&2
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  [ "$attempt" = "$attempts" ] && break
+  sleep "$pause"
+done
+echo "::error::docker run $name failed after $attempts port-race attempts" >&2
+exit 1
