@@ -112,7 +112,7 @@ Listings read an empty folder's existence from `folders.explicit`, not from
 the `kind = 'folder'` marker rows: `GET /folders/explicit`, `GET /folders`,
 `GET /vault/tree` and the folder counts (MCP `list_folder`) go through
 `Notes.raw_explicit_folder_rows/2` (`Rows.explicit_rows/2`, index
-`folders_explicit_vault_live`; `folders_user_vault (user_id, vault_id)` keeps the fallback to one vault). The id a listing hands out is the folder row's;
+`folders_explicit_vault_live`, and `folders_explicit_user_vault (user_id, vault_id) WHERE explicit`, which keeps a partial-index fallback to one vault; the counts' folder-rows leg can still read `folders_user`, a known gap pending a `folders_user` drop). The id a listing hands out is the folder row's;
 the id-keyed operations (batch delete/move, notes by folder id) resolve it,
 and still resolve a marker's id (a marker made after its folder's row keeps
 its own id, and the previous release listed it). The flag is trusted only
