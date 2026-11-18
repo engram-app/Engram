@@ -111,4 +111,23 @@ defmodule Engram.Folders.MarkerStopTest do
 
     assert explicit(u, v) == ["Z"]
   end
+
+  # The reconcile is re-verified daily (#2639 audit); once the stop's floor is
+  # reached a reopen must not send listings back to markers the stop no
+  # longer writes.
+  test "with the floor reached, a reopened reconcile does not move listings off the flag" do
+    Engram.ServiceConfig.put_override(:explicit_folders_ledger, :read)
+
+    Engram.DataMigrations.mark_done(
+      Engram.DataMigrations.FolderTable.name(),
+      Engram.DataMigrations.FolderTable.version()
+    )
+
+    Engram.DataCase.clear_request_caches()
+    assert Rows.explicit_reads?()
+
+    Engram.ServiceConfig.put_override(:marker_stop_floors, :enforce)
+    Engram.DataCase.clear_request_caches()
+    refute Rows.explicit_reads?()
+  end
 end
