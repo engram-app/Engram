@@ -105,22 +105,10 @@ defmodule Engram.Folders.ExplicitReadsTest do
   test "plan: the explicit read is the partial index under RLS", %{user: u, vault: v} do
     for i <- 1..400, do: put_note(u, v, "F#{i}/n.md")
     {:ok, _} = Notes.create_folder_markers(u, v, ["E1", "E2"])
-    tenant_shape!()
 
-    {_, queries} = QueryRecorder.record(fn -> Notes.list_explicit_folders(u, v) end)
-    me = self()
-
-    [{sql, params}] =
-      for %{sql: s, params: p, pid: ^me} <- queries,
-          s =~ ~r/FROM "folders".*"explicit"/s,
-          do: {s, p}
-
-    %{custom: custom, generic: generic} = QueryPlan.rls_plans(u.id, sql, params)
-
-    for plan <- [custom, generic] do
-      assert plan =~ "folders_explicit_live", plan
-      refute plan =~ "Seq Scan on folders", plan
-    end
+    assert_explicit_index!(u, fn -> Notes.list_explicit_folders(u, v) end, fn s ->
+      s =~ ~r/FROM "folders".*"explicit"/s
+    end)
   end
 
   # Prod's statistics shape: 40 tenants, so a tenant or a vault is a fraction
@@ -128,11 +116,36 @@ defmodule Engram.Folders.ExplicitReadsTest do
   # CLUSTER): the plan must hold on them too. The visibility map is left as
   # the inserts left it, so the partial index wins on its keys, not on an
   # index-only read a restore or CLUSTER would take away.
-  defp tenant_shape! do
-    for col <- ~w(user_id vault_id),
-        do: Repo.query!("ALTER TABLE folders ALTER COLUMN #{col} SET (n_distinct = 40)")
+  defp tenant_shape!(users \\ 40, vaults \\ 40) do
+    for {col, n} <- [user_id: users, vault_id: vaults],
+        do: Repo.query!("ALTER TABLE folders ALTER COLUMN #{col} SET (n_distinct = #{n})")
 
     Repo.query!("ANALYZE folders")
+  end
+
+  # The explicit read (the statement of `fun` that `pick` matches) reads
+  # `folders_explicit_live_v2` in its custom and its forced generic plan, at
+  # the 40-tenant shape and at one where every tenant looks unique (a tenant
+  # index then looks like a 1-row read). #2639's CI picked `folders_user`,
+  # every folder of the tenant (400 rows removed by filter), over the
+  # earlier `(vault_id)`-keyed index; v2 narrows `folders_user`, so it is
+  # never the costlier read.
+  defp assert_explicit_index!(user, fun, pick) do
+    me = self()
+
+    for {users, vaults} <- [{40, 40}, {-1, 40}] do
+      tenant_shape!(users, vaults)
+      {_, queries} = QueryRecorder.record(fun)
+      [{sql, params}] = for %{sql: s, params: p, pid: ^me} <- queries, pick.(s), do: {s, p}
+      %{custom: custom, generic: generic} = QueryPlan.rls_plans(user.id, sql, params)
+
+      for plan <- [custom, generic] do
+        assert plan =~ ~r/\bfolders_explicit_live_v2\b/,
+               "n_distinct #{users}/#{vaults}:\n" <> plan
+
+        refute plan =~ "Seq Scan on folders", plan
+      end
+    end
   end
 
   defp reconcile! do
@@ -214,23 +227,17 @@ defmodule Engram.Folders.ExplicitReadsTest do
   test "plan: the counts' explicit leg is the partial index under RLS", %{user: u, vault: v} do
     for i <- 1..400, do: put_note(u, v, "F#{i}/n.md")
     {:ok, _} = Notes.create_folder_markers(u, v, ["E1", "E2"])
-    tenant_shape!()
-    Engram.DataCase.clear_request_caches()
 
-    {_, queries} = QueryRecorder.record(fn -> Notes.list_folders_with_counts(u, v) end)
-    me = self()
-
-    [{sql, params}] =
-      for %{sql: s, params: p, pid: ^me} <- queries,
-          s =~ "UNION ALL" and s =~ ~r/"explicit"/,
-          do: {s, p}
-
-    %{custom: custom, generic: generic} = QueryPlan.rls_plans(u.id, sql, params)
-
-    for plan <- [custom, generic] do
-      assert plan =~ "folders_explicit_live", plan
-      refute plan =~ "Seq Scan on folders", plan
-    end
+    assert_explicit_index!(
+      u,
+      fn ->
+        # The listing caches the counts under the vault seq.
+        Engram.Cache.clear_local(:vault_scan)
+        Engram.DataCase.clear_request_caches()
+        Notes.list_folders_with_counts(u, v)
+      end,
+      &(&1 =~ "UNION ALL" and &1 =~ ~r/"explicit"/)
+    )
   end
 
   # The counts' folder-rows leg (leg 5, every folder row of the vault) as the
@@ -269,19 +276,18 @@ defmodule Engram.Folders.ExplicitReadsTest do
     assert Repo.query!("SELECT 1 FROM pg_prepared_statements WHERE statement = $1", [sql]).rows ==
              []
 
-    vault_led =
-      Repo.query!(
-        "SELECT indexname FROM pg_indexes WHERE tablename = 'folders' " <>
-          "AND indexdef ~ 'USING btree \\(vault_id[,)]'"
-      ).rows
-      |> List.flatten()
+    # Every folders scan's index condition names the vault: no read of the
+    # tenant's other vaults (`folders_user` has only `user_id`).
+    scans =
+      Regex.scan(
+        ~r/(?:using \w+|Bitmap Heap Scan) on folders[^\n]*\n\s*(?:Index|Recheck) Cond: ([^\n]*)/,
+        custom,
+        capture: :all_but_first
+      )
 
-    for plan <- [custom] do
-      used = Regex.scan(~r/using (\w+) on folders/, plan, capture: :all_but_first)
-      assert used != [], plan
-      for [index] <- used, do: assert(index in vault_led, plan)
-      refute plan =~ "Seq Scan on folders", plan
-    end
+    assert scans != [], custom
+    for [cond] <- scans, do: assert(cond =~ "vault_id =", cond <> "\n" <> custom)
+    refute custom =~ "Seq Scan on folders", custom
   end
 
   # A batch move whose target is a folder ROW id (what the listings hand out

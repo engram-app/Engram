@@ -1000,7 +1000,7 @@ defmodule Engram.Folders.Rows do
   The live explicit folder rows of `vault_id` (all of them, or only those
   among `ids`) and their parent chains: `{ids, chain_rows}`, what
   `chain_paths/3` takes. Two statements: the explicit rows on
-  `folders_explicit_live` (or the primary key, given `ids`), then
+  `folders_explicit_live_v2` (or the primary key, given `ids`), then
   `chain_rows/3`. O(explicit folders x depth). Runs inside the caller's
   tenant transaction; decrypt outside it.
 

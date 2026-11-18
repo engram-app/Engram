@@ -11,14 +11,19 @@ defmodule Engram.Repo.Migrations.IndexFoldersExplicitLiveExpand do
   @disable_migration_lock true
 
   @moduledoc """
-  `folders_explicit_live`: a vault's live explicit folders (S6 step 4,
+  `folders_explicit_live_v2`: a vault's live explicit folders (S6 step 4,
   Engram#2523). Folder listings (`GET /folders/explicit`, `GET /folders`,
   `GET /vault/tree`, the MCP folder counts) read explicit folders from
   `folders.explicit` instead of the `kind = 'folder'` marker rows
-  (`Engram.Folders.Rows.explicit_rows/2`), so this is the index the marker
+  (`Engram.Folders.Rows.explicit_rows/3`), so this is the index the marker
   read had (`notes_folder_marker`): O(explicit folders) a listing, not a
-  read of every folder row of the vault. `user_id` and `id` are INCLUDEd so
-  the read is index-only under the RLS policy.
+  read of every folder row of the vault. Keyed `(user_id, vault_id)`, as
+  the reads bind both (`Rows.scoped/2`): a narrowing of `folders_user` to
+  the live explicit rows, so the planner can never cost the tenant's whole
+  folder index below it (#2639's CI read `folders_user`, every folder of
+  the tenant, on a `(vault_id)`-keyed version). `id` is INCLUDEd so the
+  read is index-only. `_v2`: a test or dev database that ran the earlier
+  definition of this unmerged migration keeps that index, unused.
 
   Additive: the previous release ignores it. Its predicate holds `explicit`,
   so a write that flips the flag (a marker create or delete, rare) is not
@@ -35,8 +40,8 @@ defmodule Engram.Repo.Migrations.IndexFoldersExplicitLiveExpand do
     BoundedIndexBuild.build!(
       repo(),
       [
-        {"folders_explicit_live",
-         "ON folders (vault_id) INCLUDE (user_id, id) WHERE explicit AND deleted_at IS NULL"}
+        {"folders_explicit_live_v2",
+         "ON folders (user_id, vault_id) INCLUDE (id) WHERE explicit AND deleted_at IS NULL"}
       ],
       lock_key: 20_261_118_130_000,
       label: "index_folders_explicit_live"
@@ -45,12 +50,12 @@ defmodule Engram.Repo.Migrations.IndexFoldersExplicitLiveExpand do
     MigrationLog.indexes(
       repo(),
       "index_folders_explicit_live",
-      ["folders_explicit_live"],
+      ["folders_explicit_live_v2"],
       started
     )
   end
 
   def down do
-    execute "DROP INDEX CONCURRENTLY IF EXISTS folders_explicit_live"
+    execute "DROP INDEX CONCURRENTLY IF EXISTS folders_explicit_live_v2"
   end
 end
