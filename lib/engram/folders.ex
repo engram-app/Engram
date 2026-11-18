@@ -39,6 +39,7 @@ defmodule Engram.Folders do
   """
 
   alias Engram.Attachments
+  alias Engram.Attachments.WriteStop, as: AttachmentWriteStop
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Folders.Rows
@@ -280,8 +281,8 @@ defmodule Engram.Folders do
     with {:ok, new_folder} <- PathSanitizer.sanitize_target(new_folder),
          # Never into its own subtree: refused before any scan or write.
          :ok <- refuse_own_subtree(String.trim_trailing(old_folder, "/"), new_folder),
-         {:ok, att_pairs} <-
-           Attachments.folder_rename_pairs(user, vault, old_folder, new_folder) do
+         {:ok, att_pairs, att_keyed?} <-
+           Attachments.folder_rename_plan(user, vault, old_folder, new_folder) do
       expect = opts[:expect]
 
       # The cheap refusals run before the claim too, so a refused rename claims
@@ -296,13 +297,16 @@ defmodule Engram.Folders do
       # Read before the transaction: the fleet check is an erpc to every node,
       # never to be held under the folder-write lock and a pooled connection.
       stop? = WriteStop.on?()
+      # S6 step 6: attachments stay put too, when every one can be found by
+      # name and the whole fleet reads them so (`Attachments.WriteStop`).
+      att_stop? = stop? and att_keyed? and AttachmentWriteStop.on?()
 
       claimed_atomic(user, vault, claim, fn ->
         with :ok <- check_expected(user, vault, old_folder, new_folder, expect),
              {:ok, notes, how} <- notes_leg(user, vault, old_folder, new_folder, stop?),
              {:ok, folders} <-
                move_bare_row(user, vault, old_folder, new_folder, notes, how, expect),
-             {:ok, atts} <- Attachments.move_folder_pairs(user, vault, att_pairs) do
+             {:ok, atts} <- attachments_leg(user, vault, att_pairs, how, att_stop?) do
           seq = Wire.changed(user, vault, [new_folder], opts[:origin_device_id])
           {:ok, %{notes: notes, attachments: atts, folders: folders, seq: seq}}
         end
@@ -311,9 +315,8 @@ defmodule Engram.Folders do
   end
 
   # S5 (`WriteStop`): one folder row, no note row, when the write stop can
-  # serve the op; else, or with it off, the cascade. Attachments still move
-  # row by row either way (`move_folder_pairs/3`): their readers read stored
-  # paths.
+  # serve the op; else, or with it off, the cascade. The attachments follow
+  # it (`attachments_leg/5`).
   defp notes_leg(user, vault, old, new, stop?) do
     uncascaded =
       if stop?,
@@ -331,6 +334,15 @@ defmodule Engram.Folders do
         err
     end
   end
+
+  # S6 step 6 (`Attachments.WriteStop`): when the notes leg moved only the
+  # folder row, the attachments under it stay where they are too, and
+  # readers show them under the moved folder by name; the count is the
+  # attachments the move carried, none written. Else the cascade.
+  defp attachments_leg(_user, _vault, pairs, :uncascaded, true), do: {:ok, length(pairs)}
+
+  defp attachments_leg(user, vault, pairs, _how, _stop?),
+    do: Attachments.move_folder_pairs(user, vault, pairs)
 
   defp check_expected(_user, _vault, _old, _new, nil), do: :ok
 

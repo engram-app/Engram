@@ -1662,11 +1662,23 @@ defmodule Engram.Attachments do
   @spec folder_rename_pairs(map(), map(), String.t(), String.t()) ::
           {:ok, [{String.t(), String.t()}]} | {:error, term()}
   def folder_rename_pairs(user, vault, old_folder, new_folder) do
+    with {:ok, pairs, _keyed?} <- folder_rename_plan(user, vault, old_folder, new_folder),
+         do: {:ok, pairs}
+  end
+
+  @doc """
+  `folder_rename_pairs/4` plus whether every attachment under the folder is
+  keyed (`Location.derivable?/1`), so a rename may leave them in place
+  (`Engram.Attachments.WriteStop`).
+  """
+  @spec folder_rename_plan(map(), map(), String.t(), String.t()) ::
+          {:ok, [{String.t(), String.t()}], boolean()} | {:error, term()}
+  def folder_rename_plan(user, vault, old_folder, new_folder) do
     old_folder = String.trim_trailing(old_folder, "/")
     new_folder = String.trim_trailing(new_folder, "/")
     old_len = String.length(old_folder)
 
-    with {:ok, %{metas: metas}} <- scan_under(user, vault, [old_folder]),
+    with {:ok, %{metas: metas, keyed?: keyed?}} <- scan_under(user, vault, [old_folder]),
          # The scan names rows where they are shown; the cascade moves them
          # by stored key (`settle/3`). Before the rename's transaction, so its
          # own folder move cannot make them look stale.
@@ -1674,7 +1686,7 @@ defmodule Engram.Attachments do
       {:ok,
        Enum.map(metas, fn %{path: old_path} ->
          {old_path, new_folder <> String.slice(old_path, old_len..-1//1)}
-       end)}
+       end), keyed?}
     end
   end
 
@@ -2473,11 +2485,18 @@ defmodule Engram.Attachments do
     |> case do
       {:ok, rows} ->
         decrypted = decrypt_tree_rows(rows, user)
+        metas = Enum.filter(decrypted, &in_folders?(&1.path, folders, direct?))
+        found = MapSet.new(metas, & &1.id)
 
         {:ok,
          %{
-           metas: Enum.filter(decrypted, &in_folders?(&1.path, folders, direct?)),
-           unreadable: length(rows) - length(decrypted)
+           metas: metas,
+           unreadable: length(rows) - length(decrypted),
+           # Every row in the folders can be found by its folder row and
+           # name (`Location.derivable?/1`), and none failed to decrypt.
+           keyed?:
+             length(rows) == length(decrypted) and
+               Enum.all?(rows, &(not MapSet.member?(found, &1.id) or Location.derivable?(&1)))
          }}
 
       err ->

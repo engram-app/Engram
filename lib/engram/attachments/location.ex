@@ -45,7 +45,7 @@ defmodule Engram.Attachments.Location do
   @doc """
   This build's attachment-reader level (S6 step 6): 1 reads, writes next
   to and serves (the moved-folder feed's attachment leg) attachments left
-  under a folder moved without a cascade. the next release's write stop
+  under a folder moved without a cascade. `Engram.Attachments.WriteStop`
   leaves them only while every node answers at least its level; an older
   build has no such function and counts as behind.
   """
