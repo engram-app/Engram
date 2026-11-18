@@ -1,0 +1,3 @@
+# Commits the floor tag must contain (scripts/check_floor_tag_on_main.sh):
+# "<sha> <why>", one per line.
+104ec8a5269163be8469964e41c1c5d0696d576a S5 moved-folder feed and shown-path announces (Engram#2609): the write stop needs them on every rollback target

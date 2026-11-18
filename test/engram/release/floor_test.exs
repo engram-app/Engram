@@ -33,4 +33,11 @@ defmodule Engram.Release.FloorTest do
   test "the floor covers the Qdrant legacy index drop" do
     assert Floor.at_least?("release-v0.87.0")
   end
+
+  # S5 (Engram#2523): the write stop switches on with the floor at the
+  # moved-folder feed release, and the tag must contain 2609
+  # (`priv/release_floor_contains`).
+  test "the floor covers the S5 moved-folder feed" do
+    assert Floor.at_least?(Engram.Folders.WriteStop.reads_release())
+  end
 end
