@@ -169,6 +169,44 @@ defmodule Engram.Notes.LocationLatchTest do
     end
   end
 
+  # Audit gap (notes.ex `ids_at`, the batch occupancy probe): names off, a
+  # batch move onto a path a moved note is shown at is a conflict, not a
+  # second live note there.
+  test "names off: a batch move onto a moved note's shown path conflicts", %{user: u, vault: v} do
+    moved = put!(u, v, "A/x.md", "moved")
+    other = put!(u, v, "C/x.md", "other")
+    move!(u, "A", "B")
+    names!(false)
+
+    assert {:error, {:conflict, _}} = Notes.batch_move_notes(u, v, [other.id], {:path, "B"})
+    assert {:ok, %{id: id, content: "moved"}} = Notes.get_note(u, v, "B/x.md")
+    assert id == moved.id
+    assert {:ok, %{content: "other"}} = Notes.get_note(u, v, "C/x.md")
+  end
+
+  # Audit gap (walk_sql.ex `@here`, behaviour): H's stored key is `A/x.md`
+  # but its chain moved (A -> B), so normally M, shown at `A/x.md` by name
+  # (C -> A), answers there. With H's name stamp stale, H is still at its
+  # stored path (`Location.here/0`) and its key blocks M's name arm: the
+  # path answers H, once.
+  test "a stale-stamped moved holder blocks a name match at its stored path",
+       %{user: u, vault: v} do
+    h = put!(u, v, "A/x.md", "h")
+    move!(u, "A", "B")
+    m = put!(u, v, "C/x.md", "m")
+    move!(u, "C", "A")
+    assert {:ok, %{id: mid}} = Notes.get_note(u, v, "A/x.md")
+    assert mid == m.id
+
+    Repo.query!("UPDATE notes SET name_stamp = NULL WHERE id = $1", [Ecto.UUID.dump!(h.id)])
+
+    assert {:ok, %{id: hid, content: "h"}} = Notes.get_note(u, v, "A/x.md")
+    assert hid == h.id
+
+    assert [{"A/x.md", fetch}] = Notes.get_notes_within(u, v, ["A/x.md"], 1_000_000)
+    assert %{id: ^hid} = fetch.()
+  end
+
   # Mixed window: a 0.89.0 node renames the folder with the S5 write stop on
   # (`Folders.rename/5`; this branch's folder writer is 0.89.0's: the PR's
   # diff from release-v0.89.0 touches no writer), then a release D node runs
