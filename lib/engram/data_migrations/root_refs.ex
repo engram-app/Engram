@@ -8,29 +8,32 @@ defmodule Engram.DataMigrations.RootRefs do
   and the ones a previous-release node writes during a rolling deploy or
   after a rollback (re-verified daily).
 
-  Each pass, two phases:
+  Inert until the rollback floor reaches the readers' release
+  (`Rows.root_writes?/1`): a pass then reports `blocked` and writes nothing.
 
-    1. Roots: the vaults holding a live note with no reference and no root
-       row yet get one (`Rows.ensure_root/2`), at most #{200} vaults a pass,
-       each user in its own tenant transaction gated like `FolderTable`'s
-       writes (`FolderTable.gated/3`: vault rows NOWAIT, then the rotation
-       lock FOR SHARE), so a DEK rotation never misses the row's name. A
-       user that cannot be gated now (a delete, a rotation, a folder write)
-       is retried next pass. Discovery reads every vault once (a primary-key
-       probe of `folders` and one `notes_folder_ref_live_id` probe each),
-       on the maintenance pool on SaaS and per tenant on self-host.
-    2. Fill: `Engram.Backfill.IdWindows.heal_pass/4` over `notes` (windows of
-       #{1_000} ids). Each window is one statement under `SET LOCAL
-       lock_timeout = '2s'` and `statement_timeout = '5s'`: the window's live
-       notes with no reference whose folder envelope is the root (the
-       complement of the drift predicate, `Engram.Folders.Drift`) and whose
-       root row exists get `folder_ref_id = vault_id`, locked `FOR NO KEY
-       UPDATE SKIP LOCKED`. A skipped row, or one whose root row phase 1 has
-       not made yet, counts as left and keeps the ledger open. The update
-       names only `folder_ref_id`: `seq` and `updated_at` stay, so no feed
-       or cache sees a change; `notes_set_name_key` re-derives the name key.
-       Capped at #{2_000} rows a pass (non-HOT updates: autovacuum's dead
-       tuples, as `NoteFolderHashNull`).
+  Each pass, per vault, never a walk of `notes`:
+
+    1. Discovery: at most #{200} vaults holding a live note with no
+       reference whose folder envelope is the root (the complement of the
+       drift predicate, `Engram.Folders.Drift`). One `notes_folder_ref_live_id`
+       probe per vault (the `(vault_id, NULL)` range; drift rows are 0 in
+       steady state), on the maintenance pool on SaaS and per tenant on
+       self-host. Nothing found is `:done`: a daily re-verify costs one probe
+       per vault.
+    2. Roots: a vault with no root row gets one (`Rows.ensure_root/2`), each
+       user in its own tenant transaction gated like `FolderTable`'s writes
+       (`FolderTable.gated/3`: vault rows NOWAIT, then the rotation lock FOR
+       SHARE), so a DEK rotation never misses the row's name. A user that
+       cannot be gated now (a delete, a rotation, a folder write) is retried
+       next pass; any other failure is logged.
+    3. Fill: per vault, one statement under `lock_timeout = '2s'` and
+       `statement_timeout = '5s'`: up to #{1_000} of those notes, read on the
+       same index range and locked `FOR NO KEY UPDATE SKIP LOCKED`, get
+       `folder_ref_id = vault_id`. The update names only `folder_ref_id`, so
+       `seq` and `updated_at` stay (no feed or cache sees a change);
+       `notes_set_name_key` re-derives the name key. At most #{2_000} rows a
+       pass (non-HOT updates: autovacuum's dead tuples, as
+       `NoteFolderHashNull`).
 
   Tombstones keep a NULL reference here (the restore trigger re-resolves a
   restored note). Step 9's `NOT NULL` must handle them first.
@@ -43,10 +46,10 @@ defmodule Engram.DataMigrations.RootRefs do
   import Ecto.Query
 
   alias Engram.Accounts.User
-  alias Engram.Backfill.{IdWindows, TenantScan}
+  alias Engram.Backfill.TenantScan
   alias Engram.Crypto.{RotationGate, RotationInProgressError}
   alias Engram.DataMigrations.FolderTable
-  alias Engram.Folders.{Folder, Rows}
+  alias Engram.Folders.Rows
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Repo
@@ -56,7 +59,7 @@ defmodule Engram.DataMigrations.RootRefs do
 
   @batch 1_000
   @max_fixed 2_000
-  @roots_per_pass 200
+  @vaults_per_pass 200
 
   @impl true
   def name, do: "root_refs"
@@ -68,7 +71,7 @@ defmodule Engram.DataMigrations.RootRefs do
   @impl true
   def enabled?, do: Engram.ServiceConfig.get(:root_refs, true) == true
 
-  @doc "Re-verified daily: a previous-release node writes NULL root references."
+  @doc "Re-verified daily (one probe per vault): a previous-release node writes NULL root references."
   @impl true
   def reverify?, do: true
 
@@ -76,49 +79,71 @@ defmodule Engram.DataMigrations.RootRefs do
   def run_pass, do: run_pass([])
 
   @doc false
-  # `batch:` / `max_fixed:` override the window size and per-pass cap.
+  # `batch:` / `max_fixed:` override the fill size and per-pass cap.
   def run_pass(opts) do
-    blocked = create_roots()
-
-    case IdWindows.heal_pass(name(), Note, &fill/2,
-           batch_size: Keyword.get(opts, :batch, @batch),
-           max_fixed: Keyword.get(opts, :max_fixed, @max_fixed)
-         ) do
-      :done when blocked == 0 -> :done
-      :done -> {:more, rows: 0, blocked: blocked}
-      {:more, more} -> {:more, Keyword.put(more, :blocked, blocked)}
+    if Rows.root_writes?() do
+      pass(Keyword.get(opts, :batch, @batch), Keyword.get(opts, :max_fixed, @max_fixed))
+    else
+      :ok = Engram.DataMigration.report(blocked: :rollback_floor)
+      {:more, rows: 0, blocked: 1}
     end
   end
 
-  # ---- phase 1: root rows ---------------------------------------------------
+  defp pass(batch, max_fixed) do
+    case candidates() do
+      [] ->
+        :done
 
-  # Returns the users it could not gate this pass.
-  defp create_roots do
-    # ponytail: reads every vault (a pk probe and an index probe each) per
-    # open pass; the ledger closes once, so O(vaults) a pass is fine.
-    from(v in Vault,
-      as: :v,
-      where:
-        not exists(from(f in Folder, where: f.id == parent_as(:v).id, select: 1)) and
-          exists(
-            from(n in Note,
-              where:
-                n.vault_id == parent_as(:v).id and is_nil(n.folder_ref_id) and
-                  n.kind == "note" and is_nil(n.deleted_at),
-              select: 1
-            )
-          ),
-      order_by: v.id,
-      limit: @roots_per_pass,
-      select: {v.user_id, v.id}
-    )
-    |> TenantScan.all()
-    |> Enum.take(@roots_per_pass)
-    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-    |> Enum.count(fn {user_id, vault_ids} -> not user_roots(user_id, vault_ids) end)
+      vaults ->
+        blocked =
+          vaults
+          |> Enum.reject(fn {_user, _vault, root?} -> root? end)
+          |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+          |> Enum.count(fn {user_id, vault_ids} -> not user_roots(user_id, vault_ids) end)
+
+        fixed =
+          Enum.reduce_while(vaults, 0, fn {user_id, vault_id, _}, fixed ->
+            if fixed >= max_fixed,
+              do: {:halt, fixed},
+              else: {:cont, fixed + fill(user_id, vault_id, batch)}
+          end)
+
+        {:more, rows: fixed, blocked: blocked}
+    end
   end
 
-  # true when the user's roots exist (or it has no key, so no notes).
+  # ---- discovery ------------------------------------------------------------
+
+  # A live note with no reference whose folder envelope is the root, in the
+  # vault bound as `:v`: one `(vault_id, NULL)` probe of the reference index.
+  defp root_note_query do
+    from(n in Note,
+      where:
+        n.vault_id == parent_as(:v).id and is_nil(n.folder_ref_id) and n.kind == "note" and
+          is_nil(n.deleted_at) and
+          fragment("coalesce(octet_length(?) <= 16, true)", n.folder_ciphertext),
+      select: 1
+    )
+  end
+
+  # `{user_id, vault_id, root_row?}` for the vaults with such a note.
+  defp candidates do
+    # ponytail: one index probe per vault, O(vaults) a pass, and only while
+    # open or on the daily re-verify.
+    from(v in Vault,
+      as: :v,
+      where: exists(root_note_query()),
+      order_by: v.id,
+      limit: @vaults_per_pass,
+      select: {v.user_id, v.id, fragment("EXISTS (SELECT 1 FROM folders f WHERE f.id = ?)", v.id)}
+    )
+    |> TenantScan.all()
+    |> Enum.take(@vaults_per_pass)
+  end
+
+  # ---- root rows ------------------------------------------------------------
+
+  # true when the user's roots exist (or it has no user row left).
   defp user_roots(user_id, vault_ids) do
     # Read the key's version BEFORE the key (`RotationGate.check/2`).
     ctx = %{user_id: user_id, dek_version: RotationGate.dek_version(user_id)}
@@ -130,7 +155,7 @@ defmodule Engram.DataMigrations.RootRefs do
       user ->
         Repo.with_tenant!(user_id, fn ->
           FolderTable.gated(Repo, ctx, fn _repo ->
-            Enum.all?(vault_ids, &match?({:ok, _}, Rows.ensure_root(user, &1)))
+            Enum.all?(vault_ids, &root!(user, &1))
           end)
         end)
     end
@@ -146,6 +171,13 @@ defmodule Engram.DataMigrations.RootRefs do
         else: failed(user_id, e)
   end
 
+  defp root!(user, vault_id) do
+    case Rows.ensure_root(user, vault_id) do
+      {:ok, _} -> true
+      {:error, reason} -> failed(user.id, reason)
+    end
+  end
+
   defp failed(user_id, reason) do
     Logger.error(
       "root_refs: root row not created",
@@ -158,19 +190,16 @@ defmodule Engram.DataMigrations.RootRefs do
     false
   end
 
-  # ---- phase 2: references --------------------------------------------------
-
-  # A live root note with no reference, in the window (`n`).
-  @candidate """
-  n.id = ANY($1) AND n.kind = 'note' AND n.deleted_at IS NULL AND n.folder_ref_id IS NULL
-    AND coalesce(octet_length(n.folder_ciphertext) <= 16, true)
-  """
+  # ---- references -----------------------------------------------------------
 
   @fill_sql """
   WITH c AS MATERIALIZED (
-    SELECT n.id FROM notes AS n, folders AS f
-    WHERE #{@candidate} AND f.id = n.vault_id AND f.deleted_at IS NULL
+    SELECT n.id FROM notes AS n
+    WHERE n.vault_id = $1 AND n.folder_ref_id IS NULL AND n.kind = 'note'
+      AND n.deleted_at IS NULL AND coalesce(octet_length(n.folder_ciphertext) <= 16, true)
+      AND EXISTS (SELECT 1 FROM folders AS f WHERE f.id = $1 AND f.deleted_at IS NULL)
     ORDER BY n.id
+    LIMIT $2
     FOR NO KEY UPDATE OF n SKIP LOCKED
   )
   UPDATE notes AS n SET folder_ref_id = n.vault_id
@@ -178,14 +207,32 @@ defmodule Engram.DataMigrations.RootRefs do
   WHERE n.id = c.id
   """
 
-  @left_sql "SELECT count(*)::int FROM notes AS n WHERE #{@candidate}"
+  @doc false
+  def fill_sql, do: @fill_sql
 
-  defp fill(ids, %{repo: repo}) do
-    ids = Enum.map(ids, &Ecto.UUID.dump!/1)
-    _ = repo.query!("SET LOCAL lock_timeout = '2s'", [])
-    _ = repo.query!("SET LOCAL statement_timeout = '5s'", [])
-    %{num_rows: fixed} = repo.query!(@fill_sql, [ids])
-    %{rows: [[left]]} = repo.query!(@left_sql, [ids])
-    {fixed, left > 0}
+  # Rows fixed in `vault_id`, in one short transaction on the sweep's pool.
+  defp fill(user_id, vault_id, batch) do
+    run = fn repo ->
+      _ = repo.query!("SET LOCAL lock_timeout = '2s'", [])
+      _ = repo.query!("SET LOCAL statement_timeout = '5s'", [])
+      %{num_rows: fixed} = repo.query!(@fill_sql, [Ecto.UUID.dump!(vault_id), batch])
+      fixed
+    end
+
+    case TenantScan.pool() do
+      :per_user ->
+        Repo.with_tenant!(user_id, fn -> run.(Repo) end)
+
+      {:fleet, maintenance} ->
+        {:ok, fixed} = maintenance.transaction(fn -> run.(maintenance) end)
+        fixed
+    end
+  rescue
+    # A lock wait or the statement budget: this vault is retried next pass
+    # (it is still a candidate, so the ledger stays open).
+    e in Postgrex.Error ->
+      if e.postgres[:code] in [:lock_not_available, :query_canceled, :deadlock_detected],
+        do: 0,
+        else: reraise(e, __STACKTRACE__)
   end
 end

@@ -24,6 +24,9 @@ config :engram, :name_reads_ledger, :done
 # rollback floor stays below the moved-folder feed release until release B
 # raises it, so tests assume it (the floor PR asserts the real one).
 config :engram, :write_stop_floors, :assume
+# Likewise the S6 root-row readers' release (`Rows.root_writes?/1`) until the
+# floor reaches it: tests write root references.
+config :engram, :root_refs_floor, :assume
 # The OAuth limiter's coarse per-IP bucket (EngramWeb.Plugs.OAuthRateLimit):
 # every test shares 127.0.0.1, so it needs the same high ceiling.
 config :engram, :oauth_ip_rate_limit_override, 10_000
