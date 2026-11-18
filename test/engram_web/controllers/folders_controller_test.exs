@@ -20,6 +20,26 @@ defmodule EngramWeb.FoldersControllerTest do
     end
   end
 
+  # S6 step 4 (#2649 review H1): an empty explicit folder with no marker
+  # (markers stopped, or a rollback from that release) is a bare folder row.
+  # A rename must move it, not answer 404.
+  describe "POST /api/folders/rename, empty explicit folder with no marker" do
+    test "moves the folder", %{conn: conn, user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      {:ok, %{folders: [%{id: m}]}} = Engram.Notes.create_folder_markers(user, vault, ["Empty"])
+
+      Engram.Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [
+        Ecto.UUID.dump!(m)
+      ])
+
+      conn
+      |> post(~p"/api/folders/rename", %{"old_path" => "Empty", "new_path" => "Renamed"})
+      |> json_response(200)
+
+      assert {:ok, ["Renamed"]} = Engram.Notes.list_explicit_folders(user, vault)
+    end
+  end
+
   describe "GET /api/folders" do
     test "response includes id and parent_id per folder marker", %{
       conn: conn,

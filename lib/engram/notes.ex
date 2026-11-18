@@ -10609,6 +10609,9 @@ defmodule Engram.Notes do
           # point already ran ensure_user_dek, so rename_folder/4's wider
           # error surface can't arise here (dialyzer proves the coverage).
           case rename_folder_gated(user, vault, source_folder, new_folder, rows, drift) do
+            # Nothing under it carried the move: an empty explicit folder's
+            # row moves alone (`Rows.move_bare_explicit/4`, S6 step 4).
+            {:ok, 0} -> move_bare_folder(user, vault, source_folder, new_folder)
             {:ok, _count} -> {:ok, {source_folder, new_folder}}
             {:error, :conflict} -> {:error, :conflict}
             {:error, :claims_stale} = stale -> stale
@@ -10624,6 +10627,16 @@ defmodule Engram.Notes do
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------
+
+  defp move_bare_folder(user, vault, source, target) do
+    case Repo.with_tenant!(user.id, fn ->
+           Rows.move_bare_explicit(user, vault.id, source, target)
+         end) do
+      {:ok, _} -> {:ok, {source, target}}
+      {:error, :conflict} -> {:error, :conflict}
+      {:error, :invalid_path} -> {:error, :cycle}
+    end
+  end
 
   # T3.2 helper — base64-encoded HMAC of a plaintext path under the user's
   # filter key. Used at Oban-enqueue boundaries so plaintext path / old_path

@@ -261,7 +261,13 @@ defmodule Engram.Folders do
   that holds no note and no marker (its last note was deleted) moves too.
   """
   @spec rename(map(), map(), String.t(), String.t(), keyword()) ::
-          {:ok, %{notes: non_neg_integer(), attachments: non_neg_integer(), seq: integer() | nil}}
+          {:ok,
+           %{
+             notes: non_neg_integer(),
+             attachments: non_neg_integer(),
+             folders: non_neg_integer(),
+             seq: integer() | nil
+           }}
           | {:error, term()}
   def rename(user, vault, old_folder, new_folder, opts \\ []) do
     # Sanitize the target once here: it is the only entry for REST and MCP
@@ -294,10 +300,11 @@ defmodule Engram.Folders do
       claimed_atomic(user, vault, claim, fn ->
         with :ok <- check_expected(user, vault, old_folder, new_folder, expect),
              {:ok, notes, how} <- notes_leg(user, vault, old_folder, new_folder, stop?),
-             :ok <- move_bare_row(user, vault, old_folder, new_folder, notes, how, expect),
+             {:ok, folders} <-
+               move_bare_row(user, vault, old_folder, new_folder, notes, how, expect),
              {:ok, atts} <- Attachments.move_folder_pairs(user, vault, att_pairs) do
           seq = Wire.changed(user, vault, [new_folder], opts[:origin_device_id])
-          {:ok, %{notes: notes, attachments: atts, seq: seq}}
+          {:ok, %{notes: notes, attachments: atts, folders: folders, seq: seq}}
         end
       end)
     end
@@ -337,16 +344,24 @@ defmodule Engram.Folders do
   # The notes leg moves the folder row only when something under the path is
   # a note or marker. A bare row (a path-made folder whose notes are all gone)
   # still has an id the wire hands out, so the wire moves it here, under the
-  # vault seq lock like every folder write. REST and MCP keep today's 404
-  # for such a folder (no `expect:`).
+  # vault seq lock like every folder write. REST and MCP (no `expect:`) move
+  # it only when it is EXPLICIT: an empty folder made on purpose, which once
+  # markers stop (or after a rollback from that release) has no marker to
+  # carry the move (S6 step 4, #2649 review H1); a bare derived row keeps
+  # today's 404. `{:ok, folder rows moved}`.
   defp move_bare_row(user, vault, old, new, 0, :cascaded, {_id, _parent}) do
     Repo.with_tenant!(user.id, fn ->
       _ = Vaults.next_seq!(vault.id)
-      Rows.rename(user, vault.id, old, new)
+
+      with :ok <- Rows.rename(user, vault.id, old, new), do: {:ok, 1}
     end)
   end
 
-  defp move_bare_row(_user, _vault, _old, _new, _notes, _how, _expect), do: :ok
+  defp move_bare_row(user, vault, old, new, 0, :cascaded, nil) do
+    Repo.with_tenant!(user.id, fn -> Rows.move_bare_explicit(user, vault.id, old, new) end)
+  end
+
+  defp move_bare_row(_user, _vault, _old, _new, _notes, _how, _expect), do: {:ok, 0}
 
   defp refuse_own_subtree(old, new) do
     if old != new and Rows.into_own_subtree?(old, new), do: {:error, :invalid_path}, else: :ok
