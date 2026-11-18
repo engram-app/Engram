@@ -586,52 +586,120 @@ defmodule Engram.Attachments do
 
   @doc """
   Before a write at `paths` (S6 step 6, `Engram.Attachments.Location`): in a
-  vault holding a folder moved without a cascade, moves each attachment that
-  is shown at one of `paths` but stored elsewhere, or stored at one but
-  shown elsewhere, to its shown path, as `move_attachment/4` does (the live
-  row repointed, a tombstone at its stored path, one seq, delete plus upsert
-  broadcasts). Every write then finds its row by the stored path key, as
-  before, and a client that still holds the old path is told to trash it.
-  One probe (`Location.named?/2`) and nothing else in any other vault.
-  O(1) per path: the rows `Location.stale_at/4` finds there, a chain of at
-  most four stale slots deep.
+  vault holding a folder moved without a cascade, repoints each attachment
+  stored at one of `paths` but shown elsewhere (it holds the unique slot
+  the write needs), or shown at one of them but stored elsewhere, to its
+  shown path: the stored path columns only, fenced on what was read, the
+  notes twin of `Engram.Notes.free_stale_slot/5`. No tombstone, no
+  broadcast, no folder row, no seq, no link job: the row was already shown
+  there, so for every reader nothing moved. Every write then finds its row
+  by the stored path key, as before. A plugin older than S4 that still
+  holds the stored path keeps that copy (the accepted orphan gap of the
+  moved-folder feed); nothing tells it to trash a path that may hold an
+  unrelated file by now.
 
-  A relocation that fails is logged and skipped: the write then runs as the
-  stored-path read would (the previous release's behavior).
+  One probe (`Location.named?/2`) in any other vault. In a moved vault a
+  fixed number of statements for the whole batch (`Location.stale_rows/4`),
+  plus one fenced update per stale row (none in steady state), in one
+  transaction, freeing a chain of at most `Engram.Notes.Location.stale_chain_depth/0`
+  held slots.
+
+  Fails closed: `{:error, :conflict}` (retryable) when a stale row cannot be
+  repointed (its shown slot is held by a row shown there, or the chain is
+  deeper than the cap), so the write never lands on another file's row.
+
+  Not atomic with the write that follows: until release E nothing leaves an
+  attachment stale except a rollback from E, the repoint creates no folder
+  row, and a race only leaves a row stale, which readers still serve.
+  E's write stop moves the heal into the write's transaction.
   """
-  @spec settle(map(), map(), [String.t()]) :: :ok
+  @spec settle(map(), map(), [String.t()]) :: :ok | {:error, :conflict}
+  def settle(_user, _vault, []), do: :ok
+
   def settle(user, vault, paths) do
-    with true <- Location.named?(user.id, vault_id(vault)),
+    vid = vault_id(vault)
+
+    with true <- Location.named?(user.id, vid),
+         {:ok, dek} <- Crypto.get_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
-      Enum.each(Enum.uniq(paths), &settle_one(user, vault, filter_key, &1, 4))
+      Repo.with_tenant!(user.id, fn ->
+        # Bounded statements: the probe set per 500 paths (a folder op passes
+        # every attachment under the folder).
+        paths
+        |> Enum.uniq()
+        |> Enum.chunk_every(500)
+        |> Enum.flat_map(&Location.stale_rows(user, vid, filter_key, &1))
+        |> Enum.reduce_while(:ok, fn stale, :ok ->
+          case repoint(
+                 user,
+                 vid,
+                 {dek, filter_key},
+                 stale,
+                 Engram.Notes.Location.stale_chain_depth()
+               ) do
+            :ok -> {:cont, :ok}
+            err -> {:halt, err}
+          end
+        end)
+      end)
     else
-      # No moved folder in the vault, or no key (nothing to relocate).
+      # No moved folder in the vault, or no key (nothing to repoint).
       _ -> :ok
     end
   end
 
-  defp settle_one(_user, _vault, _fk, _path, 0), do: :ok
+  defp repoint(_user, _vid, _keys, _stale, 0), do: {:error, :conflict}
 
-  defp settle_one(user, vault, fk, path, depth) do
-    for {stored, shown} <- Location.stale_at(user, vault_id(vault), fk, path) do
-      # A holder of `path` moves to its shown path, which may itself be held.
-      if stored == path, do: settle_one(user, vault, fk, shown, depth - 1)
+  defp repoint(user, vid, {dek, fk} = keys, {row, _stored, shown}, depth) do
+    hmac = Crypto.hmac_field(fk, shown)
 
-      case do_move_attachment(user, vault, stored, shown, false) do
-        {:ok, _} ->
-          :ok
+    holder =
+      Repo.one(
+        from(a in scoped_live(user, vid),
+          where: a.path_hmac == ^hmac and a.id != ^row.id,
+          select: struct(a, ^Location.row_fields())
+        )
+      )
 
-        {:error, reason} ->
-          require Logger
-
-          Logger.warning(
-            "attachment relocation failed",
-            Metadata.with_category(:warning, :sync, reason: Metadata.safe_reason(reason))
-          )
+    # The shown slot's own holder may be stale too (a chain of moves): free
+    # it first. A holder shown at that slot is another file: refuse.
+    freed =
+      case holder && Location.stale_of(user, [holder], MapSet.new([hmac])) do
+        nil -> :ok
+        [] -> {:error, :conflict}
+        [next] -> repoint(user, vid, keys, next, depth - 1)
       end
-    end
 
-    :ok
+    with :ok <- freed do
+      basename = Crypto.hmac_field(fk, Links.basename_key(shown))
+      cols = dek |> path_attrs(row.id, shown, {hmac, basename}) |> Map.to_list()
+
+      # Fenced on what was read: a writer that moved the row in between wins.
+      {n, _} =
+        Repo.update_all(
+          from(a in Attachment,
+            where:
+              a.id == ^row.id and is_nil(a.deleted_at) and a.path_hmac == ^row.path_hmac and
+                a.folder_ref_id == ^row.folder_ref_id
+          ),
+          set: cols ++ Rows.attachment_ref(row.folder_ref_id, Keyword.fetch!(cols, :path_nonce))
+        )
+
+      if n == 1, do: :ok, else: still_held(user, vid, row)
+    end
+  end
+
+  # The fence missed: fine if the row no longer holds its old slot (another
+  # writer moved or deleted it), a conflict if it still does.
+  defp still_held(user, vid, row) do
+    held =
+      Repo.exists?(
+        from(a in scoped_live(user, vid),
+          where: a.id == ^row.id and a.path_hmac == ^row.path_hmac
+        )
+      )
+
+    if held, do: {:error, :conflict}, else: :ok
   end
 
   defp vault_id(%{id: id}), do: id
@@ -934,8 +1002,15 @@ defmodule Engram.Attachments do
   # originating device can drop its own fanout echo.
   defp do_delete_attachment(user, vault, path, opts) do
     path = PathSanitizer.sanitize(path)
+
+    # The row shown at `path` first gets its stored path there (`settle/3`),
+    # so its tombstone names the path clients hold.
+    with :ok <- settle(user, vault, [path]),
+         do: delete_settled(user, vault, path, opts)
+  end
+
+  defp delete_settled(user, vault, path, opts) do
     now = DateTime.utc_now(:second)
-    :ok = settle(user, vault, [path])
 
     case Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
@@ -1071,14 +1146,14 @@ defmodule Engram.Attachments do
   defp check_move_target(new_path),
     do: MimeWhitelist.check(nil, PathSanitizer.sanitize(new_path))
 
-  defp do_move_attachment(user, vault, old_path, new_path, settle? \\ true) do
+  defp do_move_attachment(user, vault, old_path, new_path) do
     old_path = PathSanitizer.sanitize(old_path)
     new_path = PathSanitizer.sanitize(new_path)
     user = fresh_user(user)
-    :ok = if settle?, do: settle(user, vault, [old_path, new_path]), else: :ok
     now = DateTime.utc_now(:second)
 
-    with {:ok, user} <- Crypto.ensure_user_dek(user),
+    with :ok <- settle(user, vault, [old_path, new_path]),
+         {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       old_hmac = Crypto.hmac_field(filter_key, old_path)
@@ -1741,37 +1816,43 @@ defmodule Engram.Attachments do
     case Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
         sanitized = paths |> Enum.map(&PathSanitizer.sanitize/1) |> Enum.uniq()
-        :ok = settle(user, vault, sanitized)
-        hmac_by_path = Map.new(sanitized, &{&1, Crypto.hmac_field(filter_key, &1)})
-
-        # batch_soft_delete_rows never returns {:error, _}: a DB failure
-        # RAISES (Repo.query! inside the tenant transaction), rolling back
-        # the WHOLE batch. All-or-nothing is deliberate — a change from the
-        # old per-path independent transactions — and callers see the raise,
-        # never a fake `deleted: 0` success.
-        {:ok, {deleted_ids, seq_by_hmac}} =
-          batch_soft_delete_rows(user, vault, Map.values(hmac_by_path), opts[:op_id])
-
-        # One broadcast per deleted path in input order. No blob delete
-        # (#2159): this can run nested in a folder cascade that still rolls
-        # back, and a deleted blob cannot.
-        if deleted_ids != [], do: :ok = evict_counts(user.id)
-
-        # `origin_device_id:` (#970) lets the calling device drop its own
-        # echo, as the single delete does; without it the plugin trashed the
-        # files it had just recreated.
-        echo = Keyword.take(opts, [:origin_device_id])
-
-        for path <- sanitized, seq = seq_by_hmac[hmac_by_path[path]], seq != nil do
-          broadcast_delete(user.id, vault.id, path, seq, echo)
-        end
-
-        {:ok, %{deleted: map_size(seq_by_hmac)}}
+        # A row shown at one of `paths` first gets its stored path there
+        # (`settle/3`); one that cannot be fails the batch, never a wrong row.
+        with :ok <- settle(user, vault, sanitized),
+             do: delete_batch(user, vault, filter_key, sanitized, opts)
 
       {:error, :no_dek} ->
         # No DEK = no attachments to delete; mirror do_delete_attachment.
         {:ok, %{deleted: 0}}
     end
+  end
+
+  defp delete_batch(user, vault, filter_key, sanitized, opts) do
+    hmac_by_path = Map.new(sanitized, &{&1, Crypto.hmac_field(filter_key, &1)})
+
+    # batch_soft_delete_rows never returns {:error, _}: a DB failure
+    # RAISES (Repo.query! inside the tenant transaction), rolling back
+    # the WHOLE batch. All-or-nothing is deliberate — a change from the
+    # old per-path independent transactions — and callers see the raise,
+    # never a fake `deleted: 0` success.
+    {:ok, {deleted_ids, seq_by_hmac}} =
+      batch_soft_delete_rows(user, vault, Map.values(hmac_by_path), opts[:op_id])
+
+    # One broadcast per deleted path in input order. No blob delete
+    # (#2159): this can run nested in a folder cascade that still rolls
+    # back, and a deleted blob cannot.
+    if deleted_ids != [], do: :ok = evict_counts(user.id)
+
+    # `origin_device_id:` (#970) lets the calling device drop its own
+    # echo, as the single delete does; without it the plugin trashed the
+    # files it had just recreated.
+    echo = Keyword.take(opts, [:origin_device_id])
+
+    for path <- sanitized, seq = seq_by_hmac[hmac_by_path[path]], seq != nil do
+      broadcast_delete(user.id, vault.id, path, seq, echo)
+    end
+
+    {:ok, %{deleted: map_size(seq_by_hmac)}}
   end
 
   # One tenant transaction for the whole batch: find the live rows, allocate a
