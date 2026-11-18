@@ -85,7 +85,7 @@ defmodule Engram.Logs do
     # only mobile|desktop, so Android could not be told from iOS, nor a report
     # tied to an Obsidian release. Closed enum and a bare version number, so
     # neither can carry a path or a user agent. Metadata only, never a Loki label.
-    os: {:one_of, ~w(android ios desktop)},
+    os: {:one_of, ~w(android ios mobile_other desktop)},
     app_version: {:match, @version_regex}
   ]
 

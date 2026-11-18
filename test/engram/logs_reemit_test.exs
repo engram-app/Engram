@@ -292,6 +292,10 @@ defmodule Engram.LogsReemitTest do
       assert meta[:plugin_version] == "1.39.3"
     end
 
+    test "mobile_other is an accepted os class" do
+      assert reemit_plugin(%{"os" => "mobile_other"}, "1.0.0")[:os] == "mobile_other"
+    end
+
     test "an out-of-shape os, app_version or plugin_version is dropped" do
       meta =
         reemit_plugin(
