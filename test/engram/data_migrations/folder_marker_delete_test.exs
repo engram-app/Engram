@@ -5,23 +5,32 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
 
   alias Engram.Backfill.IdWindows
   alias Engram.DataMigrations.{ExplicitFolderReconcile, FolderMarkerDelete}
-  alias Engram.{FolderRows, Folders, Notes, Repo}
+  alias Engram.{FolderRows, Folders, Notes, QueryPlan, Repo}
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     Engram.ServiceConfig.put_override(:folder_marker_delete, true)
     IdWindows.reset_walk(FolderMarkerDelete.name())
+
+    # `done?/0` caches true per node (persistent_term); the sandbox rolls the
+    # ledger row back, so the cache must go too.
+    on_exit(fn ->
+      Engram.DataMigrations.forget(FolderMarkerDelete.name(), FolderMarkerDelete.version())
+    end)
+
     %{user: user, vault: insert(:vault, user: user)}
   end
 
   # Markers are written with the stop off (the test default), then it goes on.
   defp stop_on!, do: Engram.ServiceConfig.put_override(:marker_stop_floors, :assume)
 
-  defp markers(vault) do
+  defp markers(vault, live \\ true) do
     %{rows: [[n]]} =
-      Repo.query!("SELECT count(*) FROM notes WHERE vault_id = $1 AND kind = 'folder'", [
-        Ecto.UUID.dump!(vault.id)
-      ])
+      Repo.query!(
+        "SELECT count(*) FROM notes WHERE vault_id = $1 AND kind = 'folder' AND " <>
+          if(live, do: "deleted_at IS NULL", else: "deleted_at IS NOT NULL"),
+        [Ecto.UUID.dump!(vault.id)]
+      )
 
     n
   end
@@ -92,5 +101,72 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
   test "kill switch: off by default" do
     Engram.ServiceConfig.put_override(:folder_marker_delete, nil)
     refute FolderMarkerDelete.enabled?()
+  end
+
+  test "a trashed marker is left alone (trash history)", %{user: u, vault: v} do
+    {:ok, _} = Folders.create_markers(u, v, ["Live", "Gone"])
+    {:ok, _} = Folders.delete(u, v, "Gone", recursive: true, op_id: Ecto.UUID.generate())
+    assert markers(v, false) == 1
+    stop_on!()
+
+    assert until_done(FolderMarkerDelete) == :done
+    assert {markers(v), markers(v, false)} == {0, 1}
+  end
+
+  # #2652 review M1: a rollback to D (whose writers insert markers) and a roll
+  # forward leave the closed ledger true with a marker present. `done?/2`
+  # sees it at once; the daily re-verify walk finds and deletes it.
+  test "after a rollback writes a marker, done?/2 is false and the re-walk clears it", ctx do
+    %{user: u, vault: v} = ctx
+    {:ok, _} = Folders.create_markers(u, v, ["A"])
+    stop_on!()
+    assert until_done(FolderMarkerDelete) == :done
+    Engram.DataMigrations.mark_done(FolderMarkerDelete.name(), FolderMarkerDelete.version())
+    assert Repo.with_tenant!(u.id, fn -> FolderMarkerDelete.done?(u.id, v.id) end)
+
+    # Release D again: the stop is off and a create writes a marker.
+    Engram.ServiceConfig.put_override(:marker_stop_floors, :enforce)
+    {:ok, _} = Folders.create_markers(u, v, ["D"])
+    assert markers(v) == 1
+    assert FolderMarkerDelete.done?()
+    refute Repo.with_tenant!(u.id, fn -> FolderMarkerDelete.done?(u.id, v.id) end)
+
+    # Forward to E: the re-verify walk deletes it.
+    assert FolderMarkerDelete.reverify?()
+    stop_on!()
+    assert until_done(FolderMarkerDelete) == :done
+    assert markers(v) == 0
+    assert explicit(u, v) == ["A", "D"]
+  end
+
+  test "the per-pass cap stops the walk and the next pass resumes", %{user: u, vault: v} do
+    {:ok, _} = Folders.create_markers(u, v, ["P1", "P2", "P3"])
+    stop_on!()
+
+    assert {:more, _} = FolderMarkerDelete.run_pass(max_fixed: 1, batch: 1)
+    assert markers(v) == 2
+    assert until_done(FolderMarkerDelete) == :done
+    assert markers(v) == 0
+  end
+
+  # #2652 review L3: the window statements as engram_maintenance (the fleet
+  # role) use the marker and folder path indexes.
+  test "plans as engram_maintenance", %{user: u, vault: v} do
+    for i <- 1..30, do: {:ok, _} = Folders.create_markers(u, v, ["M#{i}"])
+    other = insert(:vault, user: u)
+    for i <- 1..30, do: {:ok, _} = Folders.create_markers(u, other, ["O#{i}"])
+    ids = [Ecto.UUID.dump!(v.id)]
+    owners = [Ecto.UUID.dump!(u.id)]
+
+    unmatched =
+      QueryPlan.rls_plans(u.id, FolderMarkerDelete.unmatched_sql(), [ids, owners],
+        role: "engram_maintenance"
+      )
+
+    for plan <- [unmatched.custom, unmatched.generic] do
+      assert plan =~ "notes_user_vault_folder_marker", plan
+      assert plan =~ "folders_full_path", plan
+      refute plan =~ ~r/Seq Scan on (notes|folders)/, plan
+    end
   end
 end

@@ -10,19 +10,29 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   Blocked (the pass walks nothing, resets its walk and stays open) unless
   `MarkerStop.on?/0`: never while any writer can still insert a marker.
 
-  Per marker, before it goes, its folder row is made to carry the flag on its
-  own, with `explicit_seq` stamped (0 unless set), so `ExplicitFolderReconcile`
-  never clears it:
+  Only LIVE markers are deleted. A trashed marker (`deleted_at` set) is trash
+  history: it stays, as every trash row does until a trash purge is approved.
+  No live read path reads one (listings, the scan's marker arm
+  `folder_markers_in`, `live_folder_marker_hmacs` filter `deleted_at IS NULL`);
+  only the undo (`Notes.plan_restore/4`, by op) and the marker lookup of a
+  path delete (`find_folder_marker`, which then clears the flag) see them.
 
-    * a LIVE marker needs its live, explicit folder row at its path hash. A
-      vault holding ANY live marker without one is not touched at all on
-      this pass (redundancy pre-check, logged with the vault id and the
-      count): an unmatched marker is never deleted, and it keeps the ledger
-      open until `FolderTable` or a writer repairs the row;
-    * a TOMBSTONED marker of an undoable delete (`delete_op_id`) marks the
-      folder row that delete stamped with the same op and path hash explicit,
-      so the undo (`Folders.restore_op/3`) brings the empty folder back from
-      the row. Other tombstones just go.
+  Before a live marker goes, its live, explicit folder row is stamped
+  (`explicit_seq` 0 unless set), so `ExplicitFolderReconcile` never clears it.
+  A vault holding ANY live marker without such a row is not touched at all on
+  that pass (redundancy pre-check, logged once per vault per day with the
+  vault id and the count): an unmatched marker is never deleted, and it keeps
+  the ledger open until `FolderTable` or a writer repairs the row.
+
+  Re-verified daily (`reverify?/0`): a rollback to release D, whose writers
+  insert markers, and a roll forward would leave `done?/0` true with markers
+  present. The daily walk finds them and reopens the ledger. A caller that
+  needs to know NOW for one vault asks `done?/2` (the ledger plus one index
+  probe).
+
+  Paced: at most `folder_marker_delete_max_fixed` markers a pass (service
+  override, default #{2_000}), so the fleet's WAL and dead tuples spread over
+  hourly passes.
 
   Discovery and writes go through `Engram.Backfill.IdWindows.heal_pass/4`
   (`notes` primary-key windows of 200; one fleet walk on the maintenance pool
@@ -40,6 +50,8 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   """
   @behaviour Engram.DataMigration
 
+  import Ecto.Query
+
   alias Engram.Backfill.IdWindows
   alias Engram.DataMigrations
   alias Engram.Folders.MarkerStop
@@ -49,6 +61,7 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   require Logger
 
   @batch 200
+  @max_fixed 2_000
 
   @impl true
   def name, do: "folder_marker_delete"
@@ -56,9 +69,33 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   @impl true
   def version, do: 1
 
-  @doc "True once no marker row is left (the ledger is done)."
+  @doc """
+  True once no live marker is left (the ledger is done). Re-verified daily
+  (`reverify?/0`), so after a rollback to D and back it can be true for up to
+  a day with markers present; use `done?/2` where that matters for one vault.
+  """
   @spec done?() :: boolean()
   def done?, do: DataMigrations.done?(name(), version())
+
+  @doc """
+  `done?/0` AND no live marker in `vault_id` right now: one probe of
+  `notes_user_vault_folder_marker` (`LIMIT 1`, O(1)). Runs inside the
+  caller's tenant transaction (`user_id` is the vault owner).
+  """
+  @spec done?(Ecto.UUID.t(), Ecto.UUID.t()) :: boolean()
+  def done?(user_id, vault_id) do
+    done?() and
+      not Engram.Repo.exists?(
+        from(n in Note,
+          where:
+            n.user_id == ^user_id and n.vault_id == ^vault_id and n.kind == "folder" and
+              is_nil(n.deleted_at)
+        )
+      )
+  end
+
+  @impl true
+  def reverify?, do: true
 
   @doc """
   Kill switch: the `folder_marker_delete` service override, default OFF.
@@ -73,7 +110,10 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   # `batch:` overrides the window size.
   def run_pass(opts) do
     if MarkerStop.on?() do
-      IdWindows.heal_pass(name(), Note, &delete/2, batch_size: Keyword.get(opts, :batch, @batch))
+      IdWindows.heal_pass(name(), Note, &delete/2,
+        batch_size: Keyword.get(opts, :batch, @batch),
+        max_fixed: Keyword.get_lazy(opts, :max_fixed, &max_fixed/0)
+      )
     else
       IdWindows.reset_walk(name())
       :ok = Engram.DataMigration.report(blocked: :markers_not_stopped)
@@ -81,53 +121,49 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
     end
   end
 
-  # Statement 1: the vault rows of the window's markers, FOR SHARE SKIP
-  # LOCKED, in a statement of their own so the later ones take their
-  # snapshot after the lock (see `ExplicitFolderReconcile`).
+  # Statement 1: the vault rows (and owners) of the window's live markers,
+  # FOR SHARE SKIP LOCKED, in a statement of their own so the later ones take
+  # their snapshot after the lock (see `ExplicitFolderReconcile`).
   @lock_vaults_sql """
-  SELECT id FROM vaults
-  WHERE id IN (SELECT vault_id FROM notes WHERE id = ANY($1) AND kind = 'folder')
+  SELECT id, user_id FROM vaults
+  WHERE id IN (
+    SELECT vault_id FROM notes WHERE id = ANY($1) AND kind = 'folder' AND deleted_at IS NULL)
   FOR SHARE SKIP LOCKED
   """
 
-  # Statement 2: the locked vaults holding a live marker with no live
-  # explicit folder row at its path hash, and how many such markers each
-  # has. Vault-wide, on `notes_user_vault_folder_marker` and
-  # `folders_full_path`: O(the vault's markers), once a window.
+  # Statement 2: of the locked vaults (`$1` ids, `$2` their owners, paired by
+  # position), those holding a live marker with no live explicit folder row at
+  # its path hash, and how many such markers each has. Vault-wide: a
+  # `(user_id, vault_id)` range of `notes_user_vault_folder_marker`, then one
+  # `folders_full_path` probe a marker: O(the vault's markers), once a window.
   @unmatched_sql """
-  SELECT m.vault_id, count(*)::int FROM notes AS m
-  WHERE m.vault_id = ANY($1) AND m.kind = 'folder' AND m.deleted_at IS NULL
-    AND m.user_id = (SELECT v.user_id FROM vaults AS v WHERE v.id = m.vault_id)
-    AND NOT EXISTS (
-      SELECT 1 FROM folders AS f
-      WHERE f.vault_id = m.vault_id AND f.full_path_hmac = m.folder_hmac
-        AND f.deleted_at IS NULL AND f.explicit)
+  SELECT m.vault_id, count(*)::int
+  FROM unnest($1::uuid[], $2::uuid[]) AS v(id, user_id)
+  JOIN notes AS m
+    ON m.user_id = v.user_id AND m.vault_id = v.id AND m.kind = 'folder' AND m.deleted_at IS NULL
+  WHERE NOT EXISTS (
+    SELECT 1 FROM folders AS f
+    WHERE f.vault_id = m.vault_id AND f.full_path_hmac = m.folder_hmac
+      AND f.deleted_at IS NULL AND f.explicit)
   GROUP BY m.vault_id
   """
 
-  # Statement 3: the window's markers in the vaults that passed (`$2`),
-  # locked, then the folder rows stamped, then the markers deleted. A
+  # Statement 3: the window's live markers in the vaults that passed (`$2`),
+  # locked, then their folder rows stamped, then the markers deleted. A
   # data-modifying CTE runs once whether or not it is referenced, in the same
-  # snapshot; the two stamps touch disjoint rows (live ones, deleted ones).
+  # snapshot.
   @delete_sql """
   WITH m AS MATERIALIZED (
-    SELECT n.id, n.vault_id, n.folder_hmac, n.deleted_at, n.delete_op_id FROM notes AS n
-    WHERE n.id = ANY($1) AND n.kind = 'folder' AND n.vault_id = ANY($2)
+    SELECT n.id, n.vault_id, n.folder_hmac FROM notes AS n
+    WHERE n.id = ANY($1) AND n.kind = 'folder' AND n.deleted_at IS NULL
+      AND n.vault_id = ANY($2)
     ORDER BY n.id
     FOR UPDATE OF n SKIP LOCKED
-  ), live AS (
+  ), stamp AS (
     UPDATE folders AS f SET explicit_seq = 0
     FROM m
-    WHERE m.deleted_at IS NULL AND f.vault_id = m.vault_id
-      AND f.full_path_hmac = m.folder_hmac AND f.deleted_at IS NULL AND f.explicit
-      AND f.explicit_seq IS NULL
-    RETURNING f.id
-  ), tomb AS (
-    UPDATE folders AS f SET explicit = true, explicit_seq = coalesce(f.explicit_seq, 0)
-    FROM m
-    WHERE m.deleted_at IS NOT NULL AND m.delete_op_id IS NOT NULL
-      AND f.vault_id = m.vault_id AND f.full_path_hmac = m.folder_hmac
-      AND f.delete_op_id = m.delete_op_id AND f.deleted_at IS NOT NULL
+    WHERE f.vault_id = m.vault_id AND f.full_path_hmac = m.folder_hmac
+      AND f.deleted_at IS NULL AND f.explicit AND f.explicit_seq IS NULL
     RETURNING f.id
   )
   DELETE FROM notes AS n
@@ -135,11 +171,34 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   WHERE n.id = m.id
   """
 
-  # What is left in a window: any marker (a skipped lock or an unmatched vault).
-  @left_sql "SELECT count(*)::int FROM notes WHERE id = ANY($1) AND kind = 'folder'"
+  # What is left in a window: any live marker (a skipped lock or an
+  # unmatched vault).
+  @left_sql "SELECT count(*)::int FROM notes WHERE id = ANY($1) AND kind = 'folder' AND deleted_at IS NULL"
 
   @doc false
+  def lock_vaults_sql, do: @lock_vaults_sql
+  @doc false
+  def unmatched_sql, do: @unmatched_sql
+  @doc false
   def delete_sql, do: @delete_sql
+
+  @doc false
+  # The per-pass cap: the service override when it is a positive integer,
+  # else the default, with a warning.
+  def max_fixed do
+    case Engram.ServiceConfig.get(:folder_marker_delete_max_fixed, @max_fixed) do
+      n when is_integer(n) and n > 0 ->
+        n
+
+      _ ->
+        Logger.warning(
+          "folder_marker_delete_max_fixed is not a positive integer, using #{@max_fixed}",
+          Metadata.with_category(:warning, :data)
+        )
+
+        @max_fixed
+    end
+  end
 
   defp delete(ids, %{repo: repo}) do
     ids = Enum.map(ids, &Ecto.UUID.dump!/1)
@@ -151,8 +210,9 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
         {0, left?(repo, ids)}
 
       %{rows: locked} ->
-        vaults = List.flatten(locked)
-        %{rows: unmatched} = repo.query!(@unmatched_sql, [vaults])
+        vaults = Enum.map(locked, &hd/1)
+        owners = Enum.map(locked, &List.last/1)
+        %{rows: unmatched} = repo.query!(@unmatched_sql, [vaults, owners])
         Enum.each(unmatched, fn [vault, count] -> log_unmatched(vault, count) end)
         ok = vaults -- Enum.map(unmatched, &hd/1)
         %{num_rows: fixed} = repo.query!(@delete_sql, [ids, ok])
@@ -165,7 +225,16 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
     left > 0
   end
 
+  # Once per vault per node per day (`:marker_delete_warned`, 24 h TTL), not
+  # once per window per hourly pass.
   defp log_unmatched(vault, count) do
+    Engram.Cache.fetch(:marker_delete_warned, vault, fn ->
+      warn_unmatched(vault, count)
+      true
+    end)
+  end
+
+  defp warn_unmatched(vault, count) do
     Logger.warning(
       "folder_marker_delete: vault skipped, live markers without an explicit folder row",
       Metadata.with_category(:warning, :data,

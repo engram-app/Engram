@@ -77,6 +77,8 @@ defmodule Engram.ServiceConfig.Overrides do
     # S6 step 4 marker delete (`Engram.DataMigrations.FolderMarkerDelete`),
     # ships OFF: switched on after release E is verified.
     folder_marker_delete: :boolean,
+    # Its pace: markers deleted a pass.
+    folder_marker_delete_max_fixed: {:integer, 1..100_000},
     # Every paced backfill chain's pressure gate (`Engram.Backfill.Throttle`).
     backfill_max_queue_ms: {:integer, 1..60_000},
     backfill_max_xact_s: {:integer, 1..86_400},
