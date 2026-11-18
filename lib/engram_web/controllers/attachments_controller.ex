@@ -807,6 +807,9 @@ defmodule EngramWeb.AttachmentsController do
     parameters: [path: [in: :path, type: :string, required: true, description: "Attachment path"]],
     responses: [
       ok: {"Deleted", "application/json", Schemas.AttachmentDeleted},
+      conflict:
+        {"`conflict`: a file left under a moved folder could not be settled; retry",
+         "application/json", Schemas.MessageError},
       internal_server_error: {"Delete failed", "application/json", Schemas.MessageError}
     ]
   )
