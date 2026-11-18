@@ -288,4 +288,72 @@ defmodule Engram.Folders.ExplicitReadsTest do
       assert {:ok, _} = Notes.get_note(u, v, "Moved/n.md")
     end
   end
+
+  # The 2639 audit: release C (0.89.0) still serves during the rollout to D,
+  # or after a rollback and re-roll, and writes after the reconcile closed.
+  # Each read switch, given 0.89.0's own write (raw SQL where its code
+  # differs from D's), must read right. D's writers are unchanged except the
+  # cascade's marker leg and the path delete, so creates, renames and undos
+  # are 0.89.0's own code here.
+  describe "0.89.0 writes, D reads" do
+    # 0.89.0's recursive delete of an empty explicit folder: the marker leg
+    # tombstones the marker WITHOUT clearing the flag (D's leg clears it),
+    # then the rows leg soft-deletes the row with explicit false.
+    defp c_delete!(user, folder, opts) do
+      %{id: row} = FolderRows.tree(user)[folder]
+
+      Repo.query!(
+        "UPDATE notes SET deleted_at = now() WHERE kind = 'folder' AND user_id = $1 " <>
+          "AND deleted_at IS NULL AND folder_hmac = (SELECT full_path_hmac FROM folders WHERE id = $2)",
+        [Ecto.UUID.dump!(user.id), Ecto.UUID.dump!(row)]
+      )
+
+      if opts[:rows_leg],
+        do:
+          Repo.query!(
+            "UPDATE folders SET deleted_at = now(), explicit = false WHERE id = $1",
+            [Ecto.UUID.dump!(row)]
+          )
+    end
+
+    test "create: a 0.89.0 folder create is listed", %{user: u, vault: v} do
+      {:ok, _} = Notes.create_folder_markers(u, v, ["C"])
+      assert {:ok, ["C"]} = Notes.list_explicit_folders(u, v)
+      assert %{"C" => _} = payload_ids(u, v)
+    end
+
+    test "rename: a 0.89.0 folder rename is listed at the new path", %{user: u, vault: v} do
+      {:ok, _} = Notes.create_folder_markers(u, v, ["Old"])
+      {:ok, _} = Notes.rename_folder(u, v, "Old", "New")
+      assert {:ok, ["New"]} = Notes.list_explicit_folders(u, v)
+    end
+
+    test "delete: a whole 0.89.0 delete is not listed", %{user: u, vault: v} do
+      {:ok, _} = Notes.create_folder_markers(u, v, ["Gone"])
+      c_delete!(u, "Gone", rows_leg: true)
+      assert {:ok, []} = Notes.list_explicit_folders(u, v)
+    end
+
+    # The audit's ghost: the marker leg ran, the rows leg did not (or kept
+    # the row). The closed ledger's daily re-verify walk clears it.
+    test "delete: a 0.89.0 delete that kept the row is cleared by the re-verify", ctx do
+      %{user: u, vault: v} = ctx
+      {:ok, _} = Notes.create_folder_markers(u, v, ["Ghost"])
+      c_delete!(u, "Ghost", rows_leg: false)
+      assert {:ok, ["Ghost"]} = Notes.list_explicit_folders(u, v)
+
+      assert ExplicitFolderReconcile.reverify?()
+      assert reconcile!() == :done
+      assert {:ok, []} = Notes.list_explicit_folders(u, v)
+    end
+
+    test "undo: a 0.89.0 undo of an empty folder delete is listed again", %{user: u, vault: v} do
+      {:ok, _} = Notes.create_folder_markers(u, v, ["U"])
+      op = Ecto.UUID.generate()
+      {:ok, _} = Engram.Folders.delete(u, v, "U", recursive: true, op_id: op)
+      assert {:ok, []} = Notes.list_explicit_folders(u, v)
+      {:ok, _} = Engram.Folders.restore_op(u, v, op)
+      assert {:ok, ["U"]} = Notes.list_explicit_folders(u, v)
+    end
+  end
 end
