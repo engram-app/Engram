@@ -1886,6 +1886,8 @@ defmodule EngramWeb.McpControllerTest do
       # reset: this module is async, and a wipe beside it (or one beside this
       # test) would erase the token `search_notes` spent.
       insert(:user_limit_override, user: user, key: "ai_searches_per_day", value: %{"v" => 1})
+      # Both calls in one budget window, never across its edge (midnight UTC).
+      EngramWeb.RateLimiter.await_fresh_window!()
       :ok
     end
 

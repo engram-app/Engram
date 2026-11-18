@@ -76,6 +76,7 @@ defmodule Engram.Search.CrossVaultGateTest do
     user = insert(:user)
     # A fresh user's budget bucket is empty; no global reset (async module).
     insert(:user_limit_override, user: user, key: "ai_searches_per_day", value: %{"v" => 1})
+    EngramWeb.RateLimiter.await_fresh_window!()
 
     assert {:error, _} = Search.search(user, nil, "anything", cross_vault: true)
 
