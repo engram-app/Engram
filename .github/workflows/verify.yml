@@ -1166,20 +1166,24 @@ jobs:
 
       - name: Claim a display window for this job
         id: display
+        timeout-minutes: 1
         run: |
           # A window of Xvfb displays this job alone owns on this host, held by
           # an flock until teardown (or the runner's end-of-job cleanup). It
           # was `GITHUB_RUN_NUMBER % 15`: two concurrent runs 15 apart got the
           # same window, and one's Xvfb cleanup killed the other's displays
           # (run 44354068376; docs/context/e2e-display-window-collision.md).
-          # Windows :50..:199, 10 displays each (e2e-crdt owns :245..:334).
+          # Windows :3500..:3649, 10 displays each (e2e-crdt owns :4000..:4089).
+          # Chosen so no old-workflow `pkill -f "Xvfb :N"` (N in :50..:199 or
+          # :245..:334, a regex prefix match) can reach them while branches
+          # still run the old workflow.
           # Layout, up to 2 xdist workers (the ports step allocates for 2):
           #   :BASE..:BASE-5    A/B/C, 3 per worker
           #   :BASE-6..:BASE-9  resumed pair (test_82), 2 per worker
           # Unset, conftest's resumed default :150/:149 would land in another
           # job's window (run 37534181735); conftest asserts the two groups
           # are disjoint for the actual worker count.
-          ci/bin/claim-display-window clerk 10 59 15 >> "$GITHUB_OUTPUT"
+          ci/bin/claim-display-window clerk 10 3509 15 >> "$GITHUB_OUTPUT"
 
       - name: Checkout plugin
         timeout-minutes: 5
@@ -1790,14 +1794,16 @@ jobs:
 
       - name: Claim a display window for this job
         id: display
+        timeout-minutes: 1
         run: |
           # A window of Xvfb displays this job alone owns on this host, held by
           # an flock until teardown (or the runner's end-of-job cleanup). It
           # was `GITHUB_RUN_NUMBER % 15`: two concurrent runs 15 apart got the
           # same window, and one's Xvfb cleanup killed the other's displays
           # (run 44354068376; docs/context/e2e-display-window-collision.md).
-          # Windows :245..:334, 6 displays each, clear of e2e-clerk's :50..:199.
-          ci/bin/claim-display-window crdt 6 250 15 >> "$GITHUB_OUTPUT"
+          # Windows :4000..:4089, 6 displays each, clear of e2e-clerk's
+          # :3500..:3649 and of every old-workflow range pkill.
+          ci/bin/claim-display-window crdt 6 4005 15 >> "$GITHUB_OUTPUT"
 
       - name: Checkout plugin
         timeout-minutes: 5
