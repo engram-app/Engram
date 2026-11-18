@@ -125,22 +125,42 @@ def _text(result: dict) -> str:
     return "\n".join(c.get("text", "") for c in result.get("content") or [])
 
 
+def _get_notes(api, vault_id: str, paths: list[str]) -> tuple[dict, str, dict]:
+    result = api.mcp_tool("get_notes", {"paths": paths, "vault_id": vault_id})
+    return {n["path"]: n for n in result["structuredContent"]["notes"]}, _text(result), result
+
+
 def _assert_get_notes(api, vault_id: str, live: list[str], gone: list[str] = ()) -> dict:
     """MCP get_notes finds every `live` path AT that path (payload and the
-    `**Path:**` header) and none of `gone`. Returns {path: payload}."""
-    result = api.mcp_tool("get_notes", {"paths": [*live, *gone], "vault_id": vault_id})
-    by_path = {n["path"]: n for n in result["structuredContent"]["notes"]}
-    text = _text(result)
-    for path in live:
-        assert by_path.get(path, {}).get("found") is True, f"get_notes missed {path}: {result}"
-        assert f"**Path:** {path}\n" in text, f"get_notes printed another path for {path}: {text}"
-        folder = path.rsplit("/", 1)[0] if "/" in path else ""
-        assert by_path[path].get("folder") == folder, f"get_notes folder for {path}: {by_path[path]}"
-    for path in gone:
-        assert by_path.get(path, {}).get("found") is not True, (
-            f"get_notes still finds the old path {path}: {by_path.get(path)}"
-        )
-    return by_path
+    `**Path:**` header) and none of `gone`. Asked three ways, so a failure
+    names which: the live paths alone, the old paths alone, then both in one
+    batch (a client holding a stale path asks exactly that). Returns
+    {path: payload} of the live-only read."""
+    calls = [("live only", list(live), []), ("gone only", [], list(gone))]
+    if live and gone:
+        calls.append(("live and gone in one batch", list(live), list(gone)))
+    first = None
+    for how, want, absent in calls:
+        if not want and not absent:
+            continue
+        by_path, text, result = _get_notes(api, vault_id, [*want, *absent])
+        first = first or by_path
+        for path in want:
+            assert by_path.get(path, {}).get("found") is True, (
+                f"get_notes ({how}) missed {path}: {result}"
+            )
+            assert f"**Path:** {path}\n" in text, (
+                f"get_notes ({how}) printed another path for {path}: {text}"
+            )
+            folder = path.rsplit("/", 1)[0] if "/" in path else ""
+            assert by_path[path].get("folder") == folder, (
+                f"get_notes ({how}) folder for {path}: {by_path[path]}"
+            )
+        for path in absent:
+            assert by_path.get(path, {}).get("found") is not True, (
+                f"get_notes ({how}) still finds the old path {path}: {by_path.get(path)}"
+            )
+    return first or {}
 
 
 def _recent_paths(api, vault_id: str, **filters) -> set[str]:
@@ -322,7 +342,7 @@ async def test_attachment_in_moved_folder_lists_downloads_and_renames(
         rows = _move(api_sync, root, rows, old, new)
         moved_att = f"{new}/img.png"
 
-        resp = api_sync.get_attachment(moved_att)
+        resp = api_sync.get_attachment(moved_att, raw=True)
         assert resp.status_code == 200 and resp.content == TINY_PNG, (
             f"GET {moved_att}: {resp.status_code}"
         )
@@ -349,7 +369,7 @@ async def test_attachment_in_moved_folder_lists_downloads_and_renames(
         assert api_sync.rename_attachment(renamed, final) == 200
         after, _ = folder_ops.wait_server_paths(api_sync, root, set(rows) - {moved_att} | {final})
         assert after[final]["id"] == rows[moved_att]["id"], "the REST rename changed the row"
-        assert api_sync.get_attachment(final).content == TINY_PNG
+        assert api_sync.get_attachment(final, raw=True).content == TINY_PNG
         expected = set(after)
         for who, vault in (("A", vault_a), ("B", vault_b)):
             assert wait_for_binary_delivery(vault, final, api_sync) == TINY_PNG
