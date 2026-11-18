@@ -99,8 +99,11 @@ defmodule Engram.Folders.LiveRefTest do
       [dump(a.id)]
     )
 
+    # The leaf is found by its parent and name (S6 step 3: no row carries a
+    # whole-path hash any more).
     {:ok, fk} = Crypto.dek_filter_key(u)
-    leaf = Crypto.hmac_field(fk, "A/C")
+    parent = FolderRows.tree(u)["A"].id
+    leaf = Engram.Folders.Rows.name_hmac(fk, "C")
     pid = self()
     id = "kill-#{System.unique_integer([:positive])}"
 
@@ -114,8 +117,8 @@ defmodule Engram.Folders.LiveRefTest do
 
           Repo.query!(
             "UPDATE folders SET deleted_at = now() " <>
-              "WHERE vault_id = $1 AND full_path_hmac = $2 AND deleted_at IS NULL",
-            [dump(v.id), leaf]
+              "WHERE vault_id = $1 AND parent_id = $2 AND name_hmac = $3 AND deleted_at IS NULL",
+            [dump(v.id), dump(parent), leaf]
           )
         end
       end,
