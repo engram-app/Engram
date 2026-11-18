@@ -1,7 +1,7 @@
 defmodule Engram.DataMigrations.NoteFolderHashNullTest do
-  # R9 release E null batch: clears `notes.folder_hmac` on notes whose
-  # reference names a live folder row, keeps roots, markers and drift,
-  # refuses to run while `note_payload_stamps` is open, and
+  # R9 release E null batch: clears `notes.folder_hmac` on notes whose live
+  # folder row holds the same hash, keeps roots, markers, drift and
+  # disagreeing rows, refuses to run while `note_payload_stamps` is open, and
   # honours its kill switch and per-pass cap.
   use Engram.DataCase, async: false
 
@@ -29,7 +29,19 @@ defmodule Engram.DataMigrations.NoteFolderHashNullTest do
     {:ok, n} =
       Notes.upsert_note(u, v, %{"path" => path, "content" => "# T\n\nbody"}, actor: "api")
 
+    stamp_row!(n.id)
     n
+  end
+
+  # The note's folder row as a release before S6 step 3's write stop left it:
+  # carrying the hash of its path (the note's own `folder_hmac` here). Rows
+  # written since carry none, and their notes are left (the safe direction).
+  defp stamp_row!(note_id) do
+    Repo.query!(
+      "UPDATE folders f SET full_path_hmac = n.folder_hmac FROM notes n " <>
+        "WHERE n.id = $1 AND f.id = n.folder_ref_id",
+      [Ecto.UUID.dump!(note_id)]
+    )
   end
 
   defp hash_at(id) do
@@ -61,7 +73,7 @@ defmodule Engram.DataMigrations.NoteFolderHashNullTest do
     assert is_binary(hash_at(n.id))
   end
 
-  test "nulls placed notes (any live reference), keeps roots, markers and drift", %{
+  test "nulls placed notes, keeps roots, markers, drift and disagreeing rows", %{
     user: u,
     vault: v
   } do
@@ -73,9 +85,7 @@ defmodule Engram.DataMigrations.NoteFolderHashNullTest do
     {:ok, marker} = Notes.create_folder_marker(u, v, "M")
 
     Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [dump(drift.id)])
-    # A row whose hash and folder row disagree (a reference to another
-    # folder): placed by its reference like every note, so nulled too. Kept
-    # before S6 step 3, when the row's `full_path_hmac` had to match.
+    # A row whose hash and folder row disagree (a reference to another folder).
     Repo.query!(
       "UPDATE notes SET folder_ref_id = (SELECT folder_ref_id FROM notes WHERE id = $2) WHERE id = $1",
       [dump(other.id), dump(placed.id)]
@@ -87,8 +97,7 @@ defmodule Engram.DataMigrations.NoteFolderHashNullTest do
 
     assert hash_at(placed.id) == nil
     assert hash_at(nested.id) == nil
-    assert hash_at(other.id) == nil
-    for kept <- [root, drift, marker], do: assert(is_binary(hash_at(kept.id)))
+    for kept <- [root, drift, other, marker], do: assert(is_binary(hash_at(kept.id)))
     assert Repo.query!("SELECT id, folder_ref_id FROM notes ORDER BY id").rows == refs_before
   end
 
