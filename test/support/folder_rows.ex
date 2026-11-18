@@ -55,8 +55,7 @@ defmodule Engram.FolderRows do
               vault_id: vault.id,
               name_ciphertext: ct,
               name_nonce: nonce,
-              full_path_hmac: Rows.path_hmac(fk, ""),
-              dek_version: Crypto.row_version_aad_bound()
+                  dek_version: Crypto.row_version_aad_bound()
             ] ++ Folder.name_keys(fk, "", nonce)
           )
         ],
