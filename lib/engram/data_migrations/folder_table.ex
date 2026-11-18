@@ -361,7 +361,7 @@ defmodule Engram.DataMigrations.FolderTable do
           )
 
         # The hash through its one writer (released from any stale holder).
-        n = marked + PathHmacs.put(repo, [{id, full}])
+        n = marked + PathHmacs.put(repo, ctx.user_id, [{id, full}])
 
         if n > 0,
           do: {id, {put(tree, key, id, full), bump(stats)}},
@@ -412,7 +412,7 @@ defmodule Engram.DataMigrations.FolderTable do
       )
 
     # Inserted without a hash; its one writer sets it.
-    if n == 1, do: PathHmacs.put(repo, [{row.id, row.full}])
+    if n == 1, do: PathHmacs.put(repo, ctx.user_id, [{row.id, row.full}])
     n
   end
 
@@ -445,7 +445,7 @@ defmodule Engram.DataMigrations.FolderTable do
       ]
     )
 
-    PathHmacs.put(repo, [{row.id, row.full}])
+    PathHmacs.put(repo, ctx.user_id, [{row.id, row.full}])
   end
 
   # Moving or reviving a folder row changes where its notes are shown when

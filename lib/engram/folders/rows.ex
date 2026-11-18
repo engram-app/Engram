@@ -295,6 +295,7 @@ defmodule Engram.Folders.Rows do
 
     # The rows are inserted without a hash; `PathHmacs.put/2` sets it.
     PathHmacs.put(
+      ctx.user_id,
       for({path, _, _, id, _} <- rows, MapSet.member?(written, id), do: {id, hmacs[path]})
     )
 
@@ -321,13 +322,13 @@ defmodule Engram.Folders.Rows do
          ) do
       1 ->
         put_names(ctx, [{id, segment}], :new)
-        PathHmacs.put([{id, full_h}])
+        PathHmacs.put(ctx.user_id, [{id, full_h}])
         id
 
       0 ->
         case live_child(ctx.vault_id, parent_id, name_h) do
           %{id: found} = row ->
-            repair(row, full_h, explicit)
+            repair(ctx, row, full_h, explicit)
             found
 
           # No live row, yet the insert wrote nothing: `explicit` names a row
@@ -377,13 +378,13 @@ defmodule Engram.Folders.Rows do
 
   # A row another writer made may lack `full_path_hmac` (the previous release's
   # backfill gap) or the explicit flag: set what this caller knows.
-  defp repair(%{id: id, full: full, explicit: explicit?}, full_h, marker) do
+  defp repair(ctx, %{id: id, full: full, explicit: explicit?}, full_h, marker) do
     if marker && !explicit? do
       from(f in Folder, where: f.id == ^id)
       |> Repo.update_all(set: [explicit: true, updated_at: now()])
     end
 
-    if full != full_h, do: PathHmacs.put([{id, full_h}])
+    if full != full_h, do: PathHmacs.put(ctx.user_id, [{id, full_h}])
     :ok
   end
 
@@ -457,7 +458,7 @@ defmodule Engram.Folders.Rows do
 
     # Only a row that moved here takes this path's hash (a 0-row update must
     # not release a live sibling's).
-    if moved == 1, do: PathHmacs.put([{id, full_h}])
+    if moved == 1, do: PathHmacs.put(ctx.user_id, [{id, full_h}])
     put_names(ctx, [{id, segment}])
   end
 
@@ -1167,6 +1168,7 @@ defmodule Engram.Folders.Rows do
         rest = for r <- rows, r.id != root.id, Map.has_key?(paths, r.id), do: {r.id, paths[r.id]}
         # The root's new path hash and every descendant's, one statement.
         PathHmacs.put(
+          ctx.user_id,
           for({id, p} <- [{root.id, new_folder} | rest], do: {id, path_hmac(ctx.fk, p)})
         )
 
@@ -1248,7 +1250,7 @@ defmodule Engram.Folders.Rows do
       end)
 
     # Every moved row's new path hash, one statement.
-    PathHmacs.put(for({id, path} <- moved, do: {id, path_hmac(ctx.fk, path)}))
+    PathHmacs.put(ctx.user_id, for({id, path} <- moved, do: {id, path_hmac(ctx.fk, path)}))
     retire_later(ctx.user_id, Enum.reverse(merged))
   end
 
@@ -1467,7 +1469,7 @@ defmodule Engram.Folders.Rows do
         end
       end)
 
-    write_revived(revive)
+    write_revived(vault_id, revive)
   end
 
   defp depth(_row, _by_id, 0), do: 0
@@ -1504,9 +1506,9 @@ defmodule Engram.Folders.Rows do
 
   defp live?(id), do: Repo.exists?(from(f in Folder, where: f.id == ^id and is_nil(f.deleted_at)))
 
-  defp write_revived([]), do: 0
+  defp write_revived(_vault_id, []), do: 0
 
-  defp write_revived(revive) do
+  defp write_revived(vault_id, revive) do
     {ids, parents} = Enum.unzip(revive)
 
     {n, _} =
@@ -1532,7 +1534,7 @@ defmodule Engram.Folders.Rows do
     # A revived row keeps the hash it died with, which may be stale (a row
     # renamed away from that path while dead, or never rewritten): it yields
     # it to a live row that holds it, so no two live rows share one.
-    PathHmacs.yield(ids)
+    PathHmacs.yield(vault_id, ids)
     n
   end
 

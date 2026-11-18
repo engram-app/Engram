@@ -428,7 +428,7 @@ defmodule Engram.Crypto.UserDekRotation do
     |> Enum.chunk_every(1_000)
     |> Enum.each(fn chunk ->
       # Through the hash's one writer (`PathHmacs`), in the user's tenant.
-      {:ok, _} = Repo.with_tenant(user_id, fn -> Engram.Folders.PathHmacs.put(chunk) end)
+      {:ok, _} = Repo.with_tenant(user_id, fn -> Engram.Folders.PathHmacs.put(user_id, chunk) end)
     end)
   end
 
