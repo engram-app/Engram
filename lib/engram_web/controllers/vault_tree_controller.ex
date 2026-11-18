@@ -78,7 +78,7 @@ defmodule EngramWeb.VaultTreeController do
               etag: etag,
               note_rows: Notes.raw_tree_note_rows(user, vault),
               folder_counts: Notes.raw_folder_counts_at(user, vault, seq),
-              folder_marker_rows: Notes.raw_folder_marker_rows(user, vault),
+              explicit_folder_rows: Notes.raw_explicit_folder_rows(user, vault),
               attachment_rows: Attachments.raw_tree_rows(user, vault)
             }
             |> with_folder_rows(user, vault, names?)
@@ -197,8 +197,8 @@ defmodule EngramWeb.VaultTreeController do
     folder_counts =
       Notes.folder_counts_at(conn.assigns.current_vault, raw.seq, raw.folder_counts, dek)
 
-    folder_markers = Notes.decrypt_folder_marker_rows(raw.folder_marker_rows, dek)
-    folders = Notes.combine_folders_payload(folder_counts, folder_markers)
+    explicit = Notes.decrypt_explicit_folder_rows(raw.explicit_folder_rows, dek)
+    folders = Notes.combine_folders_payload(folder_counts, explicit)
     attachments = Attachments.decrypt_tree_rows(raw.attachment_rows, user)
 
     json(

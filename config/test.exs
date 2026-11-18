@@ -19,6 +19,10 @@ config :engram, :rate_limit_override, 10_000
 # `ServiceConfig.put_override(:name_reads_ledger, :read)`: the ledger row,
 # which the test DB never completes.
 config :engram, :name_reads_ledger, :done
+# Folder listings read `folders.explicit` as in prod, where its ledgers are
+# done (`Engram.Folders.Rows.explicit_reads?/0`). A test of the marker
+# fallback puts a per-process override of `:explicit_folders_ledger`, `:read`.
+config :engram, :explicit_folders_ledger, :done
 
 # The S5 write stop's floor check (`Engram.Folders.WriteStop.floors?/0`): the
 # rollback floor stays below the moved-folder feed release until release B

@@ -975,11 +975,13 @@ defmodule Engram.Notes do
                      err
                  end
 
-               {:ok, _already_soft_deleted} ->
-                 {:ok, :not_found}
-
-               :not_found ->
-                 {:ok, :not_found}
+               # No live marker: a row left explicit without one (before the
+               # `ExplicitFolderReconcile` heal, or once markers stop) is still
+               # listed, so the delete clears it (S6 step 4, #2639 review H1).
+               _no_live_marker ->
+                 if Rows.clear_explicit(user, vault.id, folder),
+                   do: {:ok, :deleted},
+                   else: {:ok, :not_found}
              end
            end) do
         {:ok, inner} -> inner
@@ -5829,9 +5831,9 @@ defmodule Engram.Notes do
   def batch_move_notes(user, vault, ids, target_folder_id)
       when is_list(ids) and is_binary(target_folder_id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
-         {:ok, marker} <- get_folder_marker_by_id(user, vault, target_folder_id),
-         {:ok, dek} <- Crypto.get_dek(user) do
-      move_notes_claimed(user, vault, ids, hydrate_folder_marker(marker, dek).folder)
+         {:ok, dek} <- Crypto.get_dek(user),
+         {:ok, folder} <- explicit_folder_path(user, vault, target_folder_id, dek) do
+      move_notes_claimed(user, vault, ids, folder)
     else
       {:error, :not_found} -> {:error, {:not_found, target_folder_id}}
       {:error, reason} -> {:error, reason}
@@ -7387,35 +7389,18 @@ defmodule Engram.Notes do
   end
 
   @doc """
-  Returns just the explicit folder marker names (sorted, decrypted).
-  Used by the plugin's GET /folders/explicit consumer to maintain its
-  disk-side explicitFolders set. Derived folders (those inferred from
-  notes living under a path) are excluded — only kind='folder' rows.
+  The explicit folders' paths (sorted, decrypted): folders created on purpose,
+  which exist while empty. Used by the plugin's GET /folders/explicit consumer
+  to maintain its disk-side explicitFolders set. Derived folders (those
+  inferred from notes living under a path) are excluded. Read from
+  `folders.explicit` (`raw_explicit_folder_rows/2`).
   """
   @spec list_explicit_folders(map(), map()) :: {:ok, [String.t()]}
   def list_explicit_folders(user, vault) do
-    case Crypto.dek_filter_key(user) do
-      {:ok, _filter_key} ->
-        {:ok, dek} = Crypto.get_dek(user)
-
-        {:ok, rows} =
-          Repo.with_tenant(user.id, fn ->
-            Repo.all(
-              from(n in scoped_live(user, vault),
-                where: n.kind == "folder",
-                select: {n.id, n.dek_version, n.folder_ciphertext, n.folder_nonce}
-              )
-            )
-          end)
-
-        names =
-          rows
-          |> Enum.map(fn {id, dv, ct, nonce} ->
-            decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :folder, id, dv))
-          end)
-          |> Enum.sort()
-
-        {:ok, names}
+    case Crypto.get_dek(user) do
+      {:ok, dek} ->
+        raw = Repo.with_tenant!(user.id, fn -> raw_explicit_folder_rows(user, vault) end)
+        {:ok, raw |> decrypt_explicit_folder_rows(dek) |> Enum.map(& &1.folder) |> Enum.sort()}
 
       {:error, :no_dek} ->
         {:ok, []}
@@ -7423,13 +7408,56 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Raw rows for the explicit folders of `vault` (an empty folder a user or
+  plugin created, as opposed to one derived from note paths): the live
+  `folders` rows flagged `explicit` (`Engram.Folders.Rows.explicit_rows/3`)
+  once `Rows.explicit_reads?/0`, else the `kind = 'folder'` marker rows.
+  MUST run inside the caller's `Repo.with_tenant/2`; pair with
+  `decrypt_explicit_folder_rows/2` outside it (#1211).
+  """
+  @spec raw_explicit_folder_rows(map(), map()) ::
+          {:folders, {[Ecto.UUID.t()], [map()]}} | {:markers, [Note.t()]}
+  def raw_explicit_folder_rows(user, vault) do
+    # compat: the marker read serves a self-host whose FolderTable ledger is
+    # still open; it goes with the marker rows (S6 step 4, phase 3, #2523).
+    if Rows.explicit_reads?(),
+      do: {:folders, Rows.explicit_rows(user.id, vault.id)},
+      else: {:markers, raw_folder_marker_rows(user, vault)}
+  end
+
+  @doc "`[%{id, folder}]` from `raw_explicit_folder_rows/2`. Pure: no DB access."
+  @spec decrypt_explicit_folder_rows(
+          {:folders, {[Ecto.UUID.t()], [map()]}} | {:markers, [Note.t()]},
+          binary()
+        ) :: [%{id: Ecto.UUID.t(), folder: String.t()}]
+  def decrypt_explicit_folder_rows({:folders, {ids, rows}}, dek) do
+    paths = Rows.chain_paths(dek, rows, ids)
+
+    # A row whose name or ancestor chain will not open is left out, as the
+    # folder counts leave it out; say so (a count, no ids or names), since an
+    # empty folder missing here is one the plugin may trash locally.
+    dropped = length(ids) - map_size(paths)
+
+    if dropped > 0,
+      do:
+        Logger.warning(
+          "explicit folders: rows whose path did not open left out of the listing",
+          Metadata.with_category(:warning, :sync, count: dropped)
+        )
+
+    for {id, path} <- paths, do: %{id: id, folder: path}
+  end
+
+  def decrypt_explicit_folder_rows({:markers, markers}, dek),
+    do: Enum.map(markers, &(&1 |> hydrate_folder_marker(dek) |> Map.take([:id, :folder])))
+
+  @doc """
   Returns hydrated folder marker rows (kind="folder", non-deleted) for the
   user/vault, with `.folder` decrypted. Structs are sparsely loaded — only
   `.id`, `.folder` and `.folder_hmac` are populated (plus the decrypt
   inputs); callers needing other columns must fetch the row themselves. Used by
-  Materialization to compute the existing-marker set and by the folders
-  index for the path→id map (vs. `list_explicit_folders/2` which only
-  returns sorted names).
+  Materialization, a marker WRITER, to compute the existing-marker set.
+  Listings read `raw_explicit_folder_rows/2` instead.
   """
   @spec list_folder_markers(map(), map()) :: [Note.t()]
   def list_folder_markers(user, vault) do
@@ -7445,9 +7473,7 @@ defmodule Engram.Notes do
   @doc """
   Raw rows for `list_folder_markers/2`. MUST run inside the caller's
   `Repo.with_tenant/2` — pair with `decrypt_folder_marker_rows/2`, which
-  does the decrypt work OUTSIDE any transaction. Extracted so
-  `VaultTreeController` can fetch this alongside the note/folder-count/
-  attachment queries in one transaction instead of separate ones (#1211).
+  does the decrypt work OUTSIDE any transaction (#1211).
   """
   @spec raw_folder_marker_rows(map(), map()) :: [Note.t()]
   def raw_folder_marker_rows(user, vault) do
@@ -7488,15 +7514,15 @@ defmodule Engram.Notes do
     # across CPU work). No DEK means no notes, as in list_folders_with_counts/2.
     case Crypto.get_dek(user) do
       {:ok, dek} ->
-        {seq, counts, markers} =
+        {seq, counts, explicit} =
           Repo.with_tenant_snapshot!(user.id, fn ->
             seq = Engram.Vaults.raw_current_seq(vault.id)
-            {seq, raw_folder_counts_at(user, vault, seq), raw_folder_marker_rows(user, vault)}
+            {seq, raw_folder_counts_at(user, vault, seq), raw_explicit_folder_rows(user, vault)}
           end)
 
         combine_folders_payload(
           folder_counts_at(vault, seq, counts, dek),
-          decrypt_folder_marker_rows(markers, dek)
+          decrypt_explicit_folder_rows(explicit, dek)
         )
 
       {:error, :no_dek} ->
@@ -7506,18 +7532,18 @@ defmodule Engram.Notes do
 
   @doc """
   Combines `list_folders_with_counts/2`'s `[%{folder:, count:}]` and
-  `list_folder_markers/2`'s hydrated marker rows into the id/name/count/
+  `decrypt_explicit_folder_rows/2`'s `[%{id:, folder:}]` into the id/name/count/
   parent_id shape `folders_payload/2` returns. Pure — no DB access. Split
   out so `VaultTreeController` can call it directly after fetching both
   row sets inside one transaction instead of the two separate transactions
   `folders_payload/2` would open (#1211) — this is the SAME business rule
   as `folders_payload/2`, not a second implementation of it.
   """
-  @spec combine_folders_payload([%{folder: String.t(), count: integer()}], [Note.t()]) :: [
-          map()
-        ]
-  def combine_folders_payload(folders, markers) do
-    id_by_path = Map.new(markers, fn m -> {m.folder, m.id} end)
+  @spec combine_folders_payload([%{folder: String.t(), count: integer()}], [
+          %{id: Ecto.UUID.t(), folder: String.t()}
+        ]) :: [map()]
+  def combine_folders_payload(folders, explicit) do
+    id_by_path = Map.new(explicit, fn m -> {m.folder, m.id} end)
 
     Enum.map(folders, fn f ->
       %{
@@ -7766,14 +7792,36 @@ defmodule Engram.Notes do
     #    two root groups sum into one entry;
     #  * the drift notes (`drift_query/2`, leg 1, count 1 each), placed by
     #    their own folder envelope: 0 rows in steady state;
-    #  * the folder markers (leg 3, count 0), so an empty explicit folder is
-    #    listed;
+    #  * the explicit folders (count 0), so an empty explicit folder is
+    #    listed: their folder rows (leg 6, a reference like leg 4's) once
+    #    `Rows.explicit_reads?/0`, else the folder markers' envelopes (leg 3);
     #  * the vault's folder rows (leg 5; `ref:` is the parent, `count:` 1 when
     #    live), which name those references (a folder's name is one segment,
     #    so a path is assembled from its ancestors).
     # The root is the NULL group minus the drift: the same rows as the root
     # page of `list_notes_in_folder_page/4`.
-    markers = from(n in scoped_live(user, vault), where: n.kind == "folder")
+    explicit =
+      if Rows.explicit_reads?() do
+        from(f in Engram.Folders.Folder,
+          # `user_id` bound: `Rows.explicit_rows/3`.
+          where:
+            f.user_id == ^user.id and f.vault_id == ^vault.id and f.explicit and
+              is_nil(f.deleted_at),
+          select: %{
+            leg: fragment("6"),
+            id: fragment("NULL::uuid"),
+            vault_id: fragment("NULL::uuid"),
+            ref: f.id,
+            dv: fragment("NULL::int"),
+            ct: fragment("NULL::bytea"),
+            nonce: fragment("NULL::bytea"),
+            count: fragment("0")
+          }
+        )
+      else
+        # compat: goes with the marker rows (S6 step 4, phase 3, #2523).
+        drift_select(from(n in scoped_live(user, vault), where: n.kind == "folder"), 3, 0)
+      end
 
     groups =
       from(n in scoped_live(user, vault),
@@ -7793,7 +7841,8 @@ defmodule Engram.Notes do
 
     folders =
       from(f in Engram.Folders.Folder,
-        where: f.vault_id == ^vault.id,
+        # `user_id` bound: `Rows.explicit_rows/3`.
+        where: f.user_id == ^user.id and f.vault_id == ^vault.id,
         select: %{
           leg: fragment("5"),
           id: f.id,
@@ -7808,10 +7857,13 @@ defmodule Engram.Notes do
 
     by_leg =
       drift_query(user, vault)
-      |> union_all(^drift_select(markers, 3, 0))
+      |> union_all(^explicit)
       |> union_all(^groups)
       |> union_all(^folders)
-      |> Repo.all()
+      # Unnamed: a generic plan costs an average tenant and reads leg 5 on
+      # `folders_user`, every folder of every vault of the user
+      # (`ExplicitReadsTest`, docs/context/notes-generic-plan-mis-pick.md).
+      |> Repo.all(prepare: :unnamed)
       |> Enum.group_by(& &1.leg)
 
     envelopes =
@@ -7826,7 +7878,7 @@ defmodule Engram.Notes do
         {[%{folder_row: row} | rows], if(f.count == 1, do: MapSet.put(live, f.id), else: live)}
       end)
 
-    grouped = Map.get(by_leg, 4, [])
+    grouped = Map.get(by_leg, 4, []) ++ Map.get(by_leg, 6, [])
 
     # A group whose reference names a dead row (none since
     # `folders_release_refs`) is not listed.
@@ -8184,42 +8236,69 @@ defmodule Engram.Notes do
 
   @doc """
   One page (see `list_notes_in_folder_page/4`, same options) of the non-deleted
-  notes living directly under the folder identified by `marker_id` (a
-  folder-marker row's id). Id-keyed counterpart to
+  notes living directly under the folder identified by `marker_id` (an
+  explicit folder's id, as the folder listings hand out). Id-keyed counterpart to
   `list_notes_in_folder_page/4` — used by tree data loaders that already hold a
-  marker id and shouldn't have to round-trip cleartext folder paths.
+  folder id and shouldn't have to round-trip cleartext folder paths.
 
   Returns `{:error, :not_found}` when the id doesn't resolve to a live
-  folder marker owned by `user`/`vault`.
+  explicit folder owned by `user`/`vault`.
   """
   @spec list_folder_notes_by_id(map(), map(), String.t(), keyword()) ::
           {:ok, %{notes: [Note.t()], next_cursor: String.t() | nil}}
           | {:error, :not_found | :invalid_cursor}
   def list_folder_notes_by_id(user, vault, marker_id, opts \\ []) when is_binary(marker_id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
-         {:ok, marker} <- get_folder_marker_by_id(user, vault, marker_id),
-         {:ok, dek} <- Crypto.get_dek(user) do
-      hydrated = hydrate_folder_marker(marker, dek)
-      list_notes_in_folder_page(user, vault, hydrated.folder, opts)
+         {:ok, dek} <- Crypto.get_dek(user),
+         {:ok, folder} <- explicit_folder_path(user, vault, marker_id, dek) do
+      list_notes_in_folder_page(user, vault, folder, opts)
     end
   end
 
-  @spec get_folder_marker_by_id(map(), map(), String.t()) ::
-          {:ok, Note.t()} | {:error, :not_found}
-  defp get_folder_marker_by_id(user, vault, id) when is_binary(id) do
-    {:ok, result} =
-      Repo.with_tenant(user.id, fn ->
-        case Repo.one(
-               from(n in scoped_live(user, vault),
-                 where: n.id == ^id and n.kind == "folder"
-               )
-             ) do
-          nil -> {:error, :not_found}
-          marker -> {:ok, marker}
-        end
+  # The path of the explicit folder `id` (`explicit_folder_paths/4`).
+  @spec explicit_folder_path(map(), map(), String.t(), binary()) ::
+          {:ok, String.t()} | {:error, :not_found}
+  defp explicit_folder_path(user, vault, id, dek) when is_binary(id) do
+    with {:ok, uuid} <- Ecto.UUID.cast(id),
+         %{^uuid => path} <- explicit_folder_paths(user, vault, [uuid], dek) do
+      {:ok, path}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  # `%{id => path}` for the explicit folders among `uuids` (cast ids): the
+  # id a listing hands out (`raw_explicit_folder_rows/2`). A live explicit
+  # folder row once `Rows.explicit_reads?/0`; else, or for an id no such row
+  # has, a live folder marker of that id (an id the previous release listed:
+  # a marker made after its folder's row keeps its own id, the row its own).
+  # An id that is neither is absent. Two primary-key reads plus the chain
+  # walk, O(ids x depth).
+  defp explicit_folder_paths(_user, _vault, [], _dek), do: %{}
+
+  defp explicit_folder_paths(user, vault, uuids, dek) do
+    uuids = Enum.uniq(uuids)
+
+    {{found, rows}, markers} =
+      Repo.with_tenant!(user.id, fn ->
+        by_row =
+          if Rows.explicit_reads?(),
+            do: Rows.explicit_rows(user.id, vault.id, uuids),
+            else: {[], []}
+
+        # compat: the marker-id read goes with the marker rows (S6 step 4, phase 3, #2523).
+        {by_row, folder_markers_by_id(user, vault, uuids -- elem(by_row, 0))}
       end)
 
-    result
+    markers
+    |> Map.new(&{&1.id, hydrate_folder_marker(&1, dek).folder})
+    |> Map.merge(Rows.chain_paths(dek, rows, found))
+  end
+
+  defp folder_markers_by_id(_user, _vault, []), do: []
+
+  defp folder_markers_by_id(user, vault, uuids) do
+    Repo.all(from(n in scoped_live(user, vault), where: n.id in ^uuids and n.kind == "folder"))
   end
 
   @doc """
@@ -9725,6 +9804,20 @@ defmodule Engram.Notes do
           # Each deleted note's tombstone at its shown path (the scan's).
           _ = repath_shown!(user, Enum.filter(matches, &MapSet.member?(deleted, &1.id)), seq, now)
 
+          # A deleted marker's folder is no longer explicit, whatever happens
+          # to its row (a row kept for content written meanwhile, or a caller
+          # that deletes no rows): listings read the flag (S6 step 4).
+          :ok =
+            Rows.unmark_explicit(
+              user,
+              vault.id,
+              for(
+                %{kind: "folder", folder: f} = r <- matches,
+                MapSet.member?(deleted, r.id),
+                do: f
+              )
+            )
+
           # Decrement only real notes — markers don't count against the meter.
           real_count =
             Enum.count(matches, fn r -> r.kind == "note" and MapSet.member?(deleted, r.id) end)
@@ -10287,35 +10380,26 @@ defmodule Engram.Notes do
   end
 
   @doc """
-  The decrypted folder path of each folder marker in `marker_ids`
-  (ownership-checked). `{:error, {:not_found, id}}` for the first id that is
-  not a live marker in this vault.
+  The decrypted folder path of each explicit folder in `marker_ids`, the ids
+  the folder listings hand out (ownership-checked, `explicit_folder_paths/4`).
+  `{:error, {:not_found, id}}` for the first id that is not a live explicit
+  folder in this vault.
   """
   @spec resolve_folder_markers(map(), map(), [String.t()]) ::
           {:ok, [String.t()]} | {:error, {:not_found, String.t()} | term()}
   def resolve_folder_markers(user, vault, marker_ids) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user) do
-      # One read for every valid id (not one per marker), ids checked in
+      # One read for every valid id (not one per id), ids checked in
       # order; a malformed id is "not found", like any other missing one.
       cast = Map.new(marker_ids, &{&1, Ecto.UUID.cast(&1)})
       valid = for {_id, {:ok, uuid}} <- cast, do: uuid
-
-      {:ok, found} =
-        Repo.with_tenant(user.id, fn ->
-          Repo.all(
-            from(n in scoped_live(user, vault),
-              where: n.id in ^valid and n.kind == "folder"
-            )
-          )
-        end)
-
-      by_id = Map.new(found, &{&1.id, &1})
+      paths = explicit_folder_paths(user, vault, valid, dek)
 
       Enum.reduce_while(marker_ids, {:ok, []}, fn id, {:ok, acc} ->
         with {:ok, uuid} <- cast[id],
-             {:ok, marker} <- Map.fetch(by_id, uuid) do
-          {:cont, {:ok, [hydrate_folder_marker(marker, dek).folder | acc]}}
+             {:ok, path} <- Map.fetch(paths, uuid) do
+          {:cont, {:ok, [path | acc]}}
         else
           _ -> {:halt, {:error, {:not_found, id}}}
         end
@@ -10382,9 +10466,9 @@ defmodule Engram.Notes do
 
   defp resolve_move_target(user, vault, target_folder_id) when is_binary(target_folder_id) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
-         {:ok, target_marker} <- get_folder_marker_by_id(user, vault, target_folder_id),
-         {:ok, dek} <- Crypto.get_dek(user) do
-      {:ok, user, hydrate_folder_marker(target_marker, dek).folder, dek}
+         {:ok, dek} <- Crypto.get_dek(user),
+         {:ok, folder} <- explicit_folder_path(user, vault, target_folder_id, dek) do
+      {:ok, user, folder, dek}
     else
       {:error, :not_found} -> {:error, {:not_found, target_folder_id}}
       {:error, reason} -> {:error, reason}
@@ -10423,10 +10507,8 @@ defmodule Engram.Notes do
   # Returns the markers' folders, which bound the batch's shared scan.
   defp resolve_move_folders(user, vault, marker_ids, target_folder, dek) do
     Enum.reduce_while(marker_ids, {:ok, []}, fn id, {:ok, sources} ->
-      case get_folder_marker_by_id(user, vault, id) do
-        {:ok, marker} ->
-          source = hydrate_folder_marker(marker, dek).folder
-
+      case explicit_folder_path(user, vault, id, dek) do
+        {:ok, source} ->
           if target_folder == source or String.starts_with?(target_folder, source <> "/") do
             {:halt, {:error, {:cycle, id}}}
           else
@@ -10511,10 +10593,8 @@ defmodule Engram.Notes do
   # batch scan). Mirrors apply_moves/3's contract: returns {:ok, _}
   # or {:error, atom}.
   defp move_folder_into(user, vault, id, target_folder, dek, {rows, drift}) do
-    case get_folder_marker_by_id(user, vault, id) do
-      {:ok, marker} ->
-        source_folder = hydrate_folder_marker(marker, dek).folder
-
+    case explicit_folder_path(user, vault, id, dek) do
+      {:ok, source_folder} ->
         # Cycle guard: moving a folder into itself or any descendant would
         # produce a path that's a strict suffix of the source, which both
         # `do_rename_folder/6`'s prefix scan can't reason about and is
@@ -10538,6 +10618,9 @@ defmodule Engram.Notes do
           # point already ran ensure_user_dek, so rename_folder/4's wider
           # error surface can't arise here (dialyzer proves the coverage).
           case rename_folder_gated(user, vault, source_folder, new_folder, rows, drift) do
+            # Nothing under it carried the move: an empty explicit folder's
+            # row moves alone (`Rows.move_bare_explicit/4`, S6 step 4).
+            {:ok, 0} -> move_bare_folder(user, vault, source_folder, new_folder)
             {:ok, _count} -> {:ok, {source_folder, new_folder}}
             {:error, :conflict} -> {:error, :conflict}
             {:error, :claims_stale} = stale -> stale
@@ -10553,6 +10636,18 @@ defmodule Engram.Notes do
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------
+
+  defp move_bare_folder(user, vault, source, target) do
+    case Repo.with_tenant!(user.id, fn ->
+           Rows.move_bare_explicit(user, vault.id, source, target)
+         end) do
+      {:ok, _} -> {:ok, {source, target}}
+      {:error, :conflict} -> {:error, :conflict}
+      {:error, :invalid_path} -> {:error, :cycle}
+      # Content landed under it since the scan: the batch re-plans.
+      {:error, :claims_stale} = stale -> stale
+    end
+  end
 
   # T3.2 helper — base64-encoded HMAC of a plaintext path under the user's
   # filter key. Used at Oban-enqueue boundaries so plaintext path / old_path

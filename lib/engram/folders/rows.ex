@@ -28,6 +28,7 @@ defmodule Engram.Folders.Rows do
 
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.DataMigrations.{ExplicitFolderReconcile, FolderTable}
   alias Engram.Folders.{Folder, PathHmacs, WalkSql}
   alias Engram.Logger.Metadata
   alias Engram.Repo
@@ -956,6 +957,63 @@ defmodule Engram.Folders.Rows do
   end
 
   @doc """
+  Whether folder listings read explicit folders from `folders.explicit`
+  instead of the `kind = 'folder'` marker rows (S6 step 4, Engram#2523):
+  once the flag equals the markers. `FolderTable`'s marker step SETS it for
+  every live marker (every marker writer has set it since the folders table
+  shipped), and `ExplicitFolderReconcile` CLEARS it on every row no live
+  marker names, so both ledgers done means the two agree. Until then (a
+  self-host that skipped releases, or the reconcile's first walk) the
+  markers are read.
+
+  Read from the ledger rows, cached a minute per node (`:explicit_folders`),
+  so an open ledger costs one read a minute, not one a call, and a reopened
+  one is honoured within the minute. `:explicit_folders_ledger` `:done` is
+  the test suite's stand-in for prod's closed ledgers (`config/test.exs`).
+  """
+  @spec explicit_reads?() :: boolean()
+  def explicit_reads? do
+    Engram.ServiceConfig.get(:explicit_folders_ledger, :read) == :done or
+      Engram.Cache.fetch(:explicit_folders, :done, fn ->
+        Enum.all?([FolderTable, ExplicitFolderReconcile], fn m ->
+          Engram.DataMigrations.completed_at(m.name(), m.version()) != nil
+        end)
+      end)
+  end
+
+  @doc """
+  The live explicit folder rows of `vault_id` (all of them, or only those
+  among `ids`) and their parent chains: `{ids, chain_rows}`, what
+  `chain_paths/3` takes. Two statements: the explicit rows on
+  `folders_explicit_live` (or the primary key, given `ids`), then
+  `chain_rows/3`. O(explicit folders x depth). Runs inside the caller's
+  tenant transaction; decrypt outside it.
+
+  `user_id` is bound and the statement runs unnamed, as `ids_by_path/3`:
+  with only the policy's tenant, a plan costs an average tenant and reads
+  `folders_user`, every folder of the tenant
+  (docs/context/notes-generic-plan-mis-pick.md, third instance).
+  """
+  @spec explicit_rows(Ecto.UUID.t(), Ecto.UUID.t(), [Ecto.UUID.t()] | :all) ::
+          {[Ecto.UUID.t()], [map()]}
+  def explicit_rows(user_id, vault_id, ids \\ :all)
+  def explicit_rows(_user_id, _vault_id, []), do: {[], []}
+
+  def explicit_rows(user_id, vault_id, ids) do
+    query =
+      from(f in Folder,
+        where:
+          f.user_id == ^user_id and f.vault_id == ^vault_id and f.explicit and
+            is_nil(f.deleted_at),
+        select: f.id
+      )
+
+    query = if ids == :all, do: query, else: where(query, [f], f.id in ^ids)
+    found = Repo.all(query, prepare: :unnamed)
+    {found, chain_rows(vault_id, found)}
+  end
+
+  @doc """
   `live_rows/1` with names decrypted and each row's full `path`, as
   `[%{id, parent_id, name, path}]`, parents before children. A row whose name
   or ancestor chain does not open (a dead or missing parent, a cycle) is
@@ -1628,10 +1686,96 @@ defmodule Engram.Folders.Rows do
     n
   end
 
-  @doc "A deleted folder marker no longer makes its folder explicit; the row stays for its content."
-  @spec unmark_explicit(Engram.Accounts.User.t(), Ecto.UUID.t(), String.t()) :: :ok
-  def unmark_explicit(user, vault_id, folder) do
-    case ids_at(user, vault_id, [folder]) do
+  @doc """
+  Moves the live EXPLICIT folder row at `old` (and its subtree) to `new` when
+  no note or marker under it carried the move: an empty folder made on
+  purpose (S6 step 4). `{:ok, 1}` when it moved, after bumping the vault seq
+  (vault row first, every writer's lock order); `{:ok, 0}`, touching nothing,
+  when the row is missing or not explicit; `{:error, :conflict}` when a live
+  folder already holds `new` (a rename onto an occupied path). Runs inside
+  the caller's tenant transaction, under its folder claims.
+
+  `{:error, :claims_stale}` when the folder is no longer bare once the vault
+  row is held: the caller's scan found nothing under it, but a note written
+  since points into its subtree (attachments are moved by the caller's
+  attachment leg). Every note writer takes the vault row before it writes
+  (the seq lock), so
+  under that lock the check sees every one committed, and none can land
+  until this transaction ends. The caller's claim loop
+  (`Notes.with_folder_claims/4`) then re-plans the op from a fresh scan,
+  which cascades that content: no note is left at the old path.
+  """
+  @spec move_bare_explicit(map(), Ecto.UUID.t(), String.t(), String.t()) ::
+          {:ok, 0 | 1} | {:error, term()}
+  def move_bare_explicit(user, vault_id, old, new) do
+    with %{^old => id} when is_binary(id) <- ids_by_path(user, vault_id, [old]),
+         true <- Repo.exists?(from(f in Folder, where: f.id == ^id and f.explicit)) do
+      _ = Engram.Vaults.next_seq!(vault_id)
+
+      if bare?(user, vault_id, old),
+        do: rename_bare(user, vault_id, old, new),
+        else: {:error, :claims_stale}
+    else
+      _ -> {:ok, 0}
+    end
+  end
+
+  defp rename_bare(user, vault_id, old, new) do
+    case rename(user, vault_id, old, new) do
+      :ok -> {:ok, 1}
+      {:error, :merge} -> {:error, :conflict}
+      {:error, _} = err -> err
+    end
+  end
+
+  # No live NOTE points into the subtree at `folder`. Attachments are not
+  # checked: the rename's attachment leg moves them (`Folders.rename/5`), so an
+  # explicit folder of images alone still moves as a bare row. (#2639 review:
+  # counting them made such a rename re-plan until it gave up.)
+  defp bare?(user, vault_id, folder) do
+    ids = for r <- subtree(user, vault_id, [folder]), do: r.id
+
+    not Repo.exists?(
+      from(n in Engram.Notes.Note,
+        where: n.kind == "note" and n.folder_ref_id in ^ids and is_nil(n.deleted_at)
+      )
+    )
+  end
+
+  @doc """
+  Clears the explicit flag of the live row at `folder` when it is set, with
+  no marker involved: `true` if it was explicit (after bumping the vault seq,
+  which the listings' caches and etags key on), `false`, touching nothing,
+  if not. The vault row is taken before the folder row, every writer's lock
+  order. Runs inside the caller's tenant transaction.
+  """
+  @spec clear_explicit(Engram.Accounts.User.t(), Ecto.UUID.t(), String.t()) :: boolean()
+  def clear_explicit(user, vault_id, folder) do
+    with %{^folder => id} when is_binary(id) <- ids_by_path(user, vault_id, [folder]),
+         true <- Repo.exists?(from(f in Folder, where: f.id == ^id and f.explicit)) do
+      _ = Engram.Vaults.next_seq!(vault_id)
+
+      from(f in Folder, where: f.id == ^id and f.explicit)
+      |> Repo.update_all(set: [explicit: false, updated_at: now()])
+
+      true
+    else
+      _ -> false
+    end
+  end
+
+  @doc """
+  A deleted folder marker no longer makes its folder explicit; the row stays
+  for its content. Takes one folder or a list (a cascade's markers).
+  """
+  @spec unmark_explicit(map(), Ecto.UUID.t(), String.t() | [String.t()]) :: :ok
+  def unmark_explicit(user, vault_id, folder) when is_binary(folder),
+    do: unmark_explicit(user, vault_id, [folder])
+
+  def unmark_explicit(_user, _vault_id, []), do: :ok
+
+  def unmark_explicit(user, vault_id, folders) do
+    case ids_at(user, vault_id, folders) do
       [] ->
         :ok
 

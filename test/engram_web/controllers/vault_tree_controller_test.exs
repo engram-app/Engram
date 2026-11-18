@@ -406,6 +406,26 @@ defmodule EngramWeb.VaultTreeControllerTest do
       assert Enum.any?(json_response(resp, 200)["folders"], &(&1["name"] == "Empty"))
     end
 
+    # S6 step 4: an explicit folder row with no marker behind it (what the
+    # marker write stop leaves) is listed with the row's id.
+    test "lists an explicit folder row that has no marker, with its id", ctx do
+      %{conn: conn, user: user, vault: vault} = ctx
+      post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1_000.0})
+      user = Engram.Repo.reload!(user, skip_tenant_check: true)
+
+      {:ok, %{folders: [%{id: marker}]}} =
+        Engram.Notes.create_folder_markers(user, vault, ["Empty"])
+
+      Engram.Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [
+        Ecto.UUID.dump!(marker)
+      ])
+
+      row_id = Engram.FolderRows.tree(user)["Empty"].id
+      body = conn |> get("/api/vault/tree") |> json_response(200)
+
+      assert %{"id" => ^row_id} = Enum.find(body["folders"], &(&1["name"] == "Empty"))
+    end
+
     test "an ETag from another vault of the same user is not honored", %{conn: conn, user: user} do
       # Both vaults are fresh (change_seq 0): a tag built from the seq alone
       # would collide here and hand vault B a 304 for vault A's tree.
