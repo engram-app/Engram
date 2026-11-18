@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from helpers.proc import pid_alive
+
 BIN = Path(__file__).resolve().parents[2] / "ci" / "bin"
 CLAIM = BIN / "claim-display-window"
 RELEASE = BIN / "release-display-window"
@@ -34,14 +36,6 @@ def _claim(lock_dir: Path, family="clerk", stride=10, offset=3509, slots=15) -> 
     )
     assert out.returncode == 0, out.stderr
     return dict(line.split("=", 1) for line in out.stdout.split())
-
-
-def _alive(pid: int) -> bool:
-    try:
-        state = Path(f"/proc/{pid}/stat").read_text().split()[2]
-    except FileNotFoundError:
-        return False
-    return state != "Z"
 
 
 @pytest.fixture
@@ -69,7 +63,7 @@ def test_window_is_free_again_once_its_holder_dies(tmp_path, holders):
     a = _claim(tmp_path)
     os.kill(int(a["holder_pid"]), signal.SIGKILL)
     deadline = time.monotonic() + 5
-    while _alive(int(a["holder_pid"])) and time.monotonic() < deadline:
+    while pid_alive(int(a["holder_pid"])) and time.monotonic() < deadline:
         time.sleep(0.05)
     again = _claim(tmp_path)
     holders.append(int(again["holder_pid"]))
@@ -119,9 +113,9 @@ def test_release_kills_only_this_jobs_recorded_xvfb(tmp_path, holders):
         assert stranger.poll() is None, "a reused pid was killed"
         holder = int(window["holder_pid"])
         deadline = time.monotonic() + 5
-        while _alive(holder) and time.monotonic() < deadline:
+        while pid_alive(holder) and time.monotonic() < deadline:
             time.sleep(0.05)
-        assert not _alive(holder), "the window lock was not released"
+        assert not pid_alive(holder), "the window lock was not released"
     finally:
         for p in (mine, neighbour, stranger):
             p.kill()

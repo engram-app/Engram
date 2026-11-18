@@ -18,6 +18,7 @@ import textwrap
 import time
 from pathlib import Path
 
+from helpers.proc import pid_alive
 from load.guards import redact
 from load.sim import Recorder, spawn_child
 
@@ -105,15 +106,8 @@ def test_sigterm_stops_the_child_and_exits(tmp_path):
     assert parent.wait(timeout=20) == 128 + signal.SIGTERM
     deadline = time.time() + 10
     while time.time() < deadline:
-        try:
-            os.kill(child_pid, 0)
-        except ProcessLookupError:
-            break
         # Reaped by the parent, or a zombie of a dead parent: either way not running.
-        if (
-            Path(f"/proc/{child_pid}/stat").exists()
-            and Path(f"/proc/{child_pid}/stat").read_text().split()[2] == "Z"
-        ):
+        if not pid_alive(child_pid):
             break
         time.sleep(0.1)
     else:
