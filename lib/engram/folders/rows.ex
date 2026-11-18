@@ -830,6 +830,46 @@ defmodule Engram.Folders.Rows do
   end
 
   @doc """
+  Whether folder listings read explicit folders from `folders.explicit`
+  instead of the `kind = 'folder'` marker rows (S6 step 4, Engram#2523).
+  Every marker writer has set the flag since the folders table shipped
+  (`ensure_markers/3`, `unmark_explicit/3`), and `FolderTable`'s marker step
+  fills it for markers written before that, so the flag is complete once
+  that ledger is done. Until then (a self-host that skipped releases) the
+  markers are read. `:folder_table_ledger` `:done` is the test suite's stand-in
+  for prod's closed ledger (`config/test.exs`).
+  """
+  @spec explicit_reads?() :: boolean()
+  def explicit_reads? do
+    Engram.ServiceConfig.get(:folder_table_ledger, :read) == :done or
+      Engram.DataMigrations.FolderTable.done?()
+  end
+
+  @doc """
+  The live explicit folder rows of `vault_id` (all of them, or only those
+  among `ids`) and their parent chains: `{ids, chain_rows}`, what
+  `chain_paths/3` takes. Two statements: the explicit rows on
+  `folders_explicit_live` (or the primary key, given `ids`), then
+  `chain_rows/3`. O(explicit folders x depth). Runs inside the caller's
+  tenant transaction; decrypt outside it.
+  """
+  @spec explicit_rows(Ecto.UUID.t(), [Ecto.UUID.t()] | :all) :: {[Ecto.UUID.t()], [map()]}
+  def explicit_rows(vault_id, ids \\ :all)
+  def explicit_rows(_vault_id, []), do: {[], []}
+
+  def explicit_rows(vault_id, ids) do
+    query =
+      from(f in Folder,
+        where: f.vault_id == ^vault_id and f.explicit and is_nil(f.deleted_at),
+        select: f.id
+      )
+
+    query = if ids == :all, do: query, else: where(query, [f], f.id in ^ids)
+    found = Repo.all(query)
+    {found, chain_rows(vault_id, found)}
+  end
+
+  @doc """
   `live_rows/1` with names decrypted and each row's full `path`, as
   `[%{id, parent_id, name, path}]`, parents before children. A row whose name
   or ancestor chain does not open (a dead or missing parent, a cycle) is

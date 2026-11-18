@@ -71,6 +71,22 @@ unresolved by construction (the stored hash classifies it), so
 Markers never carry a reference; one is "resolved" when a live row sits at its
 path hash.
 
+## Explicit folders (S6 step 4, Engram#2523)
+
+Listings read an empty folder's existence from `folders.explicit`, not from
+the `kind = 'folder'` marker rows: `GET /folders/explicit`, `GET /folders`,
+`GET /vault/tree` and the folder counts (MCP `list_folder`) go through
+`Notes.raw_explicit_folder_rows/2` (`Rows.explicit_rows/2`, index
+`folders_explicit_live`). The id a listing hands out is the folder row's;
+the id-keyed operations (batch delete/move, notes by folder id) resolve it,
+and still resolve a marker's id (a marker made after its folder's row keeps
+its own id, and the previous release listed it). Until the `folder_table`
+ledger is done (`Rows.explicit_reads?/0`, a self-host that skipped releases)
+the markers are read. Phases: D reads (writers still insert markers), E
+writers stop inserting markers, F a ledger deletes them. The catch-up feed
+never carried markers (#976), and the plugin learns explicit folders only
+from `GET /folders/explicit`, whose shape is unchanged: no plugin shim.
+
 ## Row names (O(1) folder rename plan, Engram#2523)
 
 S2 (expand) adds each row's own name next to its folder reference, so a later
