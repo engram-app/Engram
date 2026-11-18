@@ -164,14 +164,22 @@ async def folder_ops_on(*cdps, write_stop: bool = False):
 
 
 async def reload_rejoined(cdp) -> None:
-    """Reload the plugin (a fresh engine: no session latch) and wait until it
-    has rejoined with folder ops on."""
+    """Reload the plugin (a fresh engine: no session latch), wait until it has
+    rejoined with folder ops on, then until every replayed op is acked (the
+    folder-op queue and the note-op queue both empty), so nothing is left to
+    replay into a switched-off server."""
     await cdp.reload_plugin()
     await cdp.wait_for_stream_connected()
     deadline = time.monotonic() + 30
     while not await plugin_folder_ops_enabled(cdp):
         if time.monotonic() > deadline:
             raise TimeoutError("plugin did not rejoin with folder ops on after a reload")
+        await asyncio.sleep(0.5)
+    await cdp.wait_for_crdt_queue_drain(timeout=30)
+    deadline = time.monotonic() + 30
+    while (left := await cdp.evaluate(f"{ENGINE_PATH}.folderOps.all().length")) != 0:
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"{left} replayed folder op(s) never acked after a reload")
         await asyncio.sleep(0.5)
 
 
@@ -224,6 +232,39 @@ def wait_server_paths(api, prefix: str, expected: set[str], timeout=DELIVERY_TIM
                 f"last: {sorted(rows)}"
             )
         time.sleep(0.5)
+
+
+def hold_server_paths(api, prefix: str, expected: set[str], seconds: float) -> dict:
+    """The manifest under `prefix` stays EXACTLY `expected` at every poll for
+    `seconds` (a late duplicate or ghost fails the poll it shows up in).
+    Returns the last {path: row}."""
+    deadline = time.monotonic() + seconds
+    while True:
+        manifest = api.get_manifest()
+        rows = {
+            r["path"]: r
+            for r in (manifest.get("notes") or []) + (manifest.get("attachments") or [])
+            if r["path"].startswith(prefix)
+        }
+        assert set(rows) == expected, (
+            f"server paths under {prefix} drifted: missing {sorted(expected - set(rows))}, "
+            f"extra {sorted(set(rows) - expected)}"
+        )
+        if time.monotonic() > deadline:
+            return rows
+        time.sleep(0.5)
+
+
+def moved_folder_count(vault_id: str) -> int:
+    """Live folder rows in `vault_id` moved without a cascade."""
+    assert all(c in "0123456789abcdef-" for c in vault_id), f"odd vault id {vault_id!r}"
+    return int(
+        psql_one(
+            "SELECT count(*) FROM folders WHERE vault_id = "
+            f"'{vault_id}' AND NOT notes_cascaded AND deleted_at IS NULL;",
+            f"moved_folder_count({vault_id})",
+        )
+    )
 
 
 def assert_uncascaded(manifest: dict, folder: str) -> None:
