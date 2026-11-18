@@ -9778,6 +9778,20 @@ defmodule Engram.Notes do
           # Each deleted note's tombstone at its shown path (the scan's).
           _ = repath_shown!(user, Enum.filter(matches, &MapSet.member?(deleted, &1.id)), seq, now)
 
+          # A deleted marker's folder is no longer explicit, whatever happens
+          # to its row (a row kept for content written meanwhile, or a caller
+          # that deletes no rows): listings read the flag (S6 step 4).
+          :ok =
+            Rows.unmark_explicit(
+              user,
+              vault.id,
+              for(
+                %{kind: "folder", folder: f} = r <- matches,
+                MapSet.member?(deleted, r.id),
+                do: f
+              )
+            )
+
           # Decrement only real notes — markers don't count against the meter.
           real_count =
             Enum.count(matches, fn r -> r.kind == "note" and MapSet.member?(deleted, r.id) end)
