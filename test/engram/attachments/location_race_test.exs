@@ -81,7 +81,8 @@ defmodule Engram.Attachments.LocationRaceTest do
         end)
       end)
 
-    assert_receive {:renamed, {:ok, %{id: id, path: "B/y.png"}}}, 10_000
+    assert_receive {:renamed, renamed}, 10_000
+    assert {:ok, %{id: id, path: "B/y.png"}} = renamed
     assert id == att.id
 
     write =
