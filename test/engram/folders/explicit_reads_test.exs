@@ -97,10 +97,15 @@ defmodule Engram.Folders.ExplicitReadsTest do
   end
 
   # The listing's new statement as the app role, under RLS: the partial
-  # index, never a read of the vault's folders.
+  # index, never a read of the vault's or the tenant's folders. At the
+  # 40-tenant shape (`tenant_shape!/0`) the policy's tenant is costed as an
+  # average tenant, and with no bound `user_id` the custom plan read
+  # `folders_user`, every folder of the tenant
+  # (docs/context/notes-generic-plan-mis-pick.md, third instance).
   test "plan: the explicit read is the partial index under RLS", %{user: u, vault: v} do
-    for i <- 1..40, do: put_note(u, v, "F#{i}/n.md")
+    for i <- 1..400, do: put_note(u, v, "F#{i}/n.md")
     {:ok, _} = Notes.create_folder_markers(u, v, ["E1", "E2"])
+    tenant_shape!()
 
     {_, queries} = QueryRecorder.record(fn -> Notes.list_explicit_folders(u, v) end)
     me = self()
@@ -116,6 +121,18 @@ defmodule Engram.Folders.ExplicitReadsTest do
       assert plan =~ "folders_explicit_live", plan
       refute plan =~ "Seq Scan on folders", plan
     end
+  end
+
+  # Prod's statistics shape: 40 tenants, so a tenant or a vault is a fraction
+  # of `folders`. The physical leftovers of earlier tests are kept (no
+  # CLUSTER): the plan must hold on them too. The visibility map is left as
+  # the inserts left it, so the partial index wins on its keys, not on an
+  # index-only read a restore or CLUSTER would take away.
+  defp tenant_shape! do
+    for col <- ~w(user_id vault_id),
+        do: Repo.query!("ALTER TABLE folders ALTER COLUMN #{col} SET (n_distinct = 40)")
+
+    Repo.query!("ANALYZE folders")
   end
 
   defp reconcile! do
@@ -187,8 +204,9 @@ defmodule Engram.Folders.ExplicitReadsTest do
 
   # The #2639 review, L2: the folder counts' explicit leg as the app role.
   test "plan: the counts' explicit leg is the partial index under RLS", %{user: u, vault: v} do
-    for i <- 1..40, do: put_note(u, v, "F#{i}/n.md")
+    for i <- 1..400, do: put_note(u, v, "F#{i}/n.md")
     {:ok, _} = Notes.create_folder_markers(u, v, ["E1", "E2"])
+    tenant_shape!()
     Engram.DataCase.clear_request_caches()
 
     {_, queries} = QueryRecorder.record(fn -> Notes.list_folders_with_counts(u, v) end)

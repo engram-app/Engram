@@ -7410,7 +7410,7 @@ defmodule Engram.Notes do
   @doc """
   Raw rows for the explicit folders of `vault` (an empty folder a user or
   plugin created, as opposed to one derived from note paths): the live
-  `folders` rows flagged `explicit` (`Engram.Folders.Rows.explicit_rows/2`)
+  `folders` rows flagged `explicit` (`Engram.Folders.Rows.explicit_rows/3`)
   once `Rows.explicit_reads?/0`, else the `kind = 'folder'` marker rows.
   MUST run inside the caller's `Repo.with_tenant/2`; pair with
   `decrypt_explicit_folder_rows/2` outside it (#1211).
@@ -7421,7 +7421,7 @@ defmodule Engram.Notes do
     # compat: the marker read serves a self-host whose FolderTable ledger is
     # still open; it goes with the marker rows (S6 step 4, phase 3, #2523).
     if Rows.explicit_reads?(),
-      do: {:folders, Rows.explicit_rows(vault.id)},
+      do: {:folders, Rows.explicit_rows(user.id, vault.id)},
       else: {:markers, raw_folder_marker_rows(user, vault)}
   end
 
@@ -7803,7 +7803,10 @@ defmodule Engram.Notes do
     explicit =
       if Rows.explicit_reads?() do
         from(f in Engram.Folders.Folder,
-          where: f.vault_id == ^vault.id and f.explicit and is_nil(f.deleted_at),
+          # `user_id` bound: `Rows.explicit_rows/3`.
+          where:
+            f.user_id == ^user.id and f.vault_id == ^vault.id and f.explicit and
+              is_nil(f.deleted_at),
           select: %{
             leg: fragment("6"),
             id: fragment("NULL::uuid"),
@@ -8275,7 +8278,9 @@ defmodule Engram.Notes do
     {{found, rows}, markers} =
       Repo.with_tenant!(user.id, fn ->
         by_row =
-          if Rows.explicit_reads?(), do: Rows.explicit_rows(vault.id, uuids), else: {[], []}
+          if Rows.explicit_reads?(),
+            do: Rows.explicit_rows(user.id, vault.id, uuids),
+            else: {[], []}
 
         # compat: the marker-id read goes with the marker rows (S6 step 4, phase 3, #2523).
         {by_row, folder_markers_by_id(user, vault, uuids -- elem(by_row, 0))}

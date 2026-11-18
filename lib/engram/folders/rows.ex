@@ -993,20 +993,28 @@ defmodule Engram.Folders.Rows do
   `folders_explicit_live` (or the primary key, given `ids`), then
   `chain_rows/3`. O(explicit folders x depth). Runs inside the caller's
   tenant transaction; decrypt outside it.
-  """
-  @spec explicit_rows(Ecto.UUID.t(), [Ecto.UUID.t()] | :all) :: {[Ecto.UUID.t()], [map()]}
-  def explicit_rows(vault_id, ids \\ :all)
-  def explicit_rows(_vault_id, []), do: {[], []}
 
-  def explicit_rows(vault_id, ids) do
+  `user_id` is bound and the statement runs unnamed, as `ids_by_path/3`:
+  with only the policy's tenant, a plan costs an average tenant and reads
+  `folders_user`, every folder of the tenant
+  (docs/context/notes-generic-plan-mis-pick.md, third instance).
+  """
+  @spec explicit_rows(Ecto.UUID.t(), Ecto.UUID.t(), [Ecto.UUID.t()] | :all) ::
+          {[Ecto.UUID.t()], [map()]}
+  def explicit_rows(user_id, vault_id, ids \\ :all)
+  def explicit_rows(_user_id, _vault_id, []), do: {[], []}
+
+  def explicit_rows(user_id, vault_id, ids) do
     query =
       from(f in Folder,
-        where: f.vault_id == ^vault_id and f.explicit and is_nil(f.deleted_at),
+        where:
+          f.user_id == ^user_id and f.vault_id == ^vault_id and f.explicit and
+            is_nil(f.deleted_at),
         select: f.id
       )
 
     query = if ids == :all, do: query, else: where(query, [f], f.id in ^ids)
-    found = Repo.all(query)
+    found = Repo.all(query, prepare: :unnamed)
     {found, chain_rows(vault_id, found)}
   end
 
