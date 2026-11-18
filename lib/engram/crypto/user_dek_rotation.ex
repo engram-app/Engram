@@ -427,16 +427,8 @@ defmodule Engram.Crypto.UserDekRotation do
     paths
     |> Enum.chunk_every(1_000)
     |> Enum.each(fn chunk ->
-      {ids, hmacs} = Enum.unzip(chunk)
-
-      {:ok, _} =
-        Repo.with_tenant(user_id, fn ->
-          Repo.query!(
-            "UPDATE folders f SET full_path_hmac = v.h FROM unnest($1::uuid[], $2::bytea[]) v(id, h) " <>
-              "WHERE f.id = v.id AND f.user_id = $3",
-            [ids, hmacs, Ecto.UUID.dump!(user_id)]
-          )
-        end)
+      # Through the hash's one writer (`PathHmacs`), in the user's tenant.
+      {:ok, _} = Repo.with_tenant(user_id, fn -> Engram.Folders.PathHmacs.put(chunk) end)
     end)
   end
 

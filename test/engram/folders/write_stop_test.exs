@@ -60,7 +60,8 @@ defmodule Engram.Folders.WriteStopTest do
     me = self()
 
     Enum.filter(queries, fn q ->
-      q.pid == me and q.sql =~ ~r/^\s*(UPDATE|INSERT INTO|DELETE FROM)\s+"?#{table}"?\b/i
+      # A writable CTE (`Engram.Folders.PathHmacs`) writes too.
+      q.pid == me and q.sql =~ ~r/(^|\)\s*)\s*(UPDATE|INSERT INTO|DELETE FROM)\s+"?#{table}"?\b/i
     end)
   end
 
@@ -79,11 +80,11 @@ defmodule Engram.Folders.WriteStopTest do
       refute row.notes_cascaded
       assert row.seq == seq
       assert seq == current_seq(v)
-      # The renamed row, its name-terms stamp (same row), its subfolders'
-      # path keys in one statement (O(subfolders); S6 drops the column), and
-      # one statement releasing those hashes from any stale holder (one path
-      # hash per live row, for 0.89.0 nodes in a mixed window).
-      assert length(writes_to(queries, "folders")) == 4
+      # The renamed row, its name-terms stamp (same row), and one statement
+      # that sets the root's and its subfolders' path hashes, releasing each
+      # from any stale holder first (`PathHmacs.put/2`, O(subfolders); S6
+      # drops the column).
+      assert length(writes_to(queries, "folders")) == 3
     end
 
     test "a move across parents is the same one row", %{user: u, vault: v} do

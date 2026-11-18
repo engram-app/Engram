@@ -120,6 +120,44 @@ defmodule Engram.Folders.MixedVersionTest do
     end
   end
 
+  describe "every hash writer keeps one live row per hash" do
+    # A restore revives a row with the hash it died with. Red before: the
+    # revived row and the live row D made at that path shared it.
+    test "a restore yields a stale hash to the live holder", %{user: u, vault: v, fk: fk} = ctx do
+      {:ok, b} = tenant!(u, fn -> Rows.ensure(u, v.id, "A/B") end)
+      :ok = tenant!(u, fn -> Rows.rename(u, v.id, "A", "C") end)
+      stale!(fk, b, "A/B")
+      op = Ecto.UUID.generate()
+      assert tenant!(u, fn -> Rows.soft_delete(u, v.id, ["C"], op) end) >= 1
+
+      {:ok, n} = tenant!(u, fn -> Rows.ensure(u, v.id, "A/B") end)
+      _ = tenant!(u, fn -> Rows.restore_op(v.id, op) end)
+
+      assert d_path(u, v, b) == "C/B"
+      assert d_path(u, v, n) == "A/B"
+      assert_consistent!(ctx)
+    end
+
+    # The FolderTable heal stamps a row's path hash. Red before: it did not
+    # release it from a stale holder.
+    test "the FolderTable heal releases the hash it stamps", %{user: u, vault: v, fk: fk} = ctx do
+      {:ok, _} = Engram.Folders.create_markers(u, v, ["A/B"])
+      {:ok, y} = tenant!(u, fn -> Rows.ensure(u, v.id, "Y") end)
+      [b] = tenant!(u, fn -> Rows.ids_at(u, v.id, ["A/B"]) end)
+
+      Repo.query!("UPDATE folders SET full_path_hmac = NULL WHERE id = $1", [Ecto.UUID.dump!(b)])
+      stale!(fk, y, "A/B")
+
+      Engram.DataMigrations.FolderTable.run_pass(user_ids: [u.id])
+
+      %{rows: [[h]]} =
+        Repo.query!("SELECT full_path_hmac FROM folders WHERE id = $1", [Ecto.UUID.dump!(b)])
+
+      assert h == Rows.path_hmac(fk, "A/B")
+      assert_consistent!(ctx)
+    end
+  end
+
   # One per read switch: written by 0.89.0, read by D.
   describe "0.89.0 writes, D reads" do
     test "create", %{user: u, vault: v} = ctx do
