@@ -340,6 +340,9 @@ defmodule Engram.Attachments do
   defp commit_txn(user, vault, {path, path_hmac, size}, dek_version, build, limit, opts) do
     Repo.transaction(fn ->
       :ok = acquire_path_lock(user.id, path_hmac)
+      # Under the path lock, in this transaction (`settle/3`): the pre-lock
+      # settle is only for the cheap checks before the upload.
+      with {:error, reason} <- settle(user, vault, [path]), do: Repo.rollback(reason)
       existing = fetch_existing(user, vault.id, path_hmac)
 
       # The stale-base and own-write checks run before the cap check: a stale
@@ -608,10 +611,10 @@ defmodule Engram.Attachments do
   repointed (its shown slot is held by a row shown there, or the chain is
   deeper than the cap), so the write never lands on another file's row.
 
-  Not atomic with the write that follows: until release E nothing leaves an
-  attachment stale except a rollback from E, the repoint creates no folder
-  row, and a race only leaves a row stale, which readers still serve.
-  E's write stop moves the heal into the write's transaction.
+  Every write runs it in its own transaction (`settled/4`, and under the
+  path lock in `commit_row/8`), so a folder moved between the heal and the
+  write cannot leave the write on a row stored elsewhere. The pre-lock
+  calls (upload start, the upsert's cheap checks) are best effort only.
   """
   @spec settle(map(), map(), [String.t()]) :: :ok | {:error, :conflict}
   def settle(_user, _vault, []), do: :ok
@@ -1011,8 +1014,21 @@ defmodule Engram.Attachments do
 
     # The row shown at `path` first gets its stored path there (`settle/3`),
     # so its tombstone names the path clients hold.
-    with :ok <- settle(user, vault, [path]),
-         do: delete_settled(user, vault, path, opts)
+    settled(user, vault, [path], fn -> delete_settled(user, vault, path, opts) end)
+  end
+
+  # `fun` (a write at `paths`) in ONE transaction with `settle/3` before it,
+  # under the vault's seq gate: a folder moved between the heal and the write
+  # cannot leave the write on a row stored elsewhere. `fun`'s result, or the
+  # settle's `{:error, :conflict}` (nothing written).
+  defp settled(user, vault, paths, fun) do
+    SeqGate.with_tenant(user.id, vault_id(vault), fn ->
+      with :ok <- settle(user, vault, paths), do: fun.()
+    end)
+    |> case do
+      {:ok, result} -> result
+      {:error, _} = err -> err
+    end
   end
 
   defp delete_settled(user, vault, path, opts) do
@@ -1156,10 +1172,16 @@ defmodule Engram.Attachments do
     old_path = PathSanitizer.sanitize(old_path)
     new_path = PathSanitizer.sanitize(new_path)
     user = fresh_user(user)
+
+    settled(user, vault, [old_path, new_path], fn ->
+      move_settled(user, vault, old_path, new_path)
+    end)
+  end
+
+  defp move_settled(user, vault, old_path, new_path) do
     now = DateTime.utc_now(:second)
 
-    with :ok <- settle(user, vault, [old_path, new_path]),
-         {:ok, user} <- Crypto.ensure_user_dek(user),
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       old_hmac = Crypto.hmac_field(filter_key, old_path)
@@ -1839,8 +1861,9 @@ defmodule Engram.Attachments do
         sanitized = paths |> Enum.map(&PathSanitizer.sanitize/1) |> Enum.uniq()
         # A row shown at one of `paths` first gets its stored path there
         # (`settle/3`); one that cannot be fails the batch, never a wrong row.
-        with :ok <- settle(user, vault, sanitized),
-             do: delete_batch(user, vault, filter_key, sanitized, opts)
+        settled(user, vault, sanitized, fn ->
+          delete_batch(user, vault, filter_key, sanitized, opts)
+        end)
 
       {:error, :no_dek} ->
         # No DEK = no attachments to delete; mirror do_delete_attachment.
@@ -2468,9 +2491,10 @@ defmodule Engram.Attachments do
   stored path stays authoritative, the reference only narrows what is read.
   """
   @spec scan_under(map(), map(), [String.t()], keyword()) ::
-          {:ok, %{metas: [map()], unreadable: non_neg_integer()}} | {:error, term()}
+          {:ok, %{metas: [map()], unreadable: non_neg_integer(), keyed?: boolean()}}
+          | {:error, term()}
   def scan_under(user, vault, folders, opts \\ [])
-  def scan_under(_user, _vault, [], _opts), do: {:ok, %{metas: [], unreadable: 0}}
+  def scan_under(_user, _vault, [], _opts), do: {:ok, %{metas: [], unreadable: 0, keyed?: true}}
 
   def scan_under(user, vault, folders, opts) do
     user = fresh_user(user)
