@@ -392,36 +392,57 @@ defmodule Engram.Insights.Snapshot do
     # untagged row (tag NULL), so its folder still counts.
     #
     # A note's folder is its folder ROW (R9: notes stop carrying
-    # `folder_hmac`), counted by that row's path hash so it dedupes with a
-    # marker's own `folder_hmac` (a marker made on an existing folder is not
-    # that row's id). Plus one for the root when a live note has no reference
-    # or names the root row (S6 step 1; a drift note, rare and healed by the
-    # drain, counts there too). Cost: one `folders` primary-key probe per live note.
-    # Both kinds on purpose: a marker is a folder (an empty one counts).
+    # `folder_hmac`): the distinct `folder_ref_id`s of live notes, plus one
+    # for the root when a live note has no reference or names the root row
+    # (S6 step 1; a drift note, rare and healed by the drain, counts there
+    # too). An empty folder counts by its explicit row (`empty_explicit`
+    # below): a marker keeps one (`Rows.ensure_markers/3`), so markers are
+    # not counted themselves and never twice. No `folders` read per note (S6
+    # step 3: there is no path hash to dedupe a marker by).
     folders_tags =
       from(n in Note,
         where: n.kind == "note" or n.kind == "folder",
         left_lateral_join: t in fragment("SELECT unnest(?) AS tag", n.tags_hmac),
         on: true,
-        # The root row (`Rows.root_id/1`) is the root: no folder row here.
-        left_join: f in Folder,
-        on: f.id == n.folder_ref_id and f.id != n.vault_id,
         where: n.vault_id in ^ids and is_nil(n.deleted_at),
         group_by: n.vault_id,
         select: %{
           vault_id: n.vault_id,
           folders:
             fragment(
-              "count(DISTINCT CASE WHEN ? = 'folder' THEN ? ELSE ? END) + (bool_or(? = 'note' AND ? IS NULL))::int",
+              "count(DISTINCT NULLIF(?, ?)) FILTER (WHERE ? = 'note') + (bool_or(? = 'note' AND NULLIF(?, ?) IS NULL))::int",
+              n.folder_ref_id,
+              n.vault_id,
               n.kind,
-              n.folder_hmac,
-              f.full_path_hmac,
               n.kind,
-              fragment("NULLIF(?, ?)", n.folder_ref_id, n.vault_id)
+              n.folder_ref_id,
+              n.vault_id
             ),
           tags: filter(count(t.tag, :distinct), n.kind == "note")
         }
       )
+
+    # Explicit folder rows no live note is in. Per row, one probe of
+    # `notes_folder_ref_live`; O(the chunk's folders).
+    holder =
+      from(h in Note,
+        where:
+          h.vault_id == parent_as(:f).vault_id and h.folder_ref_id == parent_as(:f).id and
+            h.kind == "note" and is_nil(h.deleted_at),
+        select: 1
+      )
+
+    # Its own statement, so the vault scan stays one pass over `notes`.
+    empty_explicit =
+      from(f in Folder,
+        as: :f,
+        where: f.vault_id in ^ids and is_nil(f.deleted_at) and f.explicit,
+        where: not exists(holder),
+        group_by: f.vault_id,
+        select: {f.vault_id, count(f.id)}
+      )
+      |> repo.all(timeout: @chunk_timeout)
+      |> Map.new()
 
     links =
       from(l in NoteLink,
@@ -463,6 +484,7 @@ defmodule Engram.Insights.Snapshot do
     |> repo.all(timeout: @chunk_timeout)
     |> Enum.map(
       &Map.merge(&1, %{
+        folders: &1.folders + Map.get(empty_explicit, &1.vault_id, 0),
         vault_created_at: usec(&1.vault_created_at),
         change_seq: Map.fetch!(seqs, &1.vault_id),
         scanned_on: day

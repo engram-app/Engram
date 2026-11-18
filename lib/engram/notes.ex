@@ -8431,9 +8431,12 @@ defmodule Engram.Notes do
   index room needs (one `Identity.claim`, the plan's condition C5, until
   the vault's index projects from `filemeta_v1`), and the link-rewrite
   targets (ids and HMACs, one `RewriteNoteLinks` chain per 1,000 notes).
-  Folder markers under it (explicit folders, O(subfolders)) and the
-  descendant folder rows' path keys (O(subfolders), S6 drops them) are still
-  rewritten: their writers and readers key on the stored folder path.
+  Folder markers under it (explicit folders, O(subfolders)) are still
+  rewritten: their writers and readers key on the stored folder path. The
+  descendant folder rows are not, once S6 step 3's write stop is on
+  (`Engram.Folders.PathHashStop`): the move writes one folder row and reads
+  only it (`Rows.rename/5`). While it is inert their path hashes are
+  rewritten as in release D, O(subfolders).
 
   Runs in the caller's transaction (`Folders.rename/5`).
   """
@@ -9135,7 +9138,12 @@ defmodule Engram.Notes do
 
         drifted = if drift_ids == [], do: [], else: Repo.all(where(live, [n], n.id in ^drift_ids))
 
-        rows = Enum.uniq_by(by_ref ++ folder_markers_in(live, row_hmacs) ++ drifted, & &1.id)
+        rows =
+          Enum.uniq_by(
+            by_ref ++ folder_markers_in(user, vault, live, row_hmacs) ++ drifted,
+            & &1.id
+          )
+
         # The moved chains in this same snapshot (`put_paths/3` below).
         {rows, drift, Location.chains(Enum.reject(rows, &(&1.kind == "folder")))}
       end)
@@ -9160,17 +9168,32 @@ defmodule Engram.Notes do
 
   # The live folder markers a cascade must see, in one read on
   # `notes_user_vault_folder_marker` (the vault's markers, not its notes): those
-  # at the subtree rows' path hashes, and those with no live folder row at
-  # their path at all (a row that died under a marker, a marker the previous
-  # release wrote before its row), which nothing else finds. The caller's
-  # final path filter keeps only the target's.
-  defp folder_markers_in(live, row_hmacs) do
+  # at the subtree rows' current path hashes, plus those no live row places
+  # (a row that died under a marker, a marker the previous release wrote
+  # before its row), which nothing else finds. The caller's final path filter
+  # keeps only the target's.
+  #
+  # "No live row places it": while S6 step 3's write stop is inert
+  # (`Engram.Folders.PathHashStop`), no live row at its path hash (release
+  # D's rule, about 0 rows in steady state). Once it is on the hash is not
+  # written, so: its own row (a marker's row keeps its UUID,
+  # `Rows.ensure_markers/3`) is not live. That also returns a marker made on
+  # an existing row (its id names none), so the stop waits for S6 step 4 to
+  # delete the vault's markers (`PathHashStop.markers_gone?/2`): then it reads
+  # nothing. One probe per marker of the vault either way.
+  defp folder_markers_in(user, vault, live, row_hmacs) do
     live_row =
-      from(f in Engram.Folders.Folder,
-        where:
-          f.vault_id == parent_as(:n).vault_id and f.full_path_hmac == parent_as(:n).folder_hmac and
-            is_nil(f.deleted_at)
-      )
+      if Engram.Folders.PathHashStop.write?(user.id, vault.id),
+        do:
+          from(f in Engram.Folders.Folder,
+            where:
+              f.vault_id == parent_as(:n).vault_id and
+                f.full_path_hmac == parent_as(:n).folder_hmac and is_nil(f.deleted_at)
+          ),
+        else:
+          from(f in Engram.Folders.Folder,
+            where: f.id == parent_as(:n).id and is_nil(f.deleted_at)
+          )
 
     Repo.all(
       from(n in live,
@@ -10335,8 +10358,7 @@ defmodule Engram.Notes do
   #     stale delete of the old path removes nothing. The second half is
   #     `placed_now/3`, read after the vault row lock every folder writer
   #     takes, so no rename lands between it and the update. Never
-  #     `notes.folder_hmac` (R9) nor `folders.full_path_hmac` (S6 step 3:
-  #     stale below a folder renamed in one row).
+  #     `notes.folder_hmac` (R9) nor a stored folder path hash (S6 step 3).
   #   * a drift note (no reference at scan, or one to a row the scan did not
   #     walk; placed by its own folder envelope): its `folder_nonce` is
   #     unchanged. Every path change
