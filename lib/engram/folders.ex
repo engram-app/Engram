@@ -602,7 +602,9 @@ defmodule Engram.Folders do
     # Attachment scan before the transaction (#2159), like `rename/4`; only the
     # moved folders' attachments are read.
     with {:ok, folders} <- Notes.resolve_folder_markers(user, vault, marker_ids),
-         {:ok, %{metas: metas}} <- Attachments.scan_under(user, vault, folders) do
+         {:ok, %{metas: metas}} <- Attachments.scan_under(user, vault, folders),
+         # Rows at their shown paths before the transaction (`Attachments.settle/3`).
+         :ok <- Attachments.settle(user, vault, Enum.map(metas, & &1.path)) do
       precheck = fn pairs ->
         Attachments.check_move_targets(user, vault, attachment_move_pairs(metas, pairs))
       end

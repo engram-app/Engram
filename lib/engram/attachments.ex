@@ -1281,7 +1281,9 @@ defmodule Engram.Attachments do
     # User-initiated, so it carries its own gate — `move_pairs/4` runs the
     # UNGATED mover (see `move_attachment/4`) because `rename_folder/4` shares it.
     with :ok <- Billing.check_feature(user, :attachments_enabled),
-         :ok <- Enum.find_value(pairs, :ok, &blocked_target/1) do
+         :ok <- Enum.find_value(pairs, :ok, &blocked_target/1),
+         # Sources and targets at their shown paths first (`settle/3`).
+         :ok <- settle(user, vault, Enum.flat_map(pairs, &Tuple.to_list/1)) do
       # This surface tags conflict/not_found with the offending path so the REST
       # controller can name it in the 409/404 body (`{:conflict, path}`).
       case move_pairs(user, vault, pairs, &tag_move_error/2) do
@@ -1318,10 +1320,6 @@ defmodule Engram.Attachments do
   defp move_pairs(_user, _vault, [], _on_error, _missing), do: {:ok, 0}
 
   defp move_pairs(user, vault, pairs, on_error, missing) do
-    # Sources and targets at their shown paths first (`settle/3`): a folder
-    # scan and a client name rows where they are shown.
-    :ok = settle(user, vault, Enum.flat_map(pairs, &Tuple.to_list/1))
-
     user = fresh_user(user)
 
     with {:ok, user} <- Crypto.ensure_user_dek(user),
@@ -1586,7 +1584,11 @@ defmodule Engram.Attachments do
     new_folder = String.trim_trailing(new_folder, "/")
     old_len = String.length(old_folder)
 
-    with {:ok, %{metas: metas}} <- scan_under(user, vault, [old_folder]) do
+    with {:ok, %{metas: metas}} <- scan_under(user, vault, [old_folder]),
+         # The scan names rows where they are shown; the cascade moves them
+         # by stored key (`settle/3`). Before the rename's transaction, so its
+         # own folder move cannot make them look stale.
+         :ok <- settle(user, vault, Enum.map(metas, & &1.path)) do
       {:ok,
        Enum.map(metas, fn %{path: old_path} ->
          {old_path, new_folder <> String.slice(old_path, old_len..-1//1)}
