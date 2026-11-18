@@ -10521,6 +10521,8 @@ defmodule Engram.Notes do
       {:ok, _} -> {:ok, {source, target}}
       {:error, :conflict} -> {:error, :conflict}
       {:error, :invalid_path} -> {:error, :cycle}
+      # Content landed under it since the scan: the batch re-plans.
+      {:error, :claims_stale} = stale -> stale
     end
   end
 

@@ -1607,22 +1607,38 @@ defmodule Engram.Folders.Rows do
   when the row is missing or not explicit; `{:error, :conflict}` when a live
   folder already holds `new` (a rename onto an occupied path). Runs inside
   the caller's tenant transaction, under its folder claims.
+
+  `{:error, :claims_stale}` when the folder is no longer bare once the vault
+  row is held: the caller's scan found nothing under it, but a note or
+  attachment written since points into its subtree. Every note and
+  attachment writer takes the vault row before it writes (the seq lock), so
+  under that lock the check sees every one committed, and none can land
+  until this transaction ends. The caller's claim loop
+  (`Notes.with_folder_claims/4`) then re-plans the op from a fresh scan,
+  which cascades that content: no note is left at the old path.
   """
   @spec move_bare_explicit(map(), Ecto.UUID.t(), String.t(), String.t()) ::
           {:ok, 0 | 1} | {:error, term()}
   def move_bare_explicit(user, vault_id, old, new) do
     with %{^old => id} when is_binary(id) <- ids_by_path(user, vault_id, [old]),
-         true <- Repo.exists?(from(f in Folder, where: f.id == ^id and f.explicit)) do
-      _ = Engram.Vaults.next_seq!(vault_id)
-
+         true <- Repo.exists?(from(f in Folder, where: f.id == ^id and f.explicit)),
+         _ = Engram.Vaults.next_seq!(vault_id),
+         {:bare, true} <- {:bare, bare?(user, vault_id, old)} do
       case rename(user, vault_id, old, new) do
         :ok -> {:ok, 1}
         {:error, :merge} -> {:error, :conflict}
         {:error, _} = err -> err
       end
     else
+      {:bare, false} -> {:error, :claims_stale}
       _ -> {:ok, 0}
     end
+  end
+
+  # No live note or attachment points into the subtree at `folder`.
+  defp bare?(user, vault_id, folder) do
+    ids = for r <- subtree(user, vault_id, [folder]), do: r.id
+    MapSet.size(live_content_folders(ids)) == 0
   end
 
   @doc """

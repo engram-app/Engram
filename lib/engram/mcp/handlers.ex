@@ -605,6 +605,11 @@ defmodule Engram.MCP.Handlers do
     new_folder = args["new_folder"] || ""
 
     case Engram.Folders.rename(user, vault, old_folder, new_folder) do
+      # Nothing moved: no note, attachment or explicit folder at the path (a
+      # bare derived row, or no folder at all). REST answers 404 here too.
+      {:ok, %{notes: 0, attachments: 0, folders: 0}} ->
+        ToolError.error(:folder_not_found, "Folder not found: #{old_folder}")
+
       {:ok, %{notes: n, attachments: a}} ->
         # Same sanitizer Folders.rename stored with; it succeeded there, so :ok.
         {:ok, stored} = Notes.PathSanitizer.sanitize_target(new_folder)
