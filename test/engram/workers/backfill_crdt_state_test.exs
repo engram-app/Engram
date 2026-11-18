@@ -321,7 +321,6 @@ defmodule Engram.Workers.BackfillCrdtStateTest do
       any
     end
 
-    Repo.query!("UPDATE notes SET crdt_state_ciphertext = NULL WHERE id = $1", [id])
     refute seedable?.()
 
     assert {:ok, 0} =

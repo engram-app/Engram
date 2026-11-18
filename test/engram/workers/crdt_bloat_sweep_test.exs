@@ -269,13 +269,6 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
         [id]
       )
 
-    Repo.query!(
-      # `notes_kind_shape_check` keeps a note's content NOT NULL, so the
-      # content copy is a bare 16-byte tag-sized junk value instead.
-      "UPDATE notes SET content_ciphertext = '\\xdeadbeefdeadbeefdeadbeefdeadbeef', crdt_state_ciphertext = NULL WHERE id = $1",
-      [id]
-    )
-
     attach()
     assert :ok = perform_job(CrdtBloatSweep, %{})
     assert_receive {:sweep, m, _meta}

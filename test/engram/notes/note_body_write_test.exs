@@ -28,6 +28,8 @@ defmodule Engram.Notes.NoteBodyWriteTest do
   alias Engram.Workers.{BackfillCrdtState, ReencodeEnvelopes}
 
   setup do
+    # R8(e) dropped the columns this file's legacy rows need.
+    :ok = Engram.Fixtures.legacy_body_columns!()
     DekCache.invalidate_all()
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
@@ -971,6 +973,8 @@ defmodule Engram.Notes.NoteBodyRotationTest do
   alias Engram.Repo
 
   setup do
+    # R8(e) dropped the columns this file's legacy rows need.
+    :ok = Engram.Fixtures.legacy_body_columns!()
     DekCache.invalidate_all()
     bypass = Bypass.open()
     Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")

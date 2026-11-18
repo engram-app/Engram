@@ -464,33 +464,19 @@ defmodule Engram.Fixtures do
 
   @doc """
   Every `kind = 'note'` row of `user_id` whose `note_bodies` row is missing
-  or disagrees with its `notes` body columns, as `{id, [column]}`, compared
-  in full against the dropped `notes_sync_body` trigger's mapping (20261021110200)
-  while the `notes` ciphertext is set, by nonce once it is NULL (R8(b2)),
-  restated here independently of `Engram.Notes.NoteBody`. Ids and column
-  names only, never content. `[]` means in step.
+  or disagrees with its `notes` row, as `{id, [column]}`: owner, key
+  version, head, and for each body pair an envelope under the `notes` nonce
+  (nothing when the nonce is NULL). Restated here independently of
+  `Engram.Notes.NoteBody`. Ids and column names only, never content. `[]`
+  means in step.
   """
   def note_body_divergence(user_id) do
-    merged = fn ct, nonce ->
-      """
-      CASE WHEN n.#{ct} IS NULL THEN NULL
-        WHEN n.#{nonce} IS NULL THEN n.#{ct}
-        WHEN length(n.#{nonce}) = 13 THEN n.#{nonce} || n.#{ct}
-        ELSE '\\x00'::bytea || n.#{nonce} || n.#{ct} END
-      """
-    end
-
-    # While the notes ciphertext is set, the body must equal it whole. Once
-    # it is NULL (R8(b2): writers write only the body; the retired null batch
-    # cleared older rows) the nonce is the notes side of the pair: the body holds an
-    # envelope under that nonce, or nothing when the nonce is NULL.
-    differs = fn body, ct, nonce ->
+    differs = fn body, nonce ->
       prefix =
         "CASE WHEN length(n.#{nonce}) = 13 THEN n.#{nonce} ELSE '\\x00'::bytea || n.#{nonce} END"
 
       """
-      CASE WHEN n.#{ct} IS NOT NULL THEN b.#{body} IS DISTINCT FROM (#{merged.(ct, nonce)})
-        WHEN n.#{nonce} IS NULL THEN b.#{body} IS NOT NULL
+      CASE WHEN n.#{nonce} IS NULL THEN b.#{body} IS NOT NULL
         ELSE b.#{body} IS NULL OR substring(b.#{body} FROM 1 FOR 13) <> substring((#{prefix}) FROM 1 FOR 13) END
       """
     end
@@ -503,8 +489,8 @@ defmodule Engram.Fixtures do
           b.user_id IS DISTINCT FROM n.user_id,
           b.key_version IS DISTINCT FROM
             (CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END),
-          #{differs.("content_ct", "content_ciphertext", "content_nonce")},
-          #{differs.("crdt_ct", "crdt_state_ciphertext", "crdt_state_nonce")},
+          #{differs.("content_ct", "content_nonce")},
+          #{differs.("crdt_ct", "crdt_state_nonce")},
           b.crdt_head IS DISTINCT FROM (CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$'
             THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END)
         FROM notes n LEFT JOIN note_bodies b ON b.note_id = n.id
@@ -651,11 +637,27 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
+  Puts `notes.content_ciphertext` and `notes.crdt_state_ciphertext` back,
+  empty, inside the test's sandbox transaction (the R8(e) drop's `down`),
+  for tests of the migrations a self-hoster who skips releases still runs
+  before that drop (20261107120000, 20261110130000, 20261111000100) and of
+  the legacy rows they read. Rolled back with the test. Call it before
+  inserting rows.
+  """
+  def legacy_body_columns! do
+    Engram.MigrationFile.load!("20261118100000_drop_notes_body_ciphertext_columns_drops.exs").run_down(
+      Engram.Repo
+    )
+
+    :ok
+  end
+
+  @doc """
   Sets a note's `notes` content and CRDT state ciphertexts to the envelopes
   its body row holds: the row a release before R8(b2) (which still wrote
   those columns) leaves. For the pre-split copy (`NoteSplit`, migration
-  20261107120000) and the readers that must ignore a dead copy. R8(e) drops
-  the columns and this with them.
+  20261107120000) and the readers that must ignore a dead copy. Needs
+  `legacy_body_columns!/0` first (R8(e) dropped the columns).
   """
   def old_release_notes_copy!(note_id) do
     Engram.Repo.query!(
@@ -722,59 +724,38 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
-  Copies a note's `notes` body columns into its `note_bodies` row whole
-  (the trigger's mapping; a missing row is inserted). Readers take the body
-  from `note_bodies`, and nothing copies a raw `notes` write there, so a
-  test that writes `notes` body columns directly (a tampered ciphertext, a
-  legacy shape) calls this to put the bytes where they are read.
+  Re-stamps a note's `note_bodies` row from its `notes` row (owner, key
+  version, head, and each nonce in front of the body's own ciphertext), as
+  the dropped `notes_sync_body` trigger did. A test that writes `notes`
+  nonces or the head directly calls this to put them where they are read.
+  The body ciphertexts themselves are written with `write_note_body!/2`.
   """
   def mirror_body!(note_id) do
-    # Each body pair rebuilt from the `notes` row: its nonce, its ciphertext,
-    # or (not written there since R8(b2)) the ciphertext the body holds. The
-    # `notes` row is not touched, so no trigger fires.
-    merged = fn ct, nonce, body ->
-      ct = if body, do: "COALESCE(n.#{ct}, substring(b.#{body} FROM 14))", else: "n.#{ct}"
+    merged = fn nonce, body ->
+      ct = "substring(b.#{body} FROM 14)"
 
       """
-      CASE WHEN #{ct} IS NULL THEN NULL
-        WHEN n.#{nonce} IS NULL THEN #{ct}
+      CASE WHEN b.#{body} IS NULL THEN NULL
+        WHEN n.#{nonce} IS NULL THEN b.#{body}
         WHEN length(n.#{nonce}) = 13 THEN n.#{nonce} || #{ct}
         ELSE '\\x00'::bytea || n.#{nonce} || #{ct} END
       """
     end
 
-    %{num_rows: n} =
+    %{num_rows: 1} =
       Engram.Repo.query!(
         """
         UPDATE note_bodies AS b SET
           user_id = n.user_id,
           key_version = CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END,
-          content_ct = #{merged.("content_ciphertext", "content_nonce", "content_ct")},
-          crdt_ct = #{merged.("crdt_state_ciphertext", "crdt_state_nonce", "crdt_ct")},
+          content_ct = #{merged.("content_nonce", "content_ct")},
+          crdt_ct = #{merged.("crdt_state_nonce", "crdt_ct")},
           crdt_head = CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$'
             THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END
         FROM notes AS n WHERE n.id = b.note_id AND n.id = $1
         """,
         [Ecto.UUID.dump!(note_id)]
       )
-
-    # With no body row, insert it whole from the notes columns (the R8(c)
-    # split migration's insert).
-    if n == 0 do
-      Engram.Repo.query!(
-        """
-        INSERT INTO note_bodies (note_id, user_id, key_version, content_ct, crdt_ct, crdt_head)
-        SELECT n.id, n.user_id,
-          CASE WHEN n.dek_version BETWEEN 0 AND 32767 THEN n.dek_version ELSE 0 END,
-          #{merged.("content_ciphertext", "content_nonce", nil)},
-          #{merged.("crdt_state_ciphertext", "crdt_state_nonce", nil)},
-          CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$'
-            THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END
-        FROM notes AS n WHERE n.id = $1 AND n.kind = 'note'
-        """,
-        [Ecto.UUID.dump!(note_id)]
-      )
-    end
 
     :ok
   end

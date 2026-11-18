@@ -206,8 +206,8 @@ BEGIN
   FOR u IN SELECT id FROM users LOOP
     PERFORM set_config('app.current_tenant', u.id::text, true);
     INSERT INTO envelope_bytes
-      SELECT 'notes.content_ciphertext', count(content_ciphertext), coalesce(sum(octet_length(content_ciphertext)), 0) FROM notes
-      UNION ALL SELECT 'notes.crdt_state_ciphertext', count(crdt_state_ciphertext), coalesce(sum(octet_length(crdt_state_ciphertext)), 0) FROM notes
+      SELECT 'note_bodies.content_ct', count(content_ct), coalesce(sum(octet_length(content_ct)), 0) FROM note_bodies
+      UNION ALL SELECT 'note_bodies.crdt_ct', count(crdt_ct), coalesce(sum(octet_length(crdt_ct)), 0) FROM note_bodies
       UNION ALL SELECT 'crdt_update_log.update_ciphertext', count(*), coalesce(sum(octet_length(update_ciphertext)), 0) FROM crdt_update_log
       UNION ALL SELECT 'vault_index_states.state_ciphertext', count(*), coalesce(sum(octet_length(state_ciphertext)), 0) FROM vault_index_states
       UNION ALL SELECT 'vault_index_update_log.update_ciphertext', count(*), coalesce(sum(octet_length(update_ciphertext)), 0) FROM vault_index_update_log;
@@ -217,7 +217,7 @@ SELECT col, sum(n) AS rows, sum(bytes) AS stored_bytes, pg_size_pretty(sum(bytes
   FROM envelope_bytes GROUP BY col ORDER BY col;
 -- Cross-check the row counts (estimates; expect the same order of magnitude)
 SELECT relname, n_live_tup FROM pg_stat_user_tables
-  WHERE relname IN ('notes', 'crdt_update_log', 'vault_index_states', 'vault_index_update_log');
+  WHERE relname IN ('note_bodies', 'crdt_update_log', 'vault_index_states', 'vault_index_update_log');
 COMMIT;
 ```
 

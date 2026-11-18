@@ -256,3 +256,63 @@ Note `add :some_col, :string` renders `varchar(255)` and **fails**
 `prefer-text-field` — resizing a varchar later takes an ACCESS EXCLUSIVE lock.
 Use `:text` for anything without a real length constraint; Postgres stores them
 identically.
+
+## Recovery: the R8(e) notes body columns drop refused
+
+Migration `20261118100000_drop_notes_body_ciphertext_columns_drops` raises at
+boot, before dropping `notes.content_ciphertext` / `notes.crdt_state_ciphertext`,
+when a note still holds its only body copy there: no `note_bodies` row of the
+same owner, or a NULL `content_ct` / `crdt_ct` while the `notes` column is set.
+Nothing was dropped and the version is not recorded, so every boot retries and
+fails the same way until the rows are fixed. The message names up to 5 note ids.
+
+What each case needs:
+
+| Case | Fixed by |
+|---|---|
+| No `note_bodies` row of the same owner | Rerunning `20261107120000` (inserts the row, repairs a foreign owner) |
+| NULL body column, `notes` copy set, `notes` nonce NULL (pre-nonce note) | Rerunning `20261110130000` |
+| NULL body column, `notes` copy set, `notes` nonce **set** | **Neither migration.** `20261107120000` inserts with `ON CONFLICT DO NOTHING`, so it never touches an existing row, and `20261110130000` only takes pre-nonce notes. Use the manual fix below. |
+
+Rerun the two migrations by deleting their versions; Ecto then runs them before
+the drop on the next boot:
+
+```sql
+-- Back up first. As the migration role, with the app stopped.
+DELETE FROM schema_migrations WHERE version IN (20261107120000, 20261110130000);
+```
+
+Manual fix for the nonce-set case: rebuild the body column from the `notes`
+copy in the merged layout (nonce field, then ciphertext; a 12-byte nonce gets a
+`\x00` format byte) and the head decoded from `notes.crdt_head`, the same
+mapping 20261107120000 and 20261110130000 use. Run it as a role that sees every
+tenant (superuser, BYPASSRLS, or `SET ROLE engram_maintenance`), with the app
+stopped. Run each `WHERE` as a `SELECT b.note_id ...` first: every id it returns
+should be one the error lists (the error counts notes across all three cases,
+these count columns of the nonce-set case only, so the numbers need not match).
+
+```sql
+BEGIN;
+UPDATE note_bodies b SET content_ct =
+  CASE WHEN length(n.content_nonce) = 13 THEN n.content_nonce || n.content_ciphertext
+       ELSE '\x00'::bytea || n.content_nonce || n.content_ciphertext END
+FROM notes n
+WHERE b.note_id = n.id AND b.user_id = n.user_id AND n.kind = 'note'
+  AND b.content_ct IS NULL AND n.content_ciphertext IS NOT NULL
+  AND n.content_nonce IS NOT NULL;
+
+UPDATE note_bodies b SET crdt_ct =
+  CASE WHEN length(n.crdt_state_nonce) = 13 THEN n.crdt_state_nonce || n.crdt_state_ciphertext
+       ELSE '\x00'::bytea || n.crdt_state_nonce || n.crdt_state_ciphertext END,
+  crdt_head = CASE WHEN n.crdt_head ~ '^[A-Za-z0-9_-]{43}$'
+    THEN decode(translate(n.crdt_head, '-_', '+/') || '=', 'base64') END
+FROM notes n
+WHERE b.note_id = n.id AND b.user_id = n.user_id AND n.kind = 'note'
+  AND b.crdt_ct IS NULL AND n.crdt_state_ciphertext IS NOT NULL
+  AND n.crdt_state_nonce IS NOT NULL;
+COMMIT;
+```
+
+Then restart. If the drop still refuses, the listed notes need a look by hand
+(compare `notes` and `note_bodies` for those ids as a role that sees every
+tenant). Do not delete the rows: the `notes` copy is the only one.

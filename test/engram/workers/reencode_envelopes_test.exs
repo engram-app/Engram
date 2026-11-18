@@ -314,13 +314,6 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
 
       assert first_bytes.() == [<<0>>, <<0>>]
 
-      Repo.query!(
-        # `notes_kind_shape_check` keeps a note's content NOT NULL, so the
-        # content copy is a bare 16-byte tag-sized junk value instead.
-        "UPDATE notes SET content_ciphertext = '\\xdeadbeefdeadbeefdeadbeefdeadbeef', crdt_state_ciphertext = NULL WHERE id = $1",
-        [id]
-      )
-
       assert ReencodeEnvelopes.legacy_rows?(u.id)
       assert :ok = run(u)
 
@@ -378,7 +371,7 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       seed_crdt_state!(u, note, @big <> "state")
 
       Repo.query!(
-        "UPDATE notes SET crdt_state_ciphertext = NULL, crdt_state_nonce = NULL WHERE id = $1",
+        "UPDATE notes SET crdt_state_nonce = NULL WHERE id = $1",
         [Ecto.UUID.dump!(note.id)]
       )
 
