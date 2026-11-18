@@ -40,6 +40,30 @@ defmodule Engram.MCP.HandlersMovedPathsTest do
       assert payload["folder"] == "R4mcp"
     end
 
+    # e2e run 44284939927: asked at its new AND old path in one batch, the
+    # moved note answered both (the stale stored key). It is shown at one.
+    test "the old path alone is not found", %{user: u, vault: v} do
+      assert {:ok, _, %{"notes" => [%{"found" => false}]}} =
+               Handlers.handle("get_notes", u, v, %{"paths" => ["R4/n1.md"]})
+    end
+
+    test "new and old in one batch: one hit, at the new path", %{user: u, vault: v} do
+      assert {:ok, text, %{"notes" => [hit, miss]}} =
+               Handlers.handle("get_notes", u, v, %{"paths" => ["R4mcp/n1.md", "R4/n1.md"]})
+
+      assert %{"found" => true, "path" => "R4mcp/n1.md", "folder" => "R4mcp"} = hit
+      assert %{"found" => false} = miss
+      refute text =~ "**Path:** R4/n1.md"
+    end
+
+    test "old then new in one batch: one hit, at the new path", %{user: u, vault: v} do
+      assert {:ok, _, %{"notes" => [miss, hit]}} =
+               Handlers.handle("get_notes", u, v, %{"paths" => ["R4/n1.md", "R4mcp/n1.md"]})
+
+      assert %{"found" => false} = miss
+      assert %{"found" => true, "path" => "R4mcp/n1.md"} = hit
+    end
+
     test "outline prints the shown path", %{user: u, vault: v} do
       assert {:ok, text, %{"notes" => [payload]}} =
                Handlers.handle("get_notes", u, v, %{
