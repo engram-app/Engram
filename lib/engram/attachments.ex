@@ -604,9 +604,10 @@ defmodule Engram.Attachments do
     with true <- Location.named?(user.id, vault_id(vault)),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       Enum.each(Enum.uniq(paths), &settle_one(user, vault, filter_key, &1, 4))
+    else
+      # No moved folder in the vault, or no key (nothing to relocate).
+      _ -> :ok
     end
-
-    :ok
   end
 
   defp settle_one(_user, _vault, _fk, _path, 0), do: :ok
@@ -634,7 +635,7 @@ defmodule Engram.Attachments do
   end
 
   defp vault_id(%{id: id}), do: id
-  defp vault_id(id) when is_binary(id), do: id
+  defp vault_id(id), do: id
 
   @doc false
   def fetch_existing(user, vault_id, path_hmac) do
