@@ -40,6 +40,9 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.NoteSizes,
     Engram.DataMigrations.FolderTable,
     Engram.DataMigrations.NoteFolderHashNull,
+    # No data dependency on either neighbour (it reads markers' hashes, which
+    # NoteFolderHashNull never nulls). Placed after NoteFolderHashNull only
+    # because that one's test pins it right after FolderTable.
     Engram.DataMigrations.ExplicitFolderReconcile,
     Engram.DataMigrations.KeyAliases,
     Engram.DataMigrations.PersonOriginBackfill,
