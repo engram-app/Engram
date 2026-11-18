@@ -45,4 +45,10 @@ run pull 0 >/dev/null 2>&1 && fail "pull error must fail"
 run port 99 >/dev/null 2>&1 && fail "persistent bind error must fail"
 [ "$(runs)" = 5 ] || fail "case 3: runs=$(runs)"
 
+# Slow docker: the bind error is printed late, right before exit. Detection
+# must not depend on timing.
+sed -i 's|^if \[ "\$n" -le|[ "${STUB_SLOW:-}" ] \&\& sleep 1\nif [ "$n" -le|' "$TMP/bin/docker"
+STUB_SLOW=1 run port 1 >/dev/null 2>&1 || fail "slow bind error must still be detected and retried"
+[ "$(runs)" = 2 ] && [ "$(rms)" = 1 ] || fail "case 4: runs=$(runs) rms=$(rms)"
+
 echo "ok"

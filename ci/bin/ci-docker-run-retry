@@ -35,10 +35,10 @@ err="$(mktemp)"
 trap 'rm -f "$err"' EXIT
 
 for attempt in $(seq 1 "$attempts"); do
-  "$here/ci-docker" run "$@" 2> >(tee "$err" >&2)
+  "$here/ci-docker" run "$@" 2> "$err"
   rc=$?
+  cat "$err" >&2
   [ "$rc" -eq 0 ] && exit 0
-  sleep 0.2 # let the process substitution flush "$err"
   if ! grep -qiE 'address already in use|port is already allocated|PortManager\.AddPort' "$err"; then
     echo "::error::docker run $name failed (exit $rc), not a port race: not retrying" >&2
     exit "$rc"
