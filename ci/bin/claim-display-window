@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Claim a free Xvfb display window for one e2e job on this host, held for
+# the job's lifetime by an flock. Prints `key=value` lines for $GITHUB_OUTPUT.
+#
+#   claim-display-window <family> <stride> <offset> <slots>
+#
+# Window `s` is :BASE-stride+1..:BASE with BASE = s*stride + offset. The first
+# free slot wins. The lock is held by a background `sleep` (holder_pid); the
+# job's teardown kills it (release-display-window), and if teardown never
+# runs, the runner's end-of-job process cleanup does, which frees the lock.
+#
+# Replaces `GITHUB_RUN_NUMBER % 15`, which gave two concurrent runs on one host
+# the same window whenever their run numbers were 15 apart, so one job's Xvfb
+# cleanup killed the other's displays (docs/context/e2e-display-window-collision.md).
+set -euo pipefail
+family=$1 stride=$2 offset=$3 slots=$4
+dir=${ENGRAM_CI_LOCK_DIR:-/tmp/engram-ci-display-locks}
+mkdir -p "$dir"
+for s in $(seq 0 $((slots - 1))); do
+  result=$(mktemp)
+  (
+    exec 9>>"$dir/$family-$s.lock"
+    if ! flock -n 9; then echo no >"$result"; exit 1; fi
+    echo yes >"$result"
+    exec sleep "${HOLD_SECONDS:-21600}"
+  ) </dev/null >/dev/null 2>&1 &
+  pid=$!
+  # The holder reports through the file: `kill -0` cannot tell a failed
+  # claim (an unreaped zombie) from a live holder.
+  while [ ! -s "$result" ]; do sleep 0.05; done
+  got=$(cat "$result"); rm -f "$result"
+  if [ "$got" = yes ]; then
+    base=$((s * stride + offset))
+    echo "slot=$s"
+    echo "base=$base"
+    echo "min=$((base - stride + 1))"
+    echo "max=$base"
+    echo "resumed_base=$((base - 6))"
+    echo "holder_pid=$pid"
+    echo "Display window $family-$s owned by this job: :$((base - stride + 1))..:$base" >&2
+    exit 0
+  fi
+  wait "$pid" 2>/dev/null || true
+done
+echo "::error::no free display window for $family (all $slots slots held on $(hostname))" >&2
+exit 1

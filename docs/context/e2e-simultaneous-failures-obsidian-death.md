@@ -69,16 +69,11 @@ Before #1734 there was no kill record (Obsidian stderr went to `DEVNULL`, no
 Grep those for `Out of memory: Killed process … (obsidian)` before counting
 failures as bugs.
 
-## Related live landmine (NOT the cause here)
+## Related: display-window collision (fixed)
 
-`e2e-crdt` computes its Xvfb display window as `(GITHUB_RUN_NUMBER % 15) * 6 + 150`
-(`verify.yml` e2e-crdt job; `e2e-clerk` uses the same formula with base `+50`), and pre-cleanup runs
-`pkill -9 -f "Xvfb :$d"` across that window. Only **15 buckets** — and because the runners
-share a PID namespace, that pkill can reach another job's Xvfb. Two `e2e-crdt` runs whose
-run numbers differ by a multiple of 15 collide outright.
-
-No collision in this window (run 5025 → `:145-150`, 5026 → `:151-156`), but it will bite
-eventually. Widening the modulo is cheap.
+The run-number display window this section used to warn about did collide
+(run 44354068376): see `docs/context/e2e-display-window-collision.md`. Jobs
+now claim an flock-held window and kill only the Xvfb pids they recorded.
 
 ## How to tell this class from a real regression
 

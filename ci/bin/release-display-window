@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Teardown half of claim-display-window: kill ONLY the Xvfb processes this job
+# recorded, then free its display window.
+#
+#   release-display-window <config_prefix> [holder_pid]
+#
+# The e2e harness writes `<config_dir>.xvfb.pid` ("<pid> <display>") for every
+# Xvfb it starts (e2e/helpers/obsidian.py). A pid is killed only while its
+# command line still reads `Xvfb ... :<display>`, so a pid reused by another
+# process survives. Never a `pkill -f "Xvfb :N"` across a range: that is how
+# one job killed another's displays (docs/context/e2e-display-window-collision.md).
+set -uo pipefail
+prefix=$1 holder=${2:-}
+for f in "$prefix"-*.xvfb.pid; do
+  [ -e "$f" ] || continue
+  read -r pid display <"$f" || continue
+  cmd=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null) || continue
+  case "$cmd" in
+    *Xvfb*" :$display "*)
+      kill -9 "$pid" 2>/dev/null || true
+      sleep 0.2
+      rm -f "/tmp/.X${display}-lock" "/tmp/.X11-unix/X${display}" ;;
+  esac
+done
+if [ -n "$holder" ]; then
+  case "$(tr '\0' ' ' <"/proc/$holder/cmdline" 2>/dev/null)" in
+    sleep*) kill "$holder" 2>/dev/null || true ;;
+  esac
+fi
+exit 0
