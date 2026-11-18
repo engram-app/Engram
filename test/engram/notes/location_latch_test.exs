@@ -8,8 +8,14 @@ defmodule Engram.Notes.LocationLatchTest do
   # two notes were shown at one path.
   use Engram.DataCase, async: false
 
-  alias Engram.{FolderRows, Notes, ServiceConfig}
+  alias Engram.Crypto.NameKeys
+  alias Engram.FolderRows
+  alias Engram.Folders.WalkSql
+  alias Engram.Notes
   alias Engram.Notes.Location
+  alias Engram.ServiceConfig
+
+  require WalkSql
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
@@ -80,5 +86,14 @@ defmodule Engram.Notes.LocationLatchTest do
     assert live_count(v) == 1
     assert {:ok, %{id: id}} = Notes.get_note(u, v, "A/x.md")
     assert id == note.id
+  end
+
+  # The name match's holder check reads the stamp version from NameKeys, so a
+  # version bump cannot leave the SQL testing the old byte.
+  test "the holder check's stamp byte is NameKeys' version" do
+    byte = "'\\x" <> Base.encode16(NameKeys.version(), case: :lower) <> "'::bytea"
+
+    for sql <- [WalkSql.name_match_by_id(), WalkSql.name_match_by_hmac()],
+        do: assert(sql =~ "p.name_stamp IS DISTINCT FROM (p.path_nonce || " <> byte <> ")")
   end
 end
