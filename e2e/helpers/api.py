@@ -234,10 +234,12 @@ class ApiClient:
         )
         return resp.status_code
 
-    def get_attachment(self, path: str) -> requests.Response:
-        """GET /attachments/{path}. Returns full response."""
+    def get_attachment(self, path: str, raw: bool = False) -> requests.Response:
+        """GET /attachments/{path}. Returns full response: JSON metadata plus
+        `content_base64`, or with `raw` the bytes themselves."""
         return self.session.get(
             f"{self.base_url}/attachments/{quote(path, safe='')}",
+            params={"raw": "1"} if raw else None,
             timeout=10,
         )
 

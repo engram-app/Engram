@@ -19,7 +19,7 @@ import os
 import re
 import secrets
 import time
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 
 import pytest
 from playwright.async_api import async_playwright
@@ -199,11 +199,7 @@ async def test_plugin_first_journey(fresh_unlinked_instance, clerk_client, ts, s
             manifest = api.get_manifest()
             assert sorted(n["path"] for n in manifest["notes"]) == sorted([*notes, WELCOME_NOTE])
             assert [a["path"] for a in manifest["attachments"]] == [ATTACHMENT]
-            raw = api.session.get(
-                f"{api.base_url}/attachments/{quote(ATTACHMENT, safe='')}",
-                params={"raw": "1"},
-                timeout=10,
-            )
+            raw = api.get_attachment(ATTACHMENT, raw=True)
             assert raw.status_code == 200 and raw.content == TINY_PNG
             # Cold CRDT bodies fold in asynchronously; wait for every fold, then
             # demand bytes for all 20 (frontmatter and unicode included).
