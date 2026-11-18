@@ -317,8 +317,11 @@ defmodule Engram.Backfill.IdWindows do
   # not the walk; the runner's Oban job timeout is 30 min for every ledger
   # migration together.
   @pass_budget_ms 240_000
-  # A walk spanning more passes than this logs a warning per pass: the table
-  # outgrew the budget, and done now takes that many hourly runs.
+  # A walk that STOPPED ON ITS TIME BUDGET and has spanned more passes than
+  # this logs a warning per pass: the table outgrew the budget, and done now
+  # takes that many hourly runs. A walk throttled by `:max_fixed` is working
+  # as designed (its cap is the load lever) and never warns: every capped
+  # pass moves the cursor, so it cannot be stuck.
   @span_warn_passes 3
   @cursors Engram.Backfill.IdWindows.Cursors
 
@@ -424,10 +427,12 @@ defmodule Engram.Backfill.IdWindows do
     end
   end
 
-  defp stopped(name, passes, stop, more) do
+  defp stopped(name, passes, :budget, more) do
     spanning(name, passes)
-    if stop == :budget, do: {:more, more ++ [hit_budget: true]}, else: {:more, more}
+    {:more, more ++ [hit_budget: true]}
   end
+
+  defp stopped(_name, _passes, _cap, more), do: {:more, more}
 
   # The walk's reset generation: bumped by every `reset_walk/1`.
   defp gen(cursors, name), do: Map.get(cursors, {:gen, name}, 0)

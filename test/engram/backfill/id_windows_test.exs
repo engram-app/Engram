@@ -93,6 +93,29 @@ defmodule Engram.Backfill.IdWindowsTest do
     assert_received {:spanning, 4}
   end
 
+  test "passes throttled by the fixed-row cap never warn that the walk is spanning" do
+    ref = make_ref()
+    test = self()
+
+    :telemetry.attach(
+      ref,
+      [:engram, :id_windows, :walk_spanning],
+      fn _, %{passes: n}, _, _ -> send(test, {:spanning, n}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(ref) end)
+
+    # Each pass fixes its one row and stops on the cap, as the hourly
+    # note_folder_hash_null pass does: 6 notes, so 6 capped passes.
+    for _ <- 1..5 do
+      assert {:more, rows: 1} =
+               IdWindows.heal_pass("t", Note, step({1, false}), batch_size: 1, max_fixed: 1)
+    end
+
+    refute_received {:spanning, _}
+  end
+
   test "a fix anywhere in a walk that spans passes keeps it open for a new walk" do
     opts = [batch_size: 1, budget_ms: -1]
 

@@ -63,8 +63,9 @@ others.
   window. The cursor is node-local (an Agent in the application tree): a
   restart or a pass on another node starts the walk over (slower, never a
   false done). A walk
-  spanning more than 3 passes logs a warning per pass and emits
-  `[:engram, :id_windows, :walk_spanning]`.
+  spanning more than 3 passes that STOPPED ON THE TIME BUDGET logs a warning
+  per pass and emits `[:engram, :id_windows, :walk_spanning]`. Passes stopped
+  by `:max_fixed` (a deliberate throttle, cursor always advances) never warn.
 - `NoteIndexState`'s chunk counters are kept on every `chunks` write by the
   `chunks_sync_note_counts_*` statement triggers (migration 20261028000000):
   absolute recount of the touched notes, one state write per note per
