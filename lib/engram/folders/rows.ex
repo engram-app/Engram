@@ -293,6 +293,11 @@ defmodule Engram.Folders.Rows do
       :new
     )
 
+    release_hmacs(
+      ctx.vault_id,
+      for({path, _, _, id, _} <- rows, MapSet.member?(written, id), do: {id, hmacs[path]})
+    )
+
     Enum.reduce(rows, ids, fn {path, parent, marker, id, _row}, ids ->
       if MapSet.member?(written, id),
         do: Map.put(ids, path, id),
@@ -316,12 +321,14 @@ defmodule Engram.Folders.Rows do
          ) do
       1 ->
         put_names(ctx, [{id, segment}], :new)
+        release_hmacs(ctx.vault_id, [{id, full_h}])
         id
 
       0 ->
         case live_child(ctx.vault_id, parent_id, name_h) do
           %{id: found} = row ->
             repair(row, full_h, explicit)
+            release_hmacs(ctx.vault_id, [{found, full_h}])
             found
 
           # No live row, yet the insert wrote nothing: `explicit` names a row
@@ -450,6 +457,7 @@ defmodule Engram.Folders.Rows do
         ] ++ Folder.name_keys(ctx.fk, segment, nonce)
     )
 
+    release_hmacs(ctx.vault_id, [{id, full_h}])
     put_names(ctx, [{id, segment}])
   end
 
@@ -1159,6 +1167,12 @@ defmodule Engram.Folders.Rows do
         :ok = put_names(ctx, [{root.id, new_segment}])
         rest = for r <- rows, r.id != root.id, Map.has_key?(paths, r.id), do: {r.id, paths[r.id]}
         write_path_hmacs(ctx, rest)
+        # The root and every rewritten descendant, one statement.
+        release_hmacs(
+          ctx.vault_id,
+          for({id, p} <- [{root.id, new_folder} | rest], do: {id, path_hmac(ctx.fk, p)})
+        )
+
         :ok = recascade(ctx, rows)
         :ok
     end
@@ -1232,6 +1246,30 @@ defmodule Engram.Folders.Rows do
     :ok
   end
 
+  # One live row per path hash. The previous release (0.89.0) finds folders by
+  # `full_path_hmac` and keys a map by it, so two live rows with one hash
+  # make its lookup pick either. A row this writer just stamped with a hash
+  # takes it from any other live row still holding it (a stale hash, left
+  # below a folder whose rename could not rewrite it). That row then has no
+  # hash, which 0.89.0 repairs on its next ensure and D never reads. One
+  # indexed statement (`folders_full_path`); drop with the column.
+  defp release_hmacs(vault_id, pairs) do
+    case for({id, h} <- pairs, is_binary(h), do: {id, h}) |> Enum.unzip() do
+      {[], []} ->
+        :ok
+
+      {ids, hmacs} ->
+        from(f in Folder,
+          where:
+            f.vault_id == ^vault_id and f.full_path_hmac in ^hmacs and f.id not in ^ids and
+              is_nil(f.deleted_at)
+        )
+        |> Repo.update_all(set: [full_path_hmac: nil])
+
+        :ok
+    end
+  end
+
   # The target of the rename already has a live row: fold each source row into
   # the row that holds its new place, or move it there. The rows that lose
   # their place are retired by `retire_later/2` (see `rename/4`).
@@ -1261,6 +1299,8 @@ defmodule Engram.Folders.Rows do
                     updated_at: now()
                   ]
                 )
+
+                release_hmacs(ctx.vault_id, [{row.id, path_hmac(ctx.fk, path)}])
 
                 {Map.put(placed, row.id, row.id), merged}
             end
