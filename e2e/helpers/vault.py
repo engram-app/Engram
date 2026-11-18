@@ -7,6 +7,14 @@ from pathlib import Path
 
 from helpers.latency import DELIVERY_TIMEOUT
 
+# Minimal valid PNG: 1x1 red pixel. The one attachment fixture every test uploads.
+TINY_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+    b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
+    b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
+    b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
 
 def write_note(vault_path: Path, rel_path: str, content: str) -> None:
     """Write a markdown file to the vault, creating parent dirs as needed."""
@@ -169,3 +177,17 @@ def list_notes(vault_path: Path, folder: str = "") -> list[str]:
         for p in search.rglob("*.md")
         if ".obsidian" not in p.parts and ".trash" not in p.parts
     )
+
+
+def files_under(vault_path: Path, folder: str) -> set[str]:
+    """Every FILE under `folder` (relative paths), any extension, trash
+    excluded: an exact-set oracle, so a conflict copy or a file left at an
+    old path is an extra entry."""
+    base = vault_path / folder
+    if not base.exists():
+        return set()
+    return {
+        str(p.relative_to(vault_path))
+        for p in base.rglob("*")
+        if p.is_file() and ".trash" not in p.parts
+    }

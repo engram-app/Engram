@@ -21,7 +21,7 @@ Phoenix ALREADY emits, so no backend code exists for the test's sake:
 All but `folder_op` are scoped to `prefix` so unrelated session traffic (e.g.
 test_26's oversized note, which re-POSTs and 413s on every sweep) is not
 attributed to the caller. A `folder_op` frame names folder ids, not paths, so it
-is counted vault-wide; only test_107 turns the switch on, and the suite is
+is counted vault-wide; only test_107 and test_108 turn the switch on, and the suite is
 serial.
 
 A telemetry handler that raises is DETACHED silently, after which its slot

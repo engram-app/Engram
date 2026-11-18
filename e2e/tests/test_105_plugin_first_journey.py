@@ -30,7 +30,7 @@ from helpers.clerk import e2e_email
 from helpers.clerk_browser import clerk_sign_in_url, install_testing_token
 from helpers.quiescence import await_quiescent
 from helpers.scenario import timed_step
-from helpers.vault import write_binary, write_note
+from helpers.vault import TINY_PNG, write_binary, write_note
 
 API_URL = os.environ.get("ENGRAM_API_URL") or "http://localhost:8100/api"
 SPA_URL = os.environ.get("ENGRAM_SPA_URL") or (
@@ -44,12 +44,6 @@ pytestmark = pytest.mark.skipif(
     reason="E2E_CLERK_SECRET_KEY not set: the journey signs a real Clerk user in",
 )
 
-TINY_PNG = (
-    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-    b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
-    b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
-    b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
-)
 ATTACHMENT = "Assets/diagram.png"
 FRONTMATTER_NOTE = "Projects/Engram/Roadmap.md"
 FRONTMATTER_BODY = (
