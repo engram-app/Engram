@@ -54,11 +54,14 @@ defmodule Engram.Attachments.WriteStop do
   @spec reads_release() :: String.t()
   def reads_release, do: @reads_release
 
-  @doc "Whether a folder rename the S5 write stop serves leaves attachments in place."
-  @spec on?() :: boolean()
-  def on? do
+  @doc """
+  Whether a folder rename the S5 write stop serves leaves attachments in
+  place. `fleet_opts` go to `Readiness.peers_report/4` (tests name peers).
+  """
+  @spec on?(keyword()) :: boolean()
+  def on?(fleet_opts \\ []) do
     Engram.ServiceConfig.get(:attachment_write_stop, true) != false and floors?() and
-      NoteWriteStop.on?() and ledger_done?() and fleet?()
+      NoteWriteStop.on?() and ledger_done?() and fleet?(fleet_opts)
   end
 
   @doc "Whether the rollback floor covers the attachment readers release."
@@ -74,6 +77,8 @@ defmodule Engram.Attachments.WriteStop do
       DataMigrations.done?(AttachmentNameKey.name(), AttachmentNameKey.version())
   end
 
-  defp fleet?,
-    do: Readiness.peers_report(Location, :s6_reads, @fleet_level, sync: fn -> :ok end) == :ok
+  defp fleet?(opts) do
+    opts = Keyword.merge([sync: fn -> :ok end], opts)
+    Readiness.peers_report(Location, :s6_reads, @fleet_level, opts) == :ok
+  end
 end

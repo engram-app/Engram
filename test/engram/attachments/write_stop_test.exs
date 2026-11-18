@@ -101,6 +101,43 @@ defmodule Engram.Attachments.WriteStopTest do
     refute rows(v) == before
   end
 
+  test "a peer on a build without the attachment readers keeps it off" do
+    peer = :"engram@10.0.0.9"
+    fleet = &[role: nil, query: nil, peers: fn -> [peer] end, multicall: fn _ -> [&1] end]
+
+    # An older build has no `Location.s6_reads/0`.
+    refute WriteStop.on?(fleet.({:error, {:exception, :undef, []}}))
+    refute WriteStop.on?(fleet.({:ok, 0}))
+    assert WriteStop.on?(fleet.({:ok, 1}))
+  end
+
+  test "with the note write stop off it is off, and the rename cascades", %{user: u, vault: v} do
+    ServiceConfig.put_override(:folder_ops, false)
+    refute WriteStop.on?()
+
+    before = rows(v)
+    {:ok, _} = Folders.rename(u, v, "A", "B")
+    refute rows(v) == before
+  end
+
+  test "an attachment that does not decrypt sends the rename to the cascade",
+       %{user: u, vault: v} do
+    {:ok, bad} =
+      Attachments.upsert_attachment(u, v, %{
+        "path" => "A/bad.png",
+        "content_base64" => Base.encode64("bad")
+      })
+
+    Repo.query!("UPDATE attachments SET path_ciphertext = 'garbage' WHERE id = $1", [
+      Ecto.UUID.dump!(bad.id)
+    ])
+
+    before = rows(v)
+    {:ok, _} = Folders.rename(u, v, "A", "B")
+    refute rows(v) == before
+    assert {:ok, %{content: "bytes of A/x.png"}} = Attachments.get_attachment(u, v, "B/x.png")
+  end
+
   # The floor PR (Todd's approval, via god) flips this with the sentinel.
   test "inert until the rollback floor reaches the attachment readers release" do
     refute Floor.at_least?(WriteStop.reads_release())
