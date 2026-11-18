@@ -1743,6 +1743,7 @@ defmodule Engram.Folders.Rows do
 
   defp write_revived(user, vault_id, revive) do
     {ids, parents} = Enum.unzip(revive)
+    hash? = PathHashStop.write?(user.id, vault_id)
 
     {n, _} =
       from(f in Folder,
@@ -1762,6 +1763,9 @@ defmodule Engram.Folders.Rows do
           ]
         ]
       )
+      # Stop on: the hash it died with goes in the same UPDATE, so it can
+      # never duplicate a live row's if the vault falls back to D's writes.
+      |> then(&if(hash?, do: &1, else: update(&1, set: ^PathHmacs.cleared())))
       |> Repo.update_all([])
 
     # A revived row's stored hash is the one it died with, which may be
@@ -1769,10 +1773,7 @@ defmodule Engram.Folders.Rows do
     # stale holder too). One whose path will not resolve (a name that will
     # not decrypt) yields a hash a live row holds instead.
     # With S6 step 3's write stop on in the vault, no hash is written.
-    :ok =
-      if PathHashStop.write?(user.id, vault_id),
-        do: put_revived_hashes(user, vault_id, ids),
-        else: :ok
+    :ok = if hash?, do: put_revived_hashes(user, vault_id, ids), else: :ok
 
     n
   end

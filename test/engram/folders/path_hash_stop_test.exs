@@ -234,6 +234,43 @@ defmodule Engram.Folders.PathHashStopTest do
     assert hashes(v) |> Map.values() |> Enum.all?(&is_nil/1)
   end
 
+  # A row restored with the stop on drops the hash it died with, so a vault
+  # that falls back to D's writes holds no hash twice. Red before: the
+  # revived row kept it while a live row (renamed under the stop) held the
+  # same one.
+  test "on: a restore drops the revived row's old hash", ctx do
+    %{user: u, vault: v} = ctx
+    inert! = fn -> Application.put_env(:engram, :path_hash_stop_markers_gone, false) end
+    on! = fn -> Application.put_env(:engram, :path_hash_stop_markers_gone, true) end
+    on_exit(on!)
+
+    inert!.()
+    tenant!(u, fn -> {:ok, _} = Rows.ensure(u, v.id, "A/B") end)
+    op = Ecto.UUID.generate()
+    assert tenant!(u, fn -> Rows.soft_delete(u, v.id, ["A"], op) end) >= 1
+    tenant!(u, fn -> {:ok, _} = Rows.ensure(u, v.id, "A/B") end)
+
+    on!.()
+    :ok = tenant!(u, fn -> Rows.rename(u, v.id, "A", "C") end)
+    assert tenant!(u, fn -> Rows.restore_op(u, v.id, op) end) >= 1
+
+    # The fallback: the vault is back on D's writes.
+    inert!.()
+    assert %{"A/B" => _, "C/B" => _} = Engram.FolderRows.tree(u)
+
+    %{rows: dups} =
+      Repo.query!(
+        """
+        SELECT full_path_hmac FROM folders
+        WHERE vault_id = $1 AND deleted_at IS NULL AND full_path_hmac IS NOT NULL
+        GROUP BY 1 HAVING count(*) > 1
+        """,
+        [Ecto.UUID.dump!(v.id)]
+      )
+
+    assert dups == []
+  end
+
   # The walk_index_cond_test race: `insert` runs right after the ensure's
   # walk, as a racing creator would.
   defp after_walk(insert) do
