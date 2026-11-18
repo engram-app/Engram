@@ -9,7 +9,7 @@ defmodule Engram.MCP.HandlersMovedPathsTest do
   import Engram.FieldCatalogHelpers
   import Mox
 
-  alias Engram.{Crypto, FolderRows, QdrantStub, Repo}
+  alias Engram.{Crypto, FolderRows, Folders, Notes, QdrantStub, Repo, ServiceConfig}
   alias Engram.Folders.Rows
   alias Engram.MCP.Handlers
 
@@ -92,5 +92,85 @@ defmodule Engram.MCP.HandlersMovedPathsTest do
       assert r["source_path"] == "R4mcp/n1.md"
       refute text =~ "R4/n1.md"
     end
+  end
+
+  defp live_count(vault) do
+    %{rows: [[n]]} =
+      Repo.query!(
+        "SELECT count(*)::int FROM notes WHERE vault_id = $1 AND kind = 'note' " <>
+          "AND deleted_at IS NULL",
+        [Ecto.UUID.dump!(vault.id)]
+      )
+
+    n
+  end
+
+  describe "rename_note" do
+    test "renames the moved note from its shown path", %{user: u, vault: v, note: note} do
+      assert {:ok, text, %{"new_path" => "R4mcp/n2.md"}} =
+               Handlers.handle("rename_note", u, v, %{
+                 "old_path" => "R4mcp/n1.md",
+                 "new_path" => "R4mcp/n2.md"
+               })
+
+      assert text =~ "R4mcp/n1.md -> R4mcp/n2.md"
+
+      assert {:ok, got, %{"notes" => [%{"path" => "R4mcp/n2.md"}]}} =
+               Handlers.handle("get_notes", u, v, %{"paths" => ["R4mcp/n2.md"]})
+
+      assert got =~ "quixotic body"
+      assert {:ok, %{id: id}} = Notes.get_note(u, v, "R4mcp/n2.md")
+      assert id == note.id
+      assert {:error, :not_found} = Notes.get_note(u, v, "R4mcp/n1.md")
+      assert {:error, :not_found} = Notes.get_note(u, v, "R4/n1.md")
+      assert live_count(v) == 1
+
+      # The rename's tombstone names the path the note was shown at.
+      {:ok, %{changes: changes}} = Notes.list_changes_by_seq(u, v, 0, limit: 500)
+      paths = for c <- changes, c.id == note.id, do: c.path
+      refute "R4/n1.md" in paths
+    end
+  end
+
+  describe "list_folder" do
+    test "lists the moved note under the moved folder", %{user: u, vault: v} do
+      assert {:ok, text, %{"notes" => [%{"path" => "R4mcp/n1.md"}]}} =
+               Handlers.handle("list_folder", u, v, %{"folder" => "R4mcp"})
+
+      assert text =~ "| R4mcp/n1.md |"
+      refute text =~ "R4/n1.md"
+
+      assert {:ok, _, %{"notes" => []}} =
+               Handlers.handle("list_folder", u, v, %{"folder" => "R4"})
+
+      assert {:ok, _, %{"folders" => folders}} = Handlers.handle("list_folder", u, v, %{})
+      assert Enum.map(folders, & &1["folder"]) == ["R4mcp"]
+    end
+  end
+
+  # Mixed window: a 0.89.0 node renames the folder with the S5 write stop on
+  # (`Folders.rename/5`, the folder writer this branch shares unchanged with
+  # release-v0.89.0), and a release D node answers the MCP reads.
+  test "a 0.89.0 write-stop rename: D's MCP reads print the shown path", %{user: u} do
+    ServiceConfig.put_override(:folder_ops, true)
+    v = insert(:vault, user: u)
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "W/n.md", "content" => "w"}, actor: "api")
+    {:ok, _} = Folders.rename(u, v, "W", "W2")
+
+    %{rows: [[false]]} =
+      Repo.query!("SELECT notes_cascaded FROM folders WHERE vault_id = $1", [
+        Ecto.UUID.dump!(v.id)
+      ])
+
+    assert {:ok, text, %{"notes" => [%{"path" => "W2/n.md"}]}} =
+             Handlers.handle("get_notes", u, v, %{"paths" => ["W2/n.md"]})
+
+    assert text =~ "**Path:** W2/n.md"
+
+    assert {:ok, _, %{"results" => [%{"source_path" => "W2/n.md"}]}} =
+             Handlers.handle("search_notes", u, v, %{})
+
+    assert {:ok, _, %{"notes" => [%{"path" => "W2/n.md"}]}} =
+             Handlers.handle("list_folder", u, v, %{"folder" => "W2"})
   end
 end
