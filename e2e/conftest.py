@@ -755,7 +755,11 @@ def sync_vault_id(api_sync, sync_client_id):
     re-register returns the same row, so we read its id here. Shape-robust:
     the response may nest the vault under `vault` or return it flat.
     """
-    resp, status = api_sync.register_vault(f"e2e-sync-vault-w{_WORKER}", sync_client_id)
+    return _registered_vault_id(api_sync, f"e2e-sync-vault-w{_WORKER}", sync_client_id)
+
+
+def _registered_vault_id(api, name: str, client_id: str) -> str:
+    resp, status = api.register_vault(name, client_id)
     vault = resp.get("vault", resp) if isinstance(resp, dict) else {}
     vid = vault.get("id") or vault.get("vault_id") or vault.get("uuid")
     assert vid, f"no vault id in /vaults/register response (status={status}): {resp}"
@@ -804,6 +808,12 @@ def resumed_api(resumed_user, resumed_client_id):
     except Exception:
         pass
     return api
+
+
+@pytest.fixture
+def resumed_vault_id(resumed_api, resumed_client_id):
+    """Server vault id of the resumed pair's private vault (see sync_vault_id)."""
+    return _registered_vault_id(resumed_api, f"e2e-resumed-vault-w{_WORKER}", resumed_client_id)
 
 
 # ---------------------------------------------------------------------------

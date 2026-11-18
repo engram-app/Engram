@@ -351,6 +351,16 @@ class ApiClient:
         )
         return resp.json(), resp.status_code
 
+    def mcp_tool(self, tool_name: str, arguments: dict) -> dict:
+        """`mcp_call` that must succeed: returns the tool `result` (its
+        `structuredContent` and its markdown `content`), failing on a
+        transport error or an `isError` result."""
+        resp, status = self.mcp_call(tool_name, arguments)
+        assert status == 200, f"MCP {tool_name} HTTP {status}: {resp}"
+        result = resp.get("result") or {}
+        assert result and not result.get("isError"), f"MCP {tool_name} failed: {resp}"
+        return result
+
     def search_response(self, query: str, **body_extra) -> requests.Response:
         """POST /search, returning the raw response instead of raising.
 
@@ -430,13 +440,34 @@ class ApiClient:
             logs = [l for l in logs if l.get("device_id") == device_id]
         return logs
 
-    def list_folder(self, folder: str = "") -> dict:
-        """GET /folders/list. Returns folder listing dict."""
+    def list_folder(self, folder: str = "", cursor: str | None = None) -> dict:
+        """GET /folders/list. Returns one page of the folder listing."""
+        params = {"folder": folder}
+        if cursor:
+            params["cursor"] = cursor
         resp = self.session.get(
             f"{self.base_url}/folders/list",
-            params={"folder": folder},
+            params=params,
             timeout=10,
         )
+        self._raise_for_status(resp)
+        return resp.json()
+
+    def list_folder_paths(self, folder: str = "") -> set[str]:
+        """Every note path directly in `folder`, all pages followed."""
+        paths: set[str] = set()
+        cursor = None
+        for _ in range(1000):  # a cursor that never ends is a server bug
+            page = self.list_folder(folder, cursor)
+            paths |= {n["path"] for n in page.get("notes") or []}
+            cursor = page.get("next_cursor")
+            if not cursor:
+                return paths
+        raise AssertionError(f"GET /folders/list?folder={folder!r} never reached its last page")
+
+    def get_vault_tree(self) -> dict:
+        """GET /vault/tree: every folder, note and attachment the web tree shows."""
+        resp = self.session.get(f"{self.base_url}/vault/tree", timeout=30)
         self._raise_for_status(resp)
         return resp.json()
 

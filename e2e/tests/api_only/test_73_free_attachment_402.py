@@ -30,6 +30,7 @@ import pytest
 from helpers.api import ApiClient
 from helpers.clerk import ClerkClient, e2e_email
 from helpers.clerk_auth import provision_clerk_user
+from helpers.vault import TINY_PNG
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +42,6 @@ pytestmark = pytest.mark.skipif(
     reason="E2E_CLERK_SECRET_KEY not set — Clerk auth required for Free attachment 402 test",
 )
 
-# Minimal valid PNG: 1x1 red pixel.
-TINY_PNG = (
-    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-    b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
-    b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
-    b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
-)
 
 
 def _ts() -> str:

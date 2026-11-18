@@ -17,18 +17,12 @@ import pytest
 
 from helpers.log_oracle import wait_for_binary_delivery
 from helpers.latency import DELIVERY_TIMEOUT
+from helpers.vault import TINY_PNG
 
 # B-side convergence (pull + blob fetch) can lag under parallel CI load — give
 # it more room than the suite's 15s default. Matches test_79.
 CONVERGE_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert
 
-# Minimal valid PNG: 1x1 red pixel (same constant as test_79 / test_33).
-TINY_PNG = (
-    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-    b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
-    b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
-    b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
-)
 
 
 @pytest.mark.asyncio
