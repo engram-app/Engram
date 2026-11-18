@@ -623,12 +623,8 @@ defmodule Engram.Attachments do
          {:ok, dek} <- Crypto.get_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       Repo.with_tenant!(user.id, fn ->
-        # Bounded statements: the probe set per 500 paths (a folder op passes
-        # every attachment under the folder).
-        paths
-        |> Enum.uniq()
-        |> Enum.chunk_every(500)
-        |> Enum.flat_map(&Location.stale_rows(user, vid, filter_key, &1))
+        user
+        |> stale_at(vid, filter_key, paths)
         |> Enum.reduce_while(:ok, fn stale, :ok ->
           case repoint(
                  user,
@@ -646,6 +642,16 @@ defmodule Engram.Attachments do
       # No moved folder in the vault, or no key (nothing to repoint).
       _ -> :ok
     end
+  end
+
+  # `Location.stale_rows/4` for `paths`, in bounded statements: the probe set
+  # per 500 paths (a folder op passes every attachment under the folder).
+  # Run it in `user`'s tenant transaction.
+  defp stale_at(user, vid, filter_key, paths) do
+    paths
+    |> Enum.uniq()
+    |> Enum.chunk_every(500)
+    |> Enum.flat_map(&Location.stale_rows(user, vid, filter_key, &1))
   end
 
   defp repoint(_user, _vid, _keys, _stale, 0), do: {:error, :conflict}
@@ -2265,7 +2271,6 @@ defmodule Engram.Attachments do
            |> unwrap_tenant() do
       {rows, expired} = Enum.split_with(rows, &(DateTime.compare(&1.deleted_at, cutoff) != :lt))
       by_id = Map.new(rows, &{&1.id, &1})
-      hmac_of = Map.new(rows, &{&1.id, &1.path_hmac})
 
       # `path_nonce`: the restore re-points each row's folder reference stamped
       # with the nonce its path was decrypted under (`repoint_folder_refs/3`).
@@ -2275,8 +2280,8 @@ defmodule Engram.Attachments do
           &Map.merge(&1, Map.take(by_id[&1.id], [:path_hmac, :path_nonce]))
         )
 
-      taken = live_hmacs(user, vault, Map.values(hmac_of))
-      {taken, free} = Enum.split_with(metas, &MapSet.member?(taken, &1.path_hmac))
+      taken = held_paths(user, vault, metas)
+      {taken, free} = Enum.split_with(metas, &MapSet.member?(taken, &1.path))
       bytes = free |> Enum.map(& &1.size_bytes) |> Enum.sum()
 
       case validate_storage_cap(user, nil, bytes) do
@@ -2292,6 +2297,33 @@ defmodule Engram.Attachments do
         {:error, {:storage_cap_reached, used, limit}} ->
           {:error, {:limit_reached, :attachment_bytes_cap, limit, used}}
       end
+    end
+  end
+
+  # The paths of `metas` (tombstones, shown at their stored path) a live
+  # attachment is shown at (`Location`): a stale stored key holds nothing,
+  # a row shown there by name does. Bounded statements, as `settle/3`.
+  defp held_paths(user, vault, metas) do
+    held =
+      user
+      |> live_hmacs(vault, Enum.map(metas, & &1.path_hmac))
+      |> then(fn hmacs ->
+        for m <- metas, MapSet.member?(hmacs, m.path_hmac), into: MapSet.new(), do: m.path
+      end)
+
+    vid = vault_id(vault)
+
+    with [_ | _] <- metas,
+         true <- Location.named?(user.id, vid),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      paths = Enum.map(metas, & &1.path)
+      stale = Repo.with_tenant!(user.id, fn -> stale_at(user, vid, filter_key, paths) end)
+
+      held
+      |> MapSet.difference(MapSet.new(stale, fn {_row, stored, _shown} -> stored end))
+      |> MapSet.union(MapSet.intersection(MapSet.new(stale, &elem(&1, 2)), MapSet.new(paths)))
+    else
+      _ -> held
     end
   end
 
@@ -2318,7 +2350,12 @@ defmodule Engram.Attachments do
     metas
     |> Enum.chunk_every(delete_chunk_size())
     |> Enum.reduce_while({:ok, %{restored: [], skipped: []}}, fn chunk, {:ok, acc} ->
-      case revive_tombstones(user, vault, Enum.map(chunk, & &1.id), chunk) do
+      # A row shown elsewhere but stored at a restored path holds its unique
+      # slot: repointed first (`settle/3`), or the revive refuses the row.
+      with :ok <- settle(user, vault, Enum.map(chunk, & &1.path)) do
+        revive_tombstones(user, vault, Enum.map(chunk, & &1.id), chunk)
+      end
+      |> case do
         {:ok, %{restored: ids, seqs: seqs}} ->
           back = MapSet.new(ids)
           {restored, refused} = Enum.split_with(chunk, &MapSet.member?(back, &1.id))

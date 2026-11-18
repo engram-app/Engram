@@ -820,6 +820,9 @@ defmodule EngramWeb.AttachmentsController do
            origin_device_id: EngramWeb.OriginDevice.from_conn(conn)
          ) do
       :ok -> json(conn, %{deleted: true, path: path})
+      # An attachment heal conflict (`Engram.Attachments.settle/3`): the
+      # retryable 409 via the fallback, not a 500.
+      {:error, :conflict} = err -> err
       {:error, _} -> conn |> put_status(500) |> json(%{error: "failed to delete attachment"})
     end
   end
