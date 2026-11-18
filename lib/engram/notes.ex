@@ -3293,6 +3293,10 @@ defmodule Engram.Notes do
   # text may still carry a CR (a doc the room has not healed). Equal after LF
   # conversion is a no-op; the reply hash is the served view's, i.e. of the text
   # the reader holds as it is.
+  defp current_text_repush(existing, base_attrs, _user, current_text)
+       when current_text == base_attrs.content,
+       do: idempotent_repush(existing, base_attrs)
+
   defp current_text_repush(existing, base_attrs, user, current_text) do
     with {:ok, served} <- content_hash(user, current_text) do
       {:ok, {existing.content_hash, existing, base_attrs.content, served}}

@@ -56,6 +56,40 @@ defmodule Engram.NotesIdempotentUpsertTest do
     assert n2.content_hash == n1.content_hash
   end
 
+  # A line-ending-only edit to a markdown file is a no-op BY DESIGN: the doc is
+  # LF-only, so the stored text is identical. Fails without the LF normalisation
+  # before hashing (the CRLF hash differs, so the write bumps version + seq).
+  test "LF then CRLF re-push of a markdown note is a no-op", %{user: user, vault: vault} do
+    {:ok, n1} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "one\ntwo\n"}, actor: "api")
+
+    {:ok, n2} =
+      Notes.upsert_note(user, vault, %{"path" => "a.md", "content" => "one\r\ntwo\r\n"},
+        actor: "api"
+      )
+
+    assert {n2.version, n2.seq, n2.content_hash} == {n1.version, n1.seq, n1.content_hash}
+  end
+
+  # Guards against over-converting: only markdown is LF-normalised. Passes with
+  # or without the fix; fails if a non-markdown file were converted.
+  test "a non-markdown file stays byte-exact and hashes its raw bytes", %{
+    user: user,
+    vault: vault
+  } do
+    crlf = "{\r\n\"nodes\": []\r\n}"
+    lf = "{\n\"nodes\": []\n}"
+
+    {:ok, a} =
+      Notes.upsert_note(user, vault, %{"path" => "a.canvas", "content" => crlf}, actor: "api")
+
+    {:ok, b} =
+      Notes.upsert_note(user, vault, %{"path" => "b.canvas", "content" => lf}, actor: "api")
+
+    assert a.content == crlf
+    assert a.content_hash != b.content_hash
+  end
+
   test "re-push of identical content does not broadcast note_changed", %{
     user: user,
     vault: vault
