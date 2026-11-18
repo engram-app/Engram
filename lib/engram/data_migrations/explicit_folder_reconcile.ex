@@ -25,17 +25,20 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
   marker probe is `notes_user_vault_folder_marker`, one index probe a row.
   Steady state is 0 rows: a clean walk writes nothing.
 
+  A row made explicit with no marker on purpose (markers stopped, phase 2,
+  `Engram.Folders.MarkerStop`) carries `explicit_seq` and is never touched,
+  in this release too: after a rollback E -> D this walk must not clear the
+  folders E created (the plugin would trash them).
+
   Re-verified daily (`reverify?/0`): a 0.89.0 (release C) node serving during
   the rollout to D, or after a rollback and re-roll, deletes markers through
   its cascade without clearing the flag on a row it keeps (content written
   meanwhile, or a delete that stops between its marker leg and its rows
   leg), after this ledger closed. Listed from the flag, that is a ghost
-  folder the plugin re-creates. The daily walk finds it and clears it. A
-  re-verify that finds work reopens the ledger, which sends listings back to
-  the markers until the walk is clean again: correct in D, where every
-  writer still inserts markers. Once markers stop (phase 2) a reopen must
-  not move listings off the flag; that release makes the gate independent
-  of this ledger.
+  folder the plugin re-creates. Once the ledger is closed, a walk REPAIRS
+  such rows in place and reports `:done`: it never reopens the ledger for
+  them, so listings never flap back to the markers. Only a row it could not
+  fix (a lock it skipped) or a walk cut short by its time budget reopens it.
 
   Kill switch: `enabled?/0` is the `explicit_folder_reconcile` service
   override (default on). Off, no pass runs and the ledger stays open, so
@@ -44,9 +47,12 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
   @behaviour Engram.DataMigration
 
   alias Engram.Backfill.IdWindows
+  alias Engram.DataMigrations
   alias Engram.Folders.Folder
 
   @batch 200
+  # Set by a window that left a row unfixed (a skipped lock), for `run_pass/1`.
+  @left_key {__MODULE__, :left}
 
   @impl true
   def name, do: "explicit_folder_reconcile"
@@ -70,13 +76,30 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
   @doc false
   # `batch:` overrides the window size.
   def run_pass(opts) do
-    IdWindows.heal_pass(name(), Folder, &clear/2, batch_size: Keyword.get(opts, :batch, @batch))
+    Process.delete(@left_key)
+
+    result =
+      IdWindows.heal_pass(name(), Folder, &clear/2, batch_size: Keyword.get(opts, :batch, @batch))
+
+    left? = Process.delete(@left_key) == true
+
+    case result do
+      # A closed ledger's walk that went start to end and left nothing stuck:
+      # whatever it repaired is repaired, so it stays closed (see moduledoc).
+      {:more, found} when not left? ->
+        if DataMigrations.done?(name(), version()) and not Keyword.get(found, :hit_budget, false),
+          do: :done,
+          else: result
+
+      other ->
+        other
+    end
   end
 
   # A live explicit row of the window that no live marker names. `f` the
   # folder row; the marker probe is `notes_user_vault_folder_marker`.
   @stale """
-  f.id = ANY($1) AND f.explicit AND f.deleted_at IS NULL AND NOT EXISTS (
+  f.id = ANY($1) AND f.explicit AND f.explicit_seq IS NULL AND f.deleted_at IS NULL AND NOT EXISTS (
     SELECT 1 FROM notes AS n
     WHERE n.user_id = f.user_id AND n.vault_id = f.vault_id AND n.kind = 'folder'
       AND n.deleted_at IS NULL AND n.folder_hmac = f.full_path_hmac)
@@ -118,7 +141,11 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
   @left_sql "SELECT count(*)::int FROM folders AS f WHERE #{@stale}"
 
   @doc false
+  def lock_vaults_sql, do: @lock_vaults_sql
+  @doc false
   def clear_sql, do: @clear_sql
+  @doc false
+  def left_sql, do: @left_sql
 
   defp clear(ids, %{repo: repo}) do
     ids = Enum.map(ids, &Ecto.UUID.dump!/1)
@@ -127,6 +154,7 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
     %{rows: locked} = repo.query!(@lock_vaults_sql, [ids])
     %{num_rows: fixed} = repo.query!(@clear_sql, [ids, List.flatten(locked)])
     %{rows: [[left]]} = repo.query!(@left_sql, [ids])
+    if left > 0, do: Process.put(@left_key, true)
     {fixed, left > 0}
   end
 end
