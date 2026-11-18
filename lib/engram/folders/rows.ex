@@ -1571,7 +1571,7 @@ defmodule Engram.Folders.Rows do
   end
 
   @doc "A deleted folder marker no longer makes its folder explicit; the row stays for its content."
-  @spec unmark_explicit(map(), Ecto.UUID.t(), String.t()) :: :ok
+  @spec unmark_explicit(Engram.Accounts.User.t(), Ecto.UUID.t(), String.t()) :: :ok
   def unmark_explicit(user, vault_id, folder) do
     case ids_at(user, vault_id, [folder]) do
       [] ->

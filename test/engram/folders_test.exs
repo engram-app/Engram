@@ -51,21 +51,13 @@ defmodule Engram.FoldersTest do
     )
   end
 
-  # Moves only the folder ROW at `from` to `to` (same id, new path hash): the
-  # notes under it keep every column, as an O(1) folder rename leaves them.
+  # Moves only the folder ROW at `from` to `to` (same id, new name), with the
+  # rows' own rename: the notes under it keep every column, as an O(1) folder
+  # rename leaves them. (A raw `name_hmac`/`full_path_hmac` rewrite would
+  # leave the encrypted name, the folder's path for every chain reader, as
+  # it was: S6 step 3.)
   defp rename_folder_row_in_place!(user, vault, from, to) do
-    {:ok, fk} = Engram.Crypto.dek_filter_key(user)
-
-    Engram.Repo.query!(
-      "UPDATE folders SET full_path_hmac = $1, name_hmac = $2 " <>
-        "WHERE vault_id = $3 AND full_path_hmac = $4 AND deleted_at IS NULL",
-      [
-        Rows.path_hmac(fk, to),
-        Rows.name_hmac(fk, to),
-        Ecto.UUID.dump!(vault.id),
-        Rows.path_hmac(fk, from)
-      ]
-    )
+    :ok = Engram.Repo.with_tenant!(user.id, fn -> Rows.rename(user, vault.id, from, to) end)
   end
 
   defp att_paths(user, vault) do
