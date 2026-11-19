@@ -14,7 +14,7 @@ defmodule Engram.QueryPlan do
   CAN serve the statement.
   """
 
-  import ExUnit.Assertions, only: [assert: 1, assert: 2, refute: 2]
+  import ExUnit.Assertions, only: [assert: 2, refute: 2]
 
   alias Engram.Repo
 
