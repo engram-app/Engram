@@ -254,13 +254,17 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
     # As analyzed, and with the path hash costed as unselective (the shape
     # #2652's CI hit: the planner left `folders_full_path` for the explicit
     # partial index, and with only `vault_id` bound read it as a skip scan
-    # over every tenant).
+    # over every tenant). Then with nested loops costed out: a planner that
+    # prefers a hash join (seen once on a small folders table) must still
+    # have nothing to hash, the folder probe staying one per marker.
     plans =
-      for shape <- [:analyzed, :unselective_path_hash] do
+      for shape <- [:analyzed, :unselective_path_hash, :no_nestloop] do
         if shape == :unselective_path_hash do
           Repo.query!("ALTER TABLE folders ALTER COLUMN full_path_hmac SET (n_distinct = 1)")
           Repo.query!("ANALYZE folders")
         end
+
+        if shape == :no_nestloop, do: Repo.query!("SET LOCAL enable_nestloop = off")
 
         QueryPlan.rls_plans(u.id, FolderMarkerDelete.unmatched_sql(), [ids, owners],
           role: "engram_maintenance"

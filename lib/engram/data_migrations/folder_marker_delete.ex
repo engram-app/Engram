@@ -151,16 +151,22 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   # position), those holding a live marker with no live explicit folder row at
   # its path hash, and how many such markers each has. Vault-wide: a
   # `(user_id, vault_id)` range of `notes_user_vault_folder_marker`, then one
-  # `folders_full_path` probe a marker: O(the vault's markers), once a window.
+  # vault-bound folder probe a marker: O(the vault's markers), once a window.
+  # A scalar subquery, not NOT EXISTS: Postgres never pulls it up into a
+  # join, so it stays one parameterized probe per marker. As an anti join
+  # the planner could hash every explicit folder row of every tenant
+  # (`folders_explicit_user_vault` read with no condition), which it did on
+  # a small test table.
   @unmatched_sql """
   SELECT m.vault_id, count(*)::int
   FROM unnest($1::uuid[], $2::uuid[]) AS v(id, user_id)
   JOIN notes AS m
     ON m.user_id = v.user_id AND m.vault_id = v.id AND m.kind = 'folder' AND m.deleted_at IS NULL
-  WHERE NOT EXISTS (
+  WHERE (
     SELECT 1 FROM folders AS f
     WHERE f.user_id = m.user_id AND f.vault_id = m.vault_id
-      AND f.full_path_hmac = m.folder_hmac AND f.deleted_at IS NULL AND f.explicit)
+      AND f.full_path_hmac = m.folder_hmac AND f.deleted_at IS NULL AND f.explicit
+    LIMIT 1) IS NULL
   GROUP BY m.vault_id
   """
 
