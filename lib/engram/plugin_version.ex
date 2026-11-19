@@ -200,7 +200,7 @@ defmodule Engram.PluginVersion do
   end
 
   @doc "What the runtime lock is doing now, for operators (`ClientLocks.list_locks/0`)."
-  @spec lock_state() :: map()
+  # No @spec: the literal map is narrower than any spec worth writing (dialyzer :underspecs).
   def lock_state do
     raw = ServiceConfig.get(@lock_key)
 

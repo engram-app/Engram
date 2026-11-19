@@ -99,7 +99,7 @@ defmodule Engram.Admin.ClientLocks do
     end
   end
 
-  @spec lift_plugin_lock(keyword()) :: :ok
+  @spec lift_plugin_lock(keyword()) :: :ok | {:error, term()}
   def lift_plugin_lock(opts \\ []) do
     previous = PluginVersion.lock_state()
     :ok = ServiceConfig.clear(:plugin_floor, by: opts[:by])

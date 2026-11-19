@@ -103,7 +103,10 @@ defmodule Engram.QueryBudgetTest do
     # `note_name` ledger read behind `Notes.Location.on?/0` once a minute per
     # node (18 cold there); the suite excludes it by config
     # (`config/test.exs` `:name_reads_ledger`).
-    "mcp get_notes oauth cold" => 18,
+    # +1 (19): the `account_paused` quarantine read (`ClientGate.paused/1`,
+    # 2026-11-19), one cached indexed query per user per 60 s (the
+    # `:billing_override` entry); warm it is an ETS hit.
+    "mcp get_notes oauth cold" => 19,
     # Each kept query required:
     #  1 rotation lock: a write reads it fresh from the DB (RotationGate).
     #  2, 3, 11 begin / tenant_enter / commit: the one tenant txn (RLS).

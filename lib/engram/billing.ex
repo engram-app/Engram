@@ -108,7 +108,8 @@ defmodule Engram.Billing do
   `:limits_enforced`: a quarantine applies on self-host. One cached ETS read
   (`OverrideCache`, NOTIFY-evicted, 60 s TTL backstop), no query on a hit.
   """
-  @spec control_override(Engram.Accounts.User.t(), String.t()) :: term()
+  @spec control_override(%{required(:id) => term(), optional(atom()) => term()}, String.t()) ::
+          term()
   def control_override(%{id: user_id}, key) when is_binary(key) do
     case user_override_lookup(user_id, key) do
       {:hit, v} -> v

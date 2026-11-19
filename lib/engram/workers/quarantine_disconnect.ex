@@ -8,10 +8,16 @@ defmodule Engram.Workers.QuarantineDisconnect do
   Re-checks the quarantine first: if it was lifted or expired in between, the
   user is already admitted and a second drop would only bounce a healthy socket.
   """
-  use Oban.Worker, queue: :maintenance, max_attempts: 3
+  # `:events`: a small follow-up a user's action (an operator's quarantine)
+  # triggers, never behind a long backstop.
+  use Oban.Worker, queue: :events, max_attempts: 3
 
   alias Engram.Auth.SessionInvalidator
   alias Engram.ClientGate
+
+  # One PubSub broadcast and one cached read: seconds at most.
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(1)
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id}}) do

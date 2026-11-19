@@ -34,7 +34,9 @@ defmodule Engram.ClientGate do
     with :ok <- paused(user), do: plugin_version(reported, obsidian?)
   end
 
-  @spec paused(Engram.Accounts.User.t()) :: :ok | {:error, refusal()}
+  # `map()`: anything with an `:id` (the +61 s worker has only the id).
+  @spec paused(%{required(:id) => term(), optional(atom()) => term()}) ::
+          :ok | {:error, refusal()}
   def paused(user) do
     if Billing.control_override(user, LimitKeys.account_paused()) == true,
       do: {:error, %{reason: "account_paused"}},
