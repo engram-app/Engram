@@ -332,12 +332,28 @@ defmodule Engram.Folders.Rows do
         create_level(ctx, Enum.sort(level), ids, targets, hmacs)
       end)
 
-    # A row that was already there becomes explicit when a marker names it.
-    to_mark = for {folder, marker} <- targets, marker, id <- [known[folder]], id, do: id
+    # A row that was already there becomes explicit when a marker names it,
+    # and takes the marker's path hash when it lacks it or holds a stale one.
+    marked = for {folder, marker} <- targets, marker, id <- [known[folder]], id, do: {id, folder}
 
-    mark_explicit(to_mark)
+    mark_explicit(Enum.map(marked, &elem(&1, 0)))
+    :ok = put_marker_hashes(ctx, marked, hmacs)
 
     Map.new(targets, fn {folder, _} -> {folder, ids[folder]} end)
+  end
+
+  # The folder marker delete (S6 step 4) finds a marker's row by its path
+  # hash, and #2645's write stop leaves rows without one. A row found by the
+  # walk never reaches `repair/4` (only `step/5` does), so a marker written on
+  # it (a release that still writes markers, after a rollback) would sit on a
+  # hashless row the delete never matches. One `PathHmacs.put/3` statement
+  # (the single writer): it compares each row's stored hash and writes only
+  # where it differs, after releasing the hash from any other live holder.
+  defp put_marker_hashes(_ctx, [], _hmacs), do: :ok
+
+  defp put_marker_hashes(ctx, marked, hmacs) do
+    {:ok, _} = PathHmacs.put(ctx.user_id, for({id, folder} <- marked, do: {id, hmacs[folder]}))
+    :ok
   end
 
   # Inserts the missing rows of one depth in one statement per chunk. A row the

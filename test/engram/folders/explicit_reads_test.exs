@@ -446,6 +446,83 @@ defmodule Engram.Folders.ExplicitReadsTest do
     end
   end
 
+  # The folder marker delete (S6 step 4) matches a marker to its row by path
+  # hash, and #2645's write stop leaves rows without one: a marker written on
+  # an existing row must give it the marker's hash (missing or stale).
+  test "a marker on an existing row writes the row's missing or stale path hash", ctx do
+    %{user: u, vault: v} = ctx
+    put_note(u, v, "H/n.md")
+    put_note(u, v, "S/n.md")
+    tree = FolderRows.tree(u)
+
+    Repo.query!("UPDATE folders SET full_path_hmac = NULL WHERE id = $1", [
+      Ecto.UUID.dump!(tree["H"].id)
+    ])
+
+    Repo.query!("UPDATE folders SET full_path_hmac = '\\x00' WHERE id = $1", [
+      Ecto.UUID.dump!(tree["S"].id)
+    ])
+
+    {:ok, _} = Notes.create_folder_markers(u, v, ["H", "S"])
+
+    for folder <- ["H", "S"] do
+      %{rows: [[row_hash, marker_hash]]} =
+        Repo.query!(
+          "SELECT f.full_path_hmac, n.folder_hmac FROM folders f JOIN notes n " <>
+            "ON n.vault_id = f.vault_id AND n.kind = 'folder' AND n.deleted_at IS NULL " <>
+            "AND n.folder_hmac = f.full_path_hmac WHERE f.id = $1",
+          [Ecto.UUID.dump!(tree[folder].id)]
+        )
+
+      assert is_binary(marker_hash) and row_hash == marker_hash, folder
+    end
+  end
+
+  # The marker-hash write is ONE statement per ensure call, whatever the
+  # number of markers: `PathHmacs.put/3`, which compares each named row's
+  # stored hash and writes only a mismatch (its plan, primary-key and
+  # `folders_full_path` probes: `PathHmacsPlanTest`).
+  test "the marker hash write is one statement per ensure call", %{user: u, vault: v} do
+    for f <- ~w(H1 H2 H3), do: put_note(u, v, "#{f}/n.md")
+    me = self()
+
+    {_, queries} =
+      QueryRecorder.record(fn -> {:ok, _} = Notes.create_folder_markers(u, v, ~w(H1 H2 H3)) end)
+
+    puts = for %{sql: s, pid: ^me} <- queries, s =~ "IS DISTINCT FROM t.fh", do: s
+    assert length(puts) == 1
+  end
+
+  # A stale stored hash replaced by the marker's: `PathHmacs.put/3` releases
+  # the marker's hash from any other live row first (a mixed-window leftover
+  # holding it), so exactly one live row holds it after, the marker's.
+  test "a marker's hash taken from another live holder leaves exactly one", ctx do
+    %{user: u, vault: v} = ctx
+    put_note(u, v, "H/n.md")
+    put_note(u, v, "X/n.md")
+    tree = FolderRows.tree(u)
+    [h, x] = Enum.map(["H", "X"], &Ecto.UUID.dump!(tree[&1].id))
+
+    Repo.query!(
+      "UPDATE folders SET full_path_hmac = (SELECT full_path_hmac FROM folders WHERE id = $1) " <>
+        "WHERE id = $2",
+      [h, x]
+    )
+
+    Repo.query!("UPDATE folders SET full_path_hmac = NULL WHERE id = $1", [h])
+    {:ok, _} = Notes.create_folder_markers(u, v, ["H"])
+
+    %{rows: holders} =
+      Repo.query!(
+        "SELECT f.id FROM folders f JOIN notes n ON n.vault_id = f.vault_id " <>
+          "AND n.kind = 'folder' AND n.deleted_at IS NULL AND n.folder_hmac = f.full_path_hmac " <>
+          "WHERE f.vault_id = $1 AND f.deleted_at IS NULL",
+        [Ecto.UUID.dump!(v.id)]
+      )
+
+    assert holders == [[h]]
+  end
+
   # A batch move whose target is a folder ROW id (what the listings hand out
   # since the flag reads) with no marker behind it.
   test "batch_move_notes into an explicit folder given by its row id", %{user: u, vault: v} do
