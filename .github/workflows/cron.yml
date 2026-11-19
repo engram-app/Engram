@@ -282,16 +282,7 @@ jobs:
       # restoring from cache.
       - name: Resolve latest bun version
         id: bun
-        run: |
-          set -euo pipefail
-          v=$(curl -sSfL --max-time 20 \
-                -H "Authorization: Bearer ${{ github.token }}" \
-                https://api.github.com/repos/oven-sh/bun/releases/latest \
-              | jq -r '.tag_name' | sed 's/^bun-v//')
-          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
-            echo "::error::could not resolve latest bun version (got '$v')"; exit 1; }
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "Resolved bun latest -> $v"
+        uses: ./.github/actions/resolve-bun-version
 
       # Private HOME: never rewrite the shared ~/.bun (see the first setup-bun
       # step in verify.yml for the Text-file-busy race this prevents).
@@ -913,27 +904,16 @@ jobs:
             }
           fi
 
-          for attempt in 1 2 3 4 5; do
-            if ci/bin/ci-docker run -d --name "$PG_CONTAINER" \
-                -e POSTGRES_USER=engram \
-                -e POSTGRES_PASSWORD=engram \
-                -e POSTGRES_DB=engram_test \
-                -p 0:5432 \
-                --health-cmd "pg_isready -U engram" \
-                --health-interval 3s \
-                --health-timeout 3s \
-                --health-retries 10 \
-                "$PG_IMAGE"; then
-              break
-            fi
-            echo "Attempt $attempt: docker run failed (port race or daemon pressure) — cleaning up + retrying"
-            docker rm -f "$PG_CONTAINER" 2>/dev/null || true
-            sleep 1
-            if [ "$attempt" = "5" ]; then
-              echo "::error::Postgres container failed to start after 5 attempts"
-              exit 1
-            fi
-          done
+          ci/bin/ci-docker-run-retry -d --name "$PG_CONTAINER" \
+            -e POSTGRES_USER=engram \
+            -e POSTGRES_PASSWORD=engram \
+            -e POSTGRES_DB=engram_test \
+            -p 0:5432 \
+            --health-cmd "pg_isready -U engram" \
+            --health-interval 3s \
+            --health-timeout 3s \
+            --health-retries 10 \
+            "$PG_IMAGE"
 
           PG_PORT=$(docker port "$PG_CONTAINER" 5432/tcp | head -1 | cut -d: -f2)
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"

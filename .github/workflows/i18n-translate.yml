@@ -52,15 +52,7 @@ jobs:
 
       - name: Resolve latest bun version
         id: bun
-        run: |
-          set -euo pipefail
-          v=$(curl -sSfL --max-time 20 \
-                -H "Authorization: Bearer ${{ github.token }}" \
-                https://api.github.com/repos/oven-sh/bun/releases/latest \
-              | jq -r '.tag_name' | sed 's/^bun-v//')
-          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
-            echo "::error::could not resolve latest bun version (got '$v')"; exit 1; }
-          echo "version=$v" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/resolve-bun-version
 
       # Private HOME: never rewrite the shared ~/.bun (Text-file-busy race, see verify.yml).
       - uses: oven-sh/setup-bun@v2
