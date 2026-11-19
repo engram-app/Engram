@@ -149,7 +149,7 @@ defmodule Engram.Folders.ExplicitReadsTest do
       %{custom: custom, generic: generic} = QueryPlan.rls_plans(user.id, sql, params)
 
       for {kind, plan} <- [custom: custom, generic: generic] do
-        assert_scans_vault_bound!(scope.(plan), fn ->
+        QueryPlan.assert_scans_vault_bound!(scope.(plan), fn ->
           "#{kind} plan, n_distinct #{users}/#{vaults}, #{dead} dead rows\n" <>
             plan_diagnostics(user, sql, params)
         end)
@@ -218,32 +218,6 @@ defmodule Engram.Folders.ExplicitReadsTest do
       ).rows
 
     "costed custom plan:\n#{costed}\nsizes #{inspect(sizes)}\npg_stats #{inspect(stats)}"
-  end
-
-  # Every read of folders is bound to the vault: each index scan, index-only
-  # scan and bitmap index scan (a BitmapAnd/BitmapOr arm included) on a
-  # folders index has a condition naming `vault_id`; `folders_user`
-  # (`user_id` alone, every folder of the tenant) is refused outright, and
-  # so is a seq scan or an index scan with no condition at all.
-  defp assert_scans_vault_bound!(plan, diag \\ fn -> "" end) do
-    msg = fn why -> why <> "\n" <> plan <> "\n" <> diag.() end
-
-    refute plan =~ ~r/\bfolders_user\b(?!_)/, msg.("folders_user read")
-    refute plan =~ "Seq Scan on folders", msg.("seq scan")
-
-    scans = Regex.scan(~r/Scan using (folders\w*) on folders\b/, plan)
-    bitmaps = Regex.scan(~r/Bitmap Index Scan on (folders\w*)/, plan)
-
-    conds =
-      Regex.scan(
-        ~r/(?:Scan using folders\w* on folders\b|Bitmap Index Scan on folders\w*)[^\n]*\n\s*(?:Index|Recheck) Cond: ([^\n]*)/,
-        plan,
-        capture: :all_but_first
-      )
-
-    assert scans ++ bitmaps != [], msg.("no folders scan")
-    assert length(conds) == length(scans) + length(bitmaps), msg.("a scan with no condition")
-    for [cond] <- conds, do: assert(cond =~ "vault_id =", msg.("not vault-bound: " <> cond))
   end
 
   # Past the 5 custom plans a named statement gets before Postgres may switch
@@ -481,7 +455,7 @@ defmodule Engram.Folders.ExplicitReadsTest do
                 Index Cond: ((user_id = 'u'::uuid) AND (vault_id = 'v'::uuid))
     """
 
-    assert_scans_vault_bound!(good)
+    QueryPlan.assert_scans_vault_bound!(good)
 
     for bad <- [
           # the tenant's whole folder index
@@ -507,7 +481,9 @@ defmodule Engram.Folders.ExplicitReadsTest do
           "->  Seq Scan on folders f2 (actual rows=2.00 loops=1)\n" <>
             "      Filter: (vault_id = 'v'::uuid)\n"
         ] do
-      assert_raise ExUnit.AssertionError, fn -> assert_scans_vault_bound!(good <> bad) end
+      assert_raise ExUnit.AssertionError, fn ->
+        QueryPlan.assert_scans_vault_bound!(good <> bad)
+      end
     end
   end
 

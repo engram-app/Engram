@@ -270,12 +270,11 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
     for unmatched <- plans, plan <- [unmatched.custom, unmatched.generic] do
       assert plan =~ "notes_user_vault_folder_marker", plan
       refute plan =~ "notes_user_vault_live", plan
-      # The folder probe: by path hash, or the vault's explicit rows (both
-      # bounded by the vault; the planner picks by statistics). On
-      # `folders_explicit_user_vault` both key columns must be conditions: a
-      # `vault_id`-only condition on it is a skip scan over every tenant
-      # (#2652's CI after #2639 added the index).
-      assert plan =~ ~r/folders_(full_path|explicit_vault_live|explicit_user_vault)\b/, plan
+      # The folder probe: by path hash or the vault's explicit rows, either
+      # bound to the vault, never `folders_user` (#2652's CI after #2639
+      # added `folders_explicit_user_vault`: a `vault_id`-only condition on
+      # it was a skip scan over every tenant, so its conditions name both).
+      QueryPlan.assert_scans_vault_bound!(plan)
 
       for [cond] <-
             Regex.scan(
@@ -283,9 +282,9 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
               plan,
               capture: :all_but_first
             ),
-          do: assert(cond =~ "user_id =" and cond =~ "vault_id =", cond <> "\n" <> plan)
+          do: assert(cond =~ "user_id =", cond <> "\n" <> plan)
 
-      refute plan =~ ~r/Seq Scan on (notes|folders)/, plan
+      refute plan =~ "Seq Scan on notes", plan
     end
   end
 

@@ -14,6 +14,8 @@ defmodule Engram.QueryPlan do
   CAN serve the statement.
   """
 
+  import ExUnit.Assertions, only: [assert: 1, assert: 2, refute: 2]
+
   alias Engram.Repo
 
   @doc """
@@ -336,6 +338,37 @@ defmodule Engram.QueryPlan do
     )
 
     :ok
+  end
+
+  @doc """
+  Every read of folders is bound to the vault: each index scan, index-only
+  scan and bitmap index scan (a BitmapAnd/BitmapOr arm included) on a
+  folders index has a condition naming `vault_id`; `folders_user`
+  (`user_id` alone, every folder of the tenant) is refused outright, and
+  so is a seq scan or an index scan with no condition at all.
+  `diag` adds diagnostics to a failure message.
+  """
+  @spec assert_scans_vault_bound!(String.t(), (-> String.t())) :: true
+  def assert_scans_vault_bound!(plan, diag \\ fn -> "" end) do
+    msg = fn why -> why <> "\n" <> plan <> "\n" <> diag.() end
+
+    refute plan =~ ~r/\bfolders_user\b(?!_)/, msg.("folders_user read")
+    refute plan =~ "Seq Scan on folders", msg.("seq scan")
+
+    scans = Regex.scan(~r/Scan using (folders\w*) on folders\b/, plan)
+    bitmaps = Regex.scan(~r/Bitmap Index Scan on (folders\w*)/, plan)
+
+    conds =
+      Regex.scan(
+        ~r/(?:Scan using folders\w* on folders\b|Bitmap Index Scan on folders\w*)[^\n]*\n\s*(?:Index|Recheck) Cond: ([^\n]*)/,
+        plan,
+        capture: :all_but_first
+      )
+
+    assert scans ++ bitmaps != [], msg.("no folders scan")
+    assert length(conds) == length(scans) + length(bitmaps), msg.("a scan with no condition")
+    for [cond] <- conds, do: assert(cond =~ "vault_id =", msg.("not vault-bound: " <> cond))
+    true
   end
 
   defp cluster_on_pkey!(table) do
