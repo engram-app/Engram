@@ -292,6 +292,50 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
     end
   end
 
+  # #2652 re-review L1: the window's delete (stamp the folder rows, delete
+  # the markers) planned as the fleet role, EXPLAIN only (it writes). Every
+  # folders read vault-bound or a primary-key probe, notes by primary key,
+  # with real statistics and with nested loops costed out (a planner that
+  # would rather hash must have no tenant-wide side to hash).
+  test "plans the delete as engram_maintenance", %{user: u, vault: v} do
+    for i <- 1..10, do: {:ok, _} = Folders.create_markers(u, v, ["D#{i}"])
+
+    for _ <- 1..5 do
+      {:ok, other} = Engram.Fixtures.user_with_dek_fixture()
+      ov = insert(:vault, user: other)
+      for i <- 1..20, do: {:ok, _} = Folders.create_markers(other, ov, ["O#{i}"])
+    end
+
+    Repo.query!("ANALYZE notes")
+    Repo.query!("ANALYZE folders")
+
+    %{rows: ids} =
+      Repo.query!("SELECT id FROM notes WHERE vault_id = $1 AND kind = 'folder'", [
+        Ecto.UUID.dump!(v.id)
+      ])
+
+    params = [List.flatten(ids), [Ecto.UUID.dump!(v.id)]]
+
+    for shape <- [:analyzed, :no_nestloop] do
+      if shape == :no_nestloop, do: Repo.query!("SET LOCAL enable_nestloop = off")
+
+      %{custom: custom, generic: generic} =
+        QueryPlan.rls_plans(u.id, FolderMarkerDelete.delete_sql(), params,
+          role: "engram_maintenance",
+          analyze: false
+        )
+
+      for plan <- [custom, generic] do
+        QueryPlan.assert_scans_vault_bound!(plan)
+        assert plan =~ ~r/Scan using notes_pkey on notes/, plan
+        refute plan =~ "Seq Scan on notes", plan
+
+        refute plan =~ ~r/Index (Only )?Scan using notes_\w+ on notes n\s*\n(?!\s*Index Cond)/,
+               plan
+      end
+    end
+  end
+
   # done?/2's per-vault probe runs on every folder op (PathHashStop): planned
   # as the app role under RLS and as the fleet role, it must be one probe of
   # the marker index, never a scan.

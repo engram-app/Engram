@@ -453,6 +453,8 @@ defmodule Engram.Folders.ExplicitReadsTest do
           Recheck Cond: ((user_id = 'u'::uuid) AND (vault_id = 'v'::uuid))
           ->  Bitmap Index Scan on folders_explicit_user_vault (actual rows=40.00 loops=1)
                 Index Cond: ((user_id = 'u'::uuid) AND (vault_id = 'v'::uuid))
+    ->  Index Scan using folders_pkey on folders f1
+          Index Cond: (id = ANY ((InitPlan 2).col1))
     """
 
     QueryPlan.assert_scans_vault_bound!(good)
@@ -477,6 +479,9 @@ defmodule Engram.Folders.ExplicitReadsTest do
           # a full index scan, no condition at all
           "->  Index Scan using folders_pkey on folders f2 (actual rows=2.00 loops=1)\n" <>
             "      Filter: (vault_id = 'v'::uuid)\n",
+          # a primary-key probe that also reads by another key
+          "->  Index Scan using folders_pkey on folders f2 (actual rows=2.00 loops=1)\n" <>
+            "      Index Cond: ((id = 'i'::uuid) AND (parent_id = 'p'::uuid))\n",
           # a seq scan
           "->  Seq Scan on folders f2 (actual rows=2.00 loops=1)\n" <>
             "      Filter: (vault_id = 'v'::uuid)\n"

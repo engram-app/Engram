@@ -173,7 +173,10 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   # Statement 3: the window's live markers in the vaults that passed (`$2`),
   # locked, then their folder rows stamped, then the markers deleted. A
   # data-modifying CTE runs once whether or not it is referenced, in the same
-  # snapshot.
+  # snapshot. Both writes take their rows by primary key from an ARRAY of
+  # ids: the folder ids from a correlated, vault-bound probe per marker (an
+  # ARRAY sublink is never pulled up into a join), the note ids from `m`.
+  # As joins the planner could hash every tenant's folders or notes.
   @delete_sql """
   WITH m AS MATERIALIZED (
     SELECT n.id, n.user_id, n.vault_id, n.folder_hmac FROM notes AS n
@@ -183,15 +186,17 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
     FOR UPDATE OF n SKIP LOCKED
   ), stamp AS (
     UPDATE folders AS f SET explicit_seq = 0
-    FROM m
-    WHERE f.user_id = m.user_id AND f.vault_id = m.vault_id
-      AND f.full_path_hmac = m.folder_hmac
-      AND f.deleted_at IS NULL AND f.explicit AND f.explicit_seq IS NULL
+    WHERE f.id = ANY(ARRAY(
+      SELECT unnest(ARRAY(
+        SELECT f2.id FROM folders AS f2
+        WHERE f2.user_id = m.user_id AND f2.vault_id = m.vault_id
+          AND f2.full_path_hmac = m.folder_hmac
+          AND f2.deleted_at IS NULL AND f2.explicit AND f2.explicit_seq IS NULL))
+      FROM m))
     RETURNING f.id
   )
   DELETE FROM notes AS n
-  USING m
-  WHERE n.id = m.id
+  WHERE n.id = ANY(ARRAY(SELECT id FROM m))
   """
 
   # What is left in a window: any live marker (a skipped lock or an

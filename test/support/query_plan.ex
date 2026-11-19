@@ -204,6 +204,8 @@ defmodule Engram.QueryPlan do
   index condition and the scan falls back to the tenant's index
   (`docs/context/rls-leakproof-index-quals.md`). Read-only statements only:
   the run rolls back, but an EXPLAIN ANALYZE executes the statement.
+  `analyze: false` plans with a bare `EXPLAIN`, which never executes: the
+  way to plan a data-modifying statement.
 
   `role:` plans as another role (`engram_maintenance`, the cross-tenant
   sweeps' login, whose `maintenance_all` policy is `USING (true)`; the
@@ -219,7 +221,11 @@ defmodule Engram.QueryPlan do
   def rls_plans(user_id, sql, params, opts \\ []) do
     name = "rls_plan_#{System.unique_integer([:positive])}"
     costs = if Keyword.get(opts, :costs, false), do: "ON", else: "OFF"
-    explain = "EXPLAIN (ANALYZE, BUFFERS, COSTS #{costs}, TIMING OFF, SUMMARY OFF) "
+
+    explain =
+      if Keyword.get(opts, :analyze, true),
+        do: "EXPLAIN (ANALYZE, BUFFERS, COSTS #{costs}, TIMING OFF, SUMMARY OFF) ",
+        else: "EXPLAIN (COSTS #{costs}) "
 
     rolled_back(fn ->
       Repo.query!("SET LOCAL SESSION AUTHORIZATION #{Keyword.get(opts, :role, "engram_app")}")
@@ -345,7 +351,8 @@ defmodule Engram.QueryPlan do
   scan and bitmap index scan (a BitmapAnd/BitmapOr arm included) on a
   folders index has a condition naming `vault_id`; `folders_user`
   (`user_id` alone, every folder of the tenant) is refused outright, and
-  so is a seq scan or an index scan with no condition at all.
+  so is a seq scan or an index scan with no condition at all. A primary-key
+  probe of named ids (`id = ANY (...)` alone) passes: the ids bound it.
   `diag` adds diagnostics to a failure message.
   """
   @spec assert_scans_vault_bound!(String.t(), (-> String.t())) :: true
@@ -367,9 +374,17 @@ defmodule Engram.QueryPlan do
 
     assert scans ++ bitmaps != [], msg.("no folders scan")
     assert length(conds) == length(scans) + length(bitmaps), msg.("a scan with no condition")
-    for [cond] <- conds, do: assert(cond =~ "vault_id =", msg.("not vault-bound: " <> cond))
+
+    for [cond] <- conds,
+        do: assert(cond =~ "vault_id =" or pkey_probe?(cond), msg.("not vault-bound: " <> cond))
+
     true
   end
+
+  # A primary-key probe of named ids (`id = ...` or `id = ANY (...)`, alone):
+  # bounded by the ids, which the statement drew from a vault-bound read.
+  defp pkey_probe?(cond),
+    do: String.starts_with?(cond, "(id = ") and not String.contains?(cond, " AND ")
 
   defp cluster_on_pkey!(table) do
     %{rows: [[pkey]]} =
