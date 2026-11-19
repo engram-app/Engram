@@ -2624,7 +2624,7 @@ defmodule Engram.Attachments do
     end
   end
 
-  # compat(plugin): moved_folder_feed - remove when plugin floor includes Engram-obsidian#689 (#2523)
+  # compat(plugin): moved_folder_feed - remove when plugin floor reaches WriteStop.s4_plugin/0 (#2523)
   @doc """
   The moved-folder feed's attachment leg (S6 step 6), the twin of
   `Engram.Notes.list_moved_changes/4`, for clients older than the S4 plugin

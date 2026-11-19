@@ -52,10 +52,16 @@ defmodule Engram.Folders.WriteStop do
   # (release A, Engram#2609). The rollback floor reaching it (release B,
   # `priv/release_floor`, which also requires the tag to contain 2609's merge
   # commit, `priv/release_floor_contains`) is what switches the writer on:
-  # no rollback can then land on a release without them. S4 plugin:
-  # Engram-obsidian#689, cut as 1.40.0 by its release PR 706.
+  # no rollback can then land on a release without them.
+  #
+  # S4 plugin: SENTINEL that no released plugin reaches, so every client gets
+  # the moved-folder feed. Engram-obsidian#689 was cut as 1.40.0, but 1.40.0
+  # does not learn uncascaded moves from `folder_changed` + the manifest (e2e
+  # test_108: no notes or attachments under such a folder). Set this to the
+  # first plugin release an e2e proves handles them, and flip
+  # `Engram.Folders.WriteStopFloorTest` to match.
   @reads_release "release-v0.88.0"
-  @s4_plugin "1.40.0"
+  @s4_plugin "999.0.0"
   # `Location.s5_reads/0` level a node needs: the readers plus the moved-folder feed.
   @fleet_level 2
 
@@ -63,7 +69,7 @@ defmodule Engram.Folders.WriteStop do
   @spec reads_release() :: String.t()
   def reads_release, do: @reads_release
 
-  @doc "The first plugin that learns folder moves from `folder_changed` (`Engram.Sync.moved_feed?/1`)."
+  @doc "The first plugin that skips the moved-folder feed (`Engram.Sync.moved_feed?/1`); a sentinel today."
   @spec s4_plugin() :: String.t()
   def s4_plugin, do: @s4_plugin
 

@@ -29,13 +29,15 @@ defmodule Engram.Sync do
       else: own
   end
 
-  # compat(plugin): moved_folder_feed - remove when plugin floor includes Engram-obsidian#689 (#2523)
+  # compat(plugin): moved_folder_feed - remove when plugin floor reaches WriteStop.s4_plugin/0 (#2523)
   @doc """
   Whether a client announcing `plugin_version` gets the moved-folder feed
-  (`Notes.list_moved_changes/4`): every client but the S4 plugin and later
-  (`Engram.Folders.WriteStop.s4_plugin/0`), which learn a folder move from
-  `folder_changed` and the manifest's `folders` and so pull 0 rows for it.
-  A missing or unreadable version gets it: the old view is the safe one.
+  (`Notes.list_moved_changes/4`): every client below
+  `Engram.Folders.WriteStop.s4_plugin/0`, a sentinel no released plugin
+  reaches (1.40.0 shipped without working moved-folder handling), so today
+  every client. A missing or unreadable version gets it: the old view is the
+  safe one. `feed_head/3` and `merged_changes_page/8` take the same answer as
+  `moved:`, so a cursor head always matches what is served.
   """
   @spec moved_feed?(String.t() | nil) :: boolean()
   def moved_feed?(plugin_version) do
