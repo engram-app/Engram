@@ -124,10 +124,10 @@ defmodule EngramWeb.Schemas.SyncQuiescenceResponse do
       feed_seq_moved: %Schema{
         type: :integer,
         description:
-          "The feed head a plugin older than 1.40.0 waits for: `feed_seq` or the " <>
-            "highest seq of a folder moved without a cascade, whichever is higher " <>
-            "(those clients get each such folder's notes at its seq). 1.40.0 and " <>
-            "later wait for `feed_seq`."
+          "The feed head a plugin that gets the moved-folder feed waits for (today " <>
+            "every plugin): `feed_seq` or the highest seq of a folder moved without " <>
+            "a cascade, whichever is higher (those clients get each such folder's " <>
+            "notes at its seq)."
       },
       pending_crdt_updates: %Schema{
         type: :integer,

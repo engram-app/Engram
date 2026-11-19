@@ -41,6 +41,20 @@ defmodule Engram.Folders.WriteStop do
   `on?/0` reads `Location.on?/0`) and the S3 wire extras; a bumped ledger
   refills names while every moved vault keeps reading them, each row
   trusted only while its name stamp is current.
+
+  ## Preconditions to lower `s4_plugin`
+
+  `@s4_plugin` is a sentinel, so every plugin gets the moved-folder feed and
+  `folder_ops` is safe to enable. Lowering it to a real version turns the
+  feed off for those clients. Before that, set `@verified_folder_move_plugin`
+  (`Engram.Folders.WriteStopFloorTest` keeps `@s4_plugin` at or above it) to
+  a release that meets all of:
+
+    * it applies folder moves for folders it did not create (the plugin fix
+      for `followFolderMoveOnDisk` resolving `from`);
+    * it has at least 7 days of adoption;
+    * a staging table with `folder_ops` on passes with a fresh and an
+      already-synced plugin at that version.
   """
 
   alias Engram.Cluster.Readiness
@@ -52,10 +66,18 @@ defmodule Engram.Folders.WriteStop do
   # (release A, Engram#2609). The rollback floor reaching it (release B,
   # `priv/release_floor`, which also requires the tag to contain 2609's merge
   # commit, `priv/release_floor_contains`) is what switches the writer on:
-  # no rollback can then land on a release without them. S4 plugin:
-  # Engram-obsidian#689, cut as 1.40.0 by its release PR 706.
+  # no rollback can then land on a release without them.
+  #
+  # S4 plugin: SENTINEL that no released plugin reaches, so every client gets
+  # the moved-folder feed. Engram-obsidian#689 was cut as 1.40.0, but 1.40.0
+  # does not learn uncascaded moves from `folder_changed` + the manifest (e2e
+  # test_108: no notes or attachments under such a folder). Set this to the
+  # first plugin release an e2e proves handles them, and flip
+  # `Engram.Folders.WriteStopFloorTest` to match.
   @reads_release "release-v0.88.0"
-  @s4_plugin "1.40.0"
+  @s4_plugin "999.0.0"
+  # See "Preconditions to lower `s4_plugin`" in the moduledoc. nil: none yet.
+  @verified_folder_move_plugin nil
   # `Location.s5_reads/0` level a node needs: the readers plus the moved-folder feed.
   @fleet_level 2
 
@@ -63,9 +85,13 @@ defmodule Engram.Folders.WriteStop do
   @spec reads_release() :: String.t()
   def reads_release, do: @reads_release
 
-  @doc "The first plugin that learns folder moves from `folder_changed` (`Engram.Sync.moved_feed?/1`)."
+  @doc "The first plugin that skips the moved-folder feed (`Engram.Sync.moved_feed?/1`); a sentinel today."
   @spec s4_plugin() :: String.t()
   def s4_plugin, do: @s4_plugin
+
+  @doc "The plugin release proven to apply uncascaded folder moves, or nil (see the moduledoc)."
+  @spec verified_folder_move_plugin() :: String.t() | nil
+  def verified_folder_move_plugin, do: @verified_folder_move_plugin
 
   @doc "Whether folder renames and moves write one folder row (see the moduledoc)."
   @spec on?() :: boolean()

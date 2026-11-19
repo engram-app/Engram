@@ -35,10 +35,11 @@ PROBE = (
     f"JSON.stringify({{...{PLUGIN_PATH}.syncQuiescence(), "
     f"pluginVersion: {PLUGIN_PATH}.manifest.version}})"
 )
-# The first plugin that learns a folder move from `folder_changed` (S4,
-# Engram-obsidian#689). An older one also pulls the moved-folder feed, so it
-# waits for `feed_seq_moved` (Engram.Sync.moved_feed?/1).
-S4_PLUGIN = (1, 40, 0)
+# Mirrors `Engram.Folders.WriteStop.s4_plugin/0`: the first plugin that skips
+# the moved-folder feed, a sentinel today (1.40.0 shipped without working
+# moved-folder handling). An older one pulls the feed, so it waits for
+# `feed_seq_moved` (Engram.Sync.moved_feed?/1). Keep the two in step.
+S4_PLUGIN = (999, 0, 0)
 OWED = ("pushing", "pendingPushes", "queued", "flushing", "creating", "crdtOps")
 QUEUE_DUMP_CAP = 20
 # Bounded so a wedged renderer cannot push the dump past the pytest timeout.

@@ -723,7 +723,7 @@ defmodule EngramWeb.CrdtChannel do
           limit,
           :all,
           nil,
-          # compat(plugin): moved_folder_feed - remove when plugin floor includes Engram-obsidian#689 (#2523)
+          # compat(plugin): moved_folder_feed - remove when plugin floor reaches WriteStop.s4_plugin/0 (#2523)
           moved: Engram.Sync.moved_feed?(socket.assigns[:plugin_version])
         )
 

@@ -147,10 +147,26 @@ defmodule Engram.Folders.WriteStopOldPluginTest do
       assert walk(u, v, seq, 500) == []
     end
 
-    test "the S4 plugin pulls no row for the move", ctx do
+    test "a plugin past the S4 sentinel pulls no row for the move", ctx do
       %{user: u, vault: v, cursor: cursor} = ctx
       assert {:ok, _} = Folders.rename(u, v, "A", "B")
       assert walk(u, v, cursor, 500, moved: Sync.moved_feed?(WriteStop.s4_plugin())) == []
+    end
+
+    # 1.40.0 shipped without working moved-folder handling (e2e test_108).
+    for version <- ["1.40.0", "1.41.0"] do
+      test "plugin #{version} pulls every moved note, and its feed head is the move", ctx do
+        %{user: u, vault: v, cursor: cursor} = ctx
+        assert {:ok, %{seq: seq}} = Folders.rename(u, v, "A", "B")
+        moved = Sync.moved_feed?(unquote(version))
+
+        rows = walk(u, v, cursor, 500, moved: moved)
+
+        assert Enum.map(rows, & &1.path) |> Enum.sort() ==
+                 Enum.map(moved_paths(), &String.replace_prefix(&1, "A/", "B/"))
+
+        assert Repo.with_tenant!(u.id, fn -> Sync.feed_head(u, v, moved: moved) end) == seq
+      end
     end
   end
 

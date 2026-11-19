@@ -66,7 +66,7 @@ defmodule EngramWeb.SyncController do
         pending =
           Repo.one(from(l in CrdtUpdateLog, where: l.vault_id == ^vault.id, select: count()))
 
-        # compat(plugin): moved_folder_feed - remove when plugin floor includes Engram-obsidian#689 (#2523)
+        # compat(plugin): moved_folder_feed - remove when plugin floor reaches WriteStop.s4_plugin/0 (#2523)
         # Both heads: the caller (e2e, which sends no plugin version) picks
         # by the plugin it waits on.
         feed =

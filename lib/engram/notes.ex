@@ -6257,7 +6257,7 @@ defmodule Engram.Notes do
     {:ok, %{changes: changes, has_more: has_more, next: next}}
   end
 
-  # compat(plugin): moved_folder_feed - remove when plugin floor includes Engram-obsidian#689 (#2523)
+  # compat(plugin): moved_folder_feed - remove when plugin floor reaches WriteStop.s4_plugin/0 (#2523)
   @doc """
   The moved-folder feed: what a plugin older than the S4 one (which learns a
   folder move from `folder_changed` and the manifest's `folders`) needs to
