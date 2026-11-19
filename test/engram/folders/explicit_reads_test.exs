@@ -362,9 +362,10 @@ defmodule Engram.Folders.ExplicitReadsTest do
   end
 
   # The rows leg alone (no marker left to clear the flag first, as a
-  # cascade's marker leg does): a D-era row is trashed with its flag
-  # cleared, as before the fix above.
-  test "a D-era row (explicit_seq NULL) still loses its flag when deleted", ctx do
+  # cascade's marker leg does). D cleared a D-era row's flag here; from E on
+  # every trashed row keeps it (an undo has no marker to re-create it from),
+  # and listings read live rows only.
+  test "a trashed row keeps its flag, D-era (explicit_seq NULL) too", ctx do
     %{user: u, vault: v} = ctx
     {:ok, _} = Notes.create_folder_markers(u, v, ["D"])
     Repo.query!("DELETE FROM notes WHERE vault_id = $1 AND kind = 'folder'", [dump(v.id)])
@@ -375,7 +376,7 @@ defmodule Engram.Folders.ExplicitReadsTest do
                Rows.soft_delete(u, v.id, ["D"], Ecto.UUID.generate())
              end)
 
-    assert %{rows: [[false, nil, true]]} =
+    assert %{rows: [[true, nil, true]]} =
              Repo.query!(
                "SELECT explicit, explicit_seq, deleted_at IS NOT NULL FROM folders WHERE id = $1",
                [dump(id)]
