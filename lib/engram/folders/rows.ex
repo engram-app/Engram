@@ -1391,7 +1391,7 @@ defmodule Engram.Folders.Rows do
           if ctx.hash?, do: put_rename_hashes(ctx, rows, paths.(), root, new_folder), else: :ok
 
         :ok = recascade(ctx, rows)
-        :ok
+        stamp_placed(ctx.vault_id, Enum.map(rows, & &1.id))
     end
   end
 
@@ -1481,6 +1481,8 @@ defmodule Engram.Folders.Rows do
 
     # Every moved row's new path hash, one statement.
     {:ok, _} = PathHmacs.put(ctx.user_id, for({id, path} <- moved, do: {id, full_h(ctx, path)}))
+
+    :ok = stamp_placed(ctx.vault_id, for({id, _} <- moved, do: id))
     retire_later(ctx.user_id, Enum.reverse(merged))
   end
 
@@ -1549,6 +1551,9 @@ defmodule Engram.Folders.Rows do
 
     from(f in Folder, where: f.id == ^keeper and f.explicit and is_nil(f.explicit_seq))
     |> Repo.update_all(set: [explicit_seq: 0])
+
+    # And, once markers stop, with this op's seq, like every row a move places.
+    :ok = stamp_placed(row.vault_id, [keeper])
 
     from(f in Folder, where: f.id == ^row.id)
     |> Repo.update_all(set: [deleted_at: now(), updated_at: now()])
@@ -1751,7 +1756,29 @@ defmodule Engram.Folders.Rows do
     n = write_revived(user, vault_id, revive)
     if n > 0 or marked > 0, do: Engram.Vaults.next_seq!(vault_id)
     revived_explicit = for {id, _parent} <- revive, by_id[id].explicit, do: id
-    {n, Enum.uniq(targets ++ revived_explicit)}
+    explicit = Enum.uniq(targets ++ revived_explicit)
+    :ok = stamp_placed(vault_id, explicit)
+    {n, explicit}
+  end
+
+  # The explicit rows among `ids` that a rename, move or undo just placed,
+  # stamped with the vault seq the op bumped in this transaction (every
+  # caller does, under the seq lock), as `make_explicit/3` stamps a create:
+  # `soft_delete/5`'s fence then keeps one placed inside a folder whose
+  # delete read its seq before, as the marker the op re-wrote kept it.
+  # Only once markers stop: before, that marker keeps it, and a stamp would
+  # hide the row from `ExplicitFolderReconcile` across a rollback.
+  defp stamp_placed(_vault_id, []), do: :ok
+
+  defp stamp_placed(vault_id, ids) do
+    if Engram.Folders.MarkerStop.on?() do
+      seq = Engram.Vaults.raw_current_seq(vault_id)
+
+      from(f in Folder, where: f.id in ^ids and f.explicit)
+      |> Repo.update_all(set: [explicit_seq: seq])
+    end
+
+    :ok
   end
 
   # The flag a merge moves onto a live row, stamped (`explicit_seq` 0 unless

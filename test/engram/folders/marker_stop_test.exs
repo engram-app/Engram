@@ -91,6 +91,107 @@ defmodule Engram.Folders.MarkerStopTest do
     assert explicit(u, v) == ["F", "F/New"]
   end
 
+  # A rename, move or undo that places an explicit row inside a doomed folder
+  # after the delete read its seq: the marker the op re-wrote kept such a row
+  # before markers stopped, so the op stamps `explicit_seq` like a create.
+  defp delete_since(user, vault, folder, since) do
+    Repo.with_tenant!(user.id, fn -> Rows.soft_delete(user, vault.id, [folder], nil, since) end)
+    explicit(user, vault)
+  end
+
+  # B: a live row with nothing under it (its only note gone).
+  defp bare_row!(user, vault, folder) do
+    {:ok, n} =
+      Notes.upsert_note(user, vault, %{"path" => folder <> "/n.md", "content" => "x"},
+        actor: "api"
+      )
+
+    Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(n.id)])
+  end
+
+  test "a folder renamed into a doomed one after its seq read is kept", %{user: u, vault: v} do
+    {:ok, _} = Folders.create_markers(u, v, ["F", "X", "X/Deep"])
+    since = seq(u, v)
+    assert {:ok, _} = Folders.rename(u, v, "X", "F/X")
+
+    assert delete_since(u, v, "F", since) == ["F", "F/X", "F/X/Deep"]
+  end
+
+  test "a folder moved into a doomed one after its seq read is kept", %{user: u, vault: v} do
+    {:ok, %{folders: folders}} = Folders.create_markers(u, v, ["F", "X"])
+    x = Enum.find(folders, &(&1.name == "X")).id
+    since = seq(u, v)
+    assert {:ok, _} = Folders.batch_move(u, v, [x], {:path, "F"})
+
+    assert delete_since(u, v, "F", since) == ["F", "F/X"]
+  end
+
+  test "a rename merged into a doomed one after its seq read keeps the keeper", ctx do
+    %{user: u, vault: v} = ctx
+    {:ok, _} = Folders.create_markers(u, v, ["F", "X"])
+    bare_row!(u, v, "F/X")
+    since = seq(u, v)
+    assert {:ok, _} = Folders.rename(u, v, "X", "F/X")
+
+    assert delete_since(u, v, "F", since) == ["F", "F/X"]
+  end
+
+  test "a rename merged into a doomed one after its seq read keeps the rows it moved", ctx do
+    %{user: u, vault: v} = ctx
+    {:ok, _} = Folders.create_markers(u, v, ["F", "X", "X/Sub"])
+    bare_row!(u, v, "F/X")
+    since = seq(u, v)
+    assert {:ok, _} = Folders.rename(u, v, "X", "F/X")
+
+    # X merges into the keeper F/X; X/Sub moves under it.
+    assert delete_since(u, v, "F", since) == ["F", "F/X", "F/X/Sub"]
+  end
+
+  test "a folder undone into a doomed one after its seq read is kept", %{user: u, vault: v} do
+    {:ok, _} = Folders.create_markers(u, v, ["F/Y"])
+    op = Ecto.UUID.generate()
+    {:ok, _} = Folders.delete(u, v, "F/Y", recursive: true, op_id: op)
+    since = seq(u, v)
+    assert {:ok, _} = Folders.restore_op(u, v, op)
+
+    assert delete_since(u, v, "F", since) == ["F/Y"]
+  end
+
+  test "an undo merged into a doomed one after its seq read is kept", %{user: u, vault: v} do
+    {:ok, _} = Folders.create_markers(u, v, ["F/M"])
+    op = Ecto.UUID.generate()
+    {:ok, _} = Folders.delete(u, v, "F/M", recursive: true, op_id: op)
+    bare_row!(u, v, "F/M")
+    since = seq(u, v)
+    assert {:ok, _} = Folders.restore_op(u, v, op)
+
+    assert delete_since(u, v, "F", since) == ["F/M"]
+  end
+
+  test "control: with markers written, a rename and an undo into a doomed folder are kept", %{
+    user: u,
+    vault: v
+  } do
+    Engram.ServiceConfig.put_override(:marker_stop_floors, :enforce)
+    {:ok, _} = Folders.create_markers(u, v, ["F", "X", "F/Y"])
+    op = Ecto.UUID.generate()
+    {:ok, _} = Folders.delete(u, v, "F/Y", recursive: true, op_id: op)
+    since = seq(u, v)
+    assert {:ok, _} = Folders.rename(u, v, "X", "F/X")
+    assert {:ok, _} = Folders.restore_op(u, v, op)
+
+    assert delete_since(u, v, "F", since) == ["F", "F/X", "F/Y"]
+    assert markers(v) == 3
+
+    # No stamp while markers are written: the reconcile keeps its say over
+    # these rows across a rollback.
+    assert %{rows: [[nil, nil]]} =
+             Repo.query!(
+               "SELECT max(explicit_seq), min(explicit_seq) FROM folders WHERE vault_id = $1",
+               [Ecto.UUID.dump!(v.id)]
+             )
+  end
+
   # A create that lands between a delete's scan and its row delete, through
   # the public deletes: the seq read before the scan (`since_seq`) is what
   # keeps it. The create runs from a query hook on the first attachments read
