@@ -339,6 +339,47 @@ defmodule Engram.Folders.ExplicitReadsTest do
     assert %{"K" => 1} = Map.new(counts, &{&1.folder, &1.count})
   end
 
+  # E -> D rollback: an empty folder E made carries `explicit_seq` and no
+  # marker. D deletes it, then undoes the delete: with no trashed marker to
+  # bring the flag back, the trashed row must keep it.
+  test "an undo in D brings back an empty folder E made (explicit_seq, no marker)", ctx do
+    %{user: u, vault: v} = ctx
+    {:ok, _} = Notes.create_folder_markers(u, v, ["E"])
+    Repo.query!("DELETE FROM notes WHERE vault_id = $1 AND kind = 'folder'", [dump(v.id)])
+    Repo.query!("UPDATE folders SET explicit_seq = 7 WHERE id = $1", [dump(row_id(u, "E"))])
+    assert {:ok, ["E"]} = Notes.list_explicit_folders(u, v)
+    op = Ecto.UUID.generate()
+
+    assert {:ok, _} = Engram.Folders.delete(u, v, "E", recursive: true, op_id: op)
+    assert {:ok, []} = Notes.list_explicit_folders(u, v)
+    assert {:ok, _} = Engram.Folders.restore_op(u, v, op)
+    assert {:ok, ["E"]} = Notes.list_explicit_folders(u, v)
+  end
+
+  # The rows leg alone (no marker left to clear the flag first, as a
+  # cascade's marker leg does): a D-era row is trashed with its flag
+  # cleared, as before the fix above.
+  test "a D-era row (explicit_seq NULL) still loses its flag when deleted", ctx do
+    %{user: u, vault: v} = ctx
+    {:ok, _} = Notes.create_folder_markers(u, v, ["D"])
+    Repo.query!("DELETE FROM notes WHERE vault_id = $1 AND kind = 'folder'", [dump(v.id)])
+    id = row_id(u, "D")
+
+    assert 1 =
+             Repo.with_tenant!(u.id, fn ->
+               Rows.soft_delete(u, v.id, ["D"], Ecto.UUID.generate())
+             end)
+
+    assert %{rows: [[false, nil, true]]} =
+             Repo.query!(
+               "SELECT explicit, explicit_seq, deleted_at IS NOT NULL FROM folders WHERE id = $1",
+               [dump(id)]
+             )
+  end
+
+  defp row_id(user, path), do: FolderRows.tree(user)[path].id
+  defp dump(id), do: Ecto.UUID.dump!(id)
+
   # The #2639 review, L2: the folder counts' explicit leg as the app role.
   test "plan: the counts' explicit leg is the partial index under RLS", %{user: u, vault: v} do
     for i <- 1..400, do: put_note(u, v, "F#{i}/n.md")

@@ -1536,11 +1536,24 @@ defmodule Engram.Folders.Rows do
 
         doomed = Enum.reject(ids, &MapSet.member?(keep, &1))
 
+        # A trashed row keeps its flag only when it has no marker to give it
+        # back on undo: one E made (`explicit_seq` set, E -> D rollback).
+        # A D-era row still loses it; its trashed marker restores it.
+        at = now()
+
         {n, _} =
-          from(f in Folder, where: f.id in ^doomed and is_nil(f.deleted_at))
-          |> Repo.update_all(
-            set: [deleted_at: now(), delete_op_id: op_id, explicit: false, updated_at: now()]
+          from(f in Folder,
+            where: f.id in ^doomed and is_nil(f.deleted_at),
+            update: [
+              set: [
+                deleted_at: ^at,
+                delete_op_id: ^op_id,
+                explicit: f.explicit and not is_nil(f.explicit_seq),
+                updated_at: ^at
+              ]
+            ]
           )
+          |> Repo.update_all([])
 
         :ok = NameTerms.on_folders_deleted(doomed)
         n
