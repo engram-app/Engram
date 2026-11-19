@@ -31,8 +31,29 @@ defmodule Engram.PluginVersion do
       string is work an unauthenticated caller can ask for, so anything over
       `#{32}` bytes is refused a parse and waved through.
 
-  The only thing that is ever blocked is a version we successfully parsed
-  and found to be strictly below the floor.
+  The only things that are ever blocked are a version we successfully parsed
+  and found to be strictly below the floor, and (`supported?/2`) no version at
+  all from a caller whose user agent names the Obsidian app: that is a plugin
+  older than the header, the one population absence-allowed was exempting.
+
+  ## Known false positive: scripts that run inside Obsidian
+
+  The "no version" refusal keys on the Obsidian user agent, which every
+  request made from Obsidian's own renderer carries, not just this plugin's.
+  A user's Templater/QuickAdd script, or another Obsidian plugin, that calls
+  the authed API with an API key and no `X-Plugin-Version` is refused with the
+  "update the plugin" 426, and updating cannot help it. The fix on their side
+  is to send any parseable `X-Plugin-Version` at or above the floor (the gate
+  is self-reported, see above). Accepted: that population is tiny next to the
+  stale plugins this closes, and the alternative is leaving them exempt.
+
+  ## Sockets are only partly closed
+
+  The same signal at socket connect sees the WebSocket handshake's user agent.
+  On desktop that is the Electron string, so old desktop plugins are refused at
+  join. On iOS/Android it is the WebView's string with no `obsidian/` or
+  `Dalvik`, so a pre-1.29 mobile socket is NOT refused (its HTTP is, via the
+  native request stack). Do not assume sockets are fully closed.
 
   ## Pre-release tags are ORDERED BELOW their release, and must stay that way
 
@@ -86,7 +107,7 @@ defmodule Engram.PluginVersion do
 
     * `EngramWeb.Plugs.RequirePluginVersion` on the `:authed_api` pipeline
       (HTTP) → `426 Upgrade Required`.
-    * `EngramWeb.ChannelGate.check/4` (sync + CRDT joins) →
+    * `EngramWeb.ChannelGate.check/5` (sync + CRDT joins) →
       `plugin_upgrade_required`.
 
   The socket half is the load-bearing one. Sync runs over CRDT channels, so
@@ -134,4 +155,67 @@ defmodule Engram.PluginVersion do
   end
 
   def supported?(_), do: true
+
+  @doc """
+  `supported?/1` plus the one absence we do NOT allow: no version at all from a
+  caller whose user agent says it is the Obsidian app.
+
+  Every plugin older than 1.29.0 sends no `X-Plugin-Version`, so under plain
+  `supported?/1` it is permanently exempt from every floor, including the one
+  whose whole purpose is to stop it (see "What this can and cannot reach"). An
+  Obsidian user agent with no version is exactly that population, because the
+  1.29.0+ plugin always reports. Everything else that sends no header (web SPA,
+  MCP clients, CLI, scripts, self-host) has no Obsidian user agent and stays
+  allowed.
+
+  `obsidian?` is `obsidian_client?/1`'s answer. A garbled-but-present version
+  still falls through to `supported?/1` (allowed): only absence is the signal.
+  Self-reported like the header itself, so a client that wants past it can,
+  and this is still a compatibility gate, not a security control.
+  """
+  @spec supported?(term(), boolean()) :: boolean()
+  def supported?(reported, obsidian?) when is_boolean(obsidian?) do
+    not (obsidian? and absent?(reported)) and supported?(reported)
+  end
+
+  @doc """
+  The value to echo as `your_version`: the reported string, or nil for an
+  absent or blank one (an empty echo tells the user nothing).
+  """
+  @spec reported(term()) :: String.t() | nil
+  def reported(value) when is_binary(value), do: if(absent?(value), do: nil, else: value)
+  def reported(_), do: nil
+
+  @doc """
+  The three recovery fields both refusals carry (HTTP 426 body, socket join
+  payload). One definition so the transports cannot drift.
+  """
+  @spec recovery_fields(term()) :: %{
+          min_version: String.t(),
+          your_version: String.t() | nil,
+          update_url: String.t()
+        }
+  def recovery_fields(reported) do
+    %{min_version: @minimum, your_version: reported(reported), update_url: @update_url}
+  end
+
+  # The Obsidian app's own HTTP stacks. Desktop is Electron ("obsidian/1.15.1"),
+  # iOS is "Obsidian/396 CFNetwork", Android's native HTTP is "Dalvik/" (any
+  # Android app; accepted). Measured in prod Tempo 2026-10-31..11-06: every
+  # POST /api/notes but a few "node" and "Python-urllib" calls carried one of
+  # these. Also the "is this the plugin" signal for `EngramWeb.WriteActor`.
+  @obsidian_ua ~r/obsidian\/|^Dalvik\//i
+
+  @doc """
+  Whether any of the given user agents (a binary, or the list `get_req_header/2`
+  returns) names the Obsidian app. Anything else, including nil, is false.
+  """
+  @spec obsidian_client?(String.t() | [String.t()] | nil) :: boolean()
+  def obsidian_client?(uas) when is_list(uas), do: Enum.any?(uas, &obsidian_client?/1)
+  def obsidian_client?(ua) when is_binary(ua), do: Regex.match?(@obsidian_ua, ua)
+  def obsidian_client?(_), do: false
+
+  defp absent?(nil), do: true
+  defp absent?(value) when is_binary(value), do: String.trim(value) == ""
+  defp absent?(_), do: false
 end

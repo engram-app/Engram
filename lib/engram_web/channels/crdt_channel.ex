@@ -133,6 +133,7 @@ defmodule EngramWeb.CrdtChannel do
                user,
                socket.assigns[:current_api_key],
                socket.assigns[:plugin_version],
+               socket.assigns[:obsidian_client] == true,
                "crdt:" <> ids
              ) do
           :ok -> join_gated_vault("crdt:" <> ids, user, user_id_str, socket)

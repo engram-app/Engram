@@ -9,6 +9,7 @@ defmodule EngramWeb.Endpoint do
   socket "/socket", EngramWeb.UserSocket,
     websocket: [
       check_origin: {__MODULE__, :check_origin, []},
+      connect_info: [:user_agent],
       # Frame meter (message rate + wire bytes). V1 kept so old clients still
       # negotiate, matching Phoenix's default list.
       serializer: [

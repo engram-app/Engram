@@ -121,6 +121,51 @@ defmodule Engram.PluginVersionTest do
     end
   end
 
+  describe "supported?/2 and obsidian_client?/1: no version from the Obsidian app" do
+    test "absent or blank version from an Obsidian client is refused" do
+      for absent <- [nil, "", "   ", "\t"] do
+        refute PluginVersion.supported?(absent, true), inspect(absent)
+      end
+    end
+
+    test "absent version from anything else is still allowed" do
+      for absent <- [nil, "", "   "], do: assert(PluginVersion.supported?(absent, false))
+    end
+
+    test "a garbled or current version from an Obsidian client is not refused for absence" do
+      assert PluginVersion.supported?("nightly", true)
+      assert PluginVersion.supported?("1.36.0", true)
+      refute PluginVersion.supported?("1.0.0", true)
+    end
+
+    test "obsidian_client?/1 names only the Obsidian app's user agents" do
+      assert PluginVersion.obsidian_client?(
+               "Mozilla/5.0 (Macintosh) obsidian/1.15.1 Chrome/130 Electron/33 Safari/537"
+             )
+
+      assert PluginVersion.obsidian_client?("Obsidian/396 CFNetwork/1568 Darwin/24")
+      assert PluginVersion.obsidian_client?(["curl/8", "obsidian/1.15.1"])
+
+      for other <- [
+            nil,
+            "",
+            "Mozilla/5.0 (X11; Linux) Chrome/130 Safari/537",
+            "node",
+            "Python-urllib/3.12",
+            "curl/8.5.0",
+            "Claude-User",
+            []
+          ] do
+        refute PluginVersion.obsidian_client?(other), inspect(other)
+      end
+    end
+
+    test "recovery_fields/1 echoes nil for a blank version" do
+      assert %{your_version: nil, min_version: "1.36.0"} = PluginVersion.recovery_fields("  ")
+      assert %{your_version: "1.0.0"} = PluginVersion.recovery_fields("1.0.0")
+    end
+  end
+
   test "update_url/0 points at the plugin's Obsidian pane" do
     assert PluginVersion.update_url() =~ "engram-vault-sync"
   end

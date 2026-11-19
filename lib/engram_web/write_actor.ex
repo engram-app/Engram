@@ -25,33 +25,20 @@ defmodule EngramWeb.WriteActor do
     * the Obsidian plugin can also run on an API key. Every shipped version
       pushes whole notes without a base (reconnect, offline queue) and none
       can be force-upgraded, so a caller that reports `X-Plugin-Version`
-      (1.29.0+) or that the Obsidian app's user agent names (older plugins
-      send no version header) is exempt.
+      (1.29.0+) is exempt. A plugin older than that sends no version and is
+      refused before reaching a controller (`RequirePluginVersion` treats an
+      Obsidian user agent with no version as below the floor), so it needs no
+      exemption here.
 
   This is a data-safety accident guard for honest clients, NOT a security
-  boundary. Both signals are self-reported: a caller that spoofs them only
-  opts out of its own stale-write protection. It skips nothing
+  boundary. The signal is self-reported: a caller that spoofs it only opts
+  out of its own stale-write protection. It skips nothing
   security-relevant: auth, tenancy (RLS), rate limits and plan limits all run
   before and regardless of this check.
   """
   @spec requires_base?(Plug.Conn.t()) :: boolean()
   def requires_base?(%Plug.Conn{} = conn) do
     RequestMeta.surface(conn.assigns) in ["api", "mcp"] and
-      Plug.Conn.get_req_header(conn, "x-plugin-version") == [] and
-      not obsidian_user_agent?(conn)
-  end
-
-  # compat(plugin): no-version blind push exemption - remove when plugin floor >= 1.29.0 (#2480)
-  # Plugins before 1.29.0 send no X-Plugin-Version, so the version floor
-  # cannot see them yet (a missing header passes RequirePluginVersion); only
-  # their user agent names them. Desktop is Electron ("obsidian/1.15.0"),
-  # iOS is "Obsidian/396 CFNetwork", Android's native HTTP is "Dalvik/" (any
-  # Android app; accepted, this guard is not security). Measured in prod
-  # Tempo 2026-10-31..11-06: every POST /api/notes but a few "node" and
-  # "Python-urllib" calls carried one of these.
-  @obsidian_ua ~r/obsidian\/|^Dalvik\//i
-
-  defp obsidian_user_agent?(conn) do
-    Enum.any?(Plug.Conn.get_req_header(conn, "user-agent"), &Regex.match?(@obsidian_ua, &1))
+      Plug.Conn.get_req_header(conn, "x-plugin-version") == []
   end
 end
