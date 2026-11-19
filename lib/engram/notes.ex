@@ -2115,7 +2115,7 @@ defmodule Engram.Notes do
          %{} = row <- classify_read(uuid) do
       {note, %{moved__: moved?}} = NoteBody.to_note(row, [:moved__])
       # Names off (`Location.on?/0`, a cached gate) reads stored paths only.
-      moved? = moved? == true and Location.on?()
+      moved? = moved? == true
 
       case note do
         %Note{vault_id: vid, kind: "note", deleted_at: nil} = live when vid == vault.id ->
@@ -4864,14 +4864,13 @@ defmodule Engram.Notes do
         hmacs = Map.keys(by_hmac)
         ids? = Keys.ids?()
         vid = vault_id(vault)
-        on? = Location.on?()
 
         probe =
           from(_ in fragment("(SELECT)"),
             select: {
               type(^nil, :binary),
               type(^nil, Ecto.UUID),
-              fragment(WalkSql.moved(), type(^vid, Ecto.UUID)) and ^on?
+              fragment(WalkSql.moved(), type(^vid, Ecto.UUID))
             }
           )
 
@@ -4882,8 +4881,10 @@ defmodule Engram.Notes do
             # probe is an InitPlan, so a vault with no moved folder walks no
             # chain.
             where:
-              not (fragment(WalkSql.moved(), type(^vid, Ecto.UUID)) and ^on?) or
-                is_nil(n.folder_ref_id) or not fragment(WalkSql.moved_chain(), n.folder_ref_id),
+              ^dynamic(
+                [n],
+                not fragment(WalkSql.moved(), type(^vid, Ecto.UUID)) or ^Location.here()
+              ),
             select: {n.path_hmac, n.id, false},
             union_all: ^probe
           )
@@ -9996,7 +9997,7 @@ defmodule Engram.Notes do
         |> Repo.all()
         |> Enum.map(&NoteBody.to_note(&1, [:moved__]))
         |> then(fn rows ->
-          moved? = Enum.any?(rows, fn {_n, %{moved__: m}} -> m == true end) and Location.on?()
+          moved? = Enum.any?(rows, fn {_n, %{moved__: m}} -> m == true end)
           rows |> Enum.map(&elem(&1, 0)) |> restore_rows(user, vault, moved?)
         end)
         |> tap(&enqueue_restored_jobs(user, &1))

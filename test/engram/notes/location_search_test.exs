@@ -70,9 +70,10 @@ defmodule Engram.Notes.LocationSearchTest do
 
     assert hit_paths(u, note) == ["Body/Iron.md"]
 
-    # Names off (the ledger as the test DB holds it): the stored path.
+    # Names off (the ledger as the test DB holds it): a moved vault keeps
+    # its derived path (the latch).
     ServiceConfig.put_override(:name_reads_ledger, :read)
     Engram.Cache.clear_local(:note_name)
-    assert hit_paths(u, note) == ["Health/Iron.md"]
+    assert hit_paths(u, note) == ["Body/Iron.md"]
   end
 end
