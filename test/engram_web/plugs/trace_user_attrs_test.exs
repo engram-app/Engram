@@ -18,4 +18,24 @@ defmodule EngramWeb.Plugs.TraceUserAttrsTest do
   test "omits pairs when assigns are absent" do
     assert TraceUserAttrs.attrs_for(build_conn()) == []
   end
+
+  test "stamps plugin.version and app.device_id so a flood names its client" do
+    conn =
+      build_conn()
+      |> Plug.Conn.assign(:plugin_version, "1.39.3")
+      |> Plug.Conn.put_req_header("x-device-id", "dev-abc")
+
+    attrs = TraceUserAttrs.attrs_for(conn)
+    assert {"plugin.version", "1.39.3"} in attrs
+    assert {"app.device_id", "dev-abc"} in attrs
+  end
+
+  test "caps client-supplied plugin.version length" do
+    conn = build_conn() |> Plug.Conn.assign(:plugin_version, String.duplicate("9", 500))
+
+    assert {"plugin.version", v} =
+             List.keyfind(TraceUserAttrs.attrs_for(conn), "plugin.version", 0)
+
+    assert String.length(v) == 32
+  end
 end

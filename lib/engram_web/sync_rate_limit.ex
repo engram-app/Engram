@@ -28,6 +28,14 @@ defmodule EngramWeb.SyncRateLimit do
   # 2400-note vault inside one window; bounded, not exempt.
   @hs_limit 2400
 
+  # REST `POST /api/notes` per user per minute (session / device-token callers;
+  # API keys keep `api_rps_cap`). Measured 2026-11-18: before the one-user flood
+  # (~10/s for 24 h, 300k writes) the WHOLE fleet's `POST /api/notes` peaked at
+  # 0.007/s over a 5 min window (sync runs over CRDT sockets; this route is the
+  # legacy fallback). 60/min is 1/s: ~140x that peak, 10x below the flood.
+  @rest_write_limit 60
+  @rest_write_scale_ms 60_000
+
   # Account-wide ceiling = limit x this: "up to ten busy devices per account".
   @account_multiplier 10
 
@@ -51,6 +59,25 @@ defmodule EngramWeb.SyncRateLimit do
          {:allow, _} <- hit("#{prefix}:acct:#{user_id}", limit * @account_multiplier, increment) do
       :ok
     else
+      {:deny, retry_after_ms} -> {:error, {:rate_limited, retry_after_ms}}
+    end
+  end
+
+  @doc """
+  Charges one REST note write to the user's per-minute budget. Per user, not per
+  device: a client-supplied device id must not multiply it.
+  """
+  @spec check_rest_write(Ecto.UUID.t()) :: :ok | {:error, {:rate_limited, non_neg_integer()}}
+  def check_rest_write(user_id) do
+    limit = Application.get_env(:engram, :rest_write_rate_limit_override) || @rest_write_limit
+
+    case EngramWeb.RateLimiter.hit(
+           "rest_write:#{user_id}",
+           @rest_write_scale_ms,
+           limit,
+           :rest_write
+         ) do
+      {:allow, _} -> :ok
       {:deny, retry_after_ms} -> {:error, {:rate_limited, retry_after_ms}}
     end
   end

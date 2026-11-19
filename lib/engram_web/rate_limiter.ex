@@ -37,6 +37,7 @@ defmodule EngramWeb.RateLimiter do
           | :feedback
           | :client_logs
           | :folder_create
+          | :rest_write
           | :checkout_status
           | :device_user_code
           | :other
