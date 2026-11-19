@@ -79,7 +79,10 @@ defmodule EngramWeb.NotesController do
       opts = [
         actor: actor,
         surface: surface,
-        require_base: EngramWeb.WriteActor.requires_base?(conn)
+        require_base: EngramWeb.WriteActor.requires_base?(conn),
+        # The user's own sync clients (web app, plugin) read ids and hashes of
+        # an unchanged push's reply; API-key and MCP callers keep the full note.
+        lean_unchanged: not EngramWeb.WriteActor.requires_base?(conn)
       ]
 
       # One transaction: the write and its job inserts. The response renders
@@ -89,6 +92,7 @@ defmodule EngramWeb.NotesController do
         case in_write_txn(user, &{&1, Notes.upsert_note(&1, vault, params, opts)}) do
           # The DEK could not be provisioned: nothing was written.
           {:error, _} = error -> error
+          {_user, {:ok, {:unchanged, note}}} -> {:ok, unchanged_json(note)}
           {user, {:ok, note}} -> {:ok, note_json(note, user)}
           {user, {:error, :version_conflict, server}} -> {:conflict, note_json(server, user)}
           {_user, other} -> other
@@ -811,6 +815,27 @@ defmodule EngramWeb.NotesController do
       {:error, _} = error ->
         error
     end
+  end
+
+  # `note_json/3` for a push that changed nothing: the row's plaintext columns
+  # plus the matched path and folder. No title, tags, links or content: those
+  # need the field decrypt and a content parse (the cost this reply skips), and
+  # no sync client reads them from a push reply.
+  defp unchanged_json(note) do
+    %{
+      id: note.id,
+      path: note.path,
+      folder: note.folder || "",
+      version: note.version,
+      content_hash: note.content_hash,
+      mtime: FileTime.mtime(note),
+      ctime: FileTime.ctime(note),
+      updated_at: note.updated_at,
+      fm_timestamp: note.fm_timestamp,
+      fm_created: note.fm_created,
+      parse_status: note.parse_status,
+      parse_reason: note.parse_reason
+    }
   end
 
   defp note_json(note, user, links_from \\ :content) do

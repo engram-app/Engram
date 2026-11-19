@@ -1021,6 +1021,10 @@ defmodule Engram.Notes do
       writers that must not blind-overwrite: MCP and external REST callers.
       Creating a new note, and re-pushing the content the note already holds,
       need no base.
+    * `lean_unchanged: true` — a push that changed nothing (stored hash equals
+      the pushed one, no `force:`) returns `{:ok, {:unchanged, note}}`: the
+      undecrypted row with `path`, `folder` and `served_hash` set, no field
+      decrypt. Only the REST controller passes it; it renders ids and hashes.
     * `broadcast_from: pid` — emit the `note_changed` broadcast via
       `Endpoint.broadcast_from/4` so the given subscriber (the pushing
       channel process) is excluded. Channel pushes pass `self()`; HTTP
@@ -1028,6 +1032,7 @@ defmodule Engram.Notes do
   """
   @spec upsert_note(map(), map(), map(), keyword()) ::
           {:ok, Note.t()}
+          | {:ok, {:unchanged, Note.t()}}
           | {:error, Ecto.Changeset.t()}
           | {:error, :version_conflict, Note.t()}
           | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
@@ -1050,6 +1055,10 @@ defmodule Engram.Notes do
     with :ok <- check_size(content),
          {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, path} <- validate_path(path),
+         # The doc (and so the stored content_hash) holds LF for a markdown note
+         # (`maybe_merge_crdt`). Hash the same form, or a CRLF body never equals
+         # the stored hash: every identical re-push rewrote the row.
+         content = LineEndings.for_path(content, path),
          {:ok, hash} <- content_hash(user, content) do
       sanitized_path = PathSanitizer.sanitize(path)
       folder = Helpers.extract_folder(sanitized_path)
@@ -1116,9 +1125,15 @@ defmodule Engram.Notes do
           |> commit_content(user, opts, recording)
         end)
 
-      case result do
+      case lean_unchanged(result, opts, sanitized_path, folder) do
         {:ok, :stale_expected} ->
           {:error, :stale_note}
+
+        # `lean_unchanged:` caller, hash-equal push: nothing persisted and the
+        # caller renders ids and hashes only, so the field decrypt is skipped.
+        {:ok, {:unchanged, note}} ->
+          maybe_log_path_rewrite(user, vault, path, sanitized_path, note.id)
+          {:ok, {:unchanged, note}}
 
         {:ok, {:ok, {prev_hash, note, _merged_text, served_hash}}} ->
           note = %{decrypt_or_raise!(note, user) | served_hash: served_hash}
@@ -1130,7 +1145,7 @@ defmodule Engram.Notes do
           # always differ, so they broadcast as before; forced rewrites may
           # keep the same hash (e.g. a tags repair) but did persist a change.
           _ =
-            if prev_hash != note.content_hash or Keyword.get(opts, :force, false) do
+            if not unchanged_push?(prev_hash, note, opts) do
               :ok = broadcast_change(user, vault.id, "upsert", note.path, note, opts)
             end
 
@@ -3090,6 +3105,32 @@ defmodule Engram.Notes do
       )
     end
   end
+
+  # The one definition of "this push changed nothing": the row already held the
+  # pushed hash (what `idempotent_repush` returns) and the write was not forced.
+  # Both hashes are keyed HMACs of the same LF-normalized, scrubbed text.
+  defp unchanged_push?(prev_hash, note, opts),
+    do:
+      is_binary(prev_hash) and prev_hash == note.content_hash and
+        not Keyword.get(opts, :force, false)
+
+  # Opt-in (`lean_unchanged: true`): an unchanged push returns the raw row as
+  # `{:unchanged, note}` with only the fields the lookup proved (the pushed path
+  # and folder), skipping `decrypt_or_raise!`. Everything else is untouched.
+  defp lean_unchanged(
+         {:ok, {:ok, {prev_hash, note, _text, served_hash}}} = result,
+         opts,
+         path,
+         folder
+       ) do
+    if Keyword.get(opts, :lean_unchanged, false) and unchanged_push?(prev_hash, note, opts) do
+      {:ok, {:unchanged, %{note | path: path, folder: folder, served_hash: served_hash}}}
+    else
+      result
+    end
+  end
+
+  defp lean_unchanged(result, _opts, _path, _folder), do: result
 
   # CRDT (Yjs) is the only content-sync path: merge_plaintext in do_update_note
   # IS the conflict resolution. A stale client_version never 409s — the diverging
