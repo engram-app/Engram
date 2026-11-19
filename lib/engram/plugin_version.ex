@@ -36,6 +36,25 @@ defmodule Engram.PluginVersion do
   all from a caller whose user agent names the Obsidian app: that is a plugin
   older than the header, the one population absence-allowed was exempting.
 
+  ## Known false positive: scripts that run inside Obsidian
+
+  The "no version" refusal keys on the Obsidian user agent, which every
+  request made from Obsidian's own renderer carries, not just this plugin's.
+  A user's Templater/QuickAdd script, or another Obsidian plugin, that calls
+  the authed API with an API key and no `X-Plugin-Version` is refused with the
+  "update the plugin" 426, and updating cannot help it. The fix on their side
+  is to send any parseable `X-Plugin-Version` at or above the floor (the gate
+  is self-reported, see above). Accepted: that population is tiny next to the
+  stale plugins this closes, and the alternative is leaving them exempt.
+
+  ## Sockets are only partly closed
+
+  The same signal at socket connect sees the WebSocket handshake's user agent.
+  On desktop that is the Electron string, so old desktop plugins are refused at
+  join. On iOS/Android it is the WebView's string with no `obsidian/` or
+  `Dalvik`, so a pre-1.29 mobile socket is NOT refused (its HTTP is, via the
+  native request stack). Do not assume sockets are fully closed.
+
   ## Pre-release tags are ORDERED BELOW their release, and must stay that way
 
   Plain semver: `1.28.1-pr.512.gabc1234` is BELOW `1.28.1`. That is what
@@ -88,7 +107,7 @@ defmodule Engram.PluginVersion do
 
     * `EngramWeb.Plugs.RequirePluginVersion` on the `:authed_api` pipeline
       (HTTP) → `426 Upgrade Required`.
-    * `EngramWeb.ChannelGate.check/4` (sync + CRDT joins) →
+    * `EngramWeb.ChannelGate.check/5` (sync + CRDT joins) →
       `plugin_upgrade_required`.
 
   The socket half is the load-bearing one. Sync runs over CRDT channels, so

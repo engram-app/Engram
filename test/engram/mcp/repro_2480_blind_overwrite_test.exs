@@ -285,17 +285,23 @@ defmodule Engram.MCP.Repro2480BlindOverwriteTest do
         "Obsidian/396 CFNetwork/3860.700.2 Darwin/25.6.0",
         "Dalvik/2.1.0 (Linux; U; Android 15; moto g34 5G Build/V1UGS35H.75-14-6-2-4)"
       ] do
-    test "2480 edge: a pre-1.29 plugin (no version header, Obsidian UA) pushes: #{ua}", %{
-      conn: conn,
-      user: u,
-      vault: v
-    } do
+    # Was "pushes": a pre-1.29 plugin was exempted from base_hash by its user
+    # agent. It is now refused at the plugin floor before any controller runs
+    # (RequirePluginVersion), so the exemption is gone and so is the write.
+    test "2480 edge: a pre-1.29 plugin (no version header, Obsidian UA) is refused at the floor: #{ua}",
+         %{
+           conn: conn,
+           user: u,
+           vault: v
+         } do
+      before = body(u, v)
+
       conn
       |> put_req_header("user-agent", unquote(ua))
       |> post("/api/notes", %{path: @path, content: "old plugin\n", mtime: 2.0})
-      |> json_response(200)
+      |> json_response(426)
 
-      assert body(u, v) == "old plugin\n"
+      assert body(u, v) == before
     end
   end
 

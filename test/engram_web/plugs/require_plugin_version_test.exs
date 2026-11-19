@@ -70,6 +70,7 @@ defmodule EngramWeb.Plugs.RequirePluginVersionTest do
       assert body["min_version"] == "1.36.0"
       assert body["your_version"] == nil
       assert body["update_url"] == "obsidian://show-plugin?id=engram-vault-sync"
+      assert Plug.Conn.get_resp_header(result, "retry-after") == ["3600"]
     end
 
     test "426s an Obsidian user agent sending an empty version header", %{conn: conn} do
@@ -175,9 +176,6 @@ defmodule EngramWeb.Plugs.RequirePluginVersionTest do
       assert json_response(conn, 426)["error"] == "plugin_upgrade_required"
     end
 
-    # `refute conn.status == 426` would pass on a 403, a 500, or a deleted
-    # plug. Assert the route actually SERVED, so this case fails if the
-    # fixture stops producing a request that reaches the controller.
     test "a header-less Obsidian client is refused on a real route, and the web is not", %{
       conn: conn
     } do
@@ -188,6 +186,21 @@ defmodule EngramWeb.Plugs.RequirePluginVersionTest do
       assert json_response(served, 200)
     end
 
+    # The liveness invariant: a refused request must still stamp
+    # `last_active_at` (BumpActivity runs first), or `InactivityCleanup` would
+    # soft-delete an account for being blocked. Fails if the plug is moved
+    # ahead of BumpActivity.
+    test "a refused header-less Obsidian request still stamps activity", %{conn: conn, user: user} do
+      assert is_nil(Engram.UsageMeters.last_active_at(user.id))
+
+      conn |> with_ua("obsidian/1.15.1") |> get(~p"/api/folders") |> json_response(426)
+
+      assert %DateTime{} = Engram.UsageMeters.last_active_at(user.id)
+    end
+
+    # `refute conn.status == 426` would pass on a 403, a 500, or a deleted
+    # plug. Assert the route actually SERVED, so this case fails if the
+    # fixture stops producing a request that reaches the controller.
     test "the same route without the header is served normally", %{conn: conn} do
       assert json_response(get(conn, ~p"/api/folders"), 200)
     end

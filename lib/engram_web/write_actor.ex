@@ -25,26 +25,20 @@ defmodule EngramWeb.WriteActor do
     * the Obsidian plugin can also run on an API key. Every shipped version
       pushes whole notes without a base (reconnect, offline queue) and none
       can be force-upgraded, so a caller that reports `X-Plugin-Version`
-      (1.29.0+) or that the Obsidian app's user agent names (older plugins
-      send no version header) is exempt.
+      (1.29.0+) is exempt. A plugin older than that sends no version and is
+      refused before reaching a controller (`RequirePluginVersion` treats an
+      Obsidian user agent with no version as below the floor), so it needs no
+      exemption here.
 
   This is a data-safety accident guard for honest clients, NOT a security
-  boundary. Both signals are self-reported: a caller that spoofs them only
-  opts out of its own stale-write protection. It skips nothing
+  boundary. The signal is self-reported: a caller that spoofs it only opts
+  out of its own stale-write protection. It skips nothing
   security-relevant: auth, tenancy (RLS), rate limits and plan limits all run
   before and regardless of this check.
   """
   @spec requires_base?(Plug.Conn.t()) :: boolean()
   def requires_base?(%Plug.Conn{} = conn) do
     RequestMeta.surface(conn.assigns) in ["api", "mcp"] and
-      Plug.Conn.get_req_header(conn, "x-plugin-version") == [] and
-      not obsidian_user_agent?(conn)
-  end
-
-  # compat(plugin): no-version blind push exemption - remove when plugin floor >= 1.29.0 (#2480)
-  # Plugins before 1.29.0 send no X-Plugin-Version; only their user agent names
-  # them (`PluginVersion.obsidian_client?/1`, the same signal the floor uses).
-  defp obsidian_user_agent?(conn) do
-    conn |> Plug.Conn.get_req_header("user-agent") |> Engram.PluginVersion.obsidian_client?()
+      Plug.Conn.get_req_header(conn, "x-plugin-version") == []
   end
 end

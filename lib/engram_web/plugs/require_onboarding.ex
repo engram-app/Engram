@@ -17,7 +17,7 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
   on a socket.
 
   Adding a route to the vault pipeline gets you this plug. Adding a *channel*
-  gets you nothing — call `EngramWeb.ChannelGate.check/4` from its `join/3`,
+  gets you nothing — call `EngramWeb.ChannelGate.check/5` from its `join/3`,
   NOT `Onboarding.gate/2` directly. `ChannelGate` composes onboarding with the
   account-lifecycle gates and the liveness stamp; calling `gate/2` alone gives
   you a channel with onboarding enforced and lifecycle silently missing, which

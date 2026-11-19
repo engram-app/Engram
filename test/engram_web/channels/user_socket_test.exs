@@ -127,15 +127,31 @@ defmodule EngramWeb.UserSocketTest do
     assert s.assigns.obsidian_client == true
 
     for info <- [%{}, %{user_agent: nil}, %{user_agent: "Mozilla/5.0 Chrome/130"}] do
-      assert {:ok, s} = connect(EngramWeb.UserSocket, %{"token" => token}, info)
+      assert {:ok, s} = connect(EngramWeb.UserSocket, %{"token" => token}, connect_info: info)
       assert s.assigns.obsidian_client == false
     end
 
     # A client cannot claim it either way through its own params.
     assert {:ok, s} =
-             connect(EngramWeb.UserSocket, %{"token" => token, "obsidian_client" => true}, %{})
+             connect(EngramWeb.UserSocket, %{"token" => token, "obsidian_client" => true},
+               connect_info: %{}
+             )
 
     assert s.assigns.obsidian_client == false
+  end
+
+  # The unit tests above hand `connect_info` to `connect/3`; nothing else
+  # proves the Endpoint actually asks Phoenix to collect it, so a typo in
+  # endpoint.ex would leave every real socket with a nil user agent and the
+  # socket floor open. Read the live endpoint config.
+  test "the real endpoint collects the user agent for /socket" do
+    {"/socket", EngramWeb.UserSocket, opts} =
+      Enum.find(
+        EngramWeb.Endpoint.__sockets__(),
+        &match?({"/socket", EngramWeb.UserSocket, _}, &1)
+      )
+
+    assert :user_agent in Keyword.fetch!(opts[:websocket], :connect_info)
   end
 
   test "a known platform param lands in assigns; anything else is nil", %{user: user} do

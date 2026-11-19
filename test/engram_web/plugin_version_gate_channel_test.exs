@@ -96,7 +96,7 @@ defmodule EngramWeb.PluginVersionGateChannelTest do
   end
 
   describe "no version from an Obsidian client (plugin older than reporting)" do
-    defp join_as(user, vault_id, assigns, channel, topic) do
+    defp join_as(user, assigns, channel, topic) do
       base = %{current_user: user, current_api_key: nil}
       s = socket(EngramWeb.UserSocket, "user_#{user.id}", Map.merge(base, assigns))
       subscribe_and_join(s, channel, topic, %{"crdt_proto" => 2})
@@ -108,7 +108,7 @@ defmodule EngramWeb.PluginVersionGateChannelTest do
             {EngramWeb.SyncChannel, "sync:#{ctx.user.id}:#{ctx.vault.id}"}
           ] do
         assert {:error, payload} =
-                 join_as(ctx.user, ctx.vault.id, %{obsidian_client: true}, channel, topic)
+                 join_as(ctx.user, %{obsidian_client: true}, channel, topic)
 
         assert payload.reason == "plugin_upgrade_required"
         assert payload.min_version == "1.36.0"
@@ -121,7 +121,6 @@ defmodule EngramWeb.PluginVersionGateChannelTest do
       assert {:ok, _, _} =
                join_as(
                  ctx.user,
-                 ctx.vault.id,
                  %{obsidian_client: false},
                  EngramWeb.SyncChannel,
                  "sync:#{ctx.user.id}:#{ctx.vault.id}"

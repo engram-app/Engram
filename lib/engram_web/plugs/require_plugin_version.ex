@@ -8,7 +8,7 @@ defmodule EngramWeb.Plugs.RequirePluginVersion do
   security control.
 
   This is the HTTP half only. Sync runs over CRDT/sync channels where a Plug
-  never runs, so `EngramWeb.ChannelGate.check/3` enforces the same floor on
+  never runs, so `EngramWeb.ChannelGate.check/5` enforces the same floor on
   join. Adding this plug to a pipeline does not gate sockets.
 
   Placement in `:authed_api`: after `BumpActivity`, i.e. LAST of the account
@@ -48,8 +48,11 @@ defmodule EngramWeb.Plugs.RequirePluginVersion do
       # `your_version` is safe to echo: it is nil (absent) or a string
       # `supported?/1` successfully parsed as a version, which bounds both
       # length and alphabet. An arbitrary blob never reaches this branch.
-      Halt.json(
-        conn,
+      # `retry-after`: an hour. Nothing changes until the user updates, so a
+      # client that honors it stops hammering; one that ignores it is no worse off.
+      conn
+      |> put_resp_header("retry-after", "3600")
+      |> Halt.json(
         426,
         Map.put(PluginVersion.recovery_fields(reported), :error, "plugin_upgrade_required")
       )
