@@ -16,24 +16,11 @@ import pytest
 
 from helpers.latency import DELIVERY_TIMEOUT
 from helpers.log_oracle import receiver_device_id, wait_for_binary_delivery
-from helpers.vault import wait_for_content, wait_for_file, wait_for_file_gone
+from helpers.vault import TINY_PNG, files_under, wait_for_content, wait_for_file, wait_for_file_gone
 
-# Minimal valid PNG: 1x1 red pixel (same bytes as test_33).
-TINY_PNG = (
-    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-    b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00"
-    b"\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00"
-    b"\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
-)
 
 # Long enough for a late duplicate or conflict copy to land after the restore.
 SETTLE_SECONDS = 5
-
-
-def _structured(response: dict) -> dict:
-    result = response["result"]
-    assert not result.get("isError"), result["content"][0]["text"]
-    return result["structuredContent"]
 
 
 def _dump_receiver_logs(api_sync, vault, since: str) -> None:
@@ -46,11 +33,6 @@ def _dump_receiver_logs(api_sync, vault, since: str) -> None:
     for entry in api_sync.list_logs(limit=1000, since=since, device_id=device or ""):
         print(f"[B log] {entry.get('timestamp')} {entry.get('level')} "
               f"{entry.get('category')}: {entry.get('message')}")
-
-
-def _files_under(vault, folder: str) -> list[str]:
-    root = vault / folder
-    return sorted(str(p.relative_to(vault)) for p in root.rglob("*") if p.is_file())
 
 
 @pytest.mark.asyncio
@@ -74,9 +56,9 @@ async def test_mcp_delete_folder_then_restore_reappears(vault_b, cdp_b, api_sync
     assert wait_for_binary_delivery(vault_b, att, api_sync) == TINY_PNG
 
     since = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    resp, status = api_sync.mcp_call("delete_folder", {"folder": folder, "recursive": True})
-    assert status == 200
-    deleted = _structured(resp)
+    deleted = api_sync.mcp_tool("delete_folder", {"folder": folder, "recursive": True})[
+        "structuredContent"
+    ]
     assert deleted["notes"] == 3 and deleted["attachments"] == 1, deleted
     op_id = deleted["delete_op_id"]
     assert op_id and deleted["restorable_until"]
@@ -84,9 +66,7 @@ async def test_mcp_delete_folder_then_restore_reappears(vault_b, cdp_b, api_sync
     for path in [*notes, att]:
         wait_for_file_gone(vault_b, path)
 
-    resp, status = api_sync.mcp_call("restore_deleted", {"op_id": op_id})
-    assert status == 200
-    restored = _structured(resp)
+    restored = api_sync.mcp_tool("restore_deleted", {"op_id": op_id})["structuredContent"]
     assert restored["notes"] == 3, restored
     assert restored["attachments"] == 1, restored
     assert restored["skipped"] == [], restored
@@ -100,15 +80,14 @@ async def test_mcp_delete_folder_then_restore_reappears(vault_b, cdp_b, api_sync
         time.sleep(SETTLE_SECONDS)
 
         # Exactly the original files: no "(conflict ...)" copy, no duplicate.
-        assert _files_under(vault_b, folder) == sorted([*notes, att])
+        assert files_under(vault_b, folder) == {*notes, att}
     except (AssertionError, TimeoutError):
-        print(f"[B files] {_files_under(vault_b, folder)}")
+        print(f"[B files] {sorted(files_under(vault_b, folder))}")
         _dump_receiver_logs(api_sync, vault_b, since)
         raise
     for path, content in notes.items():
         assert (vault_b / path).read_text(encoding="utf-8").count(content.splitlines()[1]) == 1
 
     # A second restore brings back nothing more (idempotent).
-    resp, _ = api_sync.mcp_call("restore_deleted", {"op_id": op_id})
-    again = _structured(resp)
+    again = api_sync.mcp_tool("restore_deleted", {"op_id": op_id})["structuredContent"]
     assert again["notes"] == 0 and again["attachments"] == 0, again
