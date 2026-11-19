@@ -2627,9 +2627,10 @@ defmodule Engram.Attachments do
   # compat(plugin): moved_folder_feed - remove when plugin floor reaches WriteStop.s4_plugin/0 (#2523)
   @doc """
   The moved-folder feed's attachment leg (S6 step 6), the twin of
-  `Engram.Notes.list_moved_changes/4`, for clients older than the S4 plugin
-  (`Engram.Sync.moved_feed?/1`), which key attachments by path and learn
-  nothing from `folder_changed`. For each folder moved without a cascade
+  `Engram.Notes.list_moved_changes/4`, for clients below
+  `Engram.Folders.WriteStop.s4_plugin/0` (`Engram.Sync.moved_feed?/1`), a
+  sentinel today, so every released plugin: they key attachments by path
+  and do not apply a move from `folder_changed`. For each folder moved without a cascade
   past the cursor, in id order at the folder's seq: every live attachment
   under it not written since the move and shown elsewhere than it is
   stored (`Location`), as a delete at its stored path then an upsert at its

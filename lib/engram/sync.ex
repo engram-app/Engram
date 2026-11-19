@@ -111,7 +111,8 @@ defmodule Engram.Sync do
       )
 
     # The moved-folder feed (`moved_feed?/1`), a third feed under the same
-    # watermark. `moved: false` (the S4 plugin) reads nothing.
+    # watermark. `moved: false` (a plugin at or past `WriteStop.s4_plugin/0`,
+    # a sentinel today, so no released plugin) reads nothing.
     #
     # Read after the other two, so its share of the page is known before any
     # of its bodies is read (`room/6`): one row and byte budget per page.
