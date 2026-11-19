@@ -493,7 +493,8 @@ defmodule Engram.Notes do
   def mint_id, do: UUIDv7.generate()
 
   # The folder row must exist before the note row that names it, in the same
-  # transaction. Returns the folder's id (nil at the root): every note writer
+  # transaction. Returns the folder's id (the root row's at the root, S6 step
+  # 1b, `Rows.ensure_root/2`): every note writer
   # that sets a path puts it in `folder_ref_id` in the same write (there is
   # no `notes_set_folder_ref` trigger since R9 release D).
   # Tombstones do not set it: they are deleted rows, no reader looks at their
@@ -503,7 +504,7 @@ defmodule Engram.Notes do
   # (`Rows.ensure/4` is safe against that race anyway). The stored `folder_*`
   # columns stay authoritative and are still written.
   defp ensure_folder_row!(user, vault_id, folder) do
-    {:ok, id} = Rows.ensure(user, vault_id, folder)
+    {:ok, id} = Rows.ensure(user, vault_id, folder, root: true)
     id
   end
 
@@ -6104,7 +6105,7 @@ defmodule Engram.Notes do
     {:ok, refs} =
       Repo.with_tenant(user.id, fn ->
         :ok = Engram.Vaults.lock_seq!(vault.id)
-        {:ok, refs} = Rows.ensure_all(user, vault.id, folders)
+        {:ok, refs} = Rows.ensure_all(user, vault.id, folders, root: true)
         refs
       end)
 
@@ -9329,7 +9330,8 @@ defmodule Engram.Notes do
                   Rows.ensure_all(
                     user,
                     vault.id,
-                    Enum.map(updates, fn {_n, _old, _new, folder, _t} -> folder end)
+                    Enum.map(updates, fn {_n, _old, _new, folder, _t} -> folder end),
+                    root: true
                   )
 
                 # Each moved note names its folder row in the same statement;
@@ -10040,7 +10042,7 @@ defmodule Engram.Notes do
         %{}
       else
         :ok = Engram.Vaults.lock_seq!(vault.id)
-        {:ok, refs} = Rows.ensure_all(user, vault.id, folders)
+        {:ok, refs} = Rows.ensure_all(user, vault.id, folders, root: true)
         refs
       end
 

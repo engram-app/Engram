@@ -95,6 +95,27 @@ defmodule Engram.Folders.Rows do
   @spec root_id(Ecto.UUID.t()) :: Ecto.UUID.t()
   def root_id(vault_id), do: vault_id
 
+  # The release holding the root-row readers (S6 step 1a, #2641). SENTINEL
+  # that no floor reaches, so root writes stay off whatever the floor says
+  # until the floor-raise PR sets this to 1a's real tag, lists 2641's merge
+  # commit in `priv/release_floor_contains`, and flips
+  # `Engram.Folders.RootRefsFloorTest` to assert (as 2630 did for S5).
+  @root_reads_release "release-v999.0.0"
+
+  @doc "The first release whose readers take a root-row reference: the rollback floor must reach it."
+  @spec root_reads_release() :: String.t()
+  def root_reads_release, do: @root_reads_release
+
+  @doc """
+  Whether note writers (and the `RootRefs` ledger) write root-row
+  references: only once the rollback floor reaches `root_reads_release/0`,
+  so no rollback lands on a release that does not read them. `:assume`
+  (test config) skips the floor.
+  """
+  @spec root_writes?(:assume | :enforce) :: boolean()
+  def root_writes?(mode \\ Application.get_env(:engram, :root_refs_floor, :enforce)),
+    do: mode == :assume or Engram.Release.Floor.at_least?(@root_reads_release)
+
   @doc """
   A folder reference as listings and the wire show it: nil at the root,
   whether the row names the root row (`root_id/1`) or nothing.
@@ -171,8 +192,8 @@ defmodule Engram.Folders.Rows do
 
   @doc """
   Finds or creates the live folder row for `folder` ("A/B/C") in `vault_id`,
-  creating missing ancestors, and returns the leaf's id. The root ("") has no
-  row: `{:ok, nil}`.
+  creating missing ancestors, and returns the leaf's id. The root (""):
+  `{:ok, nil}`, or its row (`ensure_root/2`) with `root: true`.
 
   Safe against a concurrent creator: every insert is `ON CONFLICT DO NOTHING`
   (no error, so no aborted transaction, no savepoint needed) and a lost race
@@ -191,11 +212,42 @@ defmodule Engram.Folders.Rows do
   def ensure(user, vault_id, folder, opts) do
     case normalize(folder) do
       "" ->
-        {:ok, nil}
+        if opts[:root] && root_writes?(), do: ensure_root(user, vault_id), else: {:ok, nil}
 
       path ->
         with {:ok, ids} <- ensure_set(user, vault_id, %{path => Keyword.get(opts, :explicit)}),
              do: {:ok, ids[path]}
+    end
+  end
+
+  @doc """
+  Finds or creates `vault_id`'s root row (`root_id/1`: the vault's id, no
+  parent, the empty name) and returns its id. One `INSERT .. ON CONFLICT DO
+  NOTHING` (the primary key, or the root's slot in `folders_live_name`), so
+  a concurrent creator neither raises nor aborts the transaction. Note
+  writers reach it through `ensure/4` and `ensure_all/4` with `root: true`
+  (S6 step 1b); attachments keep a NULL root reference until their own step.
+  """
+  @spec ensure_root(map(), Ecto.UUID.t()) :: {:ok, Ecto.UUID.t()} | {:error, term()}
+  def ensure_root(user, vault_id) do
+    # The common case, the row exists: one primary-key probe, no encrypt.
+    if Repo.exists?(from(f in Folder, where: f.id == ^root_id(vault_id))),
+      do: {:ok, root_id(vault_id)},
+      else: create_root(user, vault_id)
+  end
+
+  defp create_root(user, vault_id) do
+    with {:ok, dek} <- Crypto.get_dek(user),
+         {:ok, fk} <- Crypto.dek_filter_key(user) do
+      ctx = %{user_id: user.id, vault_id: vault_id, dek: dek, fk: fk}
+      id = root_id(vault_id)
+
+      # No `full_path_hmac`: nothing finds the root by path hash, and a root
+      # note's `folder_hmac` must not look redundant to `NoteFolderHashNull`
+      # (it keeps a root's hash). A DEK rotation re-keys only rows with one.
+      if insert(ctx, id, nil, "", nil, false) == 1, do: put_names(ctx, [{id, ""}], :new)
+
+      {:ok, id}
     end
   end
 
@@ -223,15 +275,25 @@ defmodule Engram.Folders.Rows do
   statements (one read of every path and ancestor, one insert per depth
   level). Rows go in sorted, so two concurrent batches create shared
   ancestors in the same order and cannot deadlock on each other's
-  unique-index entries.
+  unique-index entries. `root: true` maps the root to its row
+  (`ensure_root/2`, after the folders), as `ensure/4`'s option does.
   """
-  @spec ensure_all(map(), Ecto.UUID.t(), [String.t()]) ::
+  @spec ensure_all(map(), Ecto.UUID.t(), [String.t()], keyword()) ::
           {:ok, %{String.t() => Ecto.UUID.t() | nil}} | {:error, term()}
-  def ensure_all(user, vault_id, folders) do
-    with {:ok, ids} <- ensure_set(user, vault_id, Map.new(folders, &{normalize(&1), nil})) do
-      {:ok, Map.new(folders, &{&1, Map.get(ids, normalize(&1))})}
+  def ensure_all(user, vault_id, folders, opts \\ []) do
+    with {:ok, ids} <- ensure_set(user, vault_id, Map.new(folders, &{normalize(&1), nil})),
+         {:ok, root} <- root_ref(user, vault_id, folders, opts) do
+      {:ok, Map.new(folders, &{&1, Map.get(ids, normalize(&1)) || root_of(&1, root)})}
     end
   end
+
+  defp root_ref(user, vault_id, folders, opts) do
+    if opts[:root] && root_writes?() && Enum.any?(folders, &(normalize(&1) == "")),
+      do: ensure_root(user, vault_id),
+      else: {:ok, nil}
+  end
+
+  defp root_of(folder, root), do: if(normalize(folder) == "", do: root)
 
   @doc """
   Makes each `{folder, marker_id}` an explicit folder keeping the marker's UUID

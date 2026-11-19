@@ -59,7 +59,8 @@ defmodule Engram.Folders.WritersSetFolderRefTest do
   end
 
   # Every live note and attachment of the vault names the live folder row at
-  # its decrypted folder (nil at the root), and every attachment's reference
+  # its decrypted folder (at the root: a note the root row, an attachment
+  # nil), and every attachment's reference
   # is stamped current. Vault-wide, so a writer the test drives cannot leave
   # any row it touched behind. Returns the number of rows checked.
   defp assert_refs!(u, v) do
@@ -78,8 +79,8 @@ defmodule Engram.Folders.WritersSetFolderRefTest do
         aad = if Crypto.aad_bound?(ver), do: Crypto.aad_for_row(:notes, :folder, id), else: <<>>
         {:ok, folder} = Envelope.decrypt(ct, nonce, dek, aad)
 
-        assert (ref && Ecto.UUID.load!(ref)) == ref_at.(folder),
-               "note #{id} in #{inspect(folder)}"
+        want = if folder == "", do: Engram.Folders.Rows.root_id(v.id), else: ref_at.(folder)
+        assert (ref && Ecto.UUID.load!(ref)) == want, "note #{id} in #{inspect(folder)}"
       end
 
     atts =

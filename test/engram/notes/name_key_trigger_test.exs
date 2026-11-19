@@ -38,8 +38,13 @@ defmodule Engram.Notes.NameKeyTriggerTest do
     assert key == ci <> ref
   end
 
-  test "a root note has none", %{user: u, vault: v} do
-    assert {nil, _, nil} = row(note!(u, v, "top.md").id)
+  test "a root note keys on the root row; with no reference it has none", %{user: u, vault: v} do
+    note = note!(u, v, "top.md")
+    {key, ci, ref} = row(note.id)
+    assert ref == Ecto.UUID.dump!(v.id) and key == ci <> ref
+
+    Repo.query!("UPDATE notes SET folder_ref_id = NULL WHERE id = $1", [Ecto.UUID.dump!(note.id)])
+    assert {nil, _, nil} = row(note.id)
   end
 
   test "a stale name stamp clears it, a fresh one sets it again", %{user: u, vault: v} do
