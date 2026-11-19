@@ -221,17 +221,40 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
     ids = [Ecto.UUID.dump!(v.id)]
     owners = [Ecto.UUID.dump!(u.id)]
 
-    unmatched =
-      QueryPlan.rls_plans(u.id, FolderMarkerDelete.unmatched_sql(), [ids, owners],
-        role: "engram_maintenance"
-      )
+    # As analyzed, and with the path hash costed as unselective (the shape
+    # #2652's CI hit: the planner left `folders_full_path` for the explicit
+    # partial index, and with only `vault_id` bound read it as a skip scan
+    # over every tenant).
+    plans =
+      for shape <- [:analyzed, :unselective_path_hash] do
+        if shape == :unselective_path_hash do
+          Repo.query!("ALTER TABLE folders ALTER COLUMN full_path_hmac SET (n_distinct = 1)")
+          Repo.query!("ANALYZE folders")
+        end
 
-    for plan <- [unmatched.custom, unmatched.generic] do
+        QueryPlan.rls_plans(u.id, FolderMarkerDelete.unmatched_sql(), [ids, owners],
+          role: "engram_maintenance"
+        )
+      end
+
+    for unmatched <- plans, plan <- [unmatched.custom, unmatched.generic] do
       assert plan =~ "notes_user_vault_folder_marker", plan
       refute plan =~ "notes_user_vault_live", plan
-      # The folder probe: by path hash, or the live explicit rows of the
-      # vault (both bounded by the vault; the planner picks by statistics).
-      assert plan =~ ~r/folders_(full_path|explicit_live)/, plan
+      # The folder probe: by path hash, or the vault's explicit rows (both
+      # bounded by the vault; the planner picks by statistics). On
+      # `folders_explicit_user_vault` both key columns must be conditions: a
+      # `vault_id`-only condition on it is a skip scan over every tenant
+      # (#2652's CI after #2639 added the index).
+      assert plan =~ ~r/folders_(full_path|explicit_vault_live|explicit_user_vault)\b/, plan
+
+      for [cond] <-
+            Regex.scan(
+              ~r/folders_explicit_user_vault on folders[^\n]*\n\s*Index Cond: ([^\n]*)/,
+              plan,
+              capture: :all_but_first
+            ),
+          do: assert(cond =~ "user_id =" and cond =~ "vault_id =", cond <> "\n" <> plan)
+
       refute plan =~ ~r/Seq Scan on (notes|folders)/, plan
     end
   end

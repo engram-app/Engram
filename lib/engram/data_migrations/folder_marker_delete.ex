@@ -159,8 +159,8 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
     ON m.user_id = v.user_id AND m.vault_id = v.id AND m.kind = 'folder' AND m.deleted_at IS NULL
   WHERE NOT EXISTS (
     SELECT 1 FROM folders AS f
-    WHERE f.vault_id = m.vault_id AND f.full_path_hmac = m.folder_hmac
-      AND f.deleted_at IS NULL AND f.explicit)
+    WHERE f.user_id = m.user_id AND f.vault_id = m.vault_id
+      AND f.full_path_hmac = m.folder_hmac AND f.deleted_at IS NULL AND f.explicit)
   GROUP BY m.vault_id
   """
 
@@ -170,7 +170,7 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   # snapshot.
   @delete_sql """
   WITH m AS MATERIALIZED (
-    SELECT n.id, n.vault_id, n.folder_hmac FROM notes AS n
+    SELECT n.id, n.user_id, n.vault_id, n.folder_hmac FROM notes AS n
     WHERE n.id = ANY($1) AND n.kind = 'folder' AND n.deleted_at IS NULL
       AND n.vault_id = ANY($2)
     ORDER BY n.id
@@ -178,7 +178,8 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   ), stamp AS (
     UPDATE folders AS f SET explicit_seq = 0
     FROM m
-    WHERE f.vault_id = m.vault_id AND f.full_path_hmac = m.folder_hmac
+    WHERE f.user_id = m.user_id AND f.vault_id = m.vault_id
+      AND f.full_path_hmac = m.folder_hmac
       AND f.deleted_at IS NULL AND f.explicit AND f.explicit_seq IS NULL
     RETURNING f.id
   )
