@@ -35,6 +35,15 @@ defmodule Engram.Folders.WriteStopFloorTest do
     refute Sync.moved_feed?(WriteStop.s4_plugin())
   end
 
+  # Lowering s4_plugin turns the moved-folder feed off for real clients, so
+  # it needs a plugin proven to apply such moves (moduledoc preconditions).
+  test "s4_plugin stays the sentinel until a folder-move plugin is verified" do
+    case WriteStop.verified_folder_move_plugin() do
+      nil -> assert WriteStop.s4_plugin() == "999.0.0"
+      v -> assert Version.compare(WriteStop.s4_plugin(), v) != :lt
+    end
+  end
+
   test "a client with no readable version gets the moved-folder feed" do
     assert Sync.moved_feed?(nil)
     assert Sync.moved_feed?("not-a-version")
