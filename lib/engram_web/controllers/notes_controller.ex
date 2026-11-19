@@ -48,11 +48,22 @@ defmodule EngramWeb.NotesController do
   # A client file time out of range is the caller's error: a 422 here, the
   # one strict check (`Engram.FileTime`); every write behind it is lenient.
   def upsert(conn, params) do
-    case FileTime.check(params, ~w(mtime ctime)) do
-      :ok -> write_upsert(conn, params)
-      {:error, name} -> conn |> put_status(422) |> json(%{error: "#{name} is out of range"})
+    with :ok <- rest_write_budget(conn),
+         :ok <- FileTime.check(params, ~w(mtime ctime)) do
+      write_upsert(conn, params)
+    else
+      {:error, {:rate_limited, retry_after_ms}} ->
+        EngramWeb.Plugs.Halt.rate_limited(conn, retry_after_ms)
+
+      {:error, name} ->
+        conn |> put_status(422) |> json(%{error: "#{name} is out of range"})
     end
   end
+
+  # API-key callers are already bounded by `api_rps_cap`; this covers the
+  # session / device-token callers a client bug can loop.
+  defp rest_write_budget(%{assigns: %{current_api_key: _}}), do: :ok
+  defp rest_write_budget(conn), do: SyncRateLimit.check_rest_write(conn.assigns.current_user.id)
 
   defp write_upsert(conn, params) do
     content = params["content"] || params[:content] || ""
