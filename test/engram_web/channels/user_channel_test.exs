@@ -25,6 +25,19 @@ defmodule EngramWeb.UserChannelTest do
   end
 
   describe "join/3" do
+    test "a quarantined account is refused with account_paused, and admitted again after a lift" do
+      user = insert(:user)
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      :ok = Engram.Admin.ClientLocks.quarantine_user(user.id, "r", 3600)
+      {:ok, socket} = connect_as(user)
+
+      assert {:error, %{reason: "account_paused"}} =
+               subscribe_and_join(socket, "user:#{user.id}", %{})
+
+      :ok = Engram.Admin.ClientLocks.lift_quarantine(user.id)
+      assert {:ok, _, _} = subscribe_and_join(socket, "user:#{user.id}", %{})
+    end
+
     test "replies with the user's plan state" do
       free_user = insert(:user)
       {:ok, free_user} = Engram.Crypto.ensure_user_dek(free_user)
@@ -46,6 +59,7 @@ defmodule EngramWeb.UserChannelTest do
       {:ok, reply, _socket} = subscribe_and_join(socket, "user:#{user.id}", %{})
 
       assert reply.features == %{
+               plugin_floor: %{min_version: "1.36.0", update_to: "1.36.0"},
                raw_attachment_upload: true,
                raw_attachment_download: true,
                crdt_diff_refusal: true,

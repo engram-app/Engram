@@ -24,7 +24,7 @@ defmodule Engram.Admin.ClientLocksTest do
         to,
         exp,
         reason,
-        [highest_published: "1.99.0", by: "t"] ++ extra
+        [by: "t"] ++ extra
       )
   end
 
@@ -33,6 +33,8 @@ defmodule Engram.Admin.ClientLocksTest do
   end
 
   setup %{conn: conn} do
+    Application.put_env(:engram, :plugin_manifest_fetcher, fn -> {:ok, "1.99.0"} end)
+    on_exit(fn -> Application.delete_env(:engram, :plugin_manifest_fetcher) end)
     ServiceConfig.put_override(:service_overrides_enabled, true)
     Cache.clear_local(:service_overrides)
     Cache.clear_local(:service_overrides_last_good)
@@ -157,9 +159,7 @@ defmodule Engram.Admin.ClientLocksTest do
     test "HTTP body, socket-join body and features payload all report the lock's min and update_to",
          %{conn: conn, user: user} do
       :ok =
-        ClientLocks.lock_plugin_version("1.98.0", "1.99.0", 3600, "r",
-          highest_published: "1.99.0"
-        )
+        ClientLocks.lock_plugin_version("1.98.0", "1.99.0", 3600, "r")
 
       http = conn |> get_folders("1.50.0") |> json_response(426)
 
@@ -180,9 +180,7 @@ defmodule Engram.Admin.ClientLocksTest do
 
       # Change the floor: every surface moves together.
       :ok =
-        ClientLocks.lock_plugin_version("1.97.0", "1.97.5", 3600, "r",
-          highest_published: "1.99.0"
-        )
+        ClientLocks.lock_plugin_version("1.97.0", "1.97.5", 3600, "r")
 
       http = conn |> get_folders("1.50.0") |> json_response(426)
       assert {:error, sock} = Engram.ClientGate.check(user, "1.50.0", false)
@@ -224,24 +222,76 @@ defmodule Engram.Admin.ClientLocksTest do
       assert ClientLocks.list_locks().plugin_floor.set? == false
     end
 
-    test "refuses an update_to above the highest published release unless confirmed" do
-      assert {:error, {:update_to_not_verified_published, "1.40.0", :pass_confirm_true}} =
-               ClientLocks.lock_plugin_version("1.99.0", "1.99.0", 60, "r",
-                 highest_published: "1.40.0"
-               )
+    test "refuses an update_to above the PUBLISHED manifest version (not operator input) unless confirmed" do
+      Application.put_env(:engram, :plugin_manifest_fetcher, fn -> {:ok, "1.40.0"} end)
 
-      assert {:error, {:update_to_not_verified_published, nil, _}} =
+      assert {:error, {:update_to_not_verified_published, {:above, "1.40.0"}, :pass_confirm_true}} =
                ClientLocks.lock_plugin_version("1.99.0", "1.99.0", 60, "r")
 
-      assert :ok =
+      # The operator cannot vouch for themselves: an extra opt changes nothing.
+      assert {:error, _} =
                ClientLocks.lock_plugin_version("1.99.0", "1.99.0", 60, "r",
-                 highest_published: "1.40.0",
-                 confirm: true
+                 highest_published: "1.99.0"
                )
+
+      assert :ok = ClientLocks.lock_plugin_version("1.99.0", "1.99.0", 60, "r", confirm: true)
+    end
+
+    test "an unreachable manifest needs confirm" do
+      Application.put_env(:engram, :plugin_manifest_fetcher, fn -> {:error, :nxdomain} end)
+
+      assert {:error, {:update_to_not_verified_published, {:error, :nxdomain}, _}} =
+               ClientLocks.lock_plugin_version("1.99.0", "1.99.0", 60, "r")
+
+      assert :ok = ClientLocks.lock_plugin_version("1.99.0", "1.99.0", 60, "r", confirm: true)
+    end
+
+    test "a lock that re-enables a switched-off kill switch says so in the audit line" do
+      :ok = ServiceConfig.override(:plugin_floor_enabled, false)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          :ok = ClientLocks.lock_plugin_version("1.99.0", "1.99.0", 60, "r")
+        end)
+
+      assert log =~ "reenabled_kill_switch=true"
+    end
+  end
+
+  describe "real override path (no per-process stubbing of the floor)" do
+    test "ServiceConfig.override -> effective_minimum -> 426 over HTTP", %{conn: conn} do
+      exp = DateTime.utc_now() |> DateTime.add(600, :second) |> DateTime.to_iso8601()
+      lock = %{"min" => "1.97.0", "update_to" => "1.98.0", "expires_at" => exp, "reason" => "r"}
+
+      assert :ok = ServiceConfig.override(:plugin_floor, lock, by: "t")
+      assert %{min: "1.97.0", show: "1.98.0"} = Engram.PluginVersion.effective_minimum()
+
+      assert %{"min_version" => "1.97.0", "update_to" => "1.98.0"} =
+               conn |> get_folders("1.50.0") |> json_response(426)
+
+      assert :ok = ServiceConfig.clear(:plugin_floor)
+      assert %{min: "1.36.0"} = Engram.PluginVersion.effective_minimum()
+    end
+
+    test "an invalid lock value is rejected at write time" do
+      assert {:error, {:invalid_value, :plugin_floor, _}} =
+               ServiceConfig.override(:plugin_floor, %{"min" => "nope"})
     end
   end
 
   describe "quarantine" do
+    test "the +61 s job drops sockets only while still quarantined", ctx do
+      :ok = ClientLocks.quarantine_user(ctx.user.id, "r", 3600)
+      EngramWeb.Endpoint.subscribe("user_socket:#{ctx.user.id}")
+      assert :ok = perform_job(Engram.Workers.QuarantineDisconnect, %{user_id: ctx.user.id})
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+
+      :ok = ClientLocks.lift_quarantine(ctx.user.id)
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+      assert :ok = perform_job(Engram.Workers.QuarantineDisconnect, %{user_id: ctx.user.id})
+      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 200
+    end
+
     test "refuses with account_paused, still stamps activity, and lifts on the next request",
          ctx do
       assert is_nil(Engram.UsageMeters.last_active_at(ctx.user.id))

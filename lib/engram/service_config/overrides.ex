@@ -61,6 +61,11 @@ defmodule Engram.ServiceConfig.Overrides do
     payload_backfill: :boolean,
     payload_backfill_points_per_min: {:integer, 1..100_000},
     rebuild_max_disk_percent: {:integer, 1..100},
+    # Emergency plugin-version floor (`Engram.PluginVersion.effective_minimum/0`)
+    # and its kill switch (absent = on; false = every lock is ignored). The lock
+    # value is a validated JSON map, never free-form.
+    plugin_floor: :plugin_lock,
+    plugin_floor_enabled: :boolean,
     file_times_backfill: :boolean,
     folder_table_backfill: :boolean,
     # S6 step 4 reconcile of `folders.explicit` against the markers

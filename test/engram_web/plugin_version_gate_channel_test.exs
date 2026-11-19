@@ -220,6 +220,8 @@ defmodule EngramWeb.PluginVersionGateChannelTest do
     alias Engram.Admin.ClientLocks
 
     setup do
+      Application.put_env(:engram, :plugin_manifest_fetcher, fn -> {:ok, "1.99.0"} end)
+      on_exit(fn -> Application.delete_env(:engram, :plugin_manifest_fetcher) end)
       Engram.ServiceConfig.put_override(:service_overrides_enabled, true)
       Engram.Cache.clear_local(:service_overrides)
       on_exit(fn -> Engram.Cache.clear_local(:service_overrides) end)
@@ -227,9 +229,7 @@ defmodule EngramWeb.PluginVersionGateChannelTest do
 
     test "a lock refuses an at-compile-floor plugin at join, a lift admits it", ctx do
       :ok =
-        ClientLocks.lock_plugin_version("1.99.0", "1.99.0", 3600, "r",
-          highest_published: "1.99.0"
-        )
+        ClientLocks.lock_plugin_version("1.99.0", "1.99.0", 3600, "r")
 
       assert {:error,
               %{reason: "plugin_upgrade_required", min_version: "1.99.0", update_to: "1.99.0"}} =

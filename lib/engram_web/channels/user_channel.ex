@@ -82,7 +82,13 @@ defmodule EngramWeb.UserChannel do
       # exemption on the HTTP side and gets none here. (#1435)
       # A revoked grant is refused even if its disconnect broadcast never
       # reached this socket (`ChannelGate.vault_scope/1`).
+      # A quarantined account holds no `user:` socket either. This channel
+      # carries no note content, but it is the plan/vault event feed and a
+      # dropped abuser would otherwise just reconnect here. A lift drops the
+      # paused sockets (`ClientLocks.lift_quarantine/2`), so the client rejoins
+      # and is admitted at once.
       with :ok <- ChannelGate.check_not_deleted(user),
+           :ok <- Engram.ClientGate.paused(user),
            scope when scope != :revoked <- ChannelGate.vault_scope(socket.assigns) do
         # Every client idles on this topic, so it is where a runtime floor
         # change reaches live sockets (`Engram.Admin.ClientLocks`).

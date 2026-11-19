@@ -3,15 +3,16 @@ defmodule Engram.Admin.ClientLocks do
   Operator commands to lock down a bad plugin version or quarantine one user,
   and to REVERSE both. Callable from a release shell:
 
-      bin/engram rpc 'Engram.Admin.ClientLocks.lock_plugin_version("1.41.0", "1.41.0", 86_400, "1.40.x floods /api/logs", by: "todd", highest_published: "1.41.0")'
+      bin/engram rpc 'Engram.Admin.ClientLocks.lock_plugin_version("1.41.0", "1.41.0", 86_400, "1.40.x floods /api/logs", by: "todd")'
       bin/engram rpc 'Engram.Admin.ClientLocks.lift_plugin_lock(by: "todd")'
       bin/engram rpc 'Engram.Admin.ClientLocks.quarantine_user("<uuid>", "log loop", 3600, by: "todd")'
       bin/engram rpc 'Engram.Admin.ClientLocks.lift_quarantine("<uuid>", by: "todd")'
       bin/engram rpc 'Engram.Admin.ClientLocks.list_locks()'
 
-  Find `highest_published` with
-  `gh release list -R engram-app/Engram-obsidian --limit 5` (dev box only,
-  never at request time).
+  `update_to` is checked against the plugin repo's published manifest
+  (`latest_published/0`, fetched at command time, never on a request): above
+  it, or an unreachable manifest, needs `confirm: true`. The operator's own
+  input is never the reference.
 
   ## Reversal is first class
 
@@ -77,6 +78,8 @@ defmodule Engram.Admin.ClientLocks do
       "reason" => reason
     }
 
+    switch_was_off = ServiceConfig.get(:plugin_floor_enabled, true) != true
+
     with :ok <- check_expiry(expires_in_s),
          {:ok, lock} <- valid_lock(value),
          :ok <- above_compiled(lock.min),
@@ -88,6 +91,7 @@ defmodule Engram.Admin.ClientLocks do
         update_to: update_to,
         expires_in_s: expires_in_s,
         reason: reason,
+        reenabled_kill_switch: switch_was_off,
         by: opts[:by]
       )
 
@@ -214,20 +218,50 @@ defmodule Engram.Admin.ClientLocks do
   end
 
   # A floor above every release that exists bricks every client with nothing
-  # to install. `highest_published` comes from the operator (see moduledoc);
-  # without it, or above it, the lock needs `confirm: true`.
+  # to install. The reference is the plugin repo's manifest, NOT operator
+  # input; above it, or unverifiable, the lock needs `confirm: true`.
   defp published(update_to, opts) do
-    ok? =
-      case opts[:highest_published] do
-        nil -> false
-        hp -> match?({:ok, _}, Version.parse(hp)) and Version.compare(update_to, hp) != :gt
+    verified =
+      with {:ok, latest} <- latest_published(),
+           {:ok, latest_v} <- Version.parse(latest) |> ok_or(:unparseable_manifest_version) do
+        if Version.compare(update_to, latest_v) == :gt, do: {:above, latest}, else: :ok
       end
 
-    if ok? or opts[:confirm] == true,
-      do: :ok,
-      else:
-        {:error,
-         {:update_to_not_verified_published, opts[:highest_published], :pass_confirm_true}}
+    case {verified, opts[:confirm] == true} do
+      {:ok, _} -> :ok
+      {_, true} -> :ok
+      {why, false} -> {:error, {:update_to_not_verified_published, why, :pass_confirm_true}}
+    end
+  end
+
+  defp ok_or({:ok, _} = ok, _), do: ok
+  defp ok_or(_, reason), do: {:error, reason}
+
+  @manifest_url "https://raw.githubusercontent.com/engram-app/Engram-obsidian/main/manifest.json"
+
+  @doc """
+  The newest published plugin version (the plugin repo's `manifest.json`, which
+  release-please bumps on release). Operator-command time only; never called on
+  a request path. Swappable via `:plugin_manifest_fetcher` for tests.
+  """
+  @spec latest_published() :: {:ok, String.t()} | {:error, term()}
+  def latest_published do
+    case Application.get_env(:engram, :plugin_manifest_fetcher) do
+      fun when is_function(fun, 0) -> fun.()
+      nil -> fetch_manifest()
+    end
+  end
+
+  defp fetch_manifest do
+    with {:ok, %{status: 200, body: body}} <-
+           Req.get(@manifest_url, receive_timeout: 5_000, retry: false, decode_body: false),
+         {:ok, %{"version" => v}} when is_binary(v) <- Jason.decode(body) do
+      {:ok, v}
+    else
+      other -> {:error, {:manifest_unavailable, Metadata.safe_reason(other)}}
+    end
+  rescue
+    e -> {:error, {:manifest_unavailable, Metadata.safe_reason(e)}}
   end
 
   defp recheck(min) do
