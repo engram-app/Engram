@@ -38,4 +38,11 @@ defmodule EngramWeb.Plugs.TraceUserAttrsTest do
 
     assert String.length(v) == 32
   end
+
+  test "drops a non-ASCII value instead of letting one grapheme carry many bytes" do
+    combining = "a" <> String.duplicate("\u0301", 2_000)
+    conn = build_conn() |> Plug.Conn.assign(:plugin_version, combining)
+
+    refute List.keyfind(TraceUserAttrs.attrs_for(conn), "plugin.version", 0)
+  end
 end

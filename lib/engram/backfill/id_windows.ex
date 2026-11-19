@@ -507,7 +507,9 @@ defmodule Engram.Backfill.IdWindows do
   @doc """
   Drops the cursor of the walk `name`: its next `heal_pass/4` starts over. A
   pass already running when this lands does not save its cursor or report
-  `:done` (its generation moved).
+  `:done` (its generation moved). It also clears the walk's dirty-walk count
+  (`@dirty_walk_warn`): a reopen is new work, not a walk failing to converge.
+  The unsaved-pass count survives it, since those resets are what it counts.
   """
   @spec reset_walk(String.t()) :: :ok
   def reset_walk(name),

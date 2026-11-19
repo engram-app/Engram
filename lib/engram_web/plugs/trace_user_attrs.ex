@@ -36,11 +36,12 @@ defmodule EngramWeb.Plugs.TraceUserAttrs do
 
   @max_client_attr 32
 
-  # Client-supplied strings: valid UTF-8 and capped so a hostile header cannot
-  # bloat the span.
+  # Client-supplied strings: printable ASCII only (versions and device ids
+  # are), capped at @max_client_attr BYTES so a hostile header cannot bloat the
+  # span. A grapheme cap let one grapheme carry thousands of combining marks.
   defp maybe_client(attrs, key, value) when is_binary(value) do
-    if String.valid?(value),
-      do: [{key, String.slice(value, 0, @max_client_attr)} | attrs],
+    if value =~ ~r/\A[\x21-\x7e]+\z/,
+      do: [{key, binary_part(value, 0, min(byte_size(value), @max_client_attr))} | attrs],
       else: attrs
   end
 

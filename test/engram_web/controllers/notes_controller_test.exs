@@ -341,8 +341,8 @@ defmodule EngramWeb.NotesControllerTest do
       assert conn |> delete("/api/notes/Lean/Gone.md") |> json_response(200)
 
       resp = push(conn, %{path: "Lean/Gone.md", content: "# Gone", mtime: 1.0})
-      # Delete-wins (recently_deleted) or a full create, never a lean reply.
-      refute resp.status == 200 and not Map.has_key?(json_response(resp, 200)["note"], "title")
+      # Delete-wins: the same body re-pushed seconds after a delete is refused.
+      assert json_response(resp, 409) == %{"conflict" => true, "reason" => "recently_deleted"}
     end
 
     test "force: true is never lean", %{user: user, vault: vault} do

@@ -108,6 +108,11 @@ defmodule Engram.Admin.ClientLocks do
     if previous[:min], do: recheck(previous.min), else: :ok
   end
 
+  @doc """
+  Quarantines `user_id` for `expires_in_s`. `{:error, {:second_disconnect_not_scheduled, id}}`
+  means the quarantine IS applied and the first disconnect ran; only the +61 s
+  drop is missing. Re-running the call is safe (idempotent) and schedules it.
+  """
   @spec quarantine_user(Ecto.UUID.t(), String.t(), pos_integer(), keyword()) ::
           :ok | {:error, term()}
   def quarantine_user(user_id, reason, expires_in_s, opts \\ []) do
