@@ -254,7 +254,11 @@ defmodule Engram.Admin.ClientLocks do
 
   defp fetch_manifest do
     with {:ok, %{status: 200, body: body}} <-
-           Req.get(@manifest_url, receive_timeout: 5_000, retry: false, decode_body: false),
+           Req.get(
+             @manifest_url,
+             [receive_timeout: 5_000, retry: false, decode_body: false] ++
+               Application.get_env(:engram, :plugin_manifest_req_options, [])
+           ),
          {:ok, %{"version" => v}} when is_binary(v) <- Jason.decode(body) do
       {:ok, v}
     else

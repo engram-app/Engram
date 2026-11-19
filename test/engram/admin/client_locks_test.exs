@@ -202,6 +202,43 @@ defmodule Engram.Admin.ClientLocksTest do
     end
   end
 
+  describe "manifest fetch over HTTP (Req.Test)" do
+    setup do
+      Application.delete_env(:engram, :plugin_manifest_fetcher)
+      Application.put_env(:engram, :plugin_manifest_req_options, plug: {Req.Test, ClientLocks})
+
+      on_exit(fn ->
+        Application.delete_env(:engram, :plugin_manifest_req_options)
+      end)
+    end
+
+    test "success reads the manifest version" do
+      Req.Test.stub(ClientLocks, &Plug.Conn.send_resp(&1, 200, ~s({"version":"1.99.0"})))
+      assert {:ok, "1.99.0"} = ClientLocks.latest_published()
+      assert :ok = ClientLocks.lock_plugin_version("1.99.0", "1.99.0", 60, "r")
+    end
+
+    test "timeout, non-200 and garbage bodies are unverifiable and need confirm" do
+      stubs = [
+        &Req.Test.transport_error(&1, :timeout),
+        &Plug.Conn.send_resp(&1, 404, "not found"),
+        &Plug.Conn.send_resp(&1, 200, "<html>not json</html>"),
+        &Plug.Conn.send_resp(&1, 200, ~s({"nope":1}))
+      ]
+
+      for stub <- stubs do
+        Req.Test.stub(ClientLocks, stub)
+        assert {:error, {:manifest_unavailable, _}} = ClientLocks.latest_published()
+
+        assert {:error, {:update_to_not_verified_published, {:error, _}, :pass_confirm_true}} =
+                 ClientLocks.lock_plugin_version("1.99.0", "1.99.0", 60, "r")
+
+        assert :ok = ClientLocks.lock_plugin_version("1.99.0", "1.99.0", 60, "r", confirm: true)
+        :ok = ClientLocks.lift_plugin_lock()
+      end
+    end
+  end
+
   describe "guards" do
     test "refuses update_to below min, missing expiry, bad reason, min at or below the compile floor" do
       assert {:error, _} =
