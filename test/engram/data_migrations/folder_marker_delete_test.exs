@@ -67,6 +67,36 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
     assert explicit(u, v) == ["A", "B/C"]
   end
 
+  # The marker match is by path hash (`full_path_hmac = folder_hmac`), and
+  # #2645 stops writing folder hashes once a vault's markers are gone. A
+  # release that still writes markers (D, after a rollback) can put a marker
+  # on an existing hashless row; `Rows.ensure` writes the marker's hash onto
+  # that row (#2639), so the delete matches it.
+  test "a marker on a hashless folder row takes its hash and is deleted", %{user: u, vault: v} do
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "H/n.md", "content" => "x"}, actor: "api")
+    row = FolderRows.tree(u)["H"].id
+    Repo.query!("UPDATE folders SET full_path_hmac = NULL WHERE id = $1", [Ecto.UUID.dump!(row)])
+
+    # Markers still written (the stop off: release D's writer).
+    {:ok, _} = Folders.create_markers(u, v, ["H"])
+
+    assert [[row_hash, marker_hash]] =
+             Repo.query!(
+               "SELECT f.full_path_hmac, n.folder_hmac FROM folders f, notes n " <>
+                 "WHERE f.id = $1 AND n.vault_id = f.vault_id AND n.kind = 'folder' " <>
+                 "AND n.deleted_at IS NULL",
+               [Ecto.UUID.dump!(row)]
+             ).rows
+
+    assert is_binary(marker_hash)
+    assert row_hash == marker_hash
+
+    stop_on!()
+    assert until_done(FolderMarkerDelete) == :done
+    assert markers(v) == 0
+    assert explicit(u, v) == ["H"]
+  end
+
   test "a vault with a live marker but no explicit row is not touched", %{user: u, vault: v} do
     {:ok, _} = Folders.create_markers(u, v, ["X", "Y"])
 
