@@ -317,9 +317,20 @@ defmodule Engram.Backfill.IdWindows do
   # not the walk; the runner's Oban job timeout is 30 min for every ledger
   # migration together.
   @pass_budget_ms 240_000
-  # A walk spanning more passes than this logs a warning per pass: the table
-  # outgrew the budget, and done now takes that many hourly runs.
+  # A walk spanning more passes than this logs a warning per pass that
+  # stopped on its TIME budget: the table outgrew the budget, and done now
+  # takes that many hourly runs. A pass stopped by `:max_fixed` does not
+  # warn: the cap is the caller's chosen pace, so the walk spans
+  # rows / cap passes by design, and a capped pass fixed `max_fixed` rows,
+  # which is progress by definition (the runner's summary line counts it).
   @span_warn_passes 3
+  # A pass stopped by `:max_fixed` is paced on purpose and fixed that many
+  # rows, so it stays quiet until the walk outlasts this many passes
+  # (~7 days of hourly runs): a walk that never converges (a writer keeps
+  # re-creating the rows it fixes) still warns. A cap stop ran a window past
+  # the cursor, so the cursor itself always advances; only the pass count
+  # can show it.
+  @cap_warn_passes 168
   @cursors Engram.Backfill.IdWindows.Cursors
 
   @doc "Default `:budget_ms` of `heal_pass/4`."
@@ -424,15 +435,20 @@ defmodule Engram.Backfill.IdWindows do
     end
   end
 
-  defp stopped(name, passes, stop, more) do
-    spanning(name, passes)
-    if stop == :budget, do: {:more, more ++ [hit_budget: true]}, else: {:more, more}
+  defp stopped(name, passes, :budget, more) do
+    spanning(name, passes, @span_warn_passes)
+    {:more, more ++ [hit_budget: true]}
+  end
+
+  defp stopped(name, passes, :cap, more) do
+    spanning(name, passes, @cap_warn_passes)
+    {:more, more}
   end
 
   # The walk's reset generation: bumped by every `reset_walk/1`.
   defp gen(cursors, name), do: Map.get(cursors, {:gen, name}, 0)
 
-  defp spanning(name, passes) when passes > @span_warn_passes do
+  defp spanning(name, passes, bound) when passes > bound do
     :telemetry.execute([:engram, :id_windows, :walk_spanning], %{passes: passes}, %{walk: name})
 
     Logger.warning(
@@ -441,7 +457,7 @@ defmodule Engram.Backfill.IdWindows do
     )
   end
 
-  defp spanning(_name, _passes), do: :ok
+  defp spanning(_name, _passes, _bound), do: :ok
 
   @doc """
   Drops the cursor of the walk `name`: its next `heal_pass/4` starts over. A

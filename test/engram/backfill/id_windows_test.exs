@@ -93,6 +93,65 @@ defmodule Engram.Backfill.IdWindowsTest do
     assert_received {:spanning, 4}
   end
 
+  # Prod 2026-11-18/19: note_folder_hash_null, capped at 2,000 rows a pass,
+  # fixed ~2,100 rows every hourly pass and still warned "spanned N passes"
+  # (category :oban, the oban-discard alert) from pass 4 on.
+  defp attach_spanning do
+    ref = make_ref()
+    test = self()
+
+    :telemetry.attach(
+      ref,
+      [:engram, :id_windows, :walk_spanning],
+      fn _, %{passes: n}, _, _ -> send(test, {:spanning, n}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(ref) end)
+  end
+
+  # Prod 2026-11-18/19: note_folder_hash_null, capped at 2,000 rows a pass,
+  # fixed ~2,100 rows every hourly pass and still warned "spanned N passes"
+  # (category :oban, the oban-discard alert) from pass 4 on.
+  test "cap-paced with a moving cursor stays quiet" do
+    attach_spanning()
+
+    for _ <- 1..5 do
+      assert {:more, rows: 1} =
+               IdWindows.heal_pass("t", Note, step({1, false}), batch_size: 1, max_fixed: 1)
+    end
+
+    # Five passes of one walk, each resuming at the last one's cursor.
+    assert length(windows() |> Enum.uniq()) == 5
+    refute_received {:spanning, _}
+  end
+
+  # A walk that never converges (a writer re-creates what the walk fixes) must
+  # not hide behind the cap. A cap stop always advances the cursor (it ran a
+  # window past it), so the pass count is the only signal.
+  test "cap-paced past the pass bound warns", %{users: [{u1, [a | _]} | _]} do
+    attach_spanning()
+    cursors = Engram.Backfill.IdWindows.Cursors
+
+    seed = fn passes ->
+      Agent.update(cursors, &Map.put(&1, "t", %{from: {u1, a}, dirty: true, passes: passes}))
+    end
+
+    seed.(167)
+
+    assert {:more, rows: 1} =
+             IdWindows.heal_pass("t", Note, step({1, false}), batch_size: 1, max_fixed: 1)
+
+    refute_received {:spanning, _}
+
+    seed.(168)
+
+    assert {:more, rows: 1} =
+             IdWindows.heal_pass("t", Note, step({1, false}), batch_size: 1, max_fixed: 1)
+
+    assert_received {:spanning, 169}
+  end
+
   test "a fix anywhere in a walk that spans passes keeps it open for a new walk" do
     opts = [batch_size: 1, budget_ms: -1]
 
