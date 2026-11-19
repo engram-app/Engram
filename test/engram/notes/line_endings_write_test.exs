@@ -3,6 +3,8 @@ defmodule Engram.Notes.LineEndingsWriteTest do
   # a canvas write is stored byte-exact.
   use Engram.DataCase, async: true
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.MCP.Handlers
   alias Engram.Notes
   alias Engram.Notes.NoteBody
@@ -72,6 +74,50 @@ defmodule Engram.Notes.LineEndingsWriteTest do
     assert again.content_hash == hash
     assert state_vector(u, note.id) == sv
     assert content(u, v, "Old.md") == "# Old\n\nbody\n"
+  end
+
+  # A note written before LineEndings and never opened in a room since: its doc
+  # and stored hash are still raw CRLF. An identical CRLF push must stay a
+  # no-op (the stored hash is the RAW body's), not rewrite it on every push.
+  test "an identical push of a legacy CRLF-stored note keeps version and seq", %{
+    user: u,
+    vault: v
+  } do
+    crlf = "# Legacy\r\n\r\nbody\r\n"
+    note = write(u, v, "Legacy.md", "# Legacy\n\nbody\n")
+
+    {:ok, %{state: state}} = Engram.Notes.CrdtBridge.merge_plaintext(nil, crlf)
+    {:ok, {ct, nonce}} = Engram.Crypto.encrypt_crdt_state(state, u, note.id)
+    {:ok, raw_hash} = Notes.content_hash(u, crlf)
+
+    {:ok, _} =
+      Engram.Repo.with_tenant(u.id, fn ->
+        Engram.Fixtures.write_note_body!(note.id,
+          crdt_state_ciphertext: ct,
+          crdt_state_nonce: nonce
+        )
+
+        Engram.Repo.update_all(
+          from(n in Engram.Notes.Note, where: n.id == ^note.id),
+          [set: [content_hash: raw_hash]],
+          skip_tenant_check: true
+        )
+      end)
+
+    before =
+      Engram.Repo.with_tenant!(u.id, fn -> Engram.Repo.get!(Engram.Notes.Note, note.id) end)
+
+    assert before.content_hash == raw_hash
+
+    again = write(u, v, "Legacy.md", crlf)
+
+    after_push =
+      Engram.Repo.with_tenant!(u.id, fn -> Engram.Repo.get!(Engram.Notes.Note, note.id) end)
+
+    assert again.version == before.version
+    assert after_push.version == before.version
+    assert after_push.seq == before.seq
+    assert after_push.content_hash == raw_hash
   end
 
   test "edit_note finds a multi-line string in a note that came in as CRLF", %{

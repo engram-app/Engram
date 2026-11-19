@@ -1058,8 +1058,11 @@ defmodule Engram.Notes do
          # The doc (and so the stored content_hash) holds LF for a markdown note
          # (`maybe_merge_crdt`). Hash the same form, or a CRLF body never equals
          # the stored hash: every identical re-push rewrote the row.
-         content = LineEndings.for_path(content, path),
-         {:ok, hash} <- content_hash(user, content) do
+         lf_content = LineEndings.for_path(content, path),
+         {:ok, hash} <- content_hash(user, lf_content),
+         {:ok, pushed} <- pushed_hashes(user, content, lf_content, hash) do
+      content = lf_content
+      opts = Keyword.put(opts, :pushed_hashes, pushed)
       sanitized_path = PathSanitizer.sanitize(path)
       folder = Helpers.extract_folder(sanitized_path)
       now = DateTime.utc_now()
@@ -1361,7 +1364,12 @@ defmodule Engram.Notes do
     cap_check = check_notes_cap(user)
 
     cond do
-      recently_deleted_twin?(user, base_attrs.vault_id, sanitized_path, base_attrs.content_hash) ->
+      recently_deleted_twin?(
+        user,
+        base_attrs.vault_id,
+        sanitized_path,
+        pushed_hashes(base_attrs, Map.get(base_attrs, :embed_opts, []))
+      ) ->
         # Delete-wins race: this is a fresh create (no live path match, no
         # client-id match) at a path an explicit delete tombstoned seconds ago,
         # carrying identical content — i.e. another device re-pushing the note
@@ -3106,6 +3114,23 @@ defmodule Engram.Notes do
     end
   end
 
+  # The hashes that name the pushed body: its LF form first (what a doc
+  # written since LineEndings holds), plus its raw form when that differs. A
+  # CRLF note no room has opened since still holds a raw-CRLF doc and hash, and
+  # an identical push of it must stay a no-op instead of rewriting forever.
+  defp pushed_hashes(_user, raw, raw, hash), do: {:ok, [hash]}
+
+  defp pushed_hashes(user, raw, _lf, hash) do
+    with {:ok, raw_hash} <- content_hash(user, raw), do: {:ok, [hash, raw_hash]}
+  end
+
+  defp pushed_hashes(base_attrs, opts),
+    do: Keyword.get(opts, :pushed_hashes, [base_attrs.content_hash])
+
+  # Whether `stored` is a hash of the pushed body, in either form.
+  defp pushed_hash?(stored, base_attrs, opts),
+    do: is_binary(stored) and stored in pushed_hashes(base_attrs, opts)
+
   # The one definition of "this push changed nothing": the row already held the
   # pushed hash (what `idempotent_repush` returns) and the write was not forced.
   # Both hashes are keyed HMACs of the same LF-normalized, scrubbed text.
@@ -3150,8 +3175,7 @@ defmodule Engram.Notes do
           do: idempotent_repush(existing, base_attrs),
           else: rewrite(existing, base_attrs, user, sanitized_path, folder, opts)
 
-      is_binary(existing.content_hash) and
-        existing.content_hash == base_attrs.content_hash and
+      pushed_hash?(existing.content_hash, base_attrs, opts) and
           not Keyword.get(opts, :force, false) ->
         idempotent_repush(existing, base_attrs)
 
@@ -5002,7 +5026,7 @@ defmodule Engram.Notes do
   # tombstone older than the window returns false, so a genuine re-create at the
   # same path is allowed. Best-effort: a filter-key error falls back to false
   # (never blocks a write on a crypto hiccup).
-  defp recently_deleted_twin?(user, vault_id, path, content_hash) do
+  defp recently_deleted_twin?(user, vault_id, path, content_hashes) do
     case Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
         hmac = Crypto.hmac_field(filter_key, path)
@@ -5013,7 +5037,7 @@ defmodule Engram.Notes do
             where: ^Keys.eq(:path, hmac),
             where:
               n.kind == "note" and not is_nil(n.deleted_at) and
-                n.deleted_at >= ^cutoff and n.content_hash == ^content_hash
+                n.deleted_at >= ^cutoff and n.content_hash in ^content_hashes
           )
         )
 
