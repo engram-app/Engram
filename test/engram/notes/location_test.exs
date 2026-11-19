@@ -208,7 +208,10 @@ defmodule Engram.Notes.LocationTest do
       assert found(u, v, "A/B/x.md") == note.id
     end
 
-    test "get_notes_within (MCP get_notes) resolves each path, the stored path first",
+    # The moved note answers only where it is shown, as `get_note/3` does
+    # (`here/0`): its stale stored path is no hit (e2e run 44284939927 got
+    # the note twice from one batch).
+    test "get_notes_within (MCP get_notes) resolves each path at its shown path only",
          %{user: u, vault: v, note: note} do
       other = note!(u, v, "D/x.md")
       move_folder_row!(u, folder_id(u, v, "A/B"), "C")
@@ -221,7 +224,7 @@ defmodule Engram.Notes.LocationTest do
       assert got == [
                {"D/x.md", other.id},
                {"A/C/x.md", note.id},
-               {"A/B/x.md", note.id},
+               {"A/B/x.md", nil},
                {"nope.md", nil}
              ]
     end
