@@ -145,6 +145,8 @@ defmodule Engram.Admin.ClientLocks do
           )
 
           :ok = SessionInvalidator.disconnect_user(user_id)
+          # The row is committed and the first drop done; a failed repeat is
+          # reported, not raised, so the operator knows the +61 s drop is missing.
           schedule_second_disconnect(user_id)
 
         {:error, cs} ->
@@ -273,12 +275,25 @@ defmodule Engram.Admin.ClientLocks do
   end
 
   defp schedule_second_disconnect(user_id) do
-    {:ok, _} =
-      %{user_id: user_id}
-      |> QuarantineDisconnect.new(schedule_in: @second_disconnect_s)
-      |> Oban.insert()
+    insert = Application.get_env(:engram, :quarantine_job_insert, &Oban.insert/1)
 
-    :ok
+    case %{user_id: user_id}
+         |> QuarantineDisconnect.new(schedule_in: @second_disconnect_s)
+         |> insert.() do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "quarantine second disconnect not scheduled",
+          Metadata.with_category(:error, :oban,
+            user_id: Engram.Crypto.HMAC.hash_user_id(to_string(user_id)),
+            reason: Metadata.safe_reason(reason)
+          )
+        )
+
+        {:error, {:second_disconnect_not_scheduled, user_id}}
+    end
   end
 
   # Same cleaning as `ServiceConfig.Overrides`: a short identifier, never free text.

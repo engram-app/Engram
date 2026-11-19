@@ -368,6 +368,17 @@ defmodule Engram.Admin.ClientLocksTest do
       assert ctx.conn |> get(~p"/api/folders") |> json_response(200)
     end
 
+    test "a failed +61 s job insert returns an error but the quarantine stands", ctx do
+      Application.put_env(:engram, :quarantine_job_insert, fn _ -> {:error, :boom} end)
+      on_exit(fn -> Application.delete_env(:engram, :quarantine_job_insert) end)
+
+      assert {:error, {:second_disconnect_not_scheduled, _}} =
+               ClientLocks.quarantine_user(ctx.user.id, "r", 3600)
+
+      assert ctx.conn |> get(~p"/api/folders") |> json_response(403)
+      assert [%{}] = ClientLocks.list_locks().quarantined
+    end
+
     test "unknown user is refused" do
       assert {:error, :user_not_found} =
                ClientLocks.quarantine_user(Ecto.UUID.generate(), "r", 60)

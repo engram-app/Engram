@@ -34,9 +34,10 @@ defmodule Engram.ClientGate do
     with :ok <- paused(user), do: plugin_version(reported, obsidian?)
   end
 
-  # `map()`: anything with an `:id` (the +61 s worker has only the id).
-  @spec paused(%{required(:id) => term(), optional(atom()) => term()}) ::
-          :ok | {:error, refusal()}
+  # Takes anything with an `:id` (the +61 s worker has only the id). No @spec:
+  # the honest one (`%{id: binary, ...} :: :ok | {:error, %{reason: <<_::112>>}}`)
+  # is narrower than any spec worth writing (dialyzer :underspecs), the same
+  # reason `Overrides.list/0` carries none.
   def paused(user) do
     if Billing.control_override(user, LimitKeys.account_paused()) == true,
       do: {:error, %{reason: "account_paused"}},
