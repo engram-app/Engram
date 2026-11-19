@@ -345,6 +345,7 @@ defmodule Engram.ServiceConfig.Overrides do
         :boolean -> is_boolean(value)
         {:enum, allowed} -> value in allowed
         {:integer, range} -> is_integer(value) and value in range
+        :plugin_lock -> match?({:ok, _}, Engram.PluginVersion.parse_lock(value))
       end
 
     if ok?, do: :ok, else: {:error, {:invalid_value, key, value}}

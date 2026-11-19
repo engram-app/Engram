@@ -242,6 +242,20 @@ defmodule Engram.Billing.LimitKeys do
     search_query_model: %{type: :string, defaults: %{free: nil, starter: nil, pro: nil}}
   }
 
+  # Per-user control switches stored in `user_limit_overrides` but NOT plan
+  # limits: no tier default, no env var, not in `all/0` (so not in the
+  # capabilities payload or the plan matrix). `Engram.Admin.ClientLocks` writes
+  # them; `Engram.Billing.control_override/2` reads them, bypassing
+  # `:limits_enforced` (a quarantine must bite on self-host too).
+  @control_keys ~w(account_paused)
+
+  @doc "The override key that quarantines (pauses) one account's clients."
+  @spec account_paused() :: String.t()
+  def account_paused, do: "account_paused"
+
+  @spec control_key?(term()) :: boolean()
+  def control_key?(name), do: name in @control_keys
+
   @keys Map.keys(@catalog)
   @tiers [:free, :starter, :pro]
 

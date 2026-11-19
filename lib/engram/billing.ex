@@ -102,6 +102,20 @@ defmodule Engram.Billing do
     |> Enum.reject(&is_nil(elem(&1, 1)))
   end
 
+  @doc """
+  The raw, unexpired per-user override of a control key
+  (`LimitKeys.control_key?/1`), or nil. Unlike `effective_limit/2` it ignores
+  `:limits_enforced`: a quarantine applies on self-host. One cached ETS read
+  (`OverrideCache`, NOTIFY-evicted, 60 s TTL backstop), no query on a hit.
+  """
+  @spec control_override(Engram.Accounts.User.t(), String.t()) :: term()
+  def control_override(%{id: user_id}, key) when is_binary(key) do
+    case user_override_lookup(user_id, key) do
+      {:hit, v} -> v
+      :miss -> nil
+    end
+  end
+
   defp enforced?, do: Application.get_env(:engram, :limits_enforced, true)
 
   defp do_effective_limit(user, key) do
