@@ -331,6 +331,13 @@ defmodule Engram.Backfill.IdWindows do
   # the cursor, so the cursor itself always advances; only the pass count
   # can show it.
   @cap_warn_passes 168
+  # Neither bound above sees a walk that never converges by restarting: a walk
+  # that reaches the end dirty starts over at pass 0, and a pass whose
+  # generation moved (`reset_walk/1`) saves nothing. So count those too and
+  # warn past these: the third consecutive full walk that still fixed rows,
+  # and the fourth consecutive pass that could not save its cursor.
+  @dirty_walk_warn 2
+  @unsaved_warn_passes 3
   @cursors Engram.Backfill.IdWindows.Cursors
 
   @doc "Default `:budget_ms` of `heal_pass/4`."
@@ -417,22 +424,60 @@ defmodule Engram.Backfill.IdWindows do
     # A `reset_walk/1` (a reopen) that landed during this pass bumped the
     # walk's generation: the work it announced may sit behind our cursor, so
     # neither save the cursor nor report a clean walk; the next pass starts over.
+    # The unsaved count lives under its own key: `reset_walk/1` drops the
+    # walk's entry, and the count must survive the resets it counts.
     saved =
       Agent.get_and_update(@cursors, fn cursors ->
         cond do
-          gen(cursors, name) != gen -> {false, cursors}
-          pass.stop == nil -> {true, Map.delete(cursors, name)}
-          true -> {true, Map.put(cursors, name, %{walk | from: pass.at, dirty: dirty})}
+          gen(cursors, name) != gen ->
+            n = Map.get(cursors, {:unsaved, name}, 0) + 1
+            {{:unsaved, n}, Map.put(cursors, {:unsaved, name}, n)}
+
+          pass.stop == nil and not dirty ->
+            {true, cursors |> Map.delete(name) |> Map.delete({:unsaved, name})}
+
+          # A dirty walk end keeps a fresh walk's entry so the count of
+          # consecutive dirty walks survives the restart.
+          pass.stop == nil ->
+            n = Map.get(walk, :dirty_walks, 0) + 1
+            fresh = %{from: nil, dirty: false, passes: 0, dirty_walks: n}
+            {{:dirty_walks, n}, cursors |> Map.put(name, fresh) |> Map.delete({:unsaved, name})}
+
+          true ->
+            walk = %{walk | from: pass.at, dirty: dirty}
+            {true, cursors |> Map.put(name, walk) |> Map.delete({:unsaved, name})}
         end
       end)
 
     more = [rows: pass.fixed]
 
-    cond do
-      not saved -> {:more, more}
-      pass.stop == nil -> if dirty, do: {:more, more}, else: :done
+    case saved do
+      {:unsaved, n} -> stalled(name, :unsaved, n, @unsaved_warn_passes, {:more, more})
+      {:dirty_walks, n} -> stalled(name, :dirty_walks, n, @dirty_walk_warn, {:more, more})
+      true when pass.stop == nil -> :done
       true -> stopped(name, walk.passes, pass.stop, more)
     end
+  end
+
+  # A walk that keeps restarting instead of converging (see `@dirty_walk_warn`).
+  defp stalled(name, kind, count, bound, result) do
+    if count > bound do
+      :telemetry.execute([:engram, :id_windows, :walk_stalled], %{count: count}, %{
+        walk: name,
+        kind: kind
+      })
+
+      Logger.warning(
+        "id-window walk #{name} is not converging: #{count} consecutive #{kind}",
+        Engram.Logger.Metadata.with_category(:warning, :oban,
+          walk: name,
+          kind: kind,
+          count: count
+        )
+      )
+    end
+
+    result
   end
 
   defp stopped(name, passes, :budget, more) do
