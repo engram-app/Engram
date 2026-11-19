@@ -28,13 +28,18 @@ defmodule EngramWeb.SyncRateLimit do
   # 2400-note vault inside one window; bounded, not exempt.
   @hs_limit 2400
 
-  # REST `POST /api/notes` per user per minute (session / device-token callers;
-  # API keys keep `api_rps_cap`). Measured 2026-11-18: before the one-user flood
-  # (~10/s for 24 h, 300k writes) the WHOLE fleet's `POST /api/notes` peaked at
-  # 0.007/s over a 5 min window (sync runs over CRDT sockets; this route is the
-  # legacy fallback). 60/min is 1/s: ~140x that peak, 10x below the flood.
-  @rest_write_limit 60
-  @rest_write_scale_ms 60_000
+  # REST `POST /api/notes` per user, two fixed windows that must both allow
+  # (Hammer has no token bucket). Measured 2026-11-18: before the one-user
+  # flood (~10/s for 24 h, 300k writes) the WHOLE fleet's `POST /api/notes`
+  # peaked at 0.007/s over 5 min (sync runs over CRDT sockets; REST carries
+  # canvases and oversized notes). The plugin fails a note push on 429 (only
+  # attachments defer), so a first sync must fit the burst:
+  #   * burst 300/min: a first sync of 300 REST files in its first minute;
+  #     a 10/s loop is refused after 30 s.
+  #   * sustained 600/10 min (1/s): what a loop gets after that, 10x below
+  #     the flood. A first sync past 600 REST files in 10 min gets 429s.
+  @rest_write_burst {300, 60_000}
+  @rest_write_sustained {600, 600_000}
 
   # Account-wide ceiling = limit x this: "up to ten busy devices per account".
   @account_multiplier 10
@@ -64,23 +69,37 @@ defmodule EngramWeb.SyncRateLimit do
   end
 
   @doc """
-  Charges one REST note write to the user's per-minute budget. Per user, not per
-  device: a client-supplied device id must not multiply it.
+  Charges one REST note write to the user's burst and sustained budgets
+  (`@rest_write_burst`, `@rest_write_sustained`). Per user, not per device: a
+  client-supplied device id must not multiply it. A refusal carries the ms
+  until the refusing window frees.
   """
   @spec check_rest_write(Ecto.UUID.t()) :: :ok | {:error, {:rate_limited, non_neg_integer()}}
   def check_rest_write(user_id) do
-    limit = Application.get_env(:engram, :rest_write_rate_limit_override) || @rest_write_limit
+    {{burst, burst_ms}, {sustained, sustained_ms}} = rest_write_limits()
 
-    case EngramWeb.RateLimiter.hit(
-           "rest_write:#{user_id}",
-           @rest_write_scale_ms,
-           limit,
-           :rest_write
-         ) do
-      {:allow, _} -> :ok
+    with {:allow, _} <- rest_hit("rest_write:#{user_id}", burst_ms, burst),
+         {:allow, _} <- rest_hit("rest_write_10m:#{user_id}", sustained_ms, sustained) do
+      :ok
+    else
       {:deny, retry_after_ms} -> {:error, {:rate_limited, retry_after_ms}}
     end
   end
+
+  @doc "The REST write budgets: `{{burst, ms}, {sustained, ms}}`."
+  def rest_write_limits do
+    # A test override sets the burst; the sustained window keeps the ratio.
+    case Application.get_env(:engram, :rest_write_rate_limit_override) do
+      nil ->
+        {@rest_write_burst, @rest_write_sustained}
+
+      n ->
+        {{n, elem(@rest_write_burst, 1)}, {2 * n, elem(@rest_write_sustained, 1)}}
+    end
+  end
+
+  defp rest_hit(key, scale_ms, limit),
+    do: EngramWeb.RateLimiter.hit(key, scale_ms, limit, :rest_write)
 
   defp hit(key, limit, increment),
     do: EngramWeb.RateLimiter.hit(key, @scale_ms, limit, :other, increment)

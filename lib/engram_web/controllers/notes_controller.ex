@@ -60,9 +60,15 @@ defmodule EngramWeb.NotesController do
     end
   end
 
-  # API-key callers are already bounded by `api_rps_cap`; this covers the
-  # session / device-token callers a client bug can loop.
-  defp rest_write_budget(%{assigns: %{current_api_key: _}}), do: :ok
+  # A script on an API key is bounded by `api_rps_cap`. The plugin is charged
+  # however it signs in (session, device token or pasted API key): the
+  # 2026-11-18 flood was the plugin, and 10/s sits under `api_rps_cap`.
+  defp rest_write_budget(%{assigns: %{current_api_key: _}} = conn) do
+    if EngramWeb.WriteActor.plugin_client?(conn),
+      do: SyncRateLimit.check_rest_write(conn.assigns.current_user.id),
+      else: :ok
+  end
+
   defp rest_write_budget(conn), do: SyncRateLimit.check_rest_write(conn.assigns.current_user.id)
 
   defp write_upsert(conn, params) do
