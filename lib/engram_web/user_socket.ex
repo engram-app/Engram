@@ -3,6 +3,7 @@ defmodule EngramWeb.UserSocket do
 
   alias Engram.Crypto.HMAC
   alias Engram.Logger.Metadata
+  alias Engram.PluginVersion
 
   require Logger
 
@@ -11,7 +12,17 @@ defmodule EngramWeb.UserSocket do
   channel "user:*", EngramWeb.UserChannel
 
   @impl true
-  def connect(%{"token" => token} = params, socket, _connect_info) do
+  def connect(%{"token" => token} = params, socket, connect_info) do
+    # The user agent is what names a plugin too old to send `plugin_version`
+    # (see `PluginVersion.supported?/2`); `ChannelGate` reads the boolean, the
+    # raw header is not kept.
+    params =
+      Map.put(
+        params,
+        "obsidian_client",
+        PluginVersion.obsidian_client?(connect_info[:user_agent])
+      )
+
     resolve_and_accept(token, params, socket)
   end
 
@@ -144,6 +155,7 @@ defmodule EngramWeb.UserSocket do
       device_id: device_id,
       vault_id_param: vault_id,
       plugin_version: plugin_version,
+      obsidian_client: params["obsidian_client"] == true,
       # Product analytics only (forwarded on surface_active). An enum, so a
       # client can never put free text into an event.
       platform: if(params["platform"] in ~w(desktop mobile), do: params["platform"])

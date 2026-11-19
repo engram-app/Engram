@@ -42,16 +42,9 @@ defmodule EngramWeb.WriteActor do
   end
 
   # compat(plugin): no-version blind push exemption - remove when plugin floor >= 1.29.0 (#2480)
-  # Plugins before 1.29.0 send no X-Plugin-Version, so the version floor
-  # cannot see them yet (a missing header passes RequirePluginVersion); only
-  # their user agent names them. Desktop is Electron ("obsidian/1.15.0"),
-  # iOS is "Obsidian/396 CFNetwork", Android's native HTTP is "Dalvik/" (any
-  # Android app; accepted, this guard is not security). Measured in prod
-  # Tempo 2026-10-31..11-06: every POST /api/notes but a few "node" and
-  # "Python-urllib" calls carried one of these.
-  @obsidian_ua ~r/obsidian\/|^Dalvik\//i
-
+  # Plugins before 1.29.0 send no X-Plugin-Version; only their user agent names
+  # them (`PluginVersion.obsidian_client?/1`, the same signal the floor uses).
   defp obsidian_user_agent?(conn) do
-    Enum.any?(Plug.Conn.get_req_header(conn, "user-agent"), &Regex.match?(@obsidian_ua, &1))
+    conn |> Plug.Conn.get_req_header("user-agent") |> Engram.PluginVersion.obsidian_client?()
   end
 end

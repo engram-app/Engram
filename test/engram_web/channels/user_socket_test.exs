@@ -114,6 +114,30 @@ defmodule EngramWeb.UserSocketTest do
     assert socket.assigns.plugin_version == "1.29.0"
   end
 
+  # The user agent is the only signal for a plugin too old to send
+  # `plugin_version`; without it reaching assigns the socket floor is open.
+  test "an Obsidian user agent sets obsidian_client; anything else does not", %{user: user} do
+    token = version_token(user)
+
+    assert {:ok, s} =
+             connect(EngramWeb.UserSocket, %{"token" => token}, %{
+               user_agent: "obsidian/1.15.1 Electron"
+             })
+
+    assert s.assigns.obsidian_client == true
+
+    for info <- [%{}, %{user_agent: nil}, %{user_agent: "Mozilla/5.0 Chrome/130"}] do
+      assert {:ok, s} = connect(EngramWeb.UserSocket, %{"token" => token}, info)
+      assert s.assigns.obsidian_client == false
+    end
+
+    # A client cannot claim it either way through its own params.
+    assert {:ok, s} =
+             connect(EngramWeb.UserSocket, %{"token" => token, "obsidian_client" => true}, %{})
+
+    assert s.assigns.obsidian_client == false
+  end
+
   test "a known platform param lands in assigns; anything else is nil", %{user: user} do
     for {sent, want} <- [
           {"mobile", "mobile"},

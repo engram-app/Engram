@@ -95,6 +95,40 @@ defmodule EngramWeb.PluginVersionGateChannelTest do
     end
   end
 
+  describe "no version from an Obsidian client (plugin older than reporting)" do
+    defp join_as(user, vault_id, assigns, channel, topic) do
+      base = %{current_user: user, current_api_key: nil}
+      s = socket(EngramWeb.UserSocket, "user_#{user.id}", Map.merge(base, assigns))
+      subscribe_and_join(s, channel, topic, %{"crdt_proto" => 2})
+    end
+
+    test "crdt: and sync: refuse it with the recovery fields", ctx do
+      for {channel, topic} <- [
+            {EngramWeb.CrdtChannel, "crdt:#{ctx.user.id}:#{ctx.vault.id}"},
+            {EngramWeb.SyncChannel, "sync:#{ctx.user.id}:#{ctx.vault.id}"}
+          ] do
+        assert {:error, payload} =
+                 join_as(ctx.user, ctx.vault.id, %{obsidian_client: true}, channel, topic)
+
+        assert payload.reason == "plugin_upgrade_required"
+        assert payload.min_version == "1.36.0"
+        assert payload.your_version == nil
+        assert payload.update_url == "obsidian://show-plugin?id=engram-vault-sync"
+      end
+    end
+
+    test "a non-Obsidian socket with no version still joins", ctx do
+      assert {:ok, _, _} =
+               join_as(
+                 ctx.user,
+                 ctx.vault.id,
+                 %{obsidian_client: false},
+                 EngramWeb.SyncChannel,
+                 "sync:#{ctx.user.id}:#{ctx.vault.id}"
+               )
+    end
+  end
+
   describe "sync:" do
     test "an old plugin is refused", ctx do
       assert {:error, %{reason: "plugin_upgrade_required"}} =

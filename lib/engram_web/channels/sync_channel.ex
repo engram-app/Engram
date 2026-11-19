@@ -58,6 +58,7 @@ defmodule EngramWeb.SyncChannel do
            user,
            socket.assigns[:current_api_key],
            socket.assigns[:plugin_version],
+           socket.assigns[:obsidian_client] == true,
            socket.topic
          ) do
       :ok -> resolve_vault_and_join(vault_id_str, params, socket, user)

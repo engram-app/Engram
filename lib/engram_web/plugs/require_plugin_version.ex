@@ -1,9 +1,11 @@
 defmodule EngramWeb.Plugs.RequirePluginVersion do
   @moduledoc """
   Halts with `426 Upgrade Required` when the caller reports an Obsidian-plugin
-  version below `Engram.PluginVersion.minimum/0`. Absent or unreadable header
-  passes — see that module for the full rationale, including why everything
-  unknown is allowed and why this is not a security control.
+  version below `Engram.PluginVersion.minimum/0`, or reports none while its
+  user agent names the Obsidian app (a plugin older than the header). Any other
+  absent or unreadable header passes — see that module for the full rationale,
+  including why everything else unknown is allowed and why this is not a
+  security control.
 
   This is the HTTP half only. Sync runs over CRDT/sync channels where a Plug
   never runs, so `EngramWeb.ChannelGate.check/3` enforces the same floor on
@@ -34,21 +36,23 @@ defmodule EngramWeb.Plugs.RequirePluginVersion do
   def init(opts), do: opts
 
   def call(conn, _opts) do
-    reported = conn |> get_req_header("x-plugin-version") |> List.first()
-    conn = assign(conn, :plugin_version, reported)
+    reported =
+      conn |> get_req_header("x-plugin-version") |> List.first() |> PluginVersion.reported()
 
-    if PluginVersion.supported?(reported) do
+    conn = assign(conn, :plugin_version, reported)
+    obsidian? = conn |> get_req_header("user-agent") |> PluginVersion.obsidian_client?()
+
+    if PluginVersion.supported?(reported, obsidian?) do
       conn
     else
-      Halt.json(conn, 426, %{
-        error: "plugin_upgrade_required",
-        min_version: PluginVersion.minimum(),
-        # Safe to echo: `supported?/1` only returns false for a string it
-        # successfully parsed as a version, which bounds both length and
-        # alphabet. An arbitrary blob never reaches this branch.
-        your_version: reported,
-        update_url: PluginVersion.update_url()
-      })
+      # `your_version` is safe to echo: it is nil (absent) or a string
+      # `supported?/1` successfully parsed as a version, which bounds both
+      # length and alphabet. An arbitrary blob never reaches this branch.
+      Halt.json(
+        conn,
+        426,
+        Map.put(PluginVersion.recovery_fields(reported), :error, "plugin_upgrade_required")
+      )
     end
   end
 end

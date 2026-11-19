@@ -15,6 +15,8 @@ defmodule EngramWeb.Plugs.RequirePluginVersionTest do
   defp with_version(conn, value),
     do: Plug.Conn.put_req_header(conn, "x-plugin-version", value)
 
+  defp with_ua(conn, ua), do: Plug.Conn.put_req_header(conn, "user-agent", ua)
+
   describe "call/2" do
     test "passes when the header is absent", %{conn: conn} do
       result = RequirePluginVersion.call(conn, [])
@@ -52,6 +54,54 @@ defmodule EngramWeb.Plugs.RequirePluginVersionTest do
       assert body["min_version"] == "1.36.0"
       assert body["your_version"] == "1.0.0"
       assert body["update_url"] == "obsidian://show-plugin?id=engram-vault-sync"
+    end
+
+    # THE incident: pre-1.29.0 plugins send no header, so the floor never
+    # reached them. Fails without the fix (the call used to pass).
+    test "426s an Obsidian user agent that reports no version", %{conn: conn} do
+      result =
+        conn
+        |> with_ua("Mozilla/5.0 obsidian/1.15.1 Electron/33")
+        |> RequirePluginVersion.call([])
+
+      assert result.halted
+      body = json_response(result, 426)
+      assert body["error"] == "plugin_upgrade_required"
+      assert body["min_version"] == "1.36.0"
+      assert body["your_version"] == nil
+      assert body["update_url"] == "obsidian://show-plugin?id=engram-vault-sync"
+    end
+
+    test "426s an Obsidian user agent sending an empty version header", %{conn: conn} do
+      result =
+        conn |> with_ua("obsidian/1.15.1") |> with_version("") |> RequirePluginVersion.call([])
+
+      assert result.halted
+      assert json_response(result, 426)["your_version"] == nil
+    end
+
+    test "an Obsidian user agent on a current version passes", %{conn: conn} do
+      result =
+        conn
+        |> with_ua("obsidian/1.15.1")
+        |> with_version("1.36.0")
+        |> RequirePluginVersion.call([])
+
+      refute result.halted
+    end
+
+    test "non-plugin user agents with no version still pass", %{conn: conn} do
+      for ua <- [
+            "Mozilla/5.0 Chrome/130 Safari/537",
+            "node",
+            "curl/8.5.0",
+            "Claude-User",
+            "python-requests/2.32"
+          ] do
+        refute conn |> with_ua(ua) |> RequirePluginVersion.call([]) |> Map.get(:halted), ua
+      end
+
+      refute RequirePluginVersion.call(conn, []).halted
     end
 
     test "records the version even on the refusal, so the block is countable", %{conn: conn} do
@@ -128,6 +178,16 @@ defmodule EngramWeb.Plugs.RequirePluginVersionTest do
     # `refute conn.status == 426` would pass on a 403, a 500, or a deleted
     # plug. Assert the route actually SERVED, so this case fails if the
     # fixture stops producing a request that reaches the controller.
+    test "a header-less Obsidian client is refused on a real route, and the web is not", %{
+      conn: conn
+    } do
+      refused = conn |> with_ua("obsidian/1.15.1") |> get(~p"/api/folders")
+      assert json_response(refused, 426)["error"] == "plugin_upgrade_required"
+
+      served = conn |> with_ua("Mozilla/5.0 Chrome/130") |> get(~p"/api/folders")
+      assert json_response(served, 200)
+    end
+
     test "the same route without the header is served normally", %{conn: conn} do
       assert json_response(get(conn, ~p"/api/folders"), 200)
     end
