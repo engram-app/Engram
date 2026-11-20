@@ -62,9 +62,6 @@ defmodule Engram.Logs do
   # backgrounded tab, one browser build). Anything else in `context` (a key
   # not listed, a value out of shape) is dropped: these become Loki metadata,
   # where a free-text field would be a path leak and a cardinality bomb.
-  @version_regex ~r/\A\d{1,3}\.\d{1,3}\.\d{1,3}\z/
-  @plugin_version_regex ~r/\A\d{1,3}\.\d{1,3}\.\d{1,3}(?:-[0-9A-Za-z.]{1,20})?\z/
-
   @context_fields [
     browser: {:match, ~r/\A(?:[A-Za-z][A-Za-z ]{0,30} \d{1,4}|unknown)\z/},
     went_offline: :boolean,
@@ -86,7 +83,7 @@ defmodule Engram.Logs do
     # tied to an Obsidian release. Closed enum and a bare version number, so
     # neither can carry a path or a user agent. Metadata only, never a Loki label.
     os: {:one_of, ~w(android ios mobile_other desktop)},
-    app_version: {:match, @version_regex}
+    app_version: {:match, ~r/\A\d{1,3}\.\d{1,3}\.\d{1,3}\z/}
   ]
 
   @doc """
@@ -427,15 +424,14 @@ defmodule Engram.Logs do
   end
 
   # The plugin's own release, from the same column the DB keeps. Free text in
-  # the column (clamped, not validated), so only a semver-shaped value reaches
-  # Loki; web lines send none.
-  defp put_plugin_version(meta, version) when is_binary(version) do
-    if version =~ @plugin_version_regex,
-      do: Keyword.put(meta, :plugin_version, version),
-      else: meta
+  # the column (clamped, not validated), so only what the floor itself parses
+  # as a version reaches Loki; web lines send none.
+  defp put_plugin_version(meta, version) do
+    case Engram.PluginVersion.loggable(version) do
+      nil -> meta
+      v -> Keyword.put(meta, :plugin_version, v)
+    end
   end
-
-  defp put_plugin_version(meta, _version), do: meta
 
   # Identical lines of one batch (a refused frame retried per flush) as one
   # `{first, count}`, in first-seen order. Everything that ends up in the line
