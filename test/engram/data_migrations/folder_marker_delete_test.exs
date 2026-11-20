@@ -384,6 +384,8 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
     %{user: _u, vault: v} = ctx
     {:ok, _} = Folders.create_markers(ctx.user, v, ["Fl"])
     Engram.ServiceConfig.put_override(:marker_stop_floors, :assume)
+    Engram.ServiceConfig.put_override(:folder_marker_stop, true)
+    assert Engram.Folders.MarkerStop.on?()
     refute FolderMarkerDelete.floors?(:enforce)
 
     assert FolderMarkerDelete.run_pass() == {:more, rows: 0, blocked: 1}

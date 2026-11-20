@@ -193,6 +193,10 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
           AND f2.full_path_hmac = m.folder_hmac
           AND f2.deleted_at IS NULL AND f2.explicit AND f2.explicit_seq IS NULL))
       FROM m))
+      -- Again on the row itself: re-checked on the row's latest version when
+      -- it waited on a concurrent writer's lock, so a row stamped meanwhile
+      -- keeps its seq (defence in depth beyond the vault lock).
+      AND f.explicit_seq IS NULL AND f.explicit AND f.deleted_at IS NULL
     RETURNING f.id
   )
   DELETE FROM notes AS n

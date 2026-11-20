@@ -96,4 +96,58 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteFleetTest do
 
     assert markers_by_user(made) == %{two.id => 2}
   end
+
+  # The stamp's ids come from the statement's snapshot. A writer that stamps
+  # the row and commits while the stamp waits on its lock leaves a newer
+  # version, which Postgres re-checks against the UPDATE's own WHERE only.
+  # Red without the outer `explicit_seq IS NULL`: the row went to 0.
+  test "a row stamped while the stamp waits on it keeps its seq", %{made: [one | _]} do
+    Engram.ServiceConfig.put_override(:marker_stop_floors, :assume)
+    Engram.ServiceConfig.put_override(:folder_marker_stop, true)
+    Engram.ServiceConfig.put_override(:marker_delete_floors, :assume)
+
+    row =
+      Sandbox.unboxed_run(Repo, fn ->
+        %{rows: [[id]]} =
+          Repo.query!(
+            "SELECT min(id::text)::uuid FROM folders WHERE user_id = $1 AND explicit",
+            [Ecto.UUID.dump!(one.id)]
+          )
+
+        id
+      end)
+
+    me = self()
+
+    writer =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          Repo.transaction(fn ->
+            Repo.query!("UPDATE folders SET explicit_seq = 9 WHERE id = $1", [row])
+            send(me, :locked)
+
+            # Commit only once the stamp is waiting on this row's lock.
+            Enum.find(1..150, fn _ ->
+              Process.sleep(10)
+              %{rows: [[n]]} =
+                Repo.query!(
+                  "SELECT count(*)::int FROM pg_stat_activity " <>
+                    "WHERE datname = current_database() AND wait_event_type = 'Lock'"
+                )
+
+              n > 0
+            end)
+          end)
+        end)
+      end)
+
+    assert_receive :locked, 2_000
+    assert {:more, _} = Delete.run_pass()
+    assert {:ok, waited} = Task.await(writer, 5_000)
+    assert waited, "the stamp never waited on the writer's lock"
+
+    assert Sandbox.unboxed_run(Repo, fn ->
+             Repo.query!("SELECT explicit_seq FROM folders WHERE id = $1", [row]).rows
+           end) == [[9]]
+  end
 end
