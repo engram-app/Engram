@@ -164,6 +164,14 @@ defmodule Engram.Cache.Registry do
       evict_match: :key,
       pg_channel: nil
     },
+    # Vaults `FolderMarkerDelete` already warned about today (one line a vault a day).
+    %{
+      name: :marker_delete_warned,
+      ttl: 86_400_000,
+      cache_nil: false,
+      evict_match: :key,
+      pg_channel: nil
+    },
     # Legal floor / current version / hash per document; evicted on publish.
     %{
       name: :legal_version,
