@@ -74,7 +74,8 @@ defmodule EngramWeb.SyncRateLimit do
   id must not multiply it. A refusal carries the ms until the refusing window
   frees. No limit (enforcement off, or a `-1` override) charges nothing.
   """
-  @spec check_rest_write(map()) :: :ok | {:error, {:rate_limited, non_neg_integer()}}
+  @spec check_rest_write(%{required(:id) => Ecto.UUID.t(), optional(any()) => any()}) ::
+          :ok | {:error, {:rate_limited, non_neg_integer()}}
   def check_rest_write(%{id: user_id} = user) do
     case rest_write_limits(user) do
       nil ->
