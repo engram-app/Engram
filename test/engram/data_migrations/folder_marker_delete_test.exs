@@ -25,6 +25,7 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
   # And the rollback floor at E (`FolderMarkerDelete.floors?/0`).
   defp stop_on! do
     Engram.ServiceConfig.put_override(:marker_stop_floors, :assume)
+    Engram.ServiceConfig.put_override(:folder_marker_stop, true)
     Engram.ServiceConfig.put_override(:marker_delete_floors, :assume)
   end
 
@@ -158,8 +159,9 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
     Engram.DataMigrations.mark_done(FolderMarkerDelete.name(), FolderMarkerDelete.version())
     assert Repo.with_tenant!(u.id, fn -> FolderMarkerDelete.done?(u.id, v.id) end)
 
-    # Release D again: the stop is off and a create writes a marker.
-    Engram.ServiceConfig.put_override(:marker_stop_floors, :enforce)
+    # Release D again (or the kill switch): the stop is off and a create
+    # writes a marker.
+    Engram.ServiceConfig.put_override(:folder_marker_stop, false)
     {:ok, _} = Folders.create_markers(u, v, ["D"])
     assert markers(v) == 1
     assert FolderMarkerDelete.done?()
