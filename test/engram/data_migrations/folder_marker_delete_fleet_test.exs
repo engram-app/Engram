@@ -22,6 +22,11 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteFleetTest do
   alias Engram.Repo
 
   setup do
+    # #2645's path-hash stop asks the real ledger, as in prod: while a vault
+    # holds markers it writes their path hashes, which this delete matches.
+    # (The test env pins `true`, a state a vault with markers never reaches.)
+    Application.put_env(:engram, :path_hash_stop_markers_gone, Delete)
+    on_exit(fn -> Application.put_env(:engram, :path_hash_stop_markers_gone, true) end)
     Engram.Test.MaintenancePool.start!()
     IdWindows.reset_walk(Delete.name())
     Engram.ServiceConfig.put_override(:folder_marker_delete, true)
