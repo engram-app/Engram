@@ -61,6 +61,15 @@ defmodule Engram.FileTimeDoublesGoneTest do
     assert hits == []
   end
 
+  # 0.88.0 still maps the doubles as real schema fields (note.ex,
+  # attachment.ex, upload.ex), so it fails every note and attachment read
+  # once these columns are gone. 0.89.0 (R25 step b) is the first release
+  # that neither reads nor writes them. The drop may ship only when no
+  # rollback target is older than that.
+  test "the rollback floor is past the last release that maps the doubles" do
+    assert Engram.Release.Floor.at_least?("release-v0.89.0")
+  end
+
   test "the scan sees heredoc SQL and quoted SQL, not docs" do
     src =
       Enum.join(
