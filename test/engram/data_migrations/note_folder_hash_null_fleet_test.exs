@@ -44,6 +44,13 @@ defmodule Engram.DataMigrations.NoteFolderHashNullFleetTest do
               actor: "api"
             )
 
+          # Its folder row as a release before the S6 step 3 write stop left it.
+          Repo.query!(
+            "UPDATE folders f SET full_path_hmac = n.folder_hmac FROM notes n " <>
+              "WHERE n.id = $1 AND f.id = n.folder_ref_id",
+            [Ecto.UUID.dump!(note.id)]
+          )
+
           {user, note}
         end
       end)

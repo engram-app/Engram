@@ -16,7 +16,8 @@ defmodule Engram.Folders.Rows do
   `notes.folder_ciphertext`). `name_hmac` lives in its own domain so a segment
   hash never equals a `path_hmac`. `full_path_hmac` is the HMAC of the whole
   path and equals a marker's `folder_hmac` (and a note's, while note writes
-  still set it); it is rewritten for a renamed subtree.
+  still set it); it is rewritten for a renamed subtree until S6 step 3's
+  write stop (`Engram.Folders.PathHashStop`) turns on, then not written.
 
   The stored paths (`notes.path_*` / `folder_*`, attachment `path_*`) stay
   authoritative and are still written everywhere; a folder row is a second,
@@ -29,7 +30,7 @@ defmodule Engram.Folders.Rows do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.DataMigrations.{ExplicitFolderReconcile, FolderTable}
-  alias Engram.Folders.{Folder, PathHmacs, WalkSql}
+  alias Engram.Folders.{Folder, PathHashStop, PathHmacs, WalkSql}
   alias Engram.Logger.Metadata
   alias Engram.Repo
   alias Engram.Search.NameTerms
@@ -265,7 +266,14 @@ defmodule Engram.Folders.Rows do
     else
       with {:ok, dek} <- Crypto.get_dek(user),
            {:ok, fk} <- Crypto.dek_filter_key(user) do
-        ctx = %{user_id: user.id, vault_id: vault_id, dek: dek, fk: fk}
+        ctx = %{
+          user_id: user.id,
+          vault_id: vault_id,
+          dek: dek,
+          fk: fk,
+          hash?: PathHashStop.write?(user.id, vault_id)
+        }
+
         {:ok, resolve_all(ctx, targets)}
       end
     end
@@ -320,7 +328,7 @@ defmodule Engram.Folders.Rows do
   # then one insert per depth level (parents first).
   defp resolve_all(ctx, targets) do
     paths = targets |> Map.keys() |> Enum.flat_map(&prefixes/1) |> Enum.uniq()
-    hmacs = Map.new(paths, &{&1, path_hmac(ctx.fk, &1)})
+    hmacs = Map.new(paths, &{&1, full_h(ctx, &1)})
     known = walk_ids(ctx.user_id, ctx.fk, ctx.vault_id, paths)
 
     ids =
@@ -413,7 +421,7 @@ defmodule Engram.Folders.Rows do
   defp step(ctx, parent_id, path, explicit, attempts, insert? \\ true) do
     segment = segment(path)
     name_h = name_hmac(ctx.fk, segment)
-    full_h = path_hmac(ctx.fk, path)
+    full_h = full_h(ctx, path)
     id = explicit || mint_id()
 
     case if(insert?,
@@ -477,7 +485,8 @@ defmodule Engram.Folders.Rows do
   end
 
   # A row another writer made may lack `full_path_hmac` (the previous release's
-  # backfill gap) or the explicit flag: set what this caller knows.
+  # backfill gap) or the explicit flag: set what this caller knows. With the
+  # write stop on (`full_h` nil) only the flag: `PathHmacs.put/3` skips nil.
   defp repair(ctx, %{id: id, full: full, explicit: explicit?}, full_h, marker) do
     if marker && !explicit? do
       from(f in Folder, where: f.id == ^id)
@@ -597,7 +606,7 @@ defmodule Engram.Folders.Rows do
   # rename rewrites one row, so a descendant's stored path hash goes stale
   # (O(1) folder rename plan, Gap A, Engram#2523). Writers find rows the same
   # way (S6 step 3); they still write the hash for the previous release,
-  # which reads it.
+  # which reads it, until the write stop (`PathHashStop`) turns on.
 
   @doc """
   The live folder rows at `folders` and every live descendant, shallowest
@@ -1204,7 +1213,10 @@ defmodule Engram.Folders.Rows do
 
   @doc """
   Renames the folder row at `old_folder` to `new_folder` (a rename or a move:
-  any new parent) and rewrites `full_path_hmac` for the whole subtree.
+  any new parent) and, while S6 step 3's write stop is inert
+  (`Engram.Folders.PathHashStop`), rewrites `full_path_hmac` for the whole
+  subtree. Once it is on, writes ONE folder row (plus `recascade/2`'s moved
+  ones), and an S5 move (`uncascaded:`) reads only that row.
 
   Costs the DESCENDANT FOLDERS, never notes: a note joins its folder by id, so
   the notes under it need no change (their stored paths are rewritten by the
@@ -1265,12 +1277,14 @@ defmodule Engram.Folders.Rows do
         {:error, :invalid_path}
 
       true ->
-        moving = user |> subtree_refs(vault_id, [old_folder]) |> MapSet.new(& &1.id)
-        # The new parent and every ancestor as the walk finds them: the rows
-        # the writer's `resolve_all/2` takes on its way there (the same walk,
-        # one statement, one probe per prefix). None may be a moving row.
+        # The moving folder's row, and the new parent and every ancestor as
+        # the walk finds them (the rows the writer's `resolve_all/2` takes on
+        # its way there): one statement, one probe per prefix, O(depth). A
+        # walk reaches a row of the moving subtree only through its root, so
+        # the root on that chain is the cycle; the subtree is never read.
+        moving = ids_at(user, vault_id, [old_folder])
         parents = ids_at(user, vault_id, prefixes(parent_path))
-        if Enum.any?(parents, &MapSet.member?(moving, &1)), do: {:error, :invalid_path}, else: :ok
+        if Enum.any?(parents, &(&1 in moving)), do: {:error, :invalid_path}, else: :ok
     end
   end
 
@@ -1290,15 +1304,36 @@ defmodule Engram.Folders.Rows do
         vault_id: vault_id,
         dek: dek,
         fk: fk,
-        uncascaded: opts[:uncascaded]
+        uncascaded: opts[:uncascaded],
+        hash?: PathHashStop.write?(user.id, vault_id)
       }
 
-      case subtree(user, vault_id, [old_folder]) do
+      case rename_rows(user, ctx, old_folder) do
         [] -> :ok
         rows -> move_subtree(ctx, rows, new_folder)
       end
     end
   end
+
+  # The rows a rename reads. An S5 move (`uncascaded:`) with the write stop
+  # on needs only the moved row: a merge is refused, `recascade/2` is a
+  # no-op and no descendant is written, so it reads one row by the walk, O(1)
+  # in the subtree. Otherwise the subtree (a merge folds it; the inert stop
+  # rewrites its hashes; a cascade clears its moved flags).
+  defp rename_rows(user, %{hash?: false, uncascaded: seq} = ctx, old_folder)
+       when is_integer(seq) do
+    case ids_at(user, ctx.vault_id, [old_folder]) do
+      [] -> []
+      ids -> Repo.all(from(f in Folder, where: f.id in ^ids and is_nil(f.deleted_at)))
+    end
+  end
+
+  defp rename_rows(user, ctx, old_folder), do: subtree(user, ctx.vault_id, [old_folder])
+
+  # The `full_path_hmac` a writer sets: the path's hash while the write stop
+  # is inert (release D), nil once it is on.
+  defp full_h(%{hash?: true, fk: fk}, path), do: path_hmac(fk, path)
+  defp full_h(_ctx, _path), do: nil
 
   defp move_subtree(ctx, [root | _] = rows, new_folder) do
     new_segment = segment(new_folder)
@@ -1312,14 +1347,15 @@ defmodule Engram.Folders.Rows do
     # Each row's NEW full path, from the decrypted segment names. A name that
     # will not open drops that row and its descendants from the rewrite: the
     # daily FolderTable pass heals them, a corrupt row must not block a rename.
-    paths = chain_names(ctx.dek, rows, %{root.id => new_folder})
+    # Only what writes a hash or merges needs them.
+    paths = fn -> chain_names(ctx.dek, rows, %{root.id => new_folder}) end
 
     case live_child(ctx.vault_id, new_parent, new_name_h) do
       %{id: occupant} when occupant != root.id and is_integer(ctx.uncascaded) ->
         {:error, :merge}
 
       %{id: occupant} when occupant != root.id ->
-        merge_subtree(ctx, rows, paths, root.id, occupant, new_parent)
+        merge_subtree(ctx, rows, paths.(), root.id, occupant, new_parent)
 
       _ ->
         {ct, nonce} = encrypt_name(ctx.dek, root.id, new_segment)
@@ -1337,17 +1373,28 @@ defmodule Engram.Folders.Rows do
         )
 
         :ok = put_names(ctx, [{root.id, new_segment}])
-        rest = for r <- rows, r.id != root.id, Map.has_key?(paths, r.id), do: {r.id, paths[r.id]}
-        # The root's new path hash and every descendant's, one statement.
-        {:ok, _} =
-          PathHmacs.put(
-            ctx.user_id,
-            for({id, p} <- [{root.id, new_folder} | rest], do: {id, path_hmac(ctx.fk, p)})
-          )
+        # Inert write stop (release D's shape): the root's new path hash and
+        # every descendant's, one statement (`PathHmacs.put/3`, which first
+        # releases each from any stale holder), O(descendant folders). On:
+        # one folder row, nothing below (a descendant is found by its chain).
+        :ok =
+          if ctx.hash?, do: put_rename_hashes(ctx, rows, paths.(), root, new_folder), else: :ok
 
         :ok = recascade(ctx, rows)
         :ok
     end
+  end
+
+  defp put_rename_hashes(ctx, rows, paths, root, new_folder) do
+    rest = for r <- rows, r.id != root.id, Map.has_key?(paths, r.id), do: {r.id, paths[r.id]}
+
+    {:ok, _} =
+      PathHmacs.put(
+        ctx.user_id,
+        for({id, p} <- [{root.id, new_folder} | rest], do: {id, path_hmac(ctx.fk, p)})
+      )
+
+    :ok
   end
 
   # A cascade rewrote every stored path below (its scan reads the subtree by
@@ -1423,9 +1470,7 @@ defmodule Engram.Folders.Rows do
       end)
 
     # Every moved row's new path hash, one statement.
-    {:ok, _} =
-      PathHmacs.put(ctx.user_id, for({id, path} <- moved, do: {id, path_hmac(ctx.fk, path)}))
-
+    {:ok, _} = PathHmacs.put(ctx.user_id, for({id, path} <- moved, do: {id, full_h(ctx, path)}))
     retire_later(ctx.user_id, Enum.reverse(merged))
   end
 
@@ -1698,6 +1743,7 @@ defmodule Engram.Folders.Rows do
 
   defp write_revived(user, vault_id, revive) do
     {ids, parents} = Enum.unzip(revive)
+    hash? = PathHashStop.write?(user.id, vault_id)
 
     {n, _} =
       from(f in Folder,
@@ -1717,12 +1763,22 @@ defmodule Engram.Folders.Rows do
           ]
         ]
       )
+      # Stop on: the hash it died with goes in the same UPDATE, so it can
+      # never duplicate a live row's if the vault falls back to D's writes.
+      |> then(&if(hash?, do: &1, else: update(&1, set: ^PathHmacs.cleared())))
       |> Repo.update_all([])
 
     # A revived row's stored hash is the one it died with, which may be
     # stale. It takes its CURRENT path's hash like any live writer (from a
     # stale holder too). One whose path will not resolve (a name that will
     # not decrypt) yields a hash a live row holds instead.
+    # With S6 step 3's write stop on in the vault, no hash is written.
+    :ok = if hash?, do: put_revived_hashes(user, vault_id, ids), else: :ok
+
+    n
+  end
+
+  defp put_revived_hashes(user, vault_id, ids) do
     dek = dek!(user)
     fk = Crypto.dek_filter_key_from_bytes(dek)
     paths = paths_by_ids(dek, vault_id, ids)
@@ -1731,7 +1787,7 @@ defmodule Engram.Folders.Rows do
       PathHmacs.put(user.id, for({id, p} <- paths, is_binary(p), do: {id, path_hmac(fk, p)}))
 
     {:ok, _} = PathHmacs.yield(vault_id, for(id <- ids, not is_binary(paths[id]), do: id))
-    n
+    :ok
   end
 
   @doc """

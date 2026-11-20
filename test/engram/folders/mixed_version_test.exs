@@ -14,7 +14,17 @@ defmodule Engram.Folders.MixedVersionTest do
   alias Engram.Folders.{PathHmacs, Rows, RowsV089}
   alias Engram.Repo
 
+  # A mixed window with 0.89.0 is only possible while S6 step 3's write stop
+  # is inert (its floor is release D), so these run inert.
   setup do
+    Application.put_env(:engram, :path_hash_stop_floors, :enforce)
+    Application.put_env(:engram, :path_hash_stop_markers_gone, false)
+
+    on_exit(fn ->
+      Application.put_env(:engram, :path_hash_stop_floors, :assume)
+      Application.put_env(:engram, :path_hash_stop_markers_gone, true)
+    end)
+
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user)
     {:ok, fk} = Crypto.dek_filter_key(user)

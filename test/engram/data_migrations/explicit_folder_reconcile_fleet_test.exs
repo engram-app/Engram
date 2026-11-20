@@ -22,6 +22,11 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcileFleetTest do
   alias Engram.Repo
 
   setup do
+    # Markers are written here, so the vault keeps release D's path hashes:
+    # #2645's write stop is on only once a vault has no marker
+    # (`PathHashStop.markers_gone?/2`), and the test env assumes it on.
+    Application.put_env(:engram, :path_hash_stop_markers_gone, false)
+    on_exit(fn -> Application.put_env(:engram, :path_hash_stop_markers_gone, true) end)
     Engram.Test.MaintenancePool.start!()
     IdWindows.reset_walk(Reconcile.name())
 

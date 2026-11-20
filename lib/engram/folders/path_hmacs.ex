@@ -70,6 +70,14 @@ defmodule Engram.Folders.PathHmacs do
   # Every read is then a primary-key or `folders_full_path` probe.
 
   @doc """
+  The `set:` keywords that clear a row's hash, for a writer that must drop
+  it in its own UPDATE (a restore with S6 step 3's write stop on): no
+  release needed, a NULL hash is held by no one.
+  """
+  @spec cleared() :: keyword()
+  def cleared, do: [full_path_hmac: nil]
+
+  @doc """
   An insert row (a map for `Repo.insert_all/3`) carrying `hash`: the one
   place a new folder row gets it, so it is written once. The caller then
   runs `release/3` for the rows it inserted, in the same transaction.
@@ -89,7 +97,10 @@ defmodule Engram.Folders.PathHmacs do
   @doc """
   Sets each `{id, hash}` of `user_id`'s rows (a nil hash is skipped), first
   releasing that hash from any other live row of the same vault (only
-  for a live target). Returns `{:ok, rows set}`.
+  for a live target). Returns `{:ok, rows set}`. Dropping nil pairs is
+  what keeps rows hashless under `Engram.Folders.PathHashStop`: there every
+  writer's hash is nil (`Rows`' `full_h`), a marker's (`put_marker_hashes`)
+  included, so no caller needs its own stop check.
   """
   @spec put(module(), Ecto.UUID.t(), [{Ecto.UUID.t() | binary(), binary() | nil}]) ::
           {:ok, non_neg_integer()}

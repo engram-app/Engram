@@ -31,6 +31,11 @@ config :engram, :write_stop_floors, :assume
 # Likewise the S6 root-row readers' release (`Rows.root_writes?/1`) until the
 # floor reaches it: tests write root references.
 config :engram, :root_refs_floor, :assume
+# S6 step 3's path-hash write stop (`Engram.Folders.PathHashStop.on?/2`):
+# inert until the floor reaches release D; tests assume it is on, and
+# `PathHashStopTest` pins the inert default and the D-shaped writes.
+config :engram, :path_hash_stop_floors, :assume
+config :engram, :path_hash_stop_markers_gone, true
 # The OAuth limiter's coarse per-IP bucket (EngramWeb.Plugs.OAuthRateLimit):
 # every test shares 127.0.0.1, so it needs the same high ceiling.
 config :engram, :oauth_ip_rate_limit_override, 10_000

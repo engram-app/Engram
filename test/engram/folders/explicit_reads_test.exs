@@ -13,6 +13,11 @@ defmodule Engram.Folders.ExplicitReadsTest do
   alias Engram.Folders.Rows
 
   setup do
+    # Markers are written here, so the vault keeps release D's path hashes:
+    # #2645's write stop is on only once a vault has no marker
+    # (`PathHashStop.markers_gone?/2`), and the test env assumes it on.
+    Application.put_env(:engram, :path_hash_stop_markers_gone, false)
+    on_exit(fn -> Application.put_env(:engram, :path_hash_stop_markers_gone, true) end)
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     %{user: user, vault: insert(:vault, user: user)}
   end

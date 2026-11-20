@@ -6,7 +6,13 @@ defmodule Engram.DataMigrations.NoteFolderHashNull do
 
   A note's hash is nulled only when its `folder_ref_id` names a live folder
   row whose `full_path_hmac` equals it: the hash is then provably redundant
-  with the row. No Qdrant payload is touched (R3a stopped writing and reading
+  with the row. (S6 step 3 stops writing `folders.full_path_hmac` once its
+  write stop is on, `Engram.Folders.PathHashStop`: a row written since has
+  it NULL and its notes are left, the safe direction. A row renamed since
+  keeps its OLD hash, and an uncascaded note under it the same old
+  `folder_hmac`, so that note IS nulled: harmless, its chain is the source
+  of truth and release D reads NULL. The column's drop waits for this
+  ledger, the last reader.) No Qdrant payload is touched (R3a stopped writing and reading
   the chunk `f`). A root note (no reference, it keeps its hash), a drift note (no
   reference or a dead one) and a note whose row disagrees are left as they
   are and do not keep the ledger open.

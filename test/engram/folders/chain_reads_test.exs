@@ -46,28 +46,17 @@ defmodule Engram.Folders.ChainReadsTest do
   defp refs(u, v, paths), do: tenant(u, fn -> u |> Rows.subtree_refs(v.id, paths) |> ids() end)
   defp ids(rows), do: rows |> Enum.map(& &1.id) |> Enum.sort()
 
-  # The answer the 0.86.0 readers gave: rows by their stored `full_path_hmac`.
-  defp hash_oracle(user, vault, path) do
-    {:ok, fk} = Crypto.dek_filter_key(user)
-
-    %{rows: rows} =
-      Repo.query!(
-        "SELECT id FROM folders WHERE vault_id = $1 AND full_path_hmac = $2 AND deleted_at IS NULL",
-        [Ecto.UUID.dump!(vault.id), Rows.path_hmac(fk, path)]
-      )
-
-    Enum.map(rows, fn [id] -> Ecto.UUID.load!(id) end)
-  end
-
   defp sql!(sql, params), do: Repo.query!(sql, params)
 
-  describe "parity with the stored path hash while writers cascade" do
-    test "every reader answers exactly what full_path_hmac did", %{user: u, vault: v} do
+  describe "every reader against the tree" do
+    test "every reader answers the row the chain of names puts at the path", %{
+      user: u,
+      vault: v
+    } do
       tree = FolderRows.tree(u)
 
       for path <- @paths do
-        assert [id] = hash_oracle(u, v, path), path
-        assert tree[path].id == id
+        id = tree[path].id
         assert by_path(u, v, [path]) == %{path => id}
         assert at(u, v, [path]) == [id]
 
@@ -117,10 +106,6 @@ defmodule Engram.Folders.ChainReadsTest do
       tree = FolderRows.tree(u)
       %{"A/Z/C" => %{id: c}, "A/Z/C/D" => %{id: d}, "A/Z/C/D/E" => %{id: e}} = tree
 
-      # The stale hash still names the old path: the old readers' answer.
-      assert hash_oracle(u, v, "A/B/C") == [c]
-      assert hash_oracle(u, v, "A/Z/C") == []
-
       assert by_path(u, v, ["A/Z/C", "A/B/C", "A/Z"]) ==
                %{"A/Z/C" => c, "A/B/C" => nil, "A/Z" => b}
 
@@ -168,12 +153,10 @@ defmodule Engram.Folders.ChainReadsTest do
     end
 
     test "a live row under a dead ancestor has no path", %{user: u, vault: v} do
-      %{"A/B" => b, "A/B/C" => c} = by_path(u, v, ["A/B", "A/B/C"])
+      %{"A/B" => b} = by_path(u, v, ["A/B"])
       sql!("UPDATE folders SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(b)])
 
-      # The old hash read still found it; the tree (`Rows.decrypt_tree/2`)
-      # never showed it, and now no reader does.
-      assert hash_oracle(u, v, "A/B/C") == [c]
+      # The tree (`Rows.decrypt_tree/2`) never showed it, and no reader does.
       assert by_path(u, v, ["A/B/C"]) == %{"A/B/C" => nil}
       assert sub(u, v, ["A/B/C"]) == []
     end
