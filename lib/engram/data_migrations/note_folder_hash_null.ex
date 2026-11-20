@@ -29,9 +29,6 @@ defmodule Engram.DataMigrations.NoteFolderHashNull do
   tuples (R8's null batch, 2026-11-07), so the per-pass cap is low: the
   `note_folder_hash_null_max_fixed` service override (rows, default 2,000),
   about 2,000 dead `notes` tuples and their index entries per hourly pass.
-  Tuned per environment by the `NOTE_FOLDER_HASH_NULL_MAX_FIXED` env var
-  (config/runtime.exs, set via Terraform); a DB service override still wins
-  over the env value.
 
   Kill switch: `enabled?/0` is the `note_folder_hash_null` service override
   (default on). Not re-verified: a C or D node (rollout or rollback) writes a

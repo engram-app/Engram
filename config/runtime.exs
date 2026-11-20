@@ -277,16 +277,6 @@ if config_env() != :test do
     config :engram, :embed_reconcile_backoff_seconds, String.to_integer(secs)
   end
 
-  # Rows the release-E `note_folder_hash_null` walk fixes per hourly pass
-  # (`Engram.DataMigrations.NoteFolderHashNull.max_fixed/0`). Unset or blank =
-  # the code default (2,000). A `note_folder_hash_null_max_fixed` service
-  # override in the DB still wins over this. Not an integer fails boot; zero or
-  # negative is ignored at read time with a warning.
-  case String.trim(System.get_env("NOTE_FOLDER_HASH_NULL_MAX_FIXED", "")) do
-    "" -> :ok
-    rows -> config :engram, :note_folder_hash_null_max_fixed, String.to_integer(rows)
-  end
-
   # Client-side Voyage rate limit. Unset = no throttle (self-host default).
   # Set to your Voyage paid-tier RPM (e.g. 2000) to fail fast with a synthetic
   # 429 before burning real API calls. EmbedNote snoozes on the synthetic 429

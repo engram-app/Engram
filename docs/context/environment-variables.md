@@ -216,12 +216,6 @@ Paddle is the Merchant-of-Record. Server keys gate API calls; the client token f
 > unit test pins the env var names. Add a limiter override there, not by
 > copying a block into runtime.exs.
 
-## Data migrations
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `NOTE_FOLDER_HASH_NULL_MAX_FIXED` | unset (`2000`) | Rows the `note_folder_hash_null` walk fixes per hourly pass (the dead-tuple pace on `notes`). Blank reads the default; not an integer fails boot; zero or negative is ignored with a warning. A `note_folder_hash_null_max_fixed` service override in the DB wins over it. Set per environment via Terraform. |
-
 ## Sync / CRDT fan-out
 
 | Variable | Default | Purpose |
