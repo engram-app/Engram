@@ -38,15 +38,24 @@ defmodule Engram.FileTimeDoublesGoneTest do
     end
   end
 
+  # The one non-doc heredoc that names a double and is not SQL: the MCP
+  # attachment tool's prose, which names the `mtime` wire param.
+  @prose_exempt {"lib/engram/mcp/handlers.ex", "&mtime=<unix seconds>"}
+
   # Raw SQL would only fail at runtime in whatever test runs it: no lib/
   # SQL (a string or a heredoc that is not a doc) and no one-letter query
-  # binding (`n.mtime`) names a double.
+  # binding (`n.mtime`) names a double. The migrations' `# safety_assured`
+  # turns the migration-gates reference grep off, so this is the only
+  # static check left.
   test "no lib/ SQL or query binding names a double column" do
+    {exempt_path, exempt_text} = @prose_exempt
+
     hits =
       for path <- Path.wildcard("lib/**/*.ex"),
           {line, n} <- sql_lines(File.read!(path)),
           Regex.match?(~r/\b(mtime|ctime)\b/, line) or
             Regex.match?(~r/(?<![A-Za-z_.])[a-z]\.(mtime|ctime)\b/, line),
+          not (path == exempt_path and String.contains?(line, exempt_text)),
           do: "#{path}:#{n}: #{String.trim(line)}"
 
     assert hits == []
@@ -76,25 +85,36 @@ defmodule Engram.FileTimeDoublesGoneTest do
           ~s(      """),
           "  mtime in prose",
           ~s(  """),
-          ~s(text = """),
-          "POST /api/attachments?mtime=<unix seconds>",
+          ~s(q = """),
+          "-- a comment first",
+          "UPDATE notes SET mtime = 1",
+          ~s("""),
+          ~s[x = "COALESCE(mtime, 0)"],
+          ~s(x = "select mtime from notes"),
+          ~s[fragment("""],
+          "COALESCE(ctime, 0)",
           ~s(""")
         ],
         "\n"
       )
 
-    assert Enum.map(sql_lines(src), &elem(&1, 1)) == [5, 7, 8, 11]
     # Lines 15-20: a `@doc` holding a heredoc example yields nothing.
-    # Lines 21-23: a prose heredoc (no leading SQL keyword) yields nothing.
+    # 22-23: every line of a non-doc heredoc, a `--` comment first or not.
+    # 25-26: quoted SQL by function call or lowercase keyword. 28: a
+    # `fragment("""` heredoc.
+    assert Enum.map(sql_lines(src), &elem(&1, 1)) == [5, 7, 8, 11, 22, 23, 25, 26, 28]
   end
 
   # `{line, number}` for every line that can hold SQL or a query binding:
   # a line inside a heredoc that is not a `@doc` / `@moduledoc`, a quoted
-  # line with an SQL keyword, and any non-comment line (for bindings, which
+  # line with an SQL keyword (any case) or a name inside a call in the
+  # string (`"COALESCE(mtime, 0)"`), and any non-comment line (for bindings, which
   # the caller matches separately).
   defp sql_lines(src) do
-    sql_word = ~r/\b(SELECT|UPDATE|INSERT|WHERE|SET|FROM)\b/
-    sql_start = ~r/^(SELECT|UPDATE|INSERT|DELETE|WITH|ALTER|CREATE|DROP)\b/i
+    sql_word = ~r/\b(SELECT|UPDATE|INSERT|WHERE|SET|FROM)\b/i
+    # A name inside a call within ONE string literal (`"COALESCE(mtime, 0)"`),
+    # not a call that merely follows a string (`{"x-mtime", f(mtime)}`).
+    sql_call = ~r/\w\(.*\b(mtime|ctime)\b/
 
     src
     |> String.split("\n")
@@ -113,21 +133,16 @@ defmodule Engram.FileTimeDoublesGoneTest do
           cond do
             String.starts_with?(trimmed, ~s(""")) and indent <= open_indent -> {nil, :code}
             kind == :doc -> {nil, mode}
-            # A non-doc heredoc is SQL when its first non-blank line starts
-            # with a statement keyword; otherwise it is prose (an MCP tool
-            # description naming the `mtime` wire param) and is skipped.
-            kind == :open and trimmed == "" -> {nil, mode}
-            kind == :open and Regex.match?(sql_start, trimmed) -> {{line, n}, {:sql, open_indent}}
-            kind == :open -> {nil, {:doc, open_indent}}
             true -> {{line, n}, mode}
           end
 
         :code ->
           cond do
             opens? and Regex.match?(~r/@(module)?doc\b/, trimmed) -> {nil, {:doc, indent}}
-            opens? -> {nil, {:open, indent}}
+            opens? -> {nil, {:sql, indent}}
             String.starts_with?(trimmed, "#") -> {nil, :code}
             String.contains?(line, ~s(")) and Regex.match?(sql_word, line) -> {{line, n}, :code}
+            in_literal?(line, sql_call) -> {{line, n}, :code}
             Regex.match?(~r/(?<![A-Za-z_.])[a-z]\.(mtime|ctime)\b/, line) -> {{line, n}, :code}
             true -> {nil, :code}
           end
@@ -135,5 +150,11 @@ defmodule Engram.FileTimeDoublesGoneTest do
     end)
     |> elem(0)
     |> Enum.reject(&is_nil/1)
+  end
+
+  defp in_literal?(line, re) do
+    ~r/"(?:[^"\\]|\\.)*"/
+    |> Regex.scan(line)
+    |> Enum.any?(fn [lit] -> Regex.match?(re, lit) end)
   end
 end
