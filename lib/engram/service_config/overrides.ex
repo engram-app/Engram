@@ -117,7 +117,9 @@ defmodule Engram.ServiceConfig.Overrides do
     attachment_name_key: :boolean,
     attachment_name_key_max_fixed: {:integer, 1..1_000_000},
     # S6 step 1b: the root folder reference fill (`DataMigrations.RootRefs`).
-    root_refs: :boolean
+    root_refs: :boolean,
+    # S6 step 6 phase 2: folder renames leave attachments in place (kill switch).
+    attachment_write_stop: :boolean
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})
