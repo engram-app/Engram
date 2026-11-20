@@ -138,10 +138,11 @@ defmodule Engram.Attachments.WriteStopTest do
     assert {:ok, %{content: "bytes of A/x.png"}} = Attachments.get_attachment(u, v, "B/x.png")
   end
 
-  # The floor PR (Todd's approval, via god) flips this when it raises the floor.
-  test "inert until the rollback floor reaches the attachment readers release" do
+  # The floor-raise (#2674) put the rollback floor at release D, the
+  # attachment readers: the floor leg holds on the real floor.
+  test "the rollback floor reaches the attachment readers release" do
     assert WriteStop.reads_release() == "release-v0.90.0"
-    refute Floor.at_least?(WriteStop.reads_release())
-    refute WriteStop.floors?(:enforce)
+    assert Floor.at_least?(WriteStop.reads_release())
+    assert WriteStop.floors?(:enforce)
   end
 end
