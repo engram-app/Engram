@@ -1,8 +1,12 @@
 defmodule EngramWeb.Plugs.TraceUserAttrs do
   @moduledoc """
   Stamps the current OTel request span with hashed `app.user_id` and `app.vault_id`
-  so traces are filterable per user/vault. Must run AFTER Auth (and VaultPlug for
-  vault_id). No-op when the assigns are absent.
+  so traces are filterable per user/vault, plus `plugin.version` (set by
+  `RequirePluginVersion`) and `app.device_id` (`X-Device-Id`) so a flood names the
+  client build that sent it (2026-11-18: 300k `POST /api/notes` from one user, no
+  way to tell which plugin). Span attributes only, never metric labels: both are
+  client-supplied, so they are length-capped here. Must run AFTER Auth (and
+  VaultPlug for vault_id). No-op when the assigns are absent.
   """
   @behaviour Plug
   alias Engram.Crypto.HMAC
@@ -26,7 +30,22 @@ defmodule EngramWeb.Plugs.TraceUserAttrs do
     []
     |> maybe_user(conn.assigns[:current_user])
     |> maybe_vault(conn.assigns[:current_vault])
+    |> maybe_client("plugin.version", conn.assigns[:plugin_version])
+    |> maybe_client("app.device_id", EngramWeb.OriginDevice.from_conn(conn))
   end
+
+  @max_client_attr 32
+
+  # Client-supplied strings: printable ASCII only (versions and device ids
+  # are), capped at @max_client_attr BYTES so a hostile header cannot bloat the
+  # span. A grapheme cap let one grapheme carry thousands of combining marks.
+  defp maybe_client(attrs, key, value) when is_binary(value) do
+    if value =~ ~r/\A[\x21-\x7e]+\z/,
+      do: [{key, binary_part(value, 0, min(byte_size(value), @max_client_attr))} | attrs],
+      else: attrs
+  end
+
+  defp maybe_client(attrs, _key, _value), do: attrs
 
   # Keyed HMAC, NOT plain sha256: matches the user_id hash in log metadata
   # (Engram.Crypto.HMAC.hash_user_id/1) so trace and log user_id values correlate.

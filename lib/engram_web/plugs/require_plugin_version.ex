@@ -42,20 +42,22 @@ defmodule EngramWeb.Plugs.RequirePluginVersion do
     conn = assign(conn, :plugin_version, reported)
     obsidian? = conn |> get_req_header("user-agent") |> PluginVersion.obsidian_client?()
 
-    if PluginVersion.supported?(reported, obsidian?) do
-      conn
-    else
-      # `your_version` is safe to echo: it is nil (absent) or a string
-      # `supported?/1` successfully parsed as a version, which bounds both
-      # length and alphabet. An arbitrary blob never reaches this branch.
+    case Engram.ClientGate.plugin_version(reported, obsidian?) do
+      :ok ->
+        conn
+
+      # The body is the verdict's own refusal (one read of the minimum), with
+      # `reason` renamed to the HTTP `error` key. `your_version` is safe to
+      # echo: it is nil (absent) or a string `supported?/1` successfully parsed
+      # as a version, which bounds both length and alphabet.
       # `retry-after`: an hour. Nothing changes until the user updates, so a
       # client that honors it stops hammering; one that ignores it is no worse off.
-      conn
-      |> put_resp_header("retry-after", "3600")
-      |> Halt.json(
-        426,
-        Map.put(PluginVersion.recovery_fields(reported), :error, "plugin_upgrade_required")
-      )
+      {:error, refusal} ->
+        {reason, body} = Map.pop!(refusal, :reason)
+
+        conn
+        |> put_resp_header("retry-after", "3600")
+        |> Halt.json(Engram.ClientGate.http_status(reason), Map.put(body, :error, reason))
     end
   end
 end

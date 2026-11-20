@@ -85,7 +85,7 @@ defmodule Engram.NotesPathIndexPlanTest do
 
     sqls =
       for sql <- QueryPlan.reading(queries, "notes"),
-          sql =~ ~s("content_hash" = $) and sql =~ ~s(NOT \(n0."deleted_at" IS NULL\)),
+          sql =~ ~r/"content_hash" = (ANY\()?\$/ and sql =~ ~s(NOT \(n0."deleted_at" IS NULL\)),
           do: sql
 
     assert_index(sqls, @tomb_index)

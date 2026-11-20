@@ -45,6 +45,10 @@ defmodule EngramWeb.UserChannel do
   # No @spec: literal map body (dialyzer contract_supertype; same as Uploads.part_size/0).
   def features do
     base = %{
+      # What the plugin is refused below, and what to install. Read from the
+      # one function every gate uses, so a client can self-pause before a write.
+      plugin_floor:
+        Engram.PluginVersion.recovery_fields(nil) |> Map.take([:min_version, :update_to]),
       raw_attachment_upload: true,
       raw_attachment_download: true,
       crdt_diff_refusal: true,
@@ -78,8 +82,17 @@ defmodule EngramWeb.UserChannel do
       # exemption on the HTTP side and gets none here. (#1435)
       # A revoked grant is refused even if its disconnect broadcast never
       # reached this socket (`ChannelGate.vault_scope/1`).
+      # A quarantined account holds no `user:` socket either. This channel
+      # carries no note content, but it is the plan/vault event feed and a
+      # dropped abuser would otherwise just reconnect here. A lift drops the
+      # paused sockets (`ClientLocks.lift_quarantine/2`), so the client rejoins
+      # and is admitted at once.
       with :ok <- ChannelGate.check_not_deleted(user),
+           :ok <- Engram.ClientGate.paused(user),
            scope when scope != :revoked <- ChannelGate.vault_scope(socket.assigns) do
+        # Every client idles on this topic, so it is where a runtime floor
+        # change reaches live sockets (`Engram.Admin.ClientLocks`).
+        :ok = Phoenix.PubSub.subscribe(Engram.PubSub, Engram.Admin.ClientLocks.topic())
         {:ok, %{plan: Engram.Billing.plan_state(user), features: features()}, socket}
       else
         :revoked -> {:error, %{reason: "unauthorized"}}
@@ -100,6 +113,23 @@ defmodule EngramWeb.UserChannel do
   # Ignore rather than reply: there is no client request shape to answer.
   @impl true
   def handle_in(_event, _payload, socket), do: {:noreply, socket}
+
+  # A runtime plugin-floor set or lift: drop this socket if its plugin is
+  # below the affected version, so it rejoins and is judged (set) or admitted
+  # (lift). Other sockets are untouched, which bounds the reconnect herd to the
+  # clients the change is about. One comparison per user channel per change.
+  @impl true
+  def handle_info({:client_gate_recheck, min_version}, socket) do
+    if Engram.PluginVersion.below?(socket.assigns[:plugin_version], min_version),
+      do:
+        send(socket.transport_pid, %Phoenix.Socket.Broadcast{
+          event: "disconnect",
+          topic: socket.topic,
+          payload: %{}
+        })
+
+    {:noreply, socket}
+  end
 
   # Both intercepted events always carry `vault_id`; there is deliberately no
   # catch-all clause, so adding a third event to `intercept` above without

@@ -228,6 +228,150 @@ defmodule EngramWeb.NotesControllerTest do
   # Version conflict (409)
   # ---------------------------------------------------------------------------
 
+  # An unchanged push (stored hash == pushed hash) skips the field decrypt and
+  # the link parse for the user's own sync clients. Proven by shape: the reply
+  # carries no decrypted field (title, content) and no links, and
+  # "force: true is never lean" shows `upsert_note` returns the undecrypted row.
+  describe "POST /notes unchanged push (lean reply)" do
+    defp plugin_push(conn, params), do: conn |> as_plugin() |> post("/api/notes", params)
+
+    test "plugin re-push of identical content: ids and hashes only, no decrypt, no link parse",
+         %{conn: conn} do
+      params = %{path: "Lean/Same.md", content: "# Same\n\n[[Other]] body", mtime: 1.0}
+      assert %{"note" => first} = conn |> plugin_push(params) |> json_response(200)
+
+      assert %{"note" => note} = conn |> plugin_push(params) |> json_response(200)
+
+      assert Map.take(note, ["id", "path", "folder", "version", "content_hash"]) ==
+               Map.take(first, ["id", "path", "folder", "version", "content_hash"])
+
+      assert note["version"] == 1
+      refute Map.has_key?(note, "content")
+      refute Map.has_key?(note, "links")
+      refute Map.has_key?(note, "title")
+      refute Map.has_key?(note, "tags")
+    end
+
+    test "an API-key caller (no plugin header) still gets the full note", %{conn: conn} do
+      params = %{path: "Lean/Full.md", content: "# Full\n\n[[Other]]", mtime: 1.0}
+      post(conn, "/api/notes", params)
+
+      assert %{"note" => note} = conn |> post("/api/notes", params) |> json_response(200)
+      assert note["title"] == "Full"
+      assert note["content"] == params.content
+      assert is_list(note["links"])
+    end
+
+    test "a changed push decrypts and renders in full", %{conn: conn} do
+      conn
+      |> plugin_push(%{path: "Lean/Chg.md", content: "# Chg", mtime: 1.0})
+      |> json_response(200)
+
+      assert %{"note" => %{"version" => 2, "title" => "Chg 2", "content" => "# Chg 2"}} =
+               conn
+               |> plugin_push(%{path: "Lean/Chg.md", content: "# Chg 2", mtime: 2.0})
+               |> json_response(200)
+    end
+
+    test "a first push (new note) renders in full", %{conn: conn} do
+      assert %{"note" => %{"title" => "New", "version" => 1, "tags" => []}} =
+               conn
+               |> plugin_push(%{path: "Lean/New.md", content: "# New", mtime: 1.0})
+               |> json_response(200)
+    end
+
+    # Root cause of the 2026-11-19 flood: the stored hash is over the LF doc,
+    # the pushed hash was over the raw body, so a non-LF body never matched
+    # and every identical re-push bumped version, seq and the checkpoint.
+    for {name, body} <- [
+          crlf: "# Eol\r\nline\r\n",
+          lone_cr: "# Eol\rline\r",
+          mixed: "# Eol\r\nline\nthree\r",
+          frontmatter_crlf: "---\r\ntags: [b, a]\r\ntitle: T\r\n---\r\nbody\r\n",
+          trailing_ws: "# Eol  \nline \n\n",
+          bom: "\uFEFF# Eol\nline\n"
+        ] do
+      test "re-pushing the same #{name} body never bumps the version", %{conn: conn} do
+        params = %{path: "Lean/Eol.md", content: unquote(body), mtime: 1.0}
+
+        assert %{"note" => %{"version" => v}} = conn |> plugin_push(params) |> json_response(200)
+        assert %{"note" => %{"version" => ^v}} = conn |> plugin_push(params) |> json_response(200)
+        assert %{"note" => %{"version" => ^v}} = conn |> plugin_push(params) |> json_response(200)
+      end
+    end
+
+    test "a CRLF re-push of the LF note already stored is unchanged", %{conn: conn} do
+      conn
+      |> plugin_push(%{path: "Lean/Eol2.md", content: "# E\nline", mtime: 1.0})
+      |> json_response(200)
+
+      assert %{"note" => %{"version" => 1}} =
+               conn
+               |> plugin_push(%{path: "Lean/Eol2.md", content: "# E\r\nline", mtime: 2.0})
+               |> json_response(200)
+    end
+
+    test "a trashed note is not an unchanged push: it is a fresh create", %{conn: conn} do
+      conn
+      |> plugin_push(%{path: "Lean/Gone.md", content: "# Gone", mtime: 1.0})
+      |> json_response(200)
+
+      assert conn |> delete("/api/notes/Lean/Gone.md") |> json_response(200)
+
+      resp = plugin_push(conn, %{path: "Lean/Gone.md", content: "# Gone", mtime: 1.0})
+      # Delete-wins: the same body re-pushed seconds after a delete is refused.
+      assert json_response(resp, 409) == %{"conflict" => true, "reason" => "recently_deleted"}
+    end
+
+    test "force: true is never lean", %{user: user, vault: vault} do
+      attrs = %{"path" => "Lean/Force.md", "content" => "# Force", "mtime" => 1.0}
+      {:ok, _} = Engram.Notes.upsert_note(user, vault, attrs, actor: "sync")
+
+      assert {:ok, {:unchanged, raw}} =
+               Engram.Notes.upsert_note(user, vault, attrs,
+                 actor: "sync",
+                 lean_unchanged: true
+               )
+
+      assert raw.path == "Lean/Force.md" and is_nil(raw.content) and is_nil(raw.title)
+
+      assert {:ok, %Engram.Notes.Note{title: "Force"}} =
+               Engram.Notes.upsert_note(user, vault, attrs,
+                 actor: "sync",
+                 lean_unchanged: true,
+                 force: true
+               )
+    end
+
+    test "another tenant's identical push is lean for them only (zero-rows control)",
+         %{conn: conn, user: user, vault: vault} do
+      attrs = %{"path" => "Lean/Tenant.md", "content" => "# Tenant", "mtime" => 1.0}
+      {:ok, mine} = Engram.Notes.upsert_note(user, vault, attrs, actor: "sync")
+
+      other = insert(:user)
+      other_vault = insert(:vault, user: other, is_default: true)
+
+      # Control: the other tenant has no note at this path, so the same body is
+      # a CREATE for them (full note, own id), not an unchanged push of mine.
+      assert {:ok, %Engram.Notes.Note{} = theirs} =
+               Engram.Notes.upsert_note(other, other_vault, attrs,
+                 actor: "sync",
+                 lean_unchanged: true
+               )
+
+      assert theirs.id != mine.id
+      assert theirs.version == 1
+
+      # And the first tenant's conn still resolves only its own row.
+      assert %{"note" => %{"id" => id}} =
+               conn
+               |> plugin_push(attrs)
+               |> json_response(200)
+
+      assert id == mine.id
+    end
+  end
+
   describe "POST /notes version conflict" do
     test "succeeds when client version matches server version", %{conn: conn} do
       post(conn, "/api/notes", %{path: "Test/Match.md", content: "# v1", mtime: 1_000.0})

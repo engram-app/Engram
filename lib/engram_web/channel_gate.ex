@@ -10,7 +10,7 @@ defmodule EngramWeb.ChannelGate do
   ## What is mirrored, and what is NOT
 
   The vault scope pipes `:authed_api` (`router.ex:49-68`), which runs
-  **twelve** plugs (`WebActivity` was added after `BumpActivity`; the deleted
+  **thirteen** plugs (`WebActivity` was added after `BumpActivity`; the deleted
   `EnforceSearchCap` once inflated an older count). Below in PIPELINE order, which is also the order
   `check/5` applies them; derive one from the other only in that order.
 
@@ -21,7 +21,8 @@ defmodule EngramWeb.ChannelGate do
     * `RequireOnboarding`         → `onboarding_required` ✅ #1426
     * `RequireActiveSubscription` → `account_suspended` ✅ #1429
     * `BumpActivity`              → liveness stamp ✅ #1429 (see `## Activity`)
-    * `RequirePluginVersion`      → `plugin_upgrade_required` ✅
+    * `RequireAccountNotPaused`   → `account_paused` ✅ (`ClientGate`)
+    * `RequirePluginVersion`      → `plugin_upgrade_required` ✅ (`ClientGate`)
     * `RequireApiRpsBudget`       → `api_access_not_available`, but ONLY the
       `cap == 0` case ✅ #1433
 
@@ -110,6 +111,7 @@ defmodule EngramWeb.ChannelGate do
 
   alias Engram.Accounts
   alias Engram.Billing
+  alias Engram.ClientGate
   alias Engram.Crypto.HMAC
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
@@ -224,7 +226,7 @@ defmodule EngramWeb.ChannelGate do
           # TRADE-OFF above gives: refusing a join without stamping would let
           # `InactivityCleanup` soft-delete an account that is syncing daily
           # and merely running an old plugin. Data loss beats a stale row.
-          with :ok <- plugin_version(plugin_version, obsidian?) do
+          with :ok <- ClientGate.check(fresh, plugin_version, obsidian?) do
             api_access(fresh, api_key)
           end
         end
@@ -313,22 +315,6 @@ defmodule EngramWeb.ChannelGate do
 
   defp suspended(%{suspended_at: %DateTime{}}), do: {:error, %{reason: "account_suspended"}}
   defp suspended(%{suspended_at: nil}), do: :ok
-
-  # The socket half of `EngramWeb.Plugs.RequirePluginVersion`. Carries the
-  # same three recovery fields as the 426 body — a client refused at join has
-  # no working REST call left to go ask why.
-  defp plugin_version(reported, obsidian?) do
-    if Engram.PluginVersion.supported?(reported, obsidian?) do
-      :ok
-    else
-      {:error,
-       Map.put(
-         Engram.PluginVersion.recovery_fields(reported),
-         :reason,
-         "plugin_upgrade_required"
-       )}
-    end
-  end
 
   # Best-effort, and deliberately so. This is a DB WRITE on a path that was
   # read-only: an exception here would propagate out of `join/3`, kill the

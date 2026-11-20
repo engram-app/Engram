@@ -2,15 +2,29 @@ defmodule Engram.PluginVersion do
   @moduledoc """
   The minimum Obsidian-plugin version this backend will talk to.
 
-  ## Why the floor is a compile-time constant
+  ## Why the floor is a compile-time constant (plus a raise-only runtime lock)
 
-  Not an env var, not a DB row, not an admin toggle. You need a floor at
+  The BASE floor is not an env var, not a DB row, not an admin toggle. You need a floor at
   exactly one moment: you are deploying a backend that old clients can no
   longer talk to correctly. The floor is therefore a property of *this
   release*, and shipping it in the release means it can't drift between
   nodes, can't be forgotten in a task definition, and can't be set to a
   value that contradicts the code running next to it. Raising it is a
   one-line PR that goes out with the change that made it necessary.
+
+  ## The runtime lock (emergency raise)
+
+  A bad plugin build found AFTER release cannot wait for a deploy, so
+  `Engram.Admin.ClientLocks.lock_plugin_version/4` can raise the floor at
+  runtime. It can only RAISE: the floor in force is
+  `max(compile-time, runtime lock)` (`effective_minimum/0`), so a wrong lock can never
+  admit a client the release refuses. It lives in
+  `Engram.ServiceConfig.Overrides` (key `plugin_floor`), requires an expiry and
+  an `update_to` (the version users are told to install), is read from the
+  per-node ETS cache (no query per request; a write evicts every node through
+  `CacheSync`, a lost eviction is bounded by the 15 s TTL), and falls back to
+  the compile-time floor when absent, expired, garbled or switched off
+  (`plugin_floor_enabled` false). Self-host: applies like any floor.
 
   ## This is a compatibility gate, not a security control
 
@@ -114,6 +128,8 @@ defmodule Engram.PluginVersion do
   the HTTP plug alone would leave a "blocked" client happily syncing.
   """
 
+  alias Engram.ServiceConfig
+
   # Raise this in the same PR as the change that makes old clients wrong.
   #
   # 1.36.0 (2026-10-17): Free drops to a 3,000-note cap in the same release.
@@ -135,8 +151,113 @@ defmodule Engram.PluginVersion do
   # against this bound for exactly that reason.
   @max_len 32
 
+  # ponytail: the runtime lock rides the existing ServiceConfig runtime-override
+  # table (cluster-evicted cache, 15 s TTL backstop), so a request pays one ETS
+  # read and never a query. Raise-only: `effective_minimum/0` takes the max with @minimum.
+  @lock_key :plugin_floor
+  @lock_switch :plugin_floor_enabled
+  @reason_max 200
+
+  @doc "The compile-time floor alone, ignoring any runtime lock."
+  @spec compiled_minimum() :: String.t()
+  def compiled_minimum, do: @minimum
+
+  @doc "The floor in force now: `max(compile-time, runtime lock)`."
   @spec minimum() :: String.t()
-  def minimum, do: @minimum
+  def minimum, do: effective_minimum().min
+
+  @doc """
+  THE minimum, as `%{min, show}`: the one function every enforcement seam
+  (`RequirePluginVersion`, `ChannelGate`, the refusal body, the `features`
+  payload) reads. `min` is what a client is judged against, `show` is the
+  version a refused user is told to install (`update_to` of the runtime lock
+  when it is the binding floor, else `min`).
+
+  A missing, expired, garbled or switched-off (`:plugin_floor_enabled` false)
+  lock falls back to the compile-time floor, so a bad row can never block more
+  than the release itself does.
+  """
+  @spec effective_minimum() :: %{min: String.t(), show: String.t()}
+  def effective_minimum do
+    with {:ok, lock} <- active_lock(),
+         :gt <- Version.compare(lock.min, @minimum) do
+      %{min: Version.to_string(lock.min), show: lock.update_to}
+    else
+      _ -> %{min: @minimum, show: @minimum}
+    end
+  end
+
+  # Enabled, well-formed and unexpired. Expiry is judged here on every read, so
+  # an expired lock is lifted even if no sweep or operator ever ran.
+  defp active_lock do
+    with true <- ServiceConfig.get(@lock_switch, true),
+         {:ok, lock} <- ServiceConfig.get(@lock_key) |> parse_lock(),
+         :gt <- DateTime.compare(lock.expires_at, DateTime.utc_now()) do
+      {:ok, lock}
+    else
+      _ -> :none
+    end
+  end
+
+  @doc "What the runtime lock is doing now, for operators (`ClientLocks.list_locks/0`)."
+  # No @spec: the literal map is narrower than any spec worth writing (dialyzer :underspecs).
+  def lock_state do
+    raw = ServiceConfig.get(@lock_key)
+
+    base = %{
+      switch_on?: ServiceConfig.get(@lock_switch, true) == true,
+      compiled_minimum: @minimum,
+      effective_min: effective_minimum().min,
+      active?: active_lock() != :none and effective_minimum().min != @minimum
+    }
+
+    case parse_lock(raw) do
+      {:ok, l} ->
+        Map.merge(base, %{
+          set?: true,
+          min: Version.to_string(l.min),
+          update_to: l.update_to,
+          reason: raw["reason"],
+          expires_at: l.expires_at,
+          expired?: DateTime.compare(l.expires_at, DateTime.utc_now()) != :gt
+        })
+
+      :error ->
+        Map.put(base, :set?, raw != nil)
+    end
+  end
+
+  @doc """
+  Validates a runtime lock value (the JSON map stored in `service_overrides`):
+  `min` and `update_to` plain `X.Y.Z` versions with `update_to >= min`, a future
+  `expires_at` is NOT required here (an expired row is read as no lock) but is
+  required to be present and ISO 8601, and a bounded `reason`.
+  """
+  @spec parse_lock(term()) ::
+          {:ok, %{min: Version.t(), update_to: String.t(), expires_at: DateTime.t()}} | :error
+  def parse_lock(%{"min" => min, "update_to" => to, "expires_at" => exp, "reason" => reason})
+      when is_binary(min) and is_binary(to) and is_binary(exp) and is_binary(reason) do
+    with {:ok, min_v} <- plain_version(min),
+         {:ok, to_v} <- plain_version(to),
+         true <- Version.compare(min_v, to_v) != :gt,
+         {:ok, expires_at, _} <- DateTime.from_iso8601(exp),
+         true <- byte_size(reason) in 1..@reason_max do
+      {:ok, %{min: min_v, update_to: to, expires_at: expires_at}}
+    else
+      _ -> :error
+    end
+  end
+
+  def parse_lock(_), do: :error
+
+  defp plain_version(str) when byte_size(str) <= @max_len do
+    case Version.parse(str) do
+      {:ok, %Version{pre: [], build: nil} = v} -> {:ok, v}
+      _ -> :error
+    end
+  end
+
+  defp plain_version(_), do: :error
 
   @spec update_url() :: String.t()
   def update_url, do: @update_url
@@ -145,16 +266,28 @@ defmodule Engram.PluginVersion do
   `false` only for a version we parsed and found below the floor.
   """
   @spec supported?(term()) :: boolean()
-  def supported?(reported) when is_binary(reported) and byte_size(reported) <= @max_len do
+  def supported?(reported), do: meets?(reported, effective_minimum())
+
+  defp meets?(reported, %{min: min})
+       when is_binary(reported) and byte_size(reported) <= @max_len do
     case Version.parse(String.trim(reported)) do
       # Plain semver ordering, pre-releases included — see the moduledoc for
       # why a `X.Y.Z-pr.N.gSHA` build must NOT satisfy a floor of `X.Y.Z`.
-      {:ok, version} -> Version.compare(version, @minimum) != :lt
+      {:ok, version} -> Version.compare(version, min) != :lt
       :error -> true
     end
   end
 
-  def supported?(_), do: true
+  defp meets?(_, _), do: true
+
+  @doc "True for a parseable `reported` strictly below `min`. Unreadable is never below."
+  @spec below?(term(), String.t()) :: boolean()
+  def below?(reported, min) when is_binary(reported) and byte_size(reported) <= @max_len do
+    match?({:ok, v} when v != nil, Version.parse(String.trim(reported))) and
+      Version.compare(String.trim(reported), min) == :lt
+  end
+
+  def below?(_, _), do: false
 
   @doc """
   `supported?/1` plus the one absence we do NOT allow: no version at all from a
@@ -174,8 +307,12 @@ defmodule Engram.PluginVersion do
   and this is still a compatibility gate, not a security control.
   """
   @spec supported?(term(), boolean()) :: boolean()
-  def supported?(reported, obsidian?) when is_boolean(obsidian?) do
-    not (obsidian? and absent?(reported)) and supported?(reported)
+  def supported?(reported, obsidian?), do: supported?(reported, obsidian?, effective_minimum())
+
+  @doc "`supported?/2` against a floor the caller already read, so verdict and body agree."
+  @spec supported?(term(), boolean(), %{min: String.t(), show: String.t()}) :: boolean()
+  def supported?(reported, obsidian?, floor) when is_boolean(obsidian?) do
+    not (obsidian? and absent?(reported)) and meets?(reported, floor)
   end
 
   @doc """
@@ -187,16 +324,22 @@ defmodule Engram.PluginVersion do
   def reported(_), do: nil
 
   @doc """
-  The three recovery fields both refusals carry (HTTP 426 body, socket join
+  The four recovery fields both refusals carry (HTTP 426 body, socket join
   payload). One definition so the transports cannot drift.
   """
-  @spec recovery_fields(term()) :: %{
+  @spec recovery_fields(term(), %{min: String.t(), show: String.t()}) :: %{
           min_version: String.t(),
+          update_to: String.t(),
           your_version: String.t() | nil,
           update_url: String.t()
         }
-  def recovery_fields(reported) do
-    %{min_version: @minimum, your_version: reported(reported), update_url: @update_url}
+  def recovery_fields(reported, floor \\ effective_minimum()) do
+    %{
+      min_version: floor.min,
+      update_to: floor.show,
+      your_version: reported(reported),
+      update_url: @update_url
+    }
   end
 
   # The Obsidian app's own HTTP stacks. Desktop is Electron ("obsidian/1.15.1"),

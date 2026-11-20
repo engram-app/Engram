@@ -38,7 +38,17 @@ defmodule EngramWeb.WriteActor do
   """
   @spec requires_base?(Plug.Conn.t()) :: boolean()
   def requires_base?(%Plug.Conn{} = conn) do
-    RequestMeta.surface(conn.assigns) in ["api", "mcp"] and
-      Plug.Conn.get_req_header(conn, "x-plugin-version") == []
+    RequestMeta.surface(conn.assigns) in ["api", "mcp"] and not plugin_client?(conn)
+  end
+
+  @doc """
+  Whether the caller says it is the Obsidian plugin: it reports
+  `X-Plugin-Version` (1.29.0+). An Obsidian user agent without it never gets
+  here: `RequirePluginVersion` refuses it as below the floor. Self-reported,
+  so it must never grant anything security-relevant.
+  """
+  @spec plugin_client?(Plug.Conn.t()) :: boolean()
+  def plugin_client?(%Plug.Conn{} = conn) do
+    Plug.Conn.get_req_header(conn, "x-plugin-version") != []
   end
 end

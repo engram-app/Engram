@@ -42,6 +42,11 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # flags 84 sites to protect 40 gets switched off. Widen this list rather than
   # adding exceptions to it.
   @content_paths [
+    # Operator commands that log a free-text reason and operator name (both
+    # cleaned/truncated) and a hashed user id; in scope so a raw term added to
+    # the audit line is scanned.
+    "lib/engram/admin/",
+    "lib/engram/client_gate.ex",
     # Carries user-written free text (survey detail, cancel note, feedback
     # message), which can hold anything a note can.
     "lib/engram/feedback.ex",

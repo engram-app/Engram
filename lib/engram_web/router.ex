@@ -65,6 +65,7 @@ defmodule EngramWeb.Router do
     # dropping Qdrant points and S3 attachments for someone syncing daily.
     # `ChannelGate` already refuses that trade for `api_access/2` in as many
     # words: "data loss beats a stale row". Message precedence is worth less.
+    plug EngramWeb.Plugs.RequireAccountNotPaused
     plug EngramWeb.Plugs.RequirePluginVersion
     plug EngramWeb.Plugs.RequireApiRpsBudget
   end

@@ -55,6 +55,10 @@ defmodule Engram.PromEx.Reliability do
       (the per-device line budget). `level` is bounded by
       `PersistPolicy.metric_level/1`. A rising `over_budget` rate is a client
       stuck in a log loop.
+    * `[:engram, :client_lock, :change]` → `..._client_lock_change_total`, tags
+      `[:action]` (`lock_plugin_version`, `lift_plugin_lock`, `quarantine_user`,
+      `lift_quarantine`) — an operator changed a plugin-version lock or a user
+      quarantine (`Engram.Admin.ClientLocks`). Any non-zero is a human action.
     * `[:engram, :fanout_pacer, :drain]` → `..._fanout_pacer_queue_depth`,
       `..._fanout_pacer_queued`, `..._fanout_pacer_topics` (#1004) — the
       vault-channel pacer's cold-queue state, sampled on every drain tick.
@@ -211,6 +215,12 @@ defmodule Engram.PromEx.Reliability do
           event_name: [:engram, :abuse, :inactivity_sweep_failed],
           description: "Inactivity sweep per-user steps that failed, by step + kind.",
           tags: [:step, :kind]
+        ),
+        counter(
+          metric_prefix ++ [:client_lock, :change, :total],
+          event_name: [:engram, :client_lock, :change],
+          description: "Operator changes to plugin-version locks and user quarantines.",
+          tags: [:action]
         ),
         last_value(
           metric_prefix ++ [:fanout_pacer, :queue_depth],

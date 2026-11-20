@@ -215,4 +215,42 @@ defmodule EngramWeb.PluginVersionGateChannelTest do
     assert {:error, %{reason: "onboarding_required"}} =
              join_crdt(bare, Ecto.UUID.generate(), @ancient)
   end
+
+  describe "runtime lock and quarantine on join" do
+    alias Engram.Admin.ClientLocks
+
+    setup do
+      Application.put_env(:engram, :plugin_manifest_fetcher, fn -> {:ok, "1.99.0"} end)
+      on_exit(fn -> Application.delete_env(:engram, :plugin_manifest_fetcher) end)
+      Engram.ServiceConfig.put_override(:service_overrides_enabled, true)
+      Engram.Cache.clear_local(:service_overrides)
+      on_exit(fn -> Engram.Cache.clear_local(:service_overrides) end)
+    end
+
+    test "a lock refuses an at-compile-floor plugin at join, a lift admits it", ctx do
+      :ok =
+        ClientLocks.lock_plugin_version("1.99.0", "1.99.0", 3600, "r")
+
+      assert {:error,
+              %{reason: "plugin_upgrade_required", min_version: "1.99.0", update_to: "1.99.0"}} =
+               join_crdt(ctx.user, ctx.vault.id, "1.36.0")
+
+      assert {:ok, _, _} = join_crdt(ctx.user, ctx.vault.id, "1.99.0")
+
+      :ok = ClientLocks.lift_plugin_lock()
+      assert {:ok, _, _} = join_crdt(ctx.user, ctx.vault.id, "1.36.0")
+    end
+
+    test "a quarantined user is refused at join with account_paused and a lift admits", ctx do
+      :ok = ClientLocks.quarantine_user(ctx.user.id, "r", 3600)
+
+      assert {:error, %{reason: "account_paused"} = p} =
+               join_crdt(ctx.user, ctx.vault.id, "1.99.0")
+
+      refute Map.has_key?(p, :update_to)
+
+      :ok = ClientLocks.lift_quarantine(ctx.user.id)
+      assert {:ok, _, _} = join_crdt(ctx.user, ctx.vault.id, "1.99.0")
+    end
+  end
 end

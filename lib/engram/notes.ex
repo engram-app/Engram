@@ -1021,6 +1021,10 @@ defmodule Engram.Notes do
       writers that must not blind-overwrite: MCP and external REST callers.
       Creating a new note, and re-pushing the content the note already holds,
       need no base.
+    * `lean_unchanged: true` — a push that changed nothing (stored hash equals
+      the pushed one, no `force:`) returns `{:ok, {:unchanged, note}}`: the
+      undecrypted row with `path`, `folder` and `served_hash` set, no field
+      decrypt. Only the REST controller passes it; it renders ids and hashes.
     * `broadcast_from: pid` — emit the `note_changed` broadcast via
       `Endpoint.broadcast_from/4` so the given subscriber (the pushing
       channel process) is excluded. Channel pushes pass `self()`; HTTP
@@ -1028,6 +1032,7 @@ defmodule Engram.Notes do
   """
   @spec upsert_note(map(), map(), map(), keyword()) ::
           {:ok, Note.t()}
+          | {:ok, {:unchanged, Note.t()}}
           | {:error, Ecto.Changeset.t()}
           | {:error, :version_conflict, Note.t()}
           | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
@@ -1050,7 +1055,12 @@ defmodule Engram.Notes do
     with :ok <- check_size(content),
          {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, path} <- validate_path(path),
-         {:ok, hash} <- content_hash(user, content) do
+         {:ok, hash} <- content_hash(user, content),
+         # The doc (and so the stored content_hash) holds LF for a markdown note
+         # (`maybe_merge_crdt`), so a CRLF body is also named by its LF hash:
+         # without it an identical CRLF re-push never matched and rewrote the row.
+         {:ok, pushed} <- pushed_hashes(user, content, LineEndings.for_path(content, path), hash) do
+      opts = Keyword.put(opts, :pushed_hashes, pushed)
       sanitized_path = PathSanitizer.sanitize(path)
       folder = Helpers.extract_folder(sanitized_path)
       now = DateTime.utc_now()
@@ -1116,9 +1126,15 @@ defmodule Engram.Notes do
           |> commit_content(user, opts, recording)
         end)
 
-      case result do
+      case lean_unchanged(result, opts, sanitized_path, folder) do
         {:ok, :stale_expected} ->
           {:error, :stale_note}
+
+        # `lean_unchanged:` caller, hash-equal push: nothing persisted and the
+        # caller renders ids and hashes only, so the field decrypt is skipped.
+        {:ok, {:unchanged, note}} ->
+          maybe_log_path_rewrite(user, vault, path, sanitized_path, note.id)
+          {:ok, {:unchanged, note}}
 
         {:ok, {:ok, {prev_hash, note, _merged_text, served_hash}}} ->
           note = %{decrypt_or_raise!(note, user) | served_hash: served_hash}
@@ -1130,7 +1146,7 @@ defmodule Engram.Notes do
           # always differ, so they broadcast as before; forced rewrites may
           # keep the same hash (e.g. a tags repair) but did persist a change.
           _ =
-            if prev_hash != note.content_hash or Keyword.get(opts, :force, false) do
+            if not unchanged_push?(prev_hash, note, opts) do
               :ok = broadcast_change(user, vault.id, "upsert", note.path, note, opts)
             end
 
@@ -1346,7 +1362,12 @@ defmodule Engram.Notes do
     cap_check = check_notes_cap(user)
 
     cond do
-      recently_deleted_twin?(user, base_attrs.vault_id, sanitized_path, base_attrs.content_hash) ->
+      recently_deleted_twin?(
+        user,
+        base_attrs.vault_id,
+        sanitized_path,
+        read_pushed_hashes(base_attrs, Map.get(base_attrs, :embed_opts, []))
+      ) ->
         # Delete-wins race: this is a fresh create (no live path match, no
         # client-id match) at a path an explicit delete tombstoned seconds ago,
         # carrying identical content — i.e. another device re-pushing the note
@@ -3091,6 +3112,77 @@ defmodule Engram.Notes do
     end
   end
 
+  # The hashes that name the pushed body: its raw form (`base_attrs.content_hash`,
+  # what a CRLF note no room has opened since LineEndings still stores), plus
+  # its LF form when that differs (what every doc written since holds). The
+  # body itself stays raw: the merge converts it (`maybe_merge_crdt`).
+  defp pushed_hashes(_user, raw, raw, hash), do: {:ok, [hash]}
+
+  defp pushed_hashes(user, _raw, lf, hash) do
+    with {:ok, lf_hash} <- content_hash(user, lf), do: {:ok, [hash, lf_hash]}
+  end
+
+  defp read_pushed_hashes(base_attrs, opts),
+    do: Keyword.get(opts, :pushed_hashes, [base_attrs.content_hash])
+
+  # Whether `stored` is a hash of the pushed body, in either form.
+  defp pushed_hash?(stored, base_attrs, opts),
+    do: is_binary(stored) and stored in read_pushed_hashes(base_attrs, opts)
+
+  # Whether the row already holds what this push would store. The hash check
+  # first; then, only on a miss for a markdown body with frontmatter, the hash
+  # of the text the doc would render it as: the doc keeps frontmatter as keys
+  # and re-renders it (list style, spacing), so a body that does not round-trip
+  # byte-identical never matched and every identical push rewrote the row
+  # (2026-11-18: 12 notes at ~900 version bumps/hour). One fresh-doc parse of
+  # this note, only on the path that would otherwise run the full rewrite.
+  defp same_as_stored?(existing, base_attrs, user, path, opts) do
+    pushed_hash?(existing.content_hash, base_attrs, opts) or
+      (is_binary(existing.content_hash) and
+         existing.content_hash == rendered_hash(user, base_attrs.content, path))
+  end
+
+  defp rendered_hash(user, content, path) do
+    lf = LineEndings.to_lf(content)
+
+    with true <- CrdtBridge.markdown_path?(path),
+         {block, _body} when is_binary(block) <- Frontmatter.split(lf),
+         doc = CrdtBridge.new_doc(),
+         :ok <- CrdtBridge.ingest_plaintext(doc, lf),
+         {:ok, hash} <- content_hash(user, CrdtBridge.project_doc(doc)) do
+      hash
+    else
+      _ -> nil
+    end
+  end
+
+  # The one definition of "this push changed nothing": the row already held the
+  # pushed hash (what `idempotent_repush` returns) and the write was not forced.
+  # `prev_hash` is the stored row's hash and `note` the row returned, so for a
+  # no-op both are that stored hash (LF form, or raw CRLF for a legacy doc).
+  defp unchanged_push?(prev_hash, note, opts),
+    do:
+      is_binary(prev_hash) and prev_hash == note.content_hash and
+        not Keyword.get(opts, :force, false)
+
+  # Opt-in (`lean_unchanged: true`): an unchanged push returns the raw row as
+  # `{:unchanged, note}` with only the fields the lookup proved (the pushed path
+  # and folder), skipping `decrypt_or_raise!`. Everything else is untouched.
+  defp lean_unchanged(
+         {:ok, {:ok, {prev_hash, note, _text, served_hash}}} = result,
+         opts,
+         path,
+         folder
+       ) do
+    if Keyword.get(opts, :lean_unchanged, false) and unchanged_push?(prev_hash, note, opts) do
+      {:ok, {:unchanged, %{note | path: path, folder: folder, served_hash: served_hash}}}
+    else
+      result
+    end
+  end
+
+  defp lean_unchanged(result, _opts, _path, _folder), do: result
+
   # CRDT (Yjs) is the only content-sync path: merge_plaintext in do_update_note
   # IS the conflict resolution. A stale client_version never 409s — the diverging
   # write is merged convergently into crdt_state (no legacy conflict-copy flow).
@@ -3109,10 +3201,11 @@ defmodule Engram.Notes do
           do: idempotent_repush(existing, base_attrs),
           else: rewrite(existing, base_attrs, user, sanitized_path, folder, opts)
 
-      is_binary(existing.content_hash) and
-        existing.content_hash == base_attrs.content_hash and
-          not Keyword.get(opts, :force, false) ->
-        idempotent_repush(existing, base_attrs)
+      # The reply names the hash that matched, the stored one: with a CRLF body
+      # over an LF doc that is the LF hash, not the raw body's.
+      not Keyword.get(opts, :force, false) and
+          same_as_stored?(existing, base_attrs, user, sanitized_path, opts) ->
+        idempotent_repush(existing, %{base_attrs | content_hash: existing.content_hash})
 
       # #2480 (markdown notes): a writer that must not blind-overwrite (MCP,
       # external REST) declared no base. Creating stays open; replacing needs
@@ -4961,7 +5054,7 @@ defmodule Engram.Notes do
   # tombstone older than the window returns false, so a genuine re-create at the
   # same path is allowed. Best-effort: a filter-key error falls back to false
   # (never blocks a write on a crypto hiccup).
-  defp recently_deleted_twin?(user, vault_id, path, content_hash) do
+  defp recently_deleted_twin?(user, vault_id, path, content_hashes) do
     case Crypto.dek_filter_key(user) do
       {:ok, filter_key} ->
         hmac = Crypto.hmac_field(filter_key, path)
@@ -4972,7 +5065,7 @@ defmodule Engram.Notes do
             where: ^Keys.eq(:path, hmac),
             where:
               n.kind == "note" and not is_nil(n.deleted_at) and
-                n.deleted_at >= ^cutoff and n.content_hash == ^content_hash
+                n.deleted_at >= ^cutoff and n.content_hash in ^content_hashes
           )
         )
 

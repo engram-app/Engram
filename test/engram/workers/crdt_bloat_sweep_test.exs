@@ -411,4 +411,57 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
       for n <- loopers, do: refute(log =~ n.id)
     end
   end
+
+  describe "log_save_loops/2" do
+    defp loop_lines(looping, owners) do
+      [level: :warning]
+      |> ExUnit.CaptureLog.capture_log(fn ->
+        CrdtBloatSweep.log_save_loops(looping, owners)
+      end)
+      |> String.split("\n")
+      |> Enum.filter(&(&1 =~ "crdt_save_loop_note"))
+    end
+
+    # A flood on one account (25 fast notes) must not push a second looping
+    # account out of the log: the cap is per account.
+    test "two looping accounts both log, however many notes the faster one has" do
+      [a, b] = [Ecto.UUID.generate(), Ecto.UUID.generate()]
+      a_notes = for i <- 1..25, do: {Ecto.UUID.generate(), 900 + i}
+      b_note = {Ecto.UUID.generate(), 130}
+
+      owners =
+        Map.new(a_notes, fn {id, _} -> {id, a} end) |> Map.put(elem(b_note, 0), b)
+
+      lines = loop_lines([b_note | a_notes], owners)
+
+      a_lines = Enum.filter(lines, &(&1 =~ "user=#{HMAC.hash_user_id(a)}"))
+      assert length(a_lines) == CrdtBloatSweep.save_loop_log_cap()
+      assert hd(a_lines) =~ "rate_per_hour=925"
+      assert [b_line] = Enum.filter(lines, &(&1 =~ "user=#{HMAC.hash_user_id(b)}"))
+      assert b_line =~ "rate_per_hour=130"
+    end
+
+    test "log volume stays bounded by accounts x notes per account" do
+      looping = for _ <- 1..40, _ <- 1..8, do: {Ecto.UUID.generate(), 500}
+
+      owners =
+        looping
+        |> Enum.chunk_every(8)
+        |> Enum.flat_map(fn chunk ->
+          owner = Ecto.UUID.generate()
+          Enum.map(chunk, fn {id, _} -> {id, owner} end)
+        end)
+        |> Map.new()
+
+      assert length(loop_lines(looping, owners)) ==
+               CrdtBloatSweep.save_loop_log_cap() * CrdtBloatSweep.save_loop_log_accounts()
+    end
+
+    test "a note with no owner row logs as user=unknown instead of crashing the sweep" do
+      id = Ecto.UUID.generate()
+
+      assert [line] = loop_lines([{id, 400}], %{})
+      assert line =~ "note=#{HMAC.hash_id(id)} user=unknown rate_per_hour=400 threshold="
+    end
+  end
 end

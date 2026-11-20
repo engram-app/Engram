@@ -72,13 +72,15 @@ defmodule Engram.Billing.LimitEnforcementTest do
   # connection — OAuth consent and device-flow authorize — which no other
   # transport can reach. `mcp_tool_calls_per_min` is a rate of MCP JSON-RPC
   # `tools/call` requests: the MCP endpoint is the only place such a request
-  # exists.
+  # exists. `rest_writes_per_min` is a rate of REST `POST /api/notes`
+  # requests: the socket path has its own frame budgets (`SyncRateLimit.check/4`).
   @transport_scoped ~w(
     api_rps_cap
     concurrent_devices
     device_swap_cooldown_hours
     mcp_tool_calls_per_min
     obsidian_connections_cap
+    rest_writes_per_min
   )a
 
   setup_all do

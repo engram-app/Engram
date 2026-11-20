@@ -148,6 +148,18 @@ There are mutation-checked tests for all three in
 - The factory user's "already onboarded" comment is only true because the flag is
   off. It has no `free_tier_accepted_at`.
 
+## Exception: `account_paused` (operator quarantine)
+
+`UserChannel` stays ungated for onboarding and billing, but it IS refused for a
+quarantined account (`Engram.ClientGate.paused/1`, join reason `account_paused`).
+Unlike an unfinished signup or a suspension, the user cannot work their way out
+of a quarantine, so the `user:` feed has nothing to give them. A paused user
+keeps the socket connection itself, user-scoped HTTP (`/api/me`, billing,
+account routes: `RequireAccountNotPaused` sits only on `:authed_api`) and loses
+live push (plan state, vault events) plus every vault, sync and CRDT join. A
+lift (`Engram.Admin.ClientLocks.lift_quarantine/2`) drops the user's sockets so
+they rejoin and are admitted at once; expiry alone is noticed on the next join.
+
 ## References
 - `lib/engram/onboarding.ex` — `gate/1`, `status/1`
 - `lib/engram/onboarding/gate_cache.ex` — pass-cache + eviction contract

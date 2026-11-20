@@ -450,11 +450,18 @@ defmodule Engram.Workers.CrdtBloatSweep do
   # ponytail: a note first written in this window has no baseline version, so
   # a loop that starts mid-hour shows one sweep later. The baseline only holds
   # notes written in the previous window, which keeps it small.
-  # Most save-loop notes one sweep logs (`crdt_save_loop_note`), fastest first.
-  @save_loop_log_cap 20
+  # Most save-loop notes one sweep logs (`crdt_save_loop_note`) PER ACCOUNT,
+  # fastest first, and most accounts it logs, the fastest accounts first: at
+  # most 5 x 10 = 50 lines whatever the flood. Per account, not a global top N,
+  # so one account looping on many notes cannot hide a second one.
+  @save_loop_log_cap 5
+  @save_loop_log_accounts 10
 
   @doc false
   def save_loop_log_cap, do: @save_loop_log_cap
+
+  @doc false
+  def save_loop_log_accounts, do: @save_loop_log_accounts
 
   defp save_rate(nil, _now, _versions, _owners), do: %{}
 
@@ -480,18 +487,29 @@ defmodule Engram.Workers.CrdtBloatSweep do
 
   # One line per looping note, fastest first, so `engram-prod-crdt-save-loop`
   # can be pinned to a note. Ids are HMAC'd (never raw, never a path or title).
-  defp log_save_loops(looping, owners) do
+  # A note with no owner row still logs, as `user=unknown`: a crash here would
+  # silence the alert. Public for its test only.
+  @doc false
+  def log_save_loops(looping, owners) do
     looping
-    |> Enum.sort_by(fn {id, rate} -> {-rate, id} end)
-    |> Enum.take(@save_loop_log_cap)
+    |> Enum.group_by(fn {id, _rate} -> owners[id] end)
+    |> Enum.map(fn {_owner, notes} ->
+      notes |> Enum.sort_by(fn {id, rate} -> {-rate, id} end) |> Enum.take(@save_loop_log_cap)
+    end)
+    |> Enum.sort_by(fn [{id, rate} | _] -> {-rate, id} end)
+    |> Enum.take(@save_loop_log_accounts)
+    |> Enum.concat()
     |> Enum.each(fn {id, rate} ->
       Logger.warning(
-        "crdt_save_loop_note note=#{HMAC.hash_id(id)} user=#{HMAC.hash_user_id(owners[id])} " <>
+        "crdt_save_loop_note note=#{HMAC.hash_id(id)} user=#{owner_ref(owners[id])} " <>
           "rate_per_hour=#{rate} threshold=#{CrdtBloat.save_rate_threshold()}",
         Metadata.with_category(:warning, :oban, [])
       )
     end)
   end
+
+  defp owner_ref(user_id) when is_binary(user_id), do: HMAC.hash_user_id(user_id)
+  defp owner_ref(_), do: "unknown"
 
   # `enforced?/0` answers a live query and reports `true` when it cannot tell, so
   # a transient DB blip refuses this slot rather than sweeping blind. That is the
