@@ -10,6 +10,7 @@ API-only.
 
 from __future__ import annotations
 
+import time
 import uuid
 
 from helpers.backend_rpc import backend_rpc, vault_user_expr
@@ -36,11 +37,30 @@ _PROBE = (
 )
 
 
+# {kill switch, rollback floor leg, explicit reads, FolderTable completed_at}
+_LEGS = (
+    "{Engram.ServiceConfig.get(:folder_marker_stop, true), "
+    "Engram.Folders.MarkerStop.floors?(), Engram.Folders.Rows.explicit_reads?(), "
+    "Engram.DataMigrations.completed_at(Engram.DataMigrations.FolderTable.name(), "
+    "Engram.DataMigrations.FolderTable.version())}"
+)
+
+
 class TestMarkerStopOn:
     def test_folder_create_writes_no_marker_row(self, api_sync):
-        assert _bool_rpc("marker_stop", "Engram.Folders.MarkerStop.on?()"), (
-            "MarkerStop.on?() is false on the e2e backend: the stop-on path is not covered"
-        )
+        # The stop's legs settle at boot: the @reboot data-migration runner
+        # closes the FolderTable ledger, and `Rows.explicit_reads?/0` caches
+        # its read for up to a minute. Run 44673881139 hit that window (ledger
+        # done 04:24:03, this test 04:24:09), so wait past the cache.
+        deadline = time.monotonic() + 90
+        while not _bool_rpc("marker_stop", "Engram.Folders.MarkerStop.on?()"):
+            if time.monotonic() > deadline:
+                legs = backend_rpc(f'IO.puts("legs=#{{inspect({_LEGS})}}")')
+                raise AssertionError(
+                    "MarkerStop.on?() never read true on the e2e backend, so the "
+                    f"stop-on path is not covered: {legs}"
+                )
+            time.sleep(2)
 
         vaults = api_sync.list_vaults()
         assert vaults, "api_sync should have a registered vault"
