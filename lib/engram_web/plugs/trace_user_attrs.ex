@@ -5,7 +5,9 @@ defmodule EngramWeb.Plugs.TraceUserAttrs do
   `RequirePluginVersion`) and `app.device_id` (`X-Device-Id`) so a flood names the
   client build that sent it (2026-11-18: 300k `POST /api/notes` from one user, no
   way to tell which plugin). Span attributes only, never metric labels: both are
-  client-supplied, so they are length-capped here. Must run AFTER Auth (and
+  client-supplied, so the version goes through `Engram.PluginVersion.loggable/1`
+  (the same filter as the log lines) and the device id is length-capped here.
+  The version gate reads the raw assign, not this value. Must run AFTER Auth (and
   VaultPlug for vault_id). No-op when the assigns are absent.
   """
   @behaviour Plug
@@ -30,7 +32,10 @@ defmodule EngramWeb.Plugs.TraceUserAttrs do
     []
     |> maybe_user(conn.assigns[:current_user])
     |> maybe_vault(conn.assigns[:current_vault])
-    |> maybe_client("plugin.version", conn.assigns[:plugin_version])
+    |> maybe_client(
+      "plugin.version",
+      Engram.PluginVersion.loggable(conn.assigns[:plugin_version])
+    )
     |> maybe_client("app.device_id", EngramWeb.OriginDevice.from_conn(conn))
   end
 

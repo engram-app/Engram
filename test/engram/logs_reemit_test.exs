@@ -308,6 +308,41 @@ defmodule Engram.LogsReemitTest do
       end
     end
 
+    # A plugin that upgrades mid-flush sends the same line from both builds.
+    # Collapsing them would credit every repeat to the first build.
+    test "identical lines from two plugin versions do not collapse into one" do
+      user = insert(:user)
+      parent = self()
+      ref = make_ref()
+      handler_id = :logs_reemit_version_collapse_handler
+
+      :logger.add_handler(handler_id, __MODULE__, %{config: %{parent: parent, ref: ref}})
+      on_exit(fn -> :logger.remove_handler(handler_id) end)
+
+      entry = fn version ->
+        %{
+          "level" => "warn",
+          "category" => "sync",
+          "message" => "preview_failed reason=timeout",
+          "platform" => "mobile",
+          "conn_id" => "c1",
+          "plugin_version" => version,
+          "forced" => true
+        }
+      end
+
+      {:ok, 3} = Logs.insert_logs(user, [entry.("1.39.3"), entry.("1.39.3"), entry.("1.40.0")])
+
+      assert_receive {^ref, _level, old}, 1000
+      assert old[:plugin_version] == "1.39.3"
+      assert old[:repeat] == 2
+
+      assert_receive {^ref, _level, new}, 1000
+      assert new[:plugin_version] == "1.40.0"
+      refute Map.has_key?(new, :repeat)
+      refute_receive {^ref, _, _}, 100
+    end
+
     defp reemit_plugin(context, plugin_version) do
       user = insert(:user)
       parent = self()

@@ -445,7 +445,7 @@ defmodule Engram.Logs do
       Enum.reduce(items, {[], %{}}, fn {e, ship?} = item, {order, groups} ->
         key =
           {e.level, e.category, e.message, ship?, e.forced, e.conn_id, e.device_id, e.platform,
-           Keyword.delete(e.context, :elapsed_ms)}
+           e.plugin_version, Keyword.delete(e.context, :elapsed_ms)}
 
         case groups do
           %{^key => {first, elapsed}} ->
