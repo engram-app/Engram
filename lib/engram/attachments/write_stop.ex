@@ -42,11 +42,10 @@ defmodule Engram.Attachments.WriteStop do
   alias Engram.Folders.WriteStop, as: NoteWriteStop
   alias Engram.Release.Floor
 
-  # The release with the attachment readers (release D, PR 2640). A SENTINEL
-  # no floor can reach, so this writer is inert whatever tag release-please
-  # cuts: the floor PR (Todd's approval) sets this and `priv/release_floor`
-  # to D's real tag together, with a check that the tag contains the readers.
-  @reads_release "release-v999.0.0"
+  # The release with the attachment readers (release D, PR 2640). This
+  # writer stays inert until the floor PR (Todd's approval) raises
+  # `priv/release_floor` to it.
+  @reads_release "release-v0.90.0"
   # `Location.s6_reads/0` a node needs: the attachment readers and feed leg.
   @fleet_level 1
 
