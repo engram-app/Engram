@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.91.0](https://github.com/engram-app/Engram/compare/0.90.0...0.91.0) (2026-11-20)
+
+
+### Features
+
+* **folders:** delete folder markers once markers stop ([#2652](https://github.com/engram-app/Engram/issues/2652)) ([e362467](https://github.com/engram-app/Engram/commit/e362467679bbdedf1ffde6419332522b73ad6764))
+* **folders:** stop the attachment cascade (S6 step 6, E) ([#2647](https://github.com/engram-app/Engram/issues/2647)) ([3289696](https://github.com/engram-app/Engram/commit/32896966e1b966c489b4d06124013bb20d14fa0e))
+* **folders:** stop writing folder marker rows ([#2649](https://github.com/engram-app/Engram/issues/2649)) ([26ac16f](https://github.com/engram-app/Engram/commit/26ac16f6654225537a9237f84c74c723b7499b15))
+* **folders:** stop writing folders.full_path_hmac (S6 step 3 write stop) ([#2645](https://github.com/engram-app/Engram/issues/2645)) ([43130a5](https://github.com/engram-app/Engram/commit/43130a5e9ed0e5364eb890f9ff184258992028bf))
+* **logs:** re-emit plugin os, app version and plugin version to Loki ([#2669](https://github.com/engram-app/Engram/issues/2669)) ([8bc51f8](https://github.com/engram-app/Engram/commit/8bc51f8bd88ede02427c7a4b5a28f3a9fc0199bb))
+
 ## [0.90.0](https://github.com/engram-app/Engram/compare/0.89.0...0.90.0) (2026-11-20)
 
 
