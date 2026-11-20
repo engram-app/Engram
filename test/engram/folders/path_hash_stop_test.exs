@@ -43,9 +43,9 @@ defmodule Engram.Folders.PathHashStopTest do
     Map.new(rows, fn [id, h] -> {Ecto.UUID.load!(id), h} end)
   end
 
-  # Flips when the floor-raise PR names release D: assert it then.
-  test "the stop stays inert while its release is the placeholder", %{user: u, vault: v} do
-    assert PathHashStop.reads_release() == "release-v999.0.0"
+  # Flips when the floor-raise PR raises the floor to release D.
+  test "the stop stays inert while the floor is below release D", %{user: u, vault: v} do
+    assert PathHashStop.reads_release() == "release-v0.90.0"
     refute Floor.at_least?(PathHashStop.reads_release())
     refute PathHashStop.floors?(:enforce)
     refute PathHashStop.on?(u.id, v.id, :enforce)

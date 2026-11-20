@@ -13,8 +13,8 @@ defmodule Engram.Folders.PathHashStop do
       by their path hash, which only stays right while the hash is written.
 
   Anywhere either is false the vault gets release D's behaviour: every writer
-  keeps the hash. `@reads_release` is a placeholder no real floor reaches, so
-  the stop ships INERT; the floor-raise PR sets D's tag.
+  keeps the hash. `@reads_release` is release D's tag; the stop stays INERT
+  until the floor-raise PR raises `priv/release_floor` to it.
 
   The tests run with both assumed (`config :engram, :path_hash_stop_floors,
   :assume` and `:path_hash_stop_markers_gone, true`) and pin the inert
@@ -27,8 +27,8 @@ defmodule Engram.Folders.PathHashStop do
 
   alias Engram.Release.Floor
 
-  # ponytail: placeholder until the floor-raise PR names release D's tag.
-  @reads_release "release-v999.0.0"
+  # Release D (the chain readers). Inert until the floor reaches it.
+  @reads_release "release-v0.90.0"
   # S6 step 4's ledger ships in a separate stack (Engram#2652, on #2649).
   # Until both are on main the module may be absent, which reads as "markers
   # present": D's behaviour. Called through a variable, so this compiles
