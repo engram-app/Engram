@@ -49,6 +49,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Worker CPU pegged and "nothing alerted", or assuming a `severity=page` alert woke someone (CloudWatch twin did fire; `page` routes only to Discord) → `docs/context/worker-oom-regex-backtrack-2026-10-03.md`
 - Measuring CRDT doc bloat, or reading the engram-crdt dashboard (the checkpoint flatten was removed in 0.60.1 because it doubles bodies; never reintroduce a server reset) → `docs/context/crdt-bloat-measurement-traps.md`
 - The CRDT bloat alert fires on a small note, or reading `notes.version` as an edit count (it counts debounced checkpoints, Trap 0; 64 KB floor + save-rate gauges, #2175) → `docs/context/crdt-bloat-measurement-traps.md`
+- `engram-prod-crdt-save-loop` fires, or an unchanged re-push (`POST /api/notes`, same body) still bumps `notes.version` (server-normalised CRLF/frontmatter never hash-matched, Trap 0b), or a Cloudflare block on a Tempo/PostHog `client.address` matches nothing (it is /24-truncated; get the real IP from CF GraphQL) → `docs/context/crdt-bloat-measurement-traps.md`
 - Note content doubled or interleaved, or the server holds a note TWICE (one-encoder invariant, frontmatter re-seed, flatten boundary #958) → `docs/context/crdt-lineage-doubling.md`
 - A note has CRLF, mixed line endings, a lone `\r`, or you are touching a note ingest point → `docs/context/line-ending-policy.md`
 - Note version history, the outbox write path, adding a content-write path or an MCP write tool → `docs/context/note-revisions-history.md`
@@ -195,4 +196,5 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Read-path decrypt perf — parallel_map economics, when it helps vs hurts → `docs/context/read-path-decrypt-perf.md`
 - Perf caches + invalidation contracts (2026-06-12 audit wave) → `docs/context/perf-caching-invalidation.md`
 - Replacing hand-rolled code with a shared helper (consolidating a PARSER silently drops accepted input shapes no test names — CRLF frontmatter read as "no frontmatter"), or a log metadata key built inside a helper that Credo cannot see → `docs/context/consolidation-drops-undocumented-tolerances.md`
+- Moving a `Logger` call into a shared helper, or renaming/re-arity-ing a function that logs (prod alerts filter on `metadata_mfa`; the alert silently matches nothing) → `docs/context/consolidation-drops-undocumented-tolerances.md`
 - Adding/reading a WebSocket metric, or a socket panel reads No data (`EngramWeb.Telemetry.metrics/0` never reaches Prometheus; Phoenix encodes a broadcast once per serializer; ChannelTest bypasses the serializer) → `docs/context/websocket-metrics.md`
