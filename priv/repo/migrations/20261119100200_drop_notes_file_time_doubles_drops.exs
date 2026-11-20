@@ -1,7 +1,7 @@
 # Shared helper; see the file for why it is not in lib/.
 Code.require_file("lock_timeout_retry.exs", __DIR__)
 
-defmodule Engram.Repo.Migrations.DropAttachmentUploadsMtimeDrops do
+defmodule Engram.Repo.Migrations.DropNotesFileTimeDoublesDrops do
   use Ecto.Migration
 
   alias Engram.Repo.Migrations.LockTimeoutRetry
@@ -18,12 +18,12 @@ defmodule Engram.Repo.Migrations.DropAttachmentUploadsMtimeDrops do
   # safety_assured: "mtime/ctime stay in lib/ as wire params and virtual fields; no column reference since R25 step (b)"
 
   @moduledoc """
-  R25 contract step (c): drops `attachment_uploads.mtime`. The `*_at` timestamptz holds the
-  file time. This is one of three (20261117170000 to 20261117170200, notes last), each its
-  own short transaction, so no table's lock is held while another waits.
+  R25 contract step (c): drops `notes.mtime` / `notes.ctime`. The `*_at` timestamptz holds the
+  file time. This is the last of the three (20261119100000 to 20261119100200), so the
+  notes lock is taken alone and last.
 
   Ships in the release after step (b), which stopped reading and writing
-  the doubles and whose boot migration 20261117160000 filled every NULL
+  the doubles and whose boot migration 20261118100100 filled every NULL
   twin from them, so no release that can run or be rolled back to touches
   the column. Skip-release safe on a single-node install: a jump from
   before (b) applies that fill first, in the same batch. A multi-node
@@ -41,13 +41,15 @@ defmodule Engram.Repo.Migrations.DropAttachmentUploadsMtimeDrops do
 
   def up do
     LockTimeoutRetry.with_lock_timeout(repo(), [
-      "ALTER TABLE attachment_uploads DROP COLUMN IF EXISTS mtime"
+      # One statement: the notes lock is taken once.
+      "ALTER TABLE notes DROP COLUMN IF EXISTS mtime, DROP COLUMN IF EXISTS ctime"
     ])
   end
 
   def down do
     LockTimeoutRetry.with_lock_timeout(repo(), [
-      "ALTER TABLE attachment_uploads ADD COLUMN IF NOT EXISTS mtime double precision"
+      "ALTER TABLE notes ADD COLUMN IF NOT EXISTS mtime double precision, " <>
+        "ADD COLUMN IF NOT EXISTS ctime double precision"
     ])
   end
 end

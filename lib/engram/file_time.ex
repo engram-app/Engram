@@ -8,7 +8,7 @@ defmodule Engram.FileTime do
   R25 contract: the epoch doubles are neither read nor written (step (b)).
   The schemas cast `mtime` / `ctime` as virtual fields, `put_at/3` derives
   the twin from them, and readers serve `mtime/1` / `ctime/1`. Step (c)
-  dropped the columns (20261117170000 to 20261117170200). No rollback below step (a) (0.88): an
+  dropped the columns (20261119100000 to 20261119100200). No rollback below step (a) (0.88): an
   older release heals twins from the doubles, which this one leaves stale.
 
   Clients send epoch seconds, but prod held milliseconds too (2026-11-05:
