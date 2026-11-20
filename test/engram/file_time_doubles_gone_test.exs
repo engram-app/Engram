@@ -75,13 +75,17 @@ defmodule Engram.FileTimeDoublesGoneTest do
           "      SELECT mtime FROM notes",
           ~s(      """),
           "  mtime in prose",
-          ~s(  """)
+          ~s(  """),
+          ~s(text = """),
+          "POST /api/attachments?mtime=<unix seconds>",
+          ~s(""")
         ],
         "\n"
       )
 
     assert Enum.map(sql_lines(src), &elem(&1, 1)) == [5, 7, 8, 11]
     # Lines 15-20: a `@doc` holding a heredoc example yields nothing.
+    # Lines 21-23: a prose heredoc (no leading SQL keyword) yields nothing.
   end
 
   # `{line, number}` for every line that can hold SQL or a query binding:
@@ -90,6 +94,7 @@ defmodule Engram.FileTimeDoublesGoneTest do
   # the caller matches separately).
   defp sql_lines(src) do
     sql_word = ~r/\b(SELECT|UPDATE|INSERT|WHERE|SET|FROM)\b/
+    sql_start = ~r/^(SELECT|UPDATE|INSERT|DELETE|WITH|ALTER|CREATE|DROP)\b/i
 
     src
     |> String.split("\n")
@@ -108,13 +113,19 @@ defmodule Engram.FileTimeDoublesGoneTest do
           cond do
             String.starts_with?(trimmed, ~s(""")) and indent <= open_indent -> {nil, :code}
             kind == :doc -> {nil, mode}
+            # A non-doc heredoc is SQL when its first non-blank line starts
+            # with a statement keyword; otherwise it is prose (an MCP tool
+            # description naming the `mtime` wire param) and is skipped.
+            kind == :open and trimmed == "" -> {nil, mode}
+            kind == :open and Regex.match?(sql_start, trimmed) -> {{line, n}, {:sql, open_indent}}
+            kind == :open -> {nil, {:doc, open_indent}}
             true -> {{line, n}, mode}
           end
 
         :code ->
           cond do
             opens? and Regex.match?(~r/@(module)?doc\b/, trimmed) -> {nil, {:doc, indent}}
-            opens? -> {nil, {:sql, indent}}
+            opens? -> {nil, {:open, indent}}
             String.starts_with?(trimmed, "#") -> {nil, :code}
             String.contains?(line, ~s(")) and Regex.match?(sql_word, line) -> {{line, n}, :code}
             Regex.match?(~r/(?<![A-Za-z_.])[a-z]\.(mtime|ctime)\b/, line) -> {{line, n}, :code}
