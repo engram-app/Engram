@@ -158,7 +158,8 @@ defmodule Engram.DataCase do
           :onboarding_actions,
           :note_counts,
           :note_split,
-          :note_name
+          :note_name,
+          :explicit_folders
         ],
         do: Engram.Cache.clear_local(c)
 

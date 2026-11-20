@@ -41,6 +41,11 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.FolderTable,
     Engram.DataMigrations.NoteFolderHashNull,
     Engram.DataMigrations.RootRefs,
+    # No data dependency on its neighbours (it reads markers' hashes, which
+    # NoteFolderHashNull never nulls, and root rows carry no marker). After
+    # NoteFolderHashNull only because that one's test pins it right after
+    # FolderTable.
+    Engram.DataMigrations.ExplicitFolderReconcile,
     Engram.DataMigrations.KeyAliases,
     Engram.DataMigrations.PersonOriginBackfill,
     Engram.DataMigrations.EffectiveDates,
