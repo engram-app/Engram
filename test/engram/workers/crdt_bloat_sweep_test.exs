@@ -492,6 +492,42 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
     end
   end
 
+  defmodule MfaHandler do
+    @moduledoc false
+    # An `:logger` handler that forwards each event's `mfa` and message.
+    def log(%{meta: meta, msg: msg}, %{config: %{pid: pid}}),
+      do: send(pid, {:logged, meta[:mfa], msg})
+  end
+
+  # Prod alerts select these lines by `metadata_mfa` (engram-infra
+  # `crdt_save_loop_mfa`), so the call site that logs is part of the contract.
+  describe "per-note warning call sites" do
+    setup do
+      id = :"mfa-#{System.unique_integer([:positive])}"
+      :ok = :logger.add_handler(id, MfaHandler, %{config: %{pid: self()}})
+      on_exit(fn -> :logger.remove_handler(id) end)
+    end
+
+    defp logged_mfa(marker) do
+      receive do
+        {:logged, mfa, {:string, msg}} ->
+          if IO.chardata_to_string(msg) =~ marker, do: mfa, else: logged_mfa(marker)
+      after
+        1_000 -> flunk("no #{marker} line logged")
+      end
+    end
+
+    test "crdt_save_loop_note logs from log_save_loops/2" do
+      CrdtBloatSweep.log_save_loops([{Ecto.UUID.generate(), 400}], %{})
+      assert logged_mfa("crdt_save_loop_note") == {CrdtBloatSweep, :log_save_loops, 2}
+    end
+
+    test "crdt_bloat_note logs from log_bloated_notes/2" do
+      CrdtBloatSweep.log_bloated_notes([{Ecto.UUID.generate(), 70_000, 10_000, 7.0}], %{})
+      assert logged_mfa("crdt_bloat_note") == {CrdtBloatSweep, :log_bloated_notes, 2}
+    end
+  end
+
   describe "log_bloated_notes/2" do
     # Shares the save-loop caps: one account bloated on many notes cannot hide
     # a second, and the total stays bounded.
