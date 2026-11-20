@@ -1,3 +1,7 @@
 # Commits the floor tag must contain (scripts/check_floor_tag_on_main.sh):
 # "<sha> <why>", one per line.
 104ec8a5269163be8469964e41c1c5d0696d576a S5 moved-folder feed and shown-path announces (Engram#2609): the write stop needs them on every rollback target
+7e8a73d1a4cb4637cd436ba954e3f2b9d3b5cb23 S6 step 1a root folder row read (Engram#2641): root writes (Rows.root_writes?/1) need it on every rollback target
+cac59128333ff6dacb6d8e112b7395bf1b868d78 S6 step 3 folder lookup by chain (Engram#2642): the full_path_hmac write stop needs it on every rollback target
+bbc77f8ebcdcaf0cd538d7c70c6c56c7b41c3d06 S6 step 6 attachment name reads (Engram#2640): the attachment cascade stop needs them on every rollback target
+57b9fc0fabc1c177a97c31e2ac7910fb7962dff7 S6 step 4 explicit folder reads (Engram#2639): the marker write stop needs them on every rollback target
