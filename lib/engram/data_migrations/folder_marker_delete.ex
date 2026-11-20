@@ -11,8 +11,8 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   `MarkerStop.on?/0` (no writer can still insert a marker) AND the rollback
   floor is at or above release E (`@stop_release`), so no release a rollback
   can land on still READS markers: a marker deleted here is gone for good.
-  A SENTINEL no floor can reach, so this is inert until the release that
-  raises the floor to E sets it (the `MarkerStop` pattern).
+  The floor-to-E PR set it to E's tag and listed 2649's merge commit in
+  `priv/release_floor_contains`.
   `:marker_delete_floors, :assume` (tests only) skips that check.
 
   Only LIVE markers are deleted. A trashed marker (`deleted_at` set) is trash
@@ -66,8 +66,8 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   require Logger
 
   @batch 200
-  # The release with the marker write stop (release E).
-  @stop_release "release-v999.0.0"
+  # The release with the marker write stop (release E, #2649).
+  @stop_release "release-v0.91.0"
   @max_fixed 2_000
 
   @impl true
