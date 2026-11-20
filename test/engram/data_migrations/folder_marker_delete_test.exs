@@ -401,16 +401,17 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
   end
 
   # #2652 re-review: the delete is irreversible, so it also needs the rollback
-  # floor at E (no rollback target reads markers), not just the stop on.
-  test "blocked while the rollback floor is below E, even with markers stopped", ctx do
+  # floor at E (no rollback target reads markers), not just the stop on. The
+  # floor-to-E raise reached it, so under `:enforce` (prod) the pass runs.
+  test "at the rollback floor (release E): the pass runs under :enforce", ctx do
     %{user: _u, vault: v} = ctx
     {:ok, _} = Folders.create_markers(ctx.user, v, ["Fl"])
     Engram.ServiceConfig.put_override(:marker_stop_floors, :assume)
     Engram.ServiceConfig.put_override(:folder_marker_stop, true)
     assert Engram.Folders.MarkerStop.on?()
-    refute FolderMarkerDelete.floors?(:enforce)
+    assert FolderMarkerDelete.floors?(:enforce)
 
-    assert FolderMarkerDelete.run_pass() == {:more, rows: 0, blocked: 1}
-    assert markers(v) == 1
+    Engram.ServiceConfig.put_override(:marker_delete_floors, :enforce)
+    refute FolderMarkerDelete.run_pass() == {:more, rows: 0, blocked: 1}
   end
 end

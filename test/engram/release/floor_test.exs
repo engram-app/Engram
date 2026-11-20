@@ -47,4 +47,11 @@ defmodule Engram.Release.FloorTest do
   test "the floor covers the S6 root-row readers" do
     assert Floor.at_least?(Engram.Folders.Rows.root_reads_release())
   end
+
+  # S6 step 4 (Engram#2523): the marker delete switches on with the floor at
+  # the marker write stop release (release E), and the tag must contain 2649
+  # (`priv/release_floor_contains`).
+  test "the floor covers the S6 marker write stop" do
+    assert Floor.at_least?(Engram.DataMigrations.FolderMarkerDelete.stop_release())
+  end
 end
