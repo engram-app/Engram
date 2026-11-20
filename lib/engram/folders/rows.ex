@@ -1596,16 +1596,15 @@ defmodule Engram.Folders.Rows do
         ids = Enum.map(rows, & &1.id)
         content = live_content_folders(ids)
 
+        parents = Map.new(rows, &{&1.id, &1.parent_id})
+
+        markers = live_marker_folders(user, vault_id, rows, at)
+        log_kept_by_marker(user, vault_id, MapSet.size(MapSet.difference(markers, content)))
+
         marked =
-          MapSet.union(
-            live_marker_folders(user, vault_id, rows, at),
-            explicit_since(ids, since_seq)
-          )
+          MapSet.union(markers, under_stamped(rows, parents, explicit_since(ids, since_seq)))
 
-        log_kept_by_marker(user, vault_id, MapSet.size(MapSet.difference(marked, content)))
-
-        keep =
-          with_ancestors(MapSet.union(content, marked), Map.new(rows, &{&1.id, &1.parent_id}))
+        keep = with_ancestors(MapSet.union(content, marked), parents)
 
         doomed = Enum.reject(ids, &MapSet.member?(keep, &1))
 
@@ -1673,6 +1672,31 @@ defmodule Engram.Folders.Rows do
     |> Repo.all()
     |> MapSet.new()
   end
+
+  # The rows an op stamped since the delete read its seq, and every row of
+  # the scanned subtree below one. An uncascaded rename (S5 with #2645's
+  # path-hash stop) stamps only the root it moves (`stamp_placed/2`), never
+  # the rows under it, and those arrived with it. One map lookup per level
+  # of each row's chain, over the rows the scan already read: no extra read.
+  defp under_stamped(rows, parents, stamped) do
+    if MapSet.size(stamped) == 0,
+      do: stamped,
+      else:
+        for(
+          r <- rows,
+          stamped_chain?(r.id, parents, stamped, @max_depth),
+          into: stamped,
+          do: r.id
+        )
+  end
+
+  defp stamped_chain?(nil, _parents, _stamped, _budget), do: false
+  defp stamped_chain?(_id, _parents, _stamped, 0), do: false
+
+  defp stamped_chain?(id, parents, stamped, budget),
+    do:
+      MapSet.member?(stamped, id) or
+        stamped_chain?(Map.get(parents, id), parents, stamped, budget - 1)
 
   # Folder ids (among `rows`, of the subtree at `paths`) whose path a live
   # folder marker names: each row's current path (`chain_names/3`), hashed
