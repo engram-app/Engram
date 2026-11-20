@@ -9,7 +9,7 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
 
   import Ecto.Query
 
-  alias Engram.Crypto.HMAC
+  alias Engram.Crypto.{Envelope, HMAC}
   alias Engram.DataMigrations
   alias Engram.DataMigrations.NoteSizes
   alias Engram.Notes
@@ -160,7 +160,7 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
       ])
 
     assert [content, _state, _has, true] = sizes(n)
-    assert content == body - 13 - Engram.Crypto.Envelope.tag_bytes()
+    assert content == body - 13 - Envelope.tag_bytes()
   end
 
   # R8 N+1 (#2416) dropped `notes_sync_body`; the app writes the body itself
@@ -182,7 +182,7 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
       )
 
     assert is_integer(len)
-    assert bytes == len - 13 - Engram.Crypto.Envelope.tag_bytes()
+    assert bytes == len - 13 - Envelope.tag_bytes()
   end
 
   # Red on 38a2a1f1c: the state row is seeded by the notes INSERT, before
@@ -316,7 +316,7 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
     assert :done = DataMigrationsRunner.run(NoteSizes)
     floor = CrdtBloat.alert_min_state_bytes()
 
-    tag = Engram.Crypto.Envelope.tag_bytes()
+    tag = Envelope.tag_bytes()
 
     # Body sizes come from the `note_bodies` trigger; the sweep's backstop
     # copies them onto the narrow row.
