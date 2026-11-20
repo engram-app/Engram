@@ -308,4 +308,35 @@ defmodule Engram.Workers.CrdtBloatSweepNarrowTest do
     refute log =~ HMAC.hash_id(steady.id)
     for id <- [user.id, looping.id, steady.id], do: refute(log =~ id)
   end
+
+  test "the narrow path names a bloated note with its owner's hashed id", %{
+    notes: [bloated | _],
+    user: user
+  } do
+    assert :done = DataMigrationsRunner.run(NoteSizes)
+    floor = CrdtBloat.alert_min_state_bytes()
+
+    tag = Engram.Crypto.Envelope.tag_bytes()
+
+    # Body sizes come from the `note_bodies` trigger; the sweep's backstop
+    # copies them onto the narrow row.
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Engram.Fixtures.write_note_body!(bloated.id,
+          crdt_state_ciphertext: :crypto.strong_rand_bytes(floor + tag),
+          content_ciphertext: :crypto.strong_rand_bytes(3_400 + tag)
+        )
+      end)
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+        assert %{notes_over_threshold: 1} = CrdtBloatSweep.measure_and_emit()
+      end)
+
+    assert [line] = log |> String.split("\n") |> Enum.filter(&(&1 =~ "crdt_bloat_note"))
+
+    assert line =~
+             "crdt_bloat_note note=#{HMAC.hash_id(bloated.id)} " <>
+               "user=#{HMAC.hash_user_id(user.id)} state_bytes="
+  end
 end
