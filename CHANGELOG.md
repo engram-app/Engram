@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.90.0](https://github.com/engram-app/Engram/compare/0.89.0...0.90.0) (2026-11-20)
+
+
+### Features
+
+* **attachments:** name reads for S6 step 6 (release D) ([#2640](https://github.com/engram-app/Engram/issues/2640)) ([bbc77f8](https://github.com/engram-app/Engram/commit/bbc77f8ebcdcaf0cd538d7c70c6c56c7b41c3d06))
+* **folders:** list explicit folders from folders.explicit ([#2639](https://github.com/engram-app/Engram/issues/2639)) ([57b9fc0](https://github.com/engram-app/Engram/commit/57b9fc0fabc1c177a97c31e2ac7910fb7962dff7))
+* **folders:** point root notes at the root row ([#2643](https://github.com/engram-app/Engram/issues/2643)) ([a9d1565](https://github.com/engram-app/Engram/commit/a9d1565a3f5290c3a31e7d821d6a4ed3f1f73e56))
+* **folders:** read a root folder row as the root ([#2641](https://github.com/engram-app/Engram/issues/2641)) ([7e8a73d](https://github.com/engram-app/Engram/commit/7e8a73d1a4cb4637cd436ba954e3f2b9d3b5cb23))
+* plugin lock, REST write budget, LF-normalized hash compare, lean unchanged push ([#2672](https://github.com/engram-app/Engram/issues/2672)) ([7482a4c](https://github.com/engram-app/Engram/commit/7482a4c7efbdf4637a283922a6e9ae97bcbbba53))
+
+
+### Bug Fixes
+
+* **ci:** claim e2e display windows by flock ([#2663](https://github.com/engram-app/Engram/issues/2663)) ([f8ef74b](https://github.com/engram-app/Engram/commit/f8ef74b00dc3ce6b7e6fc93a7efbd2a591e531fa))
+* **ci:** retry bun version lookup via shared action ([#2666](https://github.com/engram-app/Engram/issues/2666)) ([ab4f35f](https://github.com/engram-app/Engram/commit/ab4f35f852b875abbed39866aff06b88a9ad3130))
+* **crdt:** free the delete slot as it replies ([#2654](https://github.com/engram-app/Engram/issues/2654)) ([c1c9355](https://github.com/engram-app/Engram/commit/c1c935586eae3ca73b8bbb2975229cb9ee22a557))
+* **folders:** a nested folder collision no longer crashes the rename ([#2661](https://github.com/engram-app/Engram/issues/2661)) ([fad26c7](https://github.com/engram-app/Engram/commit/fad26c70781a0fbd4481113597bfb43c211909fc))
+* **folders:** find folder rows by chain, not full_path_hmac (S6 step 3 read) ([#2642](https://github.com/engram-app/Engram/issues/2642)) ([cac5912](https://github.com/engram-app/Engram/commit/cac59128333ff6dacb6d8e112b7395bf1b868d78))
+* **mcp:** show moved notes at their shown path ([#2650](https://github.com/engram-app/Engram/issues/2650)) ([280d3bd](https://github.com/engram-app/Engram/commit/280d3bd2f0e12572c922adaa6e457016eb85f645))
+* **notes:** a moved vault always reads names ([#2648](https://github.com/engram-app/Engram/issues/2648)) ([2cf05d7](https://github.com/engram-app/Engram/commit/2cf05d76a1093ed8e4d18ffa85746586f4ee725e))
+* refuse header-less Obsidian clients at the plugin floor ([#2670](https://github.com/engram-app/Engram/issues/2670)) ([cd56895](https://github.com/engram-app/Engram/commit/cd56895cd10d5e33d7c4929d2cf0fecb53156cdd))
+* **sync:** serve the moved-folder feed to every plugin ([#2673](https://github.com/engram-app/Engram/issues/2673)) ([d96d675](https://github.com/engram-app/Engram/commit/d96d67546daae82822462863c31e035a38511fb1))
+
 ## [0.89.0](https://github.com/engram-app/Engram/compare/0.88.0...0.89.0) (2026-11-18)
 
 
