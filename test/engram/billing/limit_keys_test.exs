@@ -13,6 +13,7 @@ defmodule Engram.Billing.LimitKeysTest do
       assert :cross_vault_search in keys
       assert :history_enabled in keys
       assert :mcp_tool_calls_per_min in keys
+      assert :rest_writes_per_min in keys
       assert :trash_retention_days in keys
       assert :embed_tokens_per_day in keys
     end

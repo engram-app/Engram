@@ -165,6 +165,15 @@ defmodule Engram.Billing.LimitKeys do
     # to 0: the per-user kill switch (every OAuth tools/call refused, no
     # Retry-After). One bucket per user, shared by all their OAuth connections.
     mcp_tool_calls_per_min: %{type: :integer, defaults: %{free: 120, starter: 120, pro: 120}},
+    # REST `POST /api/notes` writes per user per minute, for every caller but
+    # an API-key script (`EngramWeb.SyncRateLimit.check_rest_write/1`; the
+    # plugin is charged however it signs in). The burst window; the sustained
+    # window is twice it per 10 min (1/s at the default). 2026-11-18: one
+    # plugin re-pushed ~10/s for a day. A key, not a constant, so an override
+    # lifts it for one account (the load sim, `e2e/load/grant.sql`), -1 =
+    # unlimited, 0 = every REST write refused. Off when limits are not
+    # enforced (self-host).
+    rest_writes_per_min: %{type: :integer, defaults: %{free: 300, starter: 300, pro: 300}},
     # THE AI usage meter. One key, one number, every transport.
     #
     # Charged in `Engram.Search.search/4` — the single funnel every retrieval

@@ -65,11 +65,11 @@ defmodule EngramWeb.NotesController do
   # 2026-11-18 flood was the plugin, and 10/s sits under `api_rps_cap`.
   defp rest_write_budget(%{assigns: %{current_api_key: _}} = conn) do
     if EngramWeb.WriteActor.plugin_client?(conn),
-      do: SyncRateLimit.check_rest_write(conn.assigns.current_user.id),
+      do: SyncRateLimit.check_rest_write(conn.assigns.current_user),
       else: :ok
   end
 
-  defp rest_write_budget(conn), do: SyncRateLimit.check_rest_write(conn.assigns.current_user.id)
+  defp rest_write_budget(conn), do: SyncRateLimit.check_rest_write(conn.assigns.current_user)
 
   defp write_upsert(conn, params) do
     content = params["content"] || params[:content] || ""

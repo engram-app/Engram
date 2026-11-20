@@ -1368,7 +1368,7 @@ defmodule Engram.Notes do
         user,
         base_attrs.vault_id,
         sanitized_path,
-        pushed_hashes(base_attrs, Map.get(base_attrs, :embed_opts, []))
+        read_pushed_hashes(base_attrs, Map.get(base_attrs, :embed_opts, []))
       ) ->
         # Delete-wins race: this is a fresh create (no live path match, no
         # client-id match) at a path an explicit delete tombstoned seconds ago,
@@ -3124,16 +3124,17 @@ defmodule Engram.Notes do
     with {:ok, raw_hash} <- content_hash(user, raw), do: {:ok, [hash, raw_hash]}
   end
 
-  defp pushed_hashes(base_attrs, opts),
+  defp read_pushed_hashes(base_attrs, opts),
     do: Keyword.get(opts, :pushed_hashes, [base_attrs.content_hash])
 
   # Whether `stored` is a hash of the pushed body, in either form.
   defp pushed_hash?(stored, base_attrs, opts),
-    do: is_binary(stored) and stored in pushed_hashes(base_attrs, opts)
+    do: is_binary(stored) and stored in read_pushed_hashes(base_attrs, opts)
 
   # The one definition of "this push changed nothing": the row already held the
   # pushed hash (what `idempotent_repush` returns) and the write was not forced.
-  # Both hashes are keyed HMACs of the same LF-normalized, scrubbed text.
+  # `prev_hash` is the stored row's hash and `note` the row returned, so for a
+  # no-op both are that stored hash (LF form, or raw CRLF for a legacy doc).
   defp unchanged_push?(prev_hash, note, opts),
     do:
       is_binary(prev_hash) and prev_hash == note.content_hash and

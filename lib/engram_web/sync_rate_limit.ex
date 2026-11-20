@@ -29,17 +29,17 @@ defmodule EngramWeb.SyncRateLimit do
   @hs_limit 2400
 
   # REST `POST /api/notes` per user, two fixed windows that must both allow
-  # (Hammer has no token bucket). Measured 2026-11-18: before the one-user
-  # flood (~10/s for 24 h, 300k writes) the WHOLE fleet's `POST /api/notes`
-  # peaked at 0.007/s over 5 min (sync runs over CRDT sockets; REST carries
-  # canvases and oversized notes). The plugin fails a note push on 429 (only
-  # attachments defer), so a first sync must fit the burst:
-  #   * burst 300/min: a first sync of 300 REST files in its first minute;
-  #     a 10/s loop is refused after 30 s.
-  #   * sustained 600/10 min (1/s): what a loop gets after that, 10x below
-  #     the flood. A first sync past 600 REST files in 10 min gets 429s.
-  @rest_write_burst {300, 60_000}
-  @rest_write_sustained {600, 600_000}
+  # (Hammer has no token bucket). The burst limit is the `rest_writes_per_min`
+  # limit key (default 300, see `Engram.Billing.LimitKeys`); the sustained
+  # window allows twice it per 10 min. Measured 2026-11-18: before the
+  # one-user flood (~10/s for 24 h, 300k writes) the WHOLE fleet's
+  # `POST /api/notes` peaked at 0.007/s over 5 min (sync runs over CRDT
+  # sockets; REST carries canvases and oversized notes). The plugin fails a
+  # note push on 429 (only attachments defer), so a first sync must fit the
+  # burst: at 300/min a 10/s loop is refused after 30 s, then held to 1/s.
+  @rest_write_burst_ms 60_000
+  @rest_write_sustained_ms 600_000
+  @rest_write_sustained_factor 2
 
   # Account-wide ceiling = limit x this: "up to ten busy devices per account".
   @account_multiplier 10
@@ -69,32 +69,35 @@ defmodule EngramWeb.SyncRateLimit do
   end
 
   @doc """
-  Charges one REST note write to the user's burst and sustained budgets
-  (`@rest_write_burst`, `@rest_write_sustained`). Per user, not per device: a
-  client-supplied device id must not multiply it. A refusal carries the ms
-  until the refusing window frees.
+  Charges one REST note write by `user` to the burst and sustained windows
+  (`rest_write_limits/1`). Per user, not per device: a client-supplied device
+  id must not multiply it. A refusal carries the ms until the refusing window
+  frees. No limit (enforcement off, or a `-1` override) charges nothing.
   """
-  @spec check_rest_write(Ecto.UUID.t()) :: :ok | {:error, {:rate_limited, non_neg_integer()}}
-  def check_rest_write(user_id) do
-    {{burst, burst_ms}, {sustained, sustained_ms}} = rest_write_limits()
+  @spec check_rest_write(map()) :: :ok | {:error, {:rate_limited, non_neg_integer()}}
+  def check_rest_write(%{id: user_id} = user) do
+    case rest_write_limits(user) do
+      nil ->
+        :ok
 
-    with {:allow, _} <- rest_hit("rest_write:#{user_id}", burst_ms, burst),
-         {:allow, _} <- rest_hit("rest_write_10m:#{user_id}", sustained_ms, sustained) do
-      :ok
-    else
-      {:deny, retry_after_ms} -> {:error, {:rate_limited, retry_after_ms}}
+      {{burst, burst_ms}, {sustained, sustained_ms}} ->
+        with {:allow, _} <- rest_hit("rest_write:#{user_id}", burst_ms, burst),
+             {:allow, _} <- rest_hit("rest_write_10m:#{user_id}", sustained_ms, sustained) do
+          :ok
+        else
+          {:deny, retry_after_ms} -> {:error, {:rate_limited, retry_after_ms}}
+        end
     end
   end
 
-  @doc "The REST write budgets: `{{burst, ms}, {sustained, ms}}`."
-  def rest_write_limits do
-    # A test override sets the burst; the sustained window keeps the ratio.
-    case Application.get_env(:engram, :rest_write_rate_limit_override) do
+  @doc "`user`'s REST write windows, `{{burst, ms}, {sustained, ms}}`, or nil (none)."
+  def rest_write_limits(user) do
+    case Engram.Billing.cap(user, :rest_writes_per_min) do
       nil ->
-        {@rest_write_burst, @rest_write_sustained}
+        nil
 
       n ->
-        {{n, elem(@rest_write_burst, 1)}, {2 * n, elem(@rest_write_sustained, 1)}}
+        {{n, @rest_write_burst_ms}, {@rest_write_sustained_factor * n, @rest_write_sustained_ms}}
     end
   end
 

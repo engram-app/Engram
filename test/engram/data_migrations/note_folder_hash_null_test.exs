@@ -122,4 +122,18 @@ defmodule Engram.DataMigrations.NoteFolderHashNullTest do
     ServiceConfig.put_override(:note_folder_hash_null, false)
     refute Null.enabled?()
   end
+
+  # NOTE_FOLDER_HASH_NULL_MAX_FIXED (config/runtime.exs) lands in app env; the
+  # per-process override stands in for the DB service override in test builds.
+  test "the cap reads the env value, and a service override wins over it" do
+    on_exit(fn -> Application.delete_env(:engram, :note_folder_hash_null_max_fixed) end)
+
+    assert Null.max_fixed() == 2_000
+
+    Application.put_env(:engram, :note_folder_hash_null_max_fixed, 7)
+    assert Null.max_fixed() == 7
+
+    ServiceConfig.put_override(:note_folder_hash_null_max_fixed, 5)
+    assert Null.max_fixed() == 5
+  end
 end
