@@ -43,13 +43,17 @@ defmodule Engram.Folders.PathHashStopTest do
     Map.new(rows, fn [id, h] -> {Ecto.UUID.load!(id), h} end)
   end
 
-  # Flips when the floor-raise PR raises the floor to release D.
-  test "the stop stays inert while the floor is below release D", %{user: u, vault: v} do
+  # The floor-raise (#2674) put the rollback floor at release D: the floor
+  # leg holds on the real floor, so the vault's markers alone decide.
+  test "the floor reaches release D: the stop waits only on the markers", %{user: u, vault: v} do
     assert PathHashStop.reads_release() == "release-v0.90.0"
-    refute Floor.at_least?(PathHashStop.reads_release())
-    refute PathHashStop.floors?(:enforce)
+    assert Floor.at_least?(PathHashStop.reads_release())
+    assert PathHashStop.floors?(:enforce)
+    assert PathHashStop.on?(u.id, v.id, :enforce)
+
+    Application.put_env(:engram, :path_hash_stop_markers_gone, false)
+    on_exit(fn -> Application.put_env(:engram, :path_hash_stop_markers_gone, true) end)
     refute PathHashStop.on?(u.id, v.id, :enforce)
-    assert PathHashStop.on?(u.id, v.id, :assume)
   end
 
   test "an absent or not-done ledger reads as markers present", %{user: u, vault: v} do

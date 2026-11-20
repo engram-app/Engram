@@ -1,8 +1,9 @@
 defmodule Engram.Folders.PathHashStopInertTest do
   @moduledoc """
-  The path E ships: S6 step 3's write stop INERT (`Engram.Folders.PathHashStop`
-  below its floor). Every folder writer must write `folders.full_path_hmac`
-  exactly as release D: the hash of each row's current path.
+  The path E ships: S6 step 3's write stop INERT (`Engram.Folders.PathHashStop`:
+  the vault still has folder markers, so S6 step 4's delete is not done for
+  it). Every folder writer must write `folders.full_path_hmac` exactly as
+  release D: the hash of each row's current path.
   """
   use Engram.DataCase, async: false
 
@@ -18,7 +19,7 @@ defmodule Engram.Folders.PathHashStopInertTest do
       Application.put_env(:engram, :path_hash_stop_markers_gone, true)
     end)
 
-    refute PathHashStop.floors?()
+    refute PathHashStop.markers_gone?(Ecto.UUID.generate(), Ecto.UUID.generate())
 
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user)
