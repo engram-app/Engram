@@ -139,15 +139,18 @@ defmodule Engram.DataMigrations.RootRefsTest do
       assert FolderRows.ref("notes", a.id) == nil
     end
 
-    test "below the rollback floor: writers and the ledger stay off", %{user: u, vault: v} do
+    # The floor is at the readers' release (release D), so under `:enforce`
+    # (prod) the writers and the ledger run.
+    test "at the rollback floor: writers and the ledger run", %{user: u, vault: v} do
       Application.put_env(:engram, :root_refs_floor, :enforce)
       on_exit(fn -> Application.put_env(:engram, :root_refs_floor, :assume) end)
 
       a = note!(u, v, "a.md")
-      assert FolderRows.ref("notes", a.id) == nil
-      refute RootRefs.enabled?()
-      assert DataMigrationsRunner.run(RootRefs) == :skipped
-      assert FolderRows.ref("notes", a.id) == nil
+      assert FolderRows.ref("notes", a.id) == v.id
+      old_release!(a)
+      assert RootRefs.enabled?()
+      assert run_to_done() == :done
+      assert FolderRows.ref("notes", a.id) == v.id
     end
 
     test "the kill switch runs no pass", %{user: u, vault: v} do

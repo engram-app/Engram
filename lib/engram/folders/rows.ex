@@ -96,12 +96,12 @@ defmodule Engram.Folders.Rows do
   @spec root_id(Ecto.UUID.t()) :: Ecto.UUID.t()
   def root_id(vault_id), do: vault_id
 
-  # The release holding the root-row readers (S6 step 1a, #2641). SENTINEL
-  # that no floor reaches, so root writes stay off whatever the floor says
-  # until the floor-raise PR sets this to 1a's real tag, lists 2641's merge
-  # commit in `priv/release_floor_contains`, and flips
-  # `Engram.Folders.RootRefsFloorTest` to assert (as 2630 did for S5).
-  @root_reads_release "release-v999.0.0"
+  # The release holding the root-row readers (S6 step 1a, #2641; release D).
+  # The rollback floor reaching it (`priv/release_floor`, which also requires
+  # the tag to contain 2641's merge commit, `priv/release_floor_contains`)
+  # switches root writes on: no rollback can then land on a release that does
+  # not read a root-row reference.
+  @root_reads_release "release-v0.90.0"
 
   @doc "The first release whose readers take a root-row reference: the rollback floor must reach it."
   @spec root_reads_release() :: String.t()

@@ -40,4 +40,11 @@ defmodule Engram.Release.FloorTest do
   test "the floor covers the S5 moved-folder feed" do
     assert Floor.at_least?(Engram.Folders.WriteStop.reads_release())
   end
+
+  # S6 step 1b (Engram#2523): root writes switch on with the floor at the
+  # root-row readers' release (release D), and the tag must contain 2641
+  # (`priv/release_floor_contains`).
+  test "the floor covers the S6 root-row readers" do
+    assert Floor.at_least?(Engram.Folders.Rows.root_reads_release())
+  end
 end
