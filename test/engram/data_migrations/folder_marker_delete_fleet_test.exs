@@ -129,6 +129,7 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteFleetTest do
             # Commit only once the stamp is waiting on this row's lock.
             Enum.find(1..150, fn _ ->
               Process.sleep(10)
+
               %{rows: [[n]]} =
                 Repo.query!(
                   "SELECT count(*)::int FROM pg_stat_activity " <>
