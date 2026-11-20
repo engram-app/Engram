@@ -518,49 +518,59 @@ defmodule Engram.Workers.CrdtBloatSweep do
   # silence the alert. Public for its test only.
   @doc false
   def log_save_loops(looping, owners) do
+    # The `Logger.warning` call stays in THIS function: the
+    # `engram-prod-crdt-save-loop` alert filters on its `mfa` metadata
+    # (`...CrdtBloatSweep.log_save_loops/2`), so moving it silences the alert.
     looping
-    |> Enum.map(fn {id, rate} ->
-      {id, rate, "rate_per_hour=#{rate} threshold=#{CrdtBloat.save_rate_threshold()}"}
+    |> worst_per_account(owners)
+    |> Enum.each(fn {id, rate} ->
+      Logger.warning(
+        "crdt_save_loop_note note=#{HMAC.hash_id(id)} user=#{owner_ref(owners[id])} " <>
+          "rate_per_hour=#{rate} threshold=#{CrdtBloat.save_rate_threshold()}",
+        Metadata.with_category(:warning, :oban, [])
+      )
     end)
-    |> log_per_account("crdt_save_loop_note", owners)
   end
 
   # One line per note over the bloat threshold (same `over` predicate as
   # `notes_over_threshold`), worst ratio first, so
   # `engram-prod-crdt-bloat-over-threshold` can be pinned to a note and an
-  # account. Public for its test only.
+  # account. The `Logger.warning` call stays here, as in `log_save_loops/2`,
+  # so the line's `mfa` is `log_bloated_notes/2`. Public for its test only.
   @doc false
   def log_bloated_notes(bloated, owners) do
     bloated
     |> Enum.map(fn {id, state_bytes, content_bytes, ratio} ->
-      # `/ 1`: JSON renders a whole-number float8 as an integer.
-      {id, ratio,
-       "state_bytes=#{state_bytes} content_bytes=#{content_bytes} " <>
-         "ratio=#{Float.round(ratio / 1, 1)}"}
+      {id, ratio, {state_bytes, content_bytes}}
     end)
-    |> log_per_account("crdt_bloat_note", owners)
+    |> worst_per_account(owners)
+    |> Enum.each(fn {id, ratio, {state_bytes, content_bytes}} ->
+      # `/ 1`: JSON renders a whole-number float8 as an integer.
+      Logger.warning(
+        "crdt_bloat_note note=#{HMAC.hash_id(id)} user=#{owner_ref(owners[id])} " <>
+          "state_bytes=#{state_bytes} content_bytes=#{content_bytes} " <>
+          "ratio=#{Float.round(ratio / 1, 1)}",
+        Metadata.with_category(:warning, :oban, [])
+      )
+    end)
   end
 
-  # `rows` are `{note_id, rank, detail}`; highest rank logs first, capped per
-  # account and in total (`@save_loop_log_cap`, `@save_loop_log_accounts`).
-  defp log_per_account(rows, event, owners) do
+  # Selects which rows to log, it never logs (see `log_save_loops/2`). Rows
+  # are tuples whose first two elements are `note_id, rank`; highest rank
+  # first, capped per account and in total (`@save_loop_log_cap`,
+  # `@save_loop_log_accounts`).
+  defp worst_per_account(rows, owners) do
     rows
-    |> Enum.group_by(fn {id, _rank, _detail} -> owners[id] end)
+    |> Enum.group_by(&owners[elem(&1, 0)])
     |> Enum.map(fn {_owner, notes} ->
       notes |> Enum.sort_by(&worst_first/1) |> Enum.take(@save_loop_log_cap)
     end)
     |> Enum.sort_by(fn [worst | _] -> worst_first(worst) end)
     |> Enum.take(@save_loop_log_accounts)
     |> Enum.concat()
-    |> Enum.each(fn {id, _rank, detail} ->
-      Logger.warning(
-        "#{event} note=#{HMAC.hash_id(id)} user=#{owner_ref(owners[id])} #{detail}",
-        Metadata.with_category(:warning, :oban, [])
-      )
-    end)
   end
 
-  defp worst_first({id, rank, _detail}), do: {-rank, id}
+  defp worst_first(row), do: {-elem(row, 1), elem(row, 0)}
 
   defp owner_ref(user_id) when is_binary(user_id), do: HMAC.hash_user_id(user_id)
   defp owner_ref(_), do: "unknown"
