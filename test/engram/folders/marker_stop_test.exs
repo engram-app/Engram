@@ -123,6 +123,54 @@ defmodule Engram.Folders.MarkerStopTest do
     assert delete_since(u, v, "F", since) == ["F", "F/X", "F/X/Deep"]
   end
 
+  # Both stops on (#2645's path-hash stop with the S5 write stop): a rename
+  # of a folder that holds a note is uncascaded and reads only the moved
+  # root, so only the root is stamped, never the explicit empty folder
+  # nested under it.
+  test "both stops: a nested explicit folder renamed into a doomed one is kept", ctx do
+    %{user: u, vault: v} = ctx
+    Engram.ServiceConfig.put_override(:folder_ops, true)
+    assert Engram.Folders.WriteStop.on?()
+    assert Engram.Folders.PathHashStop.on?(u.id, v.id)
+    assert MarkerStop.on?()
+
+    {:ok, %{folders: made}} = Folders.create_markers(u, v, ["B", "A", "A/x"])
+    # A note in A: a bare tree takes the cascading bare-folder move instead.
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "A/n.md", "content" => "x"}, actor: "api")
+    x = Enum.find(made, &(&1.name == "A/x")).id
+
+    stamp = fn ->
+      Repo.query!("SELECT updated_at, explicit_seq FROM folders WHERE id = $1", [
+        Ecto.UUID.dump!(x)
+      ]).rows
+    end
+
+    x_before = stamp.()
+    since = seq(u, v)
+    assert {:ok, _} = Folders.rename(u, v, "A", "B/A")
+    # One folder row written (the uncascaded, hashless rename): A/x untouched.
+    assert stamp.() == x_before
+
+    assert delete_since(u, v, "B", since) == ["B", "B/A", "B/A/x"]
+    assert "B/A/x" in explicit(u, v)
+  end
+
+  # Control: the same uncascaded move, but BEFORE the delete read its seq. The
+  # rows it placed are part of the folder being deleted, so the empty
+  # explicit one goes (the note keeps its own row).
+  test "both stops: a nested explicit folder moved in before the seq read is deleted", ctx do
+    %{user: u, vault: v} = ctx
+    Engram.ServiceConfig.put_override(:folder_ops, true)
+    assert Engram.Folders.PathHashStop.on?(u.id, v.id)
+
+    {:ok, _} = Folders.create_markers(u, v, ["B", "A", "A/x"])
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "A/n.md", "content" => "x"}, actor: "api")
+    assert {:ok, _} = Folders.rename(u, v, "A", "B/A")
+    since = seq(u, v)
+
+    assert delete_since(u, v, "B", since) == ["B", "B/A"]
+  end
+
   test "a folder moved into a doomed one after its seq read is kept", %{user: u, vault: v} do
     {:ok, %{folders: folders}} = Folders.create_markers(u, v, ["F", "X"])
     x = Enum.find(folders, &(&1.name == "X")).id
