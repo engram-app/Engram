@@ -139,6 +139,11 @@ defmodule Engram.Workers.CrdtBloatSweep do
   # without changing the `le` bucket there makes the two disagree silently.
   @bloat_threshold 5
 
+  # ponytail: the per-note bloat lines (`log_bloated_notes/2`) rank only the
+  # worst 1,000 over-threshold notes; an account outside them goes unnamed
+  # until worse ones are fixed. The count gauge still sees all of them.
+  @bloat_log_scan 1_000
+
   # Both halves are needed. `timeout/1` bounds the JOB; Ecto bounds the QUERY
   # separately and defaults to 15s, so a job budget alone would still have this
   # die mid-scan on a large table with nothing but a DBConnection error and a
@@ -227,16 +232,30 @@ defmodule Engram.Workers.CrdtBloatSweep do
           coalesce(max(ratio) FILTER (WHERE has_state AND big), 0)::float8,
           coalesce(sum(state_bytes), 0)::bigint,
           coalesce(sum(content_bytes), 0)::bigint,
-          count(*) FILTER (
-            WHERE has_state AND big AND ratio > $2::float8 AND state_bytes >= $4::int
-          )::bigint,
+          count(*) FILTER (WHERE over)::bigint,
           -- All ORDER BY id: aggregates have no shared order otherwise, and
           -- the arrays are zipped id to version and id to owner.
           coalesce(array_agg(id ORDER BY id) FILTER (WHERE written), '{}'),
           coalesce(array_agg(version ORDER BY id) FILTER (WHERE written), '{}'),
-          coalesce(array_agg(user_id ORDER BY id) FILTER (WHERE written), '{}')
+          coalesce(array_agg(user_id ORDER BY id) FILTER (WHERE written), '{}'),
+          -- The over-threshold notes themselves, worst first, for
+          -- `log_bloated_notes/2`. Sliced so a mass event cannot ship every
+          -- row back; the per-account caps apply after.
+          coalesce(
+            (array_agg(
+              json_build_object(
+                'id', id, 'user_id', user_id, 'state_bytes', state_bytes,
+                'content_bytes', content_bytes, 'ratio', ratio
+              ) ORDER BY ratio DESC, id
+            ) FILTER (WHERE over))[1:$6::int],
+            '{}'
+          )
         FROM (
-          #{sized_rows(narrow?)}
+          -- `over` is the one definition `notes_over_threshold` and the
+          -- per-note lines share.
+          SELECT r.*,
+            r.has_state AND r.big AND r.ratio > $2::float8 AND r.state_bytes >= $4::int AS over
+          FROM (#{sized_rows(narrow?)}) r
         ) sized
         """,
         [
@@ -246,7 +265,8 @@ defmodule Engram.Workers.CrdtBloatSweep do
           CrdtBloat.alert_min_state_bytes(),
           # A UTC DateTime: `n.updated_at >= $5` types it from the column, so
           # it is the same instant in `timestamp` or `timestamptz`.
-          since
+          since,
+          @bloat_log_scan
         ],
         timeout: :timer.minutes(5)
       )
@@ -264,9 +284,15 @@ defmodule Engram.Workers.CrdtBloatSweep do
       over,
       ids,
       versions,
-      users
+      users,
+      bloated
     ] =
       row
+
+    log_bloated_notes(
+      Enum.map(bloated, &{&1["id"], &1["state_bytes"], &1["content_bytes"], &1["ratio"]}),
+      Map.new(bloated, &{&1["id"], &1["user_id"]})
+    )
 
     ids = Enum.map(ids, &Ecto.UUID.load!/1)
     versions = if narrow?, do: written, else: Map.new(Enum.zip(ids, versions))
@@ -313,7 +339,7 @@ defmodule Engram.Workers.CrdtBloatSweep do
       SELECT
         s.note_id AS id,
         0 AS version,
-        NULL::uuid AS user_id,
+        s.user_id,
         false AS written,
         s.has_state,
         coalesce(s.state_bytes, 0) AS state_bytes,
@@ -450,10 +476,11 @@ defmodule Engram.Workers.CrdtBloatSweep do
   # ponytail: a note first written in this window has no baseline version, so
   # a loop that starts mid-hour shows one sweep later. The baseline only holds
   # notes written in the previous window, which keeps it small.
-  # Most save-loop notes one sweep logs (`crdt_save_loop_note`) PER ACCOUNT,
-  # fastest first, and most accounts it logs, the fastest accounts first: at
-  # most 5 x 10 = 50 lines whatever the flood. Per account, not a global top N,
-  # so one account looping on many notes cannot hide a second one.
+  # Most notes one sweep logs PER ACCOUNT for each per-note warning
+  # (`crdt_save_loop_note`, `crdt_bloat_note`), worst first, and most accounts
+  # it logs, the worst accounts first: at most 5 x 10 = 50 lines per kind
+  # whatever the flood. Per account, not a global top N, so one account with
+  # many bad notes cannot hide a second one.
   @save_loop_log_cap 5
   @save_loop_log_accounts 10
 
@@ -492,21 +519,48 @@ defmodule Engram.Workers.CrdtBloatSweep do
   @doc false
   def log_save_loops(looping, owners) do
     looping
-    |> Enum.group_by(fn {id, _rate} -> owners[id] end)
-    |> Enum.map(fn {_owner, notes} ->
-      notes |> Enum.sort_by(fn {id, rate} -> {-rate, id} end) |> Enum.take(@save_loop_log_cap)
+    |> Enum.map(fn {id, rate} ->
+      {id, rate, "rate_per_hour=#{rate} threshold=#{CrdtBloat.save_rate_threshold()}"}
     end)
-    |> Enum.sort_by(fn [{id, rate} | _] -> {-rate, id} end)
+    |> log_per_account("crdt_save_loop_note", owners)
+  end
+
+  # One line per note over the bloat threshold (same `over` predicate as
+  # `notes_over_threshold`), worst ratio first, so
+  # `engram-prod-crdt-bloat-over-threshold` can be pinned to a note and an
+  # account. Public for its test only.
+  @doc false
+  def log_bloated_notes(bloated, owners) do
+    bloated
+    |> Enum.map(fn {id, state_bytes, content_bytes, ratio} ->
+      # `/ 1`: JSON renders a whole-number float8 as an integer.
+      {id, ratio,
+       "state_bytes=#{state_bytes} content_bytes=#{content_bytes} " <>
+         "ratio=#{Float.round(ratio / 1, 1)}"}
+    end)
+    |> log_per_account("crdt_bloat_note", owners)
+  end
+
+  # `rows` are `{note_id, rank, detail}`; highest rank logs first, capped per
+  # account and in total (`@save_loop_log_cap`, `@save_loop_log_accounts`).
+  defp log_per_account(rows, event, owners) do
+    rows
+    |> Enum.group_by(fn {id, _rank, _detail} -> owners[id] end)
+    |> Enum.map(fn {_owner, notes} ->
+      notes |> Enum.sort_by(&worst_first/1) |> Enum.take(@save_loop_log_cap)
+    end)
+    |> Enum.sort_by(fn [worst | _] -> worst_first(worst) end)
     |> Enum.take(@save_loop_log_accounts)
     |> Enum.concat()
-    |> Enum.each(fn {id, rate} ->
+    |> Enum.each(fn {id, _rank, detail} ->
       Logger.warning(
-        "crdt_save_loop_note note=#{HMAC.hash_id(id)} user=#{owner_ref(owners[id])} " <>
-          "rate_per_hour=#{rate} threshold=#{CrdtBloat.save_rate_threshold()}",
+        "#{event} note=#{HMAC.hash_id(id)} user=#{owner_ref(owners[id])} #{detail}",
         Metadata.with_category(:warning, :oban, [])
       )
     end)
   end
+
+  defp worst_first({id, rank, _detail}), do: {-rank, id}
 
   defp owner_ref(user_id) when is_binary(user_id), do: HMAC.hash_user_id(user_id)
   defp owner_ref(_), do: "unknown"
