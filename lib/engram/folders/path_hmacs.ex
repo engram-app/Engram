@@ -97,7 +97,10 @@ defmodule Engram.Folders.PathHmacs do
   @doc """
   Sets each `{id, hash}` of `user_id`'s rows (a nil hash is skipped), first
   releasing that hash from any other live row of the same vault (only
-  for a live target). Returns `{:ok, rows set}`.
+  for a live target). Returns `{:ok, rows set}`. Dropping nil pairs is
+  what keeps rows hashless under `Engram.Folders.PathHashStop`: there every
+  writer's hash is nil (`Rows`' `full_h`), a marker's (`put_marker_hashes`)
+  included, so no caller needs its own stop check.
   """
   @spec put(module(), Ecto.UUID.t(), [{Ecto.UUID.t() | binary(), binary() | nil}]) ::
           {:ok, non_neg_integer()}
