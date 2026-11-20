@@ -77,15 +77,23 @@ defmodule Engram.Logs do
          "other"
        ]},
     visibility: {:one_of, ~w(visible hidden prerender)},
-    effective_type: {:one_of, ~w(slow-2g 2g 3g 4g)}
+    effective_type: {:one_of, ~w(slow-2g 2g 3g 4g)},
+    # Plugin device facts (src/device-name.ts `clientContext`): `platform` says
+    # only mobile|desktop, so Android could not be told from iOS, nor a report
+    # tied to an Obsidian release. Closed enum and a bare version number, so
+    # neither can carry a path or a user agent. Metadata only, never a Loki label.
+    os: {:one_of, ~w(android ios mobile_other desktop)},
+    app_version: {:match, ~r/\A\d{1,3}\.\d{1,3}\.\d{1,3}\z/}
   ]
 
   @doc """
-  Metadata keys a client context can add to a re-emitted line: the
-  allowlisted fields plus `elapsed_ms_min` on a collapsed repeat. Each must
+  Metadata keys a client line can add to a re-emitted line: the allowlisted
+  context fields, `elapsed_ms_min` on a collapsed repeat, and the plugin's own
+  `plugin_version` (its own column, not context). Each must
   be declared in config.exs's `:default_formatter` metadata list.
   """
-  def context_metadata_keys, do: Keyword.keys(@context_fields) ++ [:elapsed_ms_min]
+  def context_metadata_keys,
+    do: Keyword.keys(@context_fields) ++ [:elapsed_ms_min, :plugin_version]
 
   @doc """
   Insert a batch of log entries for a user.
@@ -393,6 +401,7 @@ defmodule Engram.Logs do
             forced: entry.forced
           )
           |> Keyword.merge(entry.context)
+          |> put_plugin_version(entry.plugin_version)
 
         meta = if repeat > 1, do: Keyword.put(meta, :repeat, repeat), else: meta
 
@@ -414,6 +423,16 @@ defmodule Engram.Logs do
     end)
   end
 
+  # The plugin's own release, from the same column the DB keeps. Free text in
+  # the column (clamped, not validated), so only what the floor itself parses
+  # as a version reaches Loki; web lines send none.
+  defp put_plugin_version(meta, version) do
+    case Engram.PluginVersion.loggable(version) do
+      nil -> meta
+      v -> Keyword.put(meta, :plugin_version, v)
+    end
+  end
+
   # Identical lines of one batch (a refused frame retried per flush) as one
   # `{first, count}`, in first-seen order. Everything that ends up in the line
   # or its metadata is part of the key, so collapsing never merges two lines
@@ -426,7 +445,7 @@ defmodule Engram.Logs do
       Enum.reduce(items, {[], %{}}, fn {e, ship?} = item, {order, groups} ->
         key =
           {e.level, e.category, e.message, ship?, e.forced, e.conn_id, e.device_id, e.platform,
-           Keyword.delete(e.context, :elapsed_ms)}
+           e.plugin_version, Keyword.delete(e.context, :elapsed_ms)}
 
         case groups do
           %{^key => {first, elapsed}} ->

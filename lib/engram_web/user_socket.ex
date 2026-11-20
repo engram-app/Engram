@@ -112,18 +112,20 @@ defmodule EngramWeb.UserSocket do
     # of a valid token could push ~10KB (Bandit's request-line cap) per connect
     # into a long-retention aggregator. Two in-repo precedents bound the same
     # kind of value: `request_logger.ex` truncates `user_agent` to 200 for this
-    # exact reason, and `logs.ex` bounds `plugin_version` to 128 on the
-    # client-log ingest path. 32 is `PluginVersion`'s own bound and holds every
-    # version this repo can emit with room to spare. See `bounded_version/1`
-    # for why it DROPS rather than truncates.
+    # exact reason, and `logs.ex` clamps the stored `plugin_version` column on
+    # the client-log ingest path. 32 is `PluginVersion`'s own bound and holds
+    # every version this repo can emit with room to spare. See
+    # `bounded_version/1` for why it DROPS rather than truncates. This bounded
+    # value is what the gate reads (assigns); the LOG gets the stricter
+    # `PluginVersion.loggable/1`, the one filter for logged and traced versions.
     plugin_version = bounded_version(params["plugin_version"])
 
-    # `plugin_version` is logged HERE and nowhere else. It is the evidence you
-    # read before raising `Engram.PluginVersion.minimum/0`, and this is the one
-    # place where that costs a field per SOCKET rather than a field per request
-    # — the version distribution of everything that syncs, at ~1 line per
-    # client per reconnect. Do not also add it to `RequestLogger`; see the
-    # ingest-cost note there.
+    # This line is the per-SOCKET version record: the evidence you read before
+    # raising `Engram.PluginVersion.minimum/0`, at ~1 line per client per
+    # reconnect. The version also rides re-emitted client log lines
+    # (`Engram.Logs`) and request spans (`TraceUserAttrs`), all through
+    # `loggable/1`. Do not add it to `RequestLogger`; see the ingest-cost note
+    # there.
     #
     # Read it in CLOUDWATCH (`/ecs/engram-saas-prod`), not Loki. This is an
     # `:info` + `:websocket` line, and while `Logger.Category` lists
@@ -138,7 +140,7 @@ defmodule EngramWeb.UserSocket do
         conn_id: conn_id,
         device_id: device_id,
         vault_id: vault_id,
-        plugin_version: plugin_version,
+        plugin_version: PluginVersion.loggable(plugin_version),
         user_id: HMAC.hash_user_id(to_string(user.id))
       )
     )

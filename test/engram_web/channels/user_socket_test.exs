@@ -246,6 +246,34 @@ defmodule EngramWeb.UserSocketTest do
     assert socket.assigns.plugin_version == at_bound
   end
 
+  # The gate reads the bounded raw value; the log only gets a real version.
+  test "a non-version plugin_version reaches assigns but not the ws connect log", %{user: user} do
+    ref = make_ref()
+    handler_id = :user_socket_version_log_handler
+    :logger.add_handler(handler_id, __MODULE__, %{config: %{parent: self(), ref: ref}})
+    on_exit(fn -> :logger.remove_handler(handler_id) end)
+
+    for {sent, logged} <- [{"1.39.3", "1.39.3"}, {"x/y", nil}] do
+      assert {:ok, socket} =
+               connect(EngramWeb.UserSocket, %{
+                 "token" => version_token(user),
+                 "plugin_version" => sent
+               })
+
+      assert socket.assigns.plugin_version == sent
+      assert_receive {^ref, meta}, 1000
+      assert meta[:plugin_version] == logged
+    end
+  end
+
+  # :logger handler callback: forwards the ws connect line's metadata.
+  def log(%{msg: {:string, msg}, meta: meta}, %{config: %{parent: parent, ref: ref}}) do
+    if IO.chardata_to_string(msg) == "ws connect", do: send(parent, {ref, meta})
+    :ok
+  end
+
+  def log(_event, _config), do: :ok
+
   # `?plugin_version[]=1.0.0` decodes to a list. Dropping it keeps the assign
   # matching its `String.t() | nil` spec rather than making that a runtime lie.
   test "a non-string plugin_version becomes nil", %{user: user} do

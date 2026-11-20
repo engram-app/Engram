@@ -30,13 +30,11 @@ defmodule EngramWeb.Plugs.TraceUserAttrsTest do
     assert {"app.device_id", "dev-abc"} in attrs
   end
 
-  test "caps client-supplied plugin.version length" do
-    conn = build_conn() |> Plug.Conn.assign(:plugin_version, String.duplicate("9", 500))
-
-    assert {"plugin.version", v} =
-             List.keyfind(TraceUserAttrs.attrs_for(conn), "plugin.version", 0)
-
-    assert String.length(v) == 32
+  test "drops an over-long or non-version plugin.version instead of truncating it" do
+    for bad <- [String.duplicate("9", 500), "1.0 /home/u/vault"] do
+      conn = build_conn() |> Plug.Conn.assign(:plugin_version, bad)
+      refute List.keyfind(TraceUserAttrs.attrs_for(conn), "plugin.version", 0)
+    end
   end
 
   test "drops a non-ASCII value instead of letting one grapheme carry many bytes" do

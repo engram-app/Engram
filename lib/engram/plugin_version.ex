@@ -259,6 +259,19 @@ defmodule Engram.PluginVersion do
 
   defp plain_version(_), do: :error
 
+  @doc """
+  A client-reported plugin version safe to ship as log metadata: the exact
+  string when it parses as semver (pre-release included) within `@max_len`
+  bytes, else nil. The same parser and bound the floor uses, so a value that
+  could carry a path or bloat a line never leaves the node.
+  """
+  @spec loggable(term()) :: String.t() | nil
+  def loggable(value) when is_binary(value) and byte_size(value) <= @max_len do
+    if match?({:ok, _}, Version.parse(value)), do: value
+  end
+
+  def loggable(_), do: nil
+
   @spec update_url() :: String.t()
   def update_url, do: @update_url
 

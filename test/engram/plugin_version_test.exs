@@ -166,6 +166,17 @@ defmodule Engram.PluginVersionTest do
     end
   end
 
+  test "loggable/1 keeps real version shapes and drops anything that could leak or bloat" do
+    assert PluginVersion.loggable("1.39.3") == "1.39.3"
+    assert PluginVersion.loggable("1.28.1-pr.512.g876f2c2") == "1.28.1-pr.512.g876f2c2"
+
+    for bad <- [nil, 139, "", " 1.39.3", "1.0 /home/u/vault", "1.0.0-a/b", "1.0.0-é"] do
+      assert PluginVersion.loggable(bad) == nil, inspect(bad)
+    end
+
+    assert PluginVersion.loggable("1.0.0-" <> String.duplicate("a", 27)) == nil
+  end
+
   test "update_url/0 points at the plugin's Obsidian pane" do
     assert PluginVersion.update_url() =~ "engram-vault-sync"
   end

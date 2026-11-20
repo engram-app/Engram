@@ -281,6 +281,95 @@ defmodule Engram.LogsReemitTest do
       refute_receive {^ref, _, _}, 100
     end
 
+    # Android vs iOS vs desktop, plugin and Obsidian version: `platform` says
+    # only mobile|desktop, so a mobile report could not be tied to a device
+    # class or a release from Loki alone. Metadata, never labels (cardinality).
+    test "plugin os, app_version and plugin_version reach the re-emit metadata" do
+      meta = reemit_plugin(%{"os" => "android", "app_version" => "1.8.10"}, "1.39.3")
+
+      assert meta[:os] == "android"
+      assert meta[:app_version] == "1.8.10"
+      assert meta[:plugin_version] == "1.39.3"
+    end
+
+    test "mobile_other is an accepted os class" do
+      assert reemit_plugin(%{"os" => "mobile_other"}, "1.0.0")[:os] == "mobile_other"
+    end
+
+    test "an out-of-shape os, app_version or plugin_version is dropped" do
+      meta =
+        reemit_plugin(
+          %{"os" => "Linux 6.1 Medical/x.md", "app_version" => "1.8.10 (Pixel 8)"},
+          "1.0 /home/todd/vault"
+        )
+
+      for key <- ~w(os app_version plugin_version)a do
+        refute Map.has_key?(meta, key), "#{key} passed through"
+      end
+    end
+
+    # A plugin that upgrades mid-flush sends the same line from both builds.
+    # Collapsing them would credit every repeat to the first build.
+    test "identical lines from two plugin versions do not collapse into one" do
+      user = insert(:user)
+      parent = self()
+      ref = make_ref()
+      handler_id = :logs_reemit_version_collapse_handler
+
+      :logger.add_handler(handler_id, __MODULE__, %{config: %{parent: parent, ref: ref}})
+      on_exit(fn -> :logger.remove_handler(handler_id) end)
+
+      entry = fn version ->
+        %{
+          "level" => "warn",
+          "category" => "sync",
+          "message" => "preview_failed reason=timeout",
+          "platform" => "mobile",
+          "conn_id" => "c1",
+          "plugin_version" => version,
+          "forced" => true
+        }
+      end
+
+      {:ok, 3} = Logs.insert_logs(user, [entry.("1.39.3"), entry.("1.39.3"), entry.("1.40.0")])
+
+      assert_receive {^ref, _level, old}, 1000
+      assert old[:plugin_version] == "1.39.3"
+      assert old[:repeat] == 2
+
+      assert_receive {^ref, _level, new}, 1000
+      assert new[:plugin_version] == "1.40.0"
+      refute Map.has_key?(new, :repeat)
+      refute_receive {^ref, _, _}, 100
+    end
+
+    defp reemit_plugin(context, plugin_version) do
+      user = insert(:user)
+      parent = self()
+      ref = make_ref()
+      handler_id = :logs_reemit_plugin_handler
+
+      :logger.add_handler(handler_id, __MODULE__, %{config: %{parent: parent, ref: ref}})
+      on_exit(fn -> :logger.remove_handler(handler_id) end)
+
+      {:ok, 1} =
+        Logs.insert_logs(user, [
+          %{
+            "level" => "warn",
+            "category" => "sync",
+            "message" => "preview_failed reason=timeout missing_live=true",
+            "platform" => "mobile",
+            "conn_id" => "c1",
+            "plugin_version" => plugin_version,
+            "forced" => true,
+            "context" => context
+          }
+        ])
+
+      assert_receive {^ref, _level, meta}, 1000
+      meta
+    end
+
     # config.exs requires every metadata key we emit in :default_formatter's
     # list; these reach Logger through Keyword.merge, where credo's
     # MissedMetadataKeyInLoggerConfig cannot see them.
