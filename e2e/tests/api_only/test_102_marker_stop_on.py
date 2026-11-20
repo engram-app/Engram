@@ -10,10 +10,30 @@ API-only.
 
 from __future__ import annotations
 
-import time
+import uuid
 
-from helpers.crypto_probe import psql_one
-from helpers.folder_ops import _bool_rpc
+from helpers.backend_rpc import backend_rpc, vault_user_expr
+from helpers.folder_ops import _bool_rpc, _lines
+
+# One rpc, scoped to THIS test's folder (the e2e vault is shared by ~110
+# tests, so a vault-wide count is not a signal): live markers at the
+# folder's path hash or with its row's id (a marker keeps its folder row's
+# UUID), and the folder row's explicit flag.
+_PROBE = (
+    "{:ok, fk} = Engram.Crypto.dek_filter_key(u); "
+    'h = Engram.Folders.Rows.path_hmac(fk, "FOLDER"); '
+    "r = Engram.Repo.with_tenant!(u.id, fn -> "
+    '[id] = Engram.Folders.Rows.ids_at(u, "VAULT", ["FOLDER"]); '
+    "{:ok, m} = Ecto.Adapters.SQL.query(Engram.Repo, "
+    "\"select count(*) from notes where vault_id = $1 and kind = 'folder' "
+    'and deleted_at is null and (folder_hmac = $2 or id = $3)", '
+    "[vb, h, Ecto.UUID.dump!(id)]); "
+    "{:ok, f} = Ecto.Adapters.SQL.query(Engram.Repo, "
+    '"select explicit from folders where id = $1 and deleted_at is null", '
+    "[Ecto.UUID.dump!(id)]); "
+    "{hd(hd(m.rows)), f.rows} end); "
+    'IO.puts("probe=#{inspect(r)}")'
+)
 
 
 class TestMarkerStopOn:
@@ -27,22 +47,16 @@ class TestMarkerStopOn:
         vault_id = vaults[0]["id"]
         client = api_sync.with_vault(vault_id)
 
-        before = int(
-            psql_one(
-                f"SELECT count(*) FROM notes WHERE vault_id = '{vault_id}' AND kind = 'folder';",
-                "marker count before",
-            )
-        )
-        folder = f"marker-stop-{int(time.time())}"
+        folder = f"marker-stop-{uuid.uuid4().hex}"
         assert client.create_folder(folder) in (200, 201)
 
-        after = int(
-            psql_one(
-                f"SELECT count(*) FROM notes WHERE vault_id = '{vault_id}' AND kind = 'folder';",
-                "marker count after",
-            )
+        expr = vault_user_expr(vault_id) + _PROBE.replace("FOLDER", folder).replace(
+            "VAULT", vault_id
         )
-        assert after == before, f"a folder create wrote {after - before} marker row(s)"
+        lines = _lines(backend_rpc(expr))
+        assert "probe={0, [[true]]}" in lines, (
+            f"want no live marker for {folder} and its row explicit, got {lines}"
+        )
 
         resp = client.session.get(f"{client.base_url}/folders/explicit", timeout=10)
         assert resp.status_code == 200
