@@ -122,7 +122,18 @@ no live marker names (a cascade before #2639 deleted markers without clearing
 the flag on rows it kept, and listed from the flag those would put deleted
 empty folders back on disk). Until both ledgers are done the markers are read.
 A path delete (`Notes.delete_folder_marker/3`) with no live marker clears the
-flag too. Phases: D reads (writers still insert markers), E
+flag too.
+
+Phase 2 (`Engram.Folders.MarkerStop`, release E): creates stop inserting
+markers and make the row explicit alone (`Rows.make_explicit/3`), stamping
+`folders.explicit_seq` with the vault seq they took. On only once listings read
+the flag and the rollback floor reaches the phase 1 release (a sentinel until
+then). Every flag change bumps the vault seq (caches and etags key on it). A
+folder delete keeps a row made explicit after its scan (`explicit_seq` > the
+seq it read first), the job a live marker did (#2466 H2). A soft delete keeps
+the flag, so an undo brings an empty explicit folder back with no marker, and
+`Folders.restore_op/3` broadcasts it. `ExplicitFolderReconcile` never clears a
+row with `explicit_seq` set. Phases: D reads (writers still insert markers), E
 writers stop inserting markers, F a ledger deletes them. The catch-up feed
 never carried markers (#976), and the plugin learns explicit folders only
 from `GET /folders/explicit`, whose shape is unchanged: no plugin shim.

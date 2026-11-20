@@ -42,6 +42,7 @@ defmodule Engram.Folders do
   alias Engram.Attachments.WriteStop, as: AttachmentWriteStop
   alias Engram.Billing
   alias Engram.Crypto
+  alias Engram.Folders.MarkerStop
   alias Engram.Folders.Rows
   alias Engram.Folders.Wire
   alias Engram.Folders.WriteStop
@@ -426,6 +427,7 @@ defmodule Engram.Folders do
       # Reload ONCE here: both scan and apply need a DEK-bearing struct, and
       # each reloads defensively. Doing it up front makes those no-ops.
       user = Crypto.fresh_user(user)
+      opts = since_seq(user, vault, opts)
 
       # No outer transaction (#2159): the scans and the decrypt run outside
       # one, and `delete_scanned/4` commits chunk by chunk.
@@ -462,6 +464,15 @@ defmodule Engram.Folders do
     end
   end
 
+  # Markers stopped (S6 step 4): the vault seq before the scan, so the row
+  # delete keeps a folder made explicit inside the doomed one meanwhile
+  # (`Rows.soft_delete/5`), the job a live marker did. One seq read.
+  defp since_seq(user, vault, opts) do
+    if MarkerStop.on?(),
+      do: Keyword.put(opts, :since_seq, Vaults.current_seq(user.id, vault.id)),
+      else: opts
+  end
+
   # Attachments, then content notes, then folder markers: each leg in
   # chunks, each chunk its own transaction (#2159). Markers go last so a
   # failure anywhere leaves the folder in place for a retry to find.
@@ -475,11 +486,11 @@ defmodule Engram.Folders do
     # A heal conflict on the attachments (`Attachments.settle/3`) stops the
     # delete before any note goes: a retryable `{:error, :conflict}`.
     with {:ok, attachments} <- Attachments.delete_scanned_paths(user, vault, att_paths, op) do
-      delete_note_legs(user, vault, folders, note_rows, attachments, op)
+      delete_note_legs(user, vault, folders, note_rows, attachments, op, opts[:since_seq])
     end
   end
 
-  defp delete_note_legs(user, vault, folders, note_rows, attachments, op) do
+  defp delete_note_legs(user, vault, folders, note_rows, attachments, op, since_seq) do
     {content, markers} = Enum.split_with(note_rows, &(&1.kind == "note"))
 
     %{deleted: d1, notes: n} = delete_note_chunks(user, vault, content, op)
@@ -489,7 +500,9 @@ defmodule Engram.Folders do
     # folder in place for a retry to find. Rows only; the notes and
     # attachments were stamped by their own legs.
     _ =
-      Repo.with_tenant!(user.id, fn -> Rows.soft_delete(user, vault.id, folders, op[:op_id]) end)
+      Repo.with_tenant!(user.id, fn ->
+        Rows.soft_delete(user, vault.id, folders, op[:op_id], since_seq)
+      end)
 
     {:ok, %{notes: n, deleted: d1 + d2, attachments: attachments}}
   end
@@ -538,6 +551,7 @@ defmodule Engram.Folders do
 
     with {:ok, folders} <- Notes.resolve_folder_markers(user, vault, marker_ids),
          user = Crypto.fresh_user(user),
+         opts = since_seq(user, vault, opts),
          {:ok, note_rows} <- Notes.scan_folders(user, vault, folders),
          {:ok, att_paths} <- attachment_paths_under(user, vault, folders) do
       with {:ok, %{deleted: notes, attachments: atts}} <-
@@ -586,8 +600,9 @@ defmodule Engram.Folders do
          {:ok, atts} <- Attachments.plan_restore(user, vault, op_id, cutoff),
          # Folder rows before anything that points at them. The plans above
          # refuse without writing, so a refused restore leaves them deleted.
-         _ = Repo.with_tenant!(user.id, fn -> Rows.restore_op(user, vault.id, op_id) end),
+         explicit = Repo.with_tenant!(user.id, fn -> restore_rows(user, vault, op_id) end),
          {:ok, folders} <- restore_markers(user, vault, notes.folders),
+         :ok <- broadcast_created(user, vault, explicit, nil),
          {:ok, n} <- Notes.restore_notes(user, vault, op_id, notes.notes),
          {:ok, a} <- Attachments.restore_attachments(user, vault, atts.attachments) do
       {:ok,
@@ -608,6 +623,23 @@ defmodule Engram.Folders do
   @spec restorable_until(map()) :: DateTime.t()
   def restorable_until(user),
     do: DateTime.add(DateTime.utc_now(:second), Billing.trash_retention_days(user), :day)
+
+  # Revives the op's folder rows. Markers stopped (S6 step 4), an empty
+  # explicit folder has no marker to re-create, so the explicit rows that came
+  # back are returned as created entries for `broadcast_created/4` (peers
+  # re-poll `/folders/explicit`). Markers on: none, `restore_markers/3` does it.
+  defp restore_rows(user, vault, op_id) do
+    if MarkerStop.on?() do
+      # Revived explicit rows and the live rows an explicit one merged into.
+      {_n, ids} = Rows.restore_op_explicit(user, vault.id, op_id)
+      {:ok, dek} = Crypto.get_dek(user)
+      live = Rows.paths_by_ids(dek, vault.id, ids)
+      for {id, name} <- live, do: %{created: true, id: id, name: name}
+    else
+      _ = Rows.restore_op(user, vault.id, op_id)
+      []
+    end
+  end
 
   # The marker create path already revives a tombstoned marker in place
   # (and leaves a live one alone), so a restore is a create of the names.

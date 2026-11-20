@@ -303,22 +303,21 @@ defmodule Engram.Folders.ExplicitReadsTest do
       assert {:ok, :not_found} = Notes.delete_folder_marker(u, v, "Stale")
     end
 
-    test "the gate waits for both ledgers", %{user: _u} do
+    # With the rollback floor at the marker stop's release (D, #2674), the
+    # reconcile no longer gates: its daily re-verify may reopen it, and
+    # folders the stop made have no marker to fall back to.
+    test "the gate waits for the FolderTable ledger, not the reconcile, at D", %{user: _u} do
       Engram.ServiceConfig.put_override(:explicit_folders_ledger, :read)
+      assert Engram.Folders.MarkerStop.floors?(:enforce)
       Engram.DataCase.clear_request_caches()
       refute Rows.explicit_reads?()
 
-      # Either ledger alone is not enough.
-      for m <- [FolderTable, ExplicitFolderReconcile] do
-        DataMigrations.mark_done(m.name(), m.version())
-        Engram.DataCase.clear_request_caches()
-        refute Rows.explicit_reads?(), "#{m.name()} alone opened the gate"
-        DataMigrations.reopen(m.name(), m.version())
-      end
+      DataMigrations.mark_done(ExplicitFolderReconcile.name(), ExplicitFolderReconcile.version())
+      Engram.DataCase.clear_request_caches()
+      refute Rows.explicit_reads?(), "the reconcile alone opened the gate"
+      DataMigrations.reopen(ExplicitFolderReconcile.name(), ExplicitFolderReconcile.version())
 
-      for m <- [FolderTable, ExplicitFolderReconcile],
-          do: DataMigrations.mark_done(m.name(), m.version())
-
+      DataMigrations.mark_done(FolderTable.name(), FolderTable.version())
       Engram.DataCase.clear_request_caches()
       assert Rows.explicit_reads?()
     end
@@ -361,10 +360,30 @@ defmodule Engram.Folders.ExplicitReadsTest do
     assert {:ok, ["E"]} = Notes.list_explicit_folders(u, v)
   end
 
+  # The same E folder, but a note recreates its path before the undo: the
+  # undo merges into the note's (non-explicit) row and must carry the flag
+  # there, as a rename merge's `retire/2` does. Red without the restore's
+  # merge carry: the folder drops from listings once the note goes.
+  test "an undo merged into a note's row keeps an empty folder E made", ctx do
+    %{user: u, vault: v} = ctx
+    {:ok, _} = Notes.create_folder_markers(u, v, ["E"])
+    Repo.query!("DELETE FROM notes WHERE vault_id = $1 AND kind = 'folder'", [dump(v.id)])
+    Repo.query!("UPDATE folders SET explicit_seq = 7 WHERE id = $1", [dump(row_id(u, "E"))])
+    op = Ecto.UUID.generate()
+
+    assert {:ok, _} = Engram.Folders.delete(u, v, "E", recursive: true, op_id: op)
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "E/n.md", "content" => "x"}, actor: "api")
+    assert {:ok, _} = Engram.Folders.restore_op(u, v, op)
+    :ok = Notes.delete_note(u, v, "E/n.md")
+
+    assert {:ok, ["E"]} = Notes.list_explicit_folders(u, v)
+  end
+
   # The rows leg alone (no marker left to clear the flag first, as a
-  # cascade's marker leg does): a D-era row is trashed with its flag
-  # cleared, as before the fix above.
-  test "a D-era row (explicit_seq NULL) still loses its flag when deleted", ctx do
+  # cascade's marker leg does). D cleared a D-era row's flag here; from E on
+  # every trashed row keeps it (an undo has no marker to re-create it from),
+  # and listings read live rows only.
+  test "a trashed row keeps its flag, D-era (explicit_seq NULL) too", ctx do
     %{user: u, vault: v} = ctx
     {:ok, _} = Notes.create_folder_markers(u, v, ["D"])
     Repo.query!("DELETE FROM notes WHERE vault_id = $1 AND kind = 'folder'", [dump(v.id)])
@@ -375,7 +394,7 @@ defmodule Engram.Folders.ExplicitReadsTest do
                Rows.soft_delete(u, v.id, ["D"], Ecto.UUID.generate())
              end)
 
-    assert %{rows: [[false, nil, true]]} =
+    assert %{rows: [[true, nil, true]]} =
              Repo.query!(
                "SELECT explicit, explicit_seq, deleted_at IS NOT NULL FROM folders WHERE id = $1",
                [dump(id)]
