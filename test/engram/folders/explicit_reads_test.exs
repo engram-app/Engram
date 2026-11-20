@@ -303,22 +303,21 @@ defmodule Engram.Folders.ExplicitReadsTest do
       assert {:ok, :not_found} = Notes.delete_folder_marker(u, v, "Stale")
     end
 
-    test "the gate waits for both ledgers", %{user: _u} do
+    # With the rollback floor at the marker stop's release (D, #2674), the
+    # reconcile no longer gates: its daily re-verify may reopen it, and
+    # folders the stop made have no marker to fall back to.
+    test "the gate waits for the FolderTable ledger, not the reconcile, at D", %{user: _u} do
       Engram.ServiceConfig.put_override(:explicit_folders_ledger, :read)
+      assert Engram.Folders.MarkerStop.floors?(:enforce)
       Engram.DataCase.clear_request_caches()
       refute Rows.explicit_reads?()
 
-      # Either ledger alone is not enough.
-      for m <- [FolderTable, ExplicitFolderReconcile] do
-        DataMigrations.mark_done(m.name(), m.version())
-        Engram.DataCase.clear_request_caches()
-        refute Rows.explicit_reads?(), "#{m.name()} alone opened the gate"
-        DataMigrations.reopen(m.name(), m.version())
-      end
+      DataMigrations.mark_done(ExplicitFolderReconcile.name(), ExplicitFolderReconcile.version())
+      Engram.DataCase.clear_request_caches()
+      refute Rows.explicit_reads?(), "the reconcile alone opened the gate"
+      DataMigrations.reopen(ExplicitFolderReconcile.name(), ExplicitFolderReconcile.version())
 
-      for m <- [FolderTable, ExplicitFolderReconcile],
-          do: DataMigrations.mark_done(m.name(), m.version())
-
+      DataMigrations.mark_done(FolderTable.name(), FolderTable.version())
       Engram.DataCase.clear_request_caches()
       assert Rows.explicit_reads?()
     end

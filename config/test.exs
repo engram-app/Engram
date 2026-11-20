@@ -23,6 +23,11 @@ config :engram, :name_reads_ledger, :done
 # done (`Engram.Folders.Rows.explicit_reads?/0`). A test of the marker
 # fallback puts a per-process override of `:explicit_folders_ledger`, `:read`.
 config :engram, :explicit_folders_ledger, :done
+# The S6 step 4 marker write stop (`Engram.Folders.MarkerStop.on?/0`) is
+# live on the real floor (release D). The suites keep exercising the marker
+# path a kill switch or a rollback brings back; `MarkerStopTest` and the
+# surfaces test opt in with `put_override(:folder_marker_stop, true)`.
+config :engram, :folder_marker_stop, false
 
 # The S5 write stop's floor check (`Engram.Folders.WriteStop.floors?/0`): the
 # rollback floor stays below the moved-folder feed release until release B

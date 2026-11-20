@@ -14,6 +14,7 @@ defmodule EngramWeb.MarkerStopSurfacesTest do
 
   setup %{user: user} do
     Engram.ServiceConfig.put_override(:marker_stop_floors, :assume)
+    Engram.ServiceConfig.put_override(:folder_marker_stop, true)
     Engram.ServiceConfig.put_override(:folder_ops, true)
     assert Engram.Folders.MarkerStop.on?()
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)

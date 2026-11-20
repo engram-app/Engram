@@ -13,6 +13,7 @@ defmodule Engram.Folders.MarkerStopTest do
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     Engram.ServiceConfig.put_override(:marker_stop_floors, :assume)
+    Engram.ServiceConfig.put_override(:folder_marker_stop, true)
     %{user: user, vault: insert(:vault, user: user)}
   end
 
@@ -28,10 +29,14 @@ defmodule Engram.Folders.MarkerStopTest do
   defp seq(user, vault), do: Vaults.current_seq(user.id, vault.id)
   defp explicit(user, vault), do: elem(Notes.list_explicit_folders(user, vault), 1)
 
-  test "the stop stays off until the floor reaches release D" do
+  # The floor-raise (#2674) put the rollback floor at release D: the stop is
+  # live on the real floor, with no test override.
+  test "the rollback floor reaches release D: the stop is live" do
     assert MarkerStop.reads_release() == "release-v0.90.0"
-    refute MarkerStop.floors?(:enforce)
-    assert MarkerStop.floors?(:assume)
+    assert Engram.Release.Floor.at_least?(MarkerStop.reads_release())
+    assert MarkerStop.floors?(:enforce)
+    Engram.ServiceConfig.put_override(:marker_stop_floors, :enforce)
+    assert MarkerStop.on?()
   end
 
   test "a create writes no marker, lists the folder and moves the seq", %{user: u, vault: v} do
@@ -173,7 +178,7 @@ defmodule Engram.Folders.MarkerStopTest do
     user: u,
     vault: v
   } do
-    Engram.ServiceConfig.put_override(:marker_stop_floors, :enforce)
+    Engram.ServiceConfig.put_override(:folder_marker_stop, false)
     {:ok, _} = Folders.create_markers(u, v, ["F", "X", "F/Y"])
     op = Ecto.UUID.generate()
     {:ok, _} = Folders.delete(u, v, "F/Y", recursive: true, op_id: op)
@@ -330,8 +335,8 @@ defmodule Engram.Folders.MarkerStopTest do
     end)
   end
 
-  test "control: with the floor enforced, creates still insert markers", %{user: u, vault: v} do
-    Engram.ServiceConfig.put_override(:marker_stop_floors, :enforce)
+  test "control: with the kill switch off, creates still insert markers", %{user: u, vault: v} do
+    Engram.ServiceConfig.put_override(:folder_marker_stop, false)
     {:ok, _} = Folders.create_markers(u, v, ["M"])
     assert markers(v) == 1
     assert explicit(u, v) == ["M"]
@@ -362,11 +367,8 @@ defmodule Engram.Folders.MarkerStopTest do
       Engram.DataMigrations.FolderTable.version()
     )
 
-    Engram.DataCase.clear_request_caches()
-    assert Rows.explicit_reads?()
-
     Engram.ServiceConfig.put_override(:marker_stop_floors, :enforce)
     Engram.DataCase.clear_request_caches()
-    refute Rows.explicit_reads?()
+    assert Rows.explicit_reads?()
   end
 end
