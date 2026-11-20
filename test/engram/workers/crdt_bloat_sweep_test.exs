@@ -503,7 +503,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   # `crdt_save_loop_mfa`), so the call site that logs is part of the contract.
   describe "per-note warning call sites" do
     setup do
-      id = :"mfa-#{System.unique_integer([:positive])}"
+      id = :crdt_bloat_sweep_mfa_test
       :ok = :logger.add_handler(id, MfaHandler, %{config: %{pid: self()}})
       on_exit(fn -> :logger.remove_handler(id) end)
     end
