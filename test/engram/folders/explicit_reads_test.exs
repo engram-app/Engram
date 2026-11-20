@@ -361,6 +361,25 @@ defmodule Engram.Folders.ExplicitReadsTest do
     assert {:ok, ["E"]} = Notes.list_explicit_folders(u, v)
   end
 
+  # The same E folder, but a note recreates its path before the undo: the
+  # undo merges into the note's (non-explicit) row and must carry the flag
+  # there, as a rename merge's `retire/2` does. Red without the restore's
+  # merge carry: the folder drops from listings once the note goes.
+  test "an undo merged into a note's row keeps an empty folder E made", ctx do
+    %{user: u, vault: v} = ctx
+    {:ok, _} = Notes.create_folder_markers(u, v, ["E"])
+    Repo.query!("DELETE FROM notes WHERE vault_id = $1 AND kind = 'folder'", [dump(v.id)])
+    Repo.query!("UPDATE folders SET explicit_seq = 7 WHERE id = $1", [dump(row_id(u, "E"))])
+    op = Ecto.UUID.generate()
+
+    assert {:ok, _} = Engram.Folders.delete(u, v, "E", recursive: true, op_id: op)
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "E/n.md", "content" => "x"}, actor: "api")
+    assert {:ok, _} = Engram.Folders.restore_op(u, v, op)
+    :ok = Notes.delete_note(u, v, "E/n.md")
+
+    assert {:ok, ["E"]} = Notes.list_explicit_folders(u, v)
+  end
+
   # The rows leg alone (no marker left to clear the flag first, as a
   # cascade's marker leg does). D cleared a D-era row's flag here; from E on
   # every trashed row keeps it (an undo has no marker to re-create it from),
