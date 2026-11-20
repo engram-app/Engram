@@ -3129,6 +3129,33 @@ defmodule Engram.Notes do
   defp pushed_hash?(stored, base_attrs, opts),
     do: is_binary(stored) and stored in read_pushed_hashes(base_attrs, opts)
 
+  # Whether the row already holds what this push would store. The hash check
+  # first; then, only on a miss for a markdown body with frontmatter, the hash
+  # of the text the doc would render it as: the doc keeps frontmatter as keys
+  # and re-renders it (list style, spacing), so a body that does not round-trip
+  # byte-identical never matched and every identical push rewrote the row
+  # (2026-11-18: 12 notes at ~900 version bumps/hour). One fresh-doc parse of
+  # this note, only on the path that would otherwise run the full rewrite.
+  defp same_as_stored?(existing, base_attrs, user, path, opts) do
+    pushed_hash?(existing.content_hash, base_attrs, opts) or
+      (is_binary(existing.content_hash) and
+         existing.content_hash == rendered_hash(user, base_attrs.content, path))
+  end
+
+  defp rendered_hash(user, content, path) do
+    lf = LineEndings.to_lf(content)
+
+    with true <- CrdtBridge.markdown_path?(path),
+         {block, _body} when is_binary(block) <- Frontmatter.split(lf),
+         doc = CrdtBridge.new_doc(),
+         :ok <- CrdtBridge.ingest_plaintext(doc, lf),
+         {:ok, hash} <- content_hash(user, CrdtBridge.project_doc(doc)) do
+      hash
+    else
+      _ -> nil
+    end
+  end
+
   # The one definition of "this push changed nothing": the row already held the
   # pushed hash (what `idempotent_repush` returns) and the write was not forced.
   # `prev_hash` is the stored row's hash and `note` the row returned, so for a
@@ -3176,8 +3203,8 @@ defmodule Engram.Notes do
 
       # The reply names the hash that matched, the stored one: with a CRLF body
       # over an LF doc that is the LF hash, not the raw body's.
-      pushed_hash?(existing.content_hash, base_attrs, opts) and
-          not Keyword.get(opts, :force, false) ->
+      not Keyword.get(opts, :force, false) and
+          same_as_stored?(existing, base_attrs, user, sanitized_path, opts) ->
         idempotent_repush(existing, %{base_attrs | content_hash: existing.content_hash})
 
       # #2480 (markdown notes): a writer that must not blind-overwrite (MCP,

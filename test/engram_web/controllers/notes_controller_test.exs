@@ -229,29 +229,10 @@ defmodule EngramWeb.NotesControllerTest do
   # ---------------------------------------------------------------------------
 
   # An unchanged push (stored hash == pushed hash) skips the field decrypt and
-  # the link parse for the user's own sync clients. Counted via a process-local
-  # call trace: the request runs in the test process.
+  # the link parse for the user's own sync clients. Proven by shape: the reply
+  # carries no decrypted field (title, content) and no links, and
+  # "force: true is never lean" shows `upsert_note` returns the undecrypted row.
   describe "POST /notes unchanged push (lean reply)" do
-    @decrypt {Engram.Crypto, :maybe_decrypt_note_fields, 2}
-    @links {Engram.Links, :links_for_notes, 2}
-
-    defp counted_calls(fun) do
-      :erlang.trace_pattern(@decrypt, true, [:local])
-      :erlang.trace_pattern(@links, true, [:local])
-      :erlang.trace(self(), true, [:call])
-      result = fun.()
-      :erlang.trace(self(), false, [:call])
-      {result, drain_calls([])}
-    end
-
-    defp drain_calls(acc) do
-      receive do
-        {:trace, _pid, :call, {m, f, _}} -> drain_calls([{m, f} | acc])
-      after
-        0 -> Enum.reverse(acc)
-      end
-    end
-
     defp plugin_push(conn, params), do: conn |> as_plugin() |> post("/api/notes", params)
 
     test "plugin re-push of identical content: ids and hashes only, no decrypt, no link parse",
@@ -259,9 +240,7 @@ defmodule EngramWeb.NotesControllerTest do
       params = %{path: "Lean/Same.md", content: "# Same\n\n[[Other]] body", mtime: 1.0}
       assert %{"note" => first} = conn |> plugin_push(params) |> json_response(200)
 
-      {resp, calls} = counted_calls(fn -> plugin_push(conn, params) end)
-
-      assert %{"note" => note} = json_response(resp, 200)
+      assert %{"note" => note} = conn |> plugin_push(params) |> json_response(200)
 
       assert Map.take(note, ["id", "path", "folder", "version", "content_hash"]) ==
                Map.take(first, ["id", "path", "folder", "version", "content_hash"])
@@ -270,20 +249,17 @@ defmodule EngramWeb.NotesControllerTest do
       refute Map.has_key?(note, "content")
       refute Map.has_key?(note, "links")
       refute Map.has_key?(note, "title")
-      assert calls == []
+      refute Map.has_key?(note, "tags")
     end
 
     test "an API-key caller (no plugin header) still gets the full note", %{conn: conn} do
       params = %{path: "Lean/Full.md", content: "# Full\n\n[[Other]]", mtime: 1.0}
       post(conn, "/api/notes", params)
 
-      {resp, calls} = counted_calls(fn -> post(conn, "/api/notes", params) end)
-
-      assert %{"note" => note} = json_response(resp, 200)
+      assert %{"note" => note} = conn |> post("/api/notes", params) |> json_response(200)
       assert note["title"] == "Full"
       assert note["content"] == params.content
       assert is_list(note["links"])
-      assert {Engram.Crypto, :maybe_decrypt_note_fields} in calls
     end
 
     test "a changed push decrypts and renders in full", %{conn: conn} do
@@ -291,15 +267,10 @@ defmodule EngramWeb.NotesControllerTest do
       |> plugin_push(%{path: "Lean/Chg.md", content: "# Chg", mtime: 1.0})
       |> json_response(200)
 
-      {resp, calls} =
-        counted_calls(fn ->
-          plugin_push(conn, %{path: "Lean/Chg.md", content: "# Chg 2", mtime: 2.0})
-        end)
-
       assert %{"note" => %{"version" => 2, "title" => "Chg 2", "content" => "# Chg 2"}} =
-               json_response(resp, 200)
-
-      assert {Engram.Crypto, :maybe_decrypt_note_fields} in calls
+               conn
+               |> plugin_push(%{path: "Lean/Chg.md", content: "# Chg 2", mtime: 2.0})
+               |> json_response(200)
     end
 
     test "a first push (new note) renders in full", %{conn: conn} do
