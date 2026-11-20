@@ -19,9 +19,9 @@ defmodule Engram.Folders.MarkerStop do
       markers until its ledger closes;
     * the rollback floor is at or above the release with the phase 1 reads
       (`@reads_release`): a release that reads markers would not list a
-      folder created without one. A SENTINEL no floor can reach, so this is
-      inert until the release that raises the floor sets it to the phase 1
-      release's real tag (the `Engram.Folders.WriteStop` pattern).
+      folder created without one. Release D's tag, so this is inert until
+      the floor-raise PR raises `priv/release_floor` to it (the
+      `Engram.Folders.WriteStop` pattern).
       `:marker_stop_floors, :assume` (tests only) skips this one check.
   """
 
@@ -29,7 +29,7 @@ defmodule Engram.Folders.MarkerStop do
   alias Engram.Release.Floor
 
   # The release with the phase 1 explicit-folder reads (release D).
-  @reads_release "release-v999.0.0"
+  @reads_release "release-v0.90.0"
 
   @doc "The first release whose listings read `folders.explicit`: the rollback floor must reach it."
   @spec reads_release() :: String.t()

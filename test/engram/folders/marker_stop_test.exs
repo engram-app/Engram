@@ -28,7 +28,8 @@ defmodule Engram.Folders.MarkerStopTest do
   defp seq(user, vault), do: Vaults.current_seq(user.id, vault.id)
   defp explicit(user, vault), do: elem(Notes.list_explicit_folders(user, vault), 1)
 
-  test "the floor sentinel keeps the stop off until a release sets it" do
+  test "the stop stays off until the floor reaches release D" do
+    assert MarkerStop.reads_release() == "release-v0.90.0"
     refute MarkerStop.floors?(:enforce)
     assert MarkerStop.floors?(:assume)
   end
