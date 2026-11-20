@@ -36,10 +36,11 @@ defmodule Engram.DataMigrations.NoteFolderHashNullTest do
   # The note's folder row as a release before S6 step 3's write stop left it:
   # carrying the hash of its path (the note's own `folder_hmac` here). Rows
   # written since carry none, and their notes are left (the safe direction).
+  # Never the root row (`Rows.root_id/1`): no release wrote its hash.
   defp stamp_row!(note_id) do
     Repo.query!(
       "UPDATE folders f SET full_path_hmac = n.folder_hmac FROM notes n " <>
-        "WHERE n.id = $1 AND f.id = n.folder_ref_id",
+        "WHERE n.id = $1 AND f.id = n.folder_ref_id AND f.id <> f.vault_id",
       [Ecto.UUID.dump!(note_id)]
     )
   end
