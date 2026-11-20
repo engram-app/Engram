@@ -1055,13 +1055,11 @@ defmodule Engram.Notes do
     with :ok <- check_size(content),
          {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, path} <- validate_path(path),
+         {:ok, hash} <- content_hash(user, content),
          # The doc (and so the stored content_hash) holds LF for a markdown note
-         # (`maybe_merge_crdt`). Hash the same form, or a CRLF body never equals
-         # the stored hash: every identical re-push rewrote the row.
-         lf_content = LineEndings.for_path(content, path),
-         {:ok, hash} <- content_hash(user, lf_content),
-         {:ok, pushed} <- pushed_hashes(user, content, lf_content, hash) do
-      content = lf_content
+         # (`maybe_merge_crdt`), so a CRLF body is also named by its LF hash:
+         # without it an identical CRLF re-push never matched and rewrote the row.
+         {:ok, pushed} <- pushed_hashes(user, content, LineEndings.for_path(content, path), hash) do
       opts = Keyword.put(opts, :pushed_hashes, pushed)
       sanitized_path = PathSanitizer.sanitize(path)
       folder = Helpers.extract_folder(sanitized_path)
@@ -3114,14 +3112,14 @@ defmodule Engram.Notes do
     end
   end
 
-  # The hashes that name the pushed body: its LF form first (what a doc
-  # written since LineEndings holds), plus its raw form when that differs. A
-  # CRLF note no room has opened since still holds a raw-CRLF doc and hash, and
-  # an identical push of it must stay a no-op instead of rewriting forever.
+  # The hashes that name the pushed body: its raw form (`base_attrs.content_hash`,
+  # what a CRLF note no room has opened since LineEndings still stores), plus
+  # its LF form when that differs (what every doc written since holds). The
+  # body itself stays raw: the merge converts it (`maybe_merge_crdt`).
   defp pushed_hashes(_user, raw, raw, hash), do: {:ok, [hash]}
 
-  defp pushed_hashes(user, raw, _lf, hash) do
-    with {:ok, raw_hash} <- content_hash(user, raw), do: {:ok, [hash, raw_hash]}
+  defp pushed_hashes(user, _raw, lf, hash) do
+    with {:ok, lf_hash} <- content_hash(user, lf), do: {:ok, [hash, lf_hash]}
   end
 
   defp read_pushed_hashes(base_attrs, opts),
@@ -3176,9 +3174,11 @@ defmodule Engram.Notes do
           do: idempotent_repush(existing, base_attrs),
           else: rewrite(existing, base_attrs, user, sanitized_path, folder, opts)
 
+      # The reply names the hash that matched, the stored one: with a CRLF body
+      # over an LF doc that is the LF hash, not the raw body's.
       pushed_hash?(existing.content_hash, base_attrs, opts) and
           not Keyword.get(opts, :force, false) ->
-        idempotent_repush(existing, base_attrs)
+        idempotent_repush(existing, %{base_attrs | content_hash: existing.content_hash})
 
       # #2480 (markdown notes): a writer that must not blind-overwrite (MCP,
       # external REST) declared no base. Creating stays open; replacing needs

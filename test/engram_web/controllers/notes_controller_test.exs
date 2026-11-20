@@ -252,14 +252,14 @@ defmodule EngramWeb.NotesControllerTest do
       end
     end
 
-    defp push(conn, params), do: conn |> as_plugin() |> post("/api/notes", params)
+    defp plugin_push(conn, params), do: conn |> as_plugin() |> post("/api/notes", params)
 
     test "plugin re-push of identical content: ids and hashes only, no decrypt, no link parse",
          %{conn: conn} do
       params = %{path: "Lean/Same.md", content: "# Same\n\n[[Other]] body", mtime: 1.0}
-      assert %{"note" => first} = conn |> push(params) |> json_response(200)
+      assert %{"note" => first} = conn |> plugin_push(params) |> json_response(200)
 
-      {resp, calls} = counted_calls(fn -> push(conn, params) end)
+      {resp, calls} = counted_calls(fn -> plugin_push(conn, params) end)
 
       assert %{"note" => note} = json_response(resp, 200)
 
@@ -287,10 +287,14 @@ defmodule EngramWeb.NotesControllerTest do
     end
 
     test "a changed push decrypts and renders in full", %{conn: conn} do
-      conn |> push(%{path: "Lean/Chg.md", content: "# Chg", mtime: 1.0}) |> json_response(200)
+      conn
+      |> plugin_push(%{path: "Lean/Chg.md", content: "# Chg", mtime: 1.0})
+      |> json_response(200)
 
       {resp, calls} =
-        counted_calls(fn -> push(conn, %{path: "Lean/Chg.md", content: "# Chg 2", mtime: 2.0}) end)
+        counted_calls(fn ->
+          plugin_push(conn, %{path: "Lean/Chg.md", content: "# Chg 2", mtime: 2.0})
+        end)
 
       assert %{"note" => %{"version" => 2, "title" => "Chg 2", "content" => "# Chg 2"}} =
                json_response(resp, 200)
@@ -301,7 +305,7 @@ defmodule EngramWeb.NotesControllerTest do
     test "a first push (new note) renders in full", %{conn: conn} do
       assert %{"note" => %{"title" => "New", "version" => 1, "tags" => []}} =
                conn
-               |> push(%{path: "Lean/New.md", content: "# New", mtime: 1.0})
+               |> plugin_push(%{path: "Lean/New.md", content: "# New", mtime: 1.0})
                |> json_response(200)
     end
 
@@ -319,28 +323,31 @@ defmodule EngramWeb.NotesControllerTest do
       test "re-pushing the same #{name} body never bumps the version", %{conn: conn} do
         params = %{path: "Lean/Eol.md", content: unquote(body), mtime: 1.0}
 
-        assert %{"note" => %{"version" => v}} = conn |> push(params) |> json_response(200)
-        assert %{"note" => %{"version" => ^v}} = conn |> push(params) |> json_response(200)
-        assert %{"note" => %{"version" => ^v}} = conn |> push(params) |> json_response(200)
+        assert %{"note" => %{"version" => v}} = conn |> plugin_push(params) |> json_response(200)
+        assert %{"note" => %{"version" => ^v}} = conn |> plugin_push(params) |> json_response(200)
+        assert %{"note" => %{"version" => ^v}} = conn |> plugin_push(params) |> json_response(200)
       end
     end
 
     test "a CRLF re-push of the LF note already stored is unchanged", %{conn: conn} do
       conn
-      |> push(%{path: "Lean/Eol2.md", content: "# E\nline", mtime: 1.0})
+      |> plugin_push(%{path: "Lean/Eol2.md", content: "# E\nline", mtime: 1.0})
       |> json_response(200)
 
       assert %{"note" => %{"version" => 1}} =
                conn
-               |> push(%{path: "Lean/Eol2.md", content: "# E\r\nline", mtime: 2.0})
+               |> plugin_push(%{path: "Lean/Eol2.md", content: "# E\r\nline", mtime: 2.0})
                |> json_response(200)
     end
 
     test "a trashed note is not an unchanged push: it is a fresh create", %{conn: conn} do
-      conn |> push(%{path: "Lean/Gone.md", content: "# Gone", mtime: 1.0}) |> json_response(200)
+      conn
+      |> plugin_push(%{path: "Lean/Gone.md", content: "# Gone", mtime: 1.0})
+      |> json_response(200)
+
       assert conn |> delete("/api/notes/Lean/Gone.md") |> json_response(200)
 
-      resp = push(conn, %{path: "Lean/Gone.md", content: "# Gone", mtime: 1.0})
+      resp = plugin_push(conn, %{path: "Lean/Gone.md", content: "# Gone", mtime: 1.0})
       # Delete-wins: the same body re-pushed seconds after a delete is refused.
       assert json_response(resp, 409) == %{"conflict" => true, "reason" => "recently_deleted"}
     end
@@ -387,7 +394,7 @@ defmodule EngramWeb.NotesControllerTest do
       # And the first tenant's conn still resolves only its own row.
       assert %{"note" => %{"id" => id}} =
                conn
-               |> push(attrs)
+               |> plugin_push(attrs)
                |> json_response(200)
 
       assert id == mine.id
