@@ -294,6 +294,23 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
     end
   end
 
+  # Notes read by primary key, bound to named ids: an index scan or, as CI's
+  # statistics draw it, a bitmap scan of `notes_pkey`, either one with
+  # `id = ...` as its Index Cond (a bitmap scan without it walks the index).
+  @notes_by_id ~r/(?:Scan using notes_pkey on notes \w+|Bitmap Index Scan on notes_pkey)\s*\n\s*Index Cond: \(id = /
+
+  test "the notes-by-id check refuses an unbound notes_pkey scan" do
+    bound = "->  Bitmap Index Scan on notes_pkey\n      Index Cond: (id = ANY ($1))"
+    assert bound =~ @notes_by_id
+
+    assert "->  Index Scan using notes_pkey on notes n\n  Index Cond: (id = ANY ($1))" =~
+             @notes_by_id
+
+    refute "->  Bitmap Index Scan on notes_pkey\n      Filter: (kind = 'folder')" =~ @notes_by_id
+    refute "->  Bitmap Index Scan on notes_pkey\n  Index Cond: (vault_id = $1)" =~ @notes_by_id
+    refute "->  Index Scan using notes_pkey on notes n\n  Filter: (id = ANY ($1))" =~ @notes_by_id
+  end
+
   # #2652 re-review L1: the window's delete (stamp the folder rows, delete
   # the markers) planned as the fleet role, EXPLAIN only (it writes). Every
   # folders read vault-bound or a primary-key probe, notes by primary key,
@@ -329,7 +346,7 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
 
       for plan <- [custom, generic] do
         QueryPlan.assert_scans_vault_bound!(plan)
-        assert plan =~ ~r/Scan using notes_pkey on notes/, plan
+        assert plan =~ @notes_by_id, plan
         refute plan =~ "Seq Scan on notes", plan
 
         refute plan =~ ~r/Index (Only )?Scan using notes_\w+ on notes n\s*\n(?!\s*Index Cond)/,
