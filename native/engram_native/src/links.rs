@@ -267,8 +267,62 @@ fn starts_block(line: &[u8]) -> bool {
 pub const SEGMENT: usize = 64 * 1024;
 
 fn in_ranges(pos: usize, ranges: &[(usize, usize)]) -> bool {
+    range_at(ranges, pos).is_some()
+}
+
+/// The range of sorted, disjoint `ranges` that holds `pos`.
+pub fn range_at(ranges: &[(usize, usize)], pos: usize) -> Option<(usize, usize)> {
     let i = ranges.partition_point(|&(_, end)| end <= pos);
-    i < ranges.len() && ranges[i].0 <= pos
+    ranges.get(i).copied().filter(|&(start, _)| start <= pos)
+}
+
+/// `code_ranges(body, 0, segment, ..)` parsed lazily: a segment at a time,
+/// only as far as a caller asks. Same segments, so the same ranges.
+pub struct LazyCode<'a> {
+    body: &'a str,
+    segments: Option<Segments>,
+    ranges: Vec<(usize, usize)>,
+}
+
+impl<'a> LazyCode<'a> {
+    pub fn new(body: &'a str, segment: usize) -> Self {
+        LazyCode {
+            body,
+            segments: may_have_code(body).then(|| Segments::new(segment)),
+            ranges: Vec::new(),
+        }
+    }
+
+    /// Bytes of `body` whose code ranges are all known.
+    fn parsed(&self) -> usize {
+        self.segments.as_ref().map_or(self.body.len(), |s| s.start)
+    }
+
+    fn step(&mut self) -> bool {
+        let Some(segments) = self.segments.as_mut() else {
+            return false;
+        };
+        let mut visit = |s: &str, at, out: &mut Vec<_>| segment_code_ranges(s, at, out);
+        match segments.next(self.body, &mut visit) {
+            Some(mut items) => {
+                self.ranges.append(&mut items);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The code range holding `pos`, parsing on until `pos` is known.
+    pub fn at(&mut self, pos: usize) -> Option<(usize, usize)> {
+        while self.parsed() <= pos && self.step() {}
+        range_at(&self.ranges, pos)
+    }
+
+    /// Every range, the whole body parsed.
+    pub fn all(mut self) -> Vec<(usize, usize)> {
+        while self.step() {}
+        self.ranges
+    }
 }
 
 fn wiki_at(s: &[u8], j: usize) -> Option<(usize, usize)> {
@@ -806,12 +860,31 @@ mod tests {
                 passes || whole.is_empty(),
                 "may_have_heading missed {doc:?}"
             );
+            // The title's lazy code parse stops early, never differently.
+            assert_eq!(
+                crate::meta::title_in(&doc, 1),
+                crate::meta::title_whole(&doc, 1),
+                "title {doc:?}"
+            );
             if !may_have_code(&doc) {
                 let mut ranges = Vec::new();
                 segment_code_ranges(&doc, 0, &mut ranges);
                 assert!(ranges.is_empty(), "may_have_code missed {doc:?}");
             }
         }
+    }
+
+    // A lookup near the top parses one segment, not the whole note.
+    #[test]
+    fn lazy_code_parses_only_as_far_as_asked() {
+        let doc = "# Top\n".to_string() + &"```\ncode\n```\n\n".repeat(100_000);
+        let mut code = LazyCode::new(&doc, SEGMENT);
+        assert_eq!(code.at(0), None);
+        assert!(code.parsed() < 4 * SEGMENT, "{}", code.parsed());
+        let all = LazyCode::new(&doc, SEGMENT).all();
+        let mut eager = Vec::new();
+        code_ranges(&doc, 0, SEGMENT, &mut eager);
+        assert_eq!(all, eager);
     }
 
     // pulldown-cmark 0.13 panics on this (an unwrap in parse.rs). The note
