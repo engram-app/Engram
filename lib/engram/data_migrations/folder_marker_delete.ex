@@ -139,12 +139,17 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
 
   # Statement 1: the vault rows (and owners) of the window's live markers,
   # FOR SHARE SKIP LOCKED, in a statement of their own so the later ones take
-  # their snapshot after the lock (see `ExplicitFolderReconcile`).
+  # their snapshot after the lock (see `ExplicitFolderReconcile`). The
+  # window's notes are read by primary key alone in a MATERIALIZED CTE and
+  # filtered outside it: with `kind = 'folder' AND deleted_at IS NULL` on the
+  # scan, the planner ANDed in `notes_user_vault_folder_marker` read with no
+  # condition (every account's live markers; staging, real statistics).
   @lock_vaults_sql """
+  WITH w AS MATERIALIZED (
+    SELECT vault_id, kind, deleted_at FROM notes WHERE id = ANY($1))
   SELECT id, user_id FROM vaults
-  WHERE id IN (
-    SELECT vault_id FROM notes WHERE id = ANY($1) AND kind = 'folder' AND deleted_at IS NULL)
-  FOR SHARE SKIP LOCKED
+  WHERE id IN (SELECT vault_id FROM w WHERE kind = 'folder' AND deleted_at IS NULL)
+  FOR SHARE OF vaults SKIP LOCKED
   """
 
   # Statement 2: of the locked vaults (`$1` ids, `$2` their owners, paired by
@@ -170,54 +175,65 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   GROUP BY m.vault_id
   """
 
-  # Statement 3: the window's live markers in the vaults that passed (`$2`),
-  # locked, then their folder rows stamped, then the markers deleted. A
-  # data-modifying CTE runs once whether or not it is referenced, in the same
-  # snapshot. Both writes take their rows by primary key from an ARRAY of
-  # ids: the folder ids from a correlated, vault-bound probe per marker (an
-  # ARRAY sublink is never pulled up into a join), the note ids from `m`.
-  # The folder write is also bound by `m`'s tenants and vaults.
-  # As joins the planner could hash every tenant's folders or notes.
-  @delete_sql """
+  # Statement 3: the window's live markers in the vaults that passed (`$2`,
+  # their owners `$3`), locked, each with the id of its live explicit folder
+  # row still to stamp. The owners bind any read of `notes_user_vault_live
+  # (user_id, vault_id)`: by `vault_id` alone it is a skip scan over every
+  # tenant's entries.
+  # One keyed probe a marker: `folders_full_path (vault_id, full_path_hmac)`,
+  # with the marker's tenant re-checked on the row, so O(markers in the
+  # window). An ARRAY sublink is never pulled up into a join, so it stays a
+  # probe a marker; the CTE locks the markers before any probe runs.
+  @markers_sql """
   WITH m AS MATERIALIZED (
     SELECT n.id, n.user_id, n.vault_id, n.folder_hmac FROM notes AS n
     WHERE n.id = ANY($1) AND n.kind = 'folder' AND n.deleted_at IS NULL
-      AND n.vault_id = ANY($2)
+      AND n.user_id = ANY($3) AND n.vault_id = ANY($2)
     ORDER BY n.id
     FOR UPDATE OF n SKIP LOCKED
-  ), stamp AS (
-    UPDATE folders AS f SET explicit_seq = 0
-    WHERE f.id = ANY(ARRAY(
-      SELECT unnest(ARRAY(
-        SELECT f2.id FROM folders AS f2
-        WHERE f2.user_id = m.user_id AND f2.vault_id = m.vault_id
-          AND f2.full_path_hmac = m.folder_hmac
-          AND f2.deleted_at IS NULL AND f2.explicit AND f2.explicit_seq IS NULL))
-      FROM m))
-      -- Bound to the window's tenants and vaults, so every plan has an index
-      -- condition on them: with only the ids above, a plan could read
-      -- `folders_explicit_user_vault` with no condition (every tenant's
-      -- explicit rows; 0.91.0's CI). Always true for those ids.
-      AND f.user_id = ANY(ARRAY(SELECT user_id FROM m))
-      AND f.vault_id = ANY(ARRAY(SELECT vault_id FROM m))
-      -- Again on the row itself: re-checked on the row's latest version when
-      -- it waited on a concurrent writer's lock, so a row stamped meanwhile
-      -- keeps its seq (defence in depth beyond the vault lock).
-      AND f.explicit_seq IS NULL AND f.explicit AND f.deleted_at IS NULL
-    RETURNING f.id
   )
-  DELETE FROM notes AS n
-  WHERE n.id = ANY(ARRAY(SELECT id FROM m))
+  SELECT m.id, m.user_id, m.vault_id, ARRAY(
+    SELECT f.id FROM folders AS f
+    WHERE f.user_id = m.user_id AND f.vault_id = m.vault_id
+      AND f.full_path_hmac = m.folder_hmac
+      AND f.deleted_at IS NULL AND f.explicit AND f.explicit_seq IS NULL)
+  FROM m
   """
 
+  # Statement 4, once per folder row from statement 3: the row stamped by
+  # its primary key, a scalar, so O(markers in the window), capped by the
+  # window (`@batch`). By an array of ids the planner costed the key probe
+  # as a guess: an ARRAY sublink read `folders_explicit_user_vault` with no
+  # condition, every tenant's explicit rows (0.91.0's CI). By `id` alone:
+  # a `vault_id`/`user_id` equality here makes the partial explicit-folder
+  # indexes usable, and they tie with the key probe. The row's tenant and
+  # vault come from statement 3's probe, under the vault lock. The guards
+  # again on the row itself: re-checked on the row's latest version when it
+  # waited on a concurrent writer's lock, so a row stamped meanwhile keeps
+  # its seq (defence in depth beyond the vault lock).
+  @stamp_sql """
+  UPDATE folders SET explicit_seq = 0
+  WHERE id = $1 AND explicit_seq IS NULL AND explicit AND deleted_at IS NULL
+  """
+
+  # Statement 5: the markers locked by statement 3, by primary key.
+  @delete_sql "DELETE FROM notes AS n WHERE n.id = ANY($1::uuid[])"
+
   # What is left in a window: any live marker (a skipped lock or an
-  # unmatched vault).
-  @left_sql "SELECT count(*)::int FROM notes WHERE id = ANY($1) AND kind = 'folder' AND deleted_at IS NULL"
+  # unmatched vault). Read by primary key alone, as statement 1.
+  @left_sql """
+  WITH w AS MATERIALIZED (SELECT kind, deleted_at FROM notes WHERE id = ANY($1))
+  SELECT count(*)::int FROM w WHERE kind = 'folder' AND deleted_at IS NULL
+  """
 
   @doc false
   def lock_vaults_sql, do: @lock_vaults_sql
   @doc false
   def unmatched_sql, do: @unmatched_sql
+  @doc false
+  def markers_sql, do: @markers_sql
+  @doc false
+  def stamp_sql, do: @stamp_sql
   @doc false
   def delete_sql, do: @delete_sql
 
@@ -253,10 +269,39 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
         owners = Enum.map(locked, &List.last/1)
         %{rows: unmatched} = repo.query!(@unmatched_sql, [vaults, owners])
         Enum.each(unmatched, fn [vault, count] -> log_unmatched(vault, count) end)
-        ok = vaults -- Enum.map(unmatched, &hd/1)
-        %{num_rows: fixed} = repo.query!(@delete_sql, [ids, ok])
-        {fixed, left?(repo, ids)}
+        skipped = Enum.map(unmatched, &hd/1)
+        {ok, ok_owners} = locked |> Enum.reject(&(hd(&1) in skipped)) |> owners_by_vault()
+        {marker_ids, stamp} = lock_markers(repo, ids, ok, ok_owners)
+        stamp_folders(repo, stamp)
+        {delete_markers(repo, marker_ids), left?(repo, ids)}
     end
+  end
+
+  defp owners_by_vault(locked),
+    do: {Enum.map(locked, &hd/1), locked |> Enum.map(&List.last/1) |> Enum.uniq()}
+
+  # Statements 3 to 5 run in the window's transaction, under its vault lock.
+  # Statement 3's rows: `[marker id, user id, vault id, folder ids]`.
+  defp lock_markers(_repo, _ids, [], _owners), do: {[], []}
+
+  defp lock_markers(repo, ids, vaults, owners) do
+    %{rows: rows} = repo.query!(@markers_sql, [ids, vaults, owners])
+    {Enum.map(rows, &hd/1), rows}
+  end
+
+  defp stamp_folders(repo, rows) do
+    for [_marker, _user, _vault, folders] <- rows,
+        folder <- folders,
+        do: repo.query!(@stamp_sql, [folder])
+
+    :ok
+  end
+
+  defp delete_markers(_repo, []), do: 0
+
+  defp delete_markers(repo, ids) do
+    %{num_rows: n} = repo.query!(@delete_sql, [ids])
+    n
   end
 
   defp left?(repo, ids) do
