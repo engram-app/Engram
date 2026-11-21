@@ -19,6 +19,7 @@ defmodule EngramWeb.CrdtChannel do
   use Phoenix.Channel
 
   alias Engram.Crypto.HMAC
+  alias Engram.FileTime
   alias Engram.Folders.Wire
   alias Engram.Logger.Metadata
   alias Engram.{Notes, Repo, Vaults}
@@ -233,8 +234,10 @@ defmodule EngramWeb.CrdtChannel do
          {:ok, frame} <- decode_frame(b64),
          :ok <- guard_frame(frame),
          {:ok, socket} <- deliver(socket, doc_id, frame, frame_class_b64(b64)) do
-      if frame_class_b64(b64) == :edit, do: note_sync_activity(socket)
-      put_frame_times(socket, doc_id, payload)
+      if frame_class_b64(b64) == :edit do
+        note_sync_activity(socket)
+        hand_room_times(socket, doc_id, payload)
+      end
 
       # ACK the push. Clients attach reply handlers to distinguish delivery
       # from loss; with no ack every successful push "times out" client-side —
@@ -403,6 +406,7 @@ defmodule EngramWeb.CrdtChannel do
           reply_created(note, note |> seed.() |> reconcile_with_row(note), socket)
 
         {:adopted, note} ->
+          put_frame_times(socket, note.id, payload)
           # Unchanged behaviour for the single create: the client's crdtCreate
           # promise resolves to the authoritative id and pushFile's ADOPT then
           # transfers the local body onto that lineage. Only the BATCH leg has to
@@ -593,10 +597,16 @@ defmodule EngramWeb.CrdtChannel do
          {:ok, %{head: head}} <-
            apply_room_free(
              socket,
-             &CrdtTransport.apply_update(&1, &2, note_id, update, :room_free_update)
+             &CrdtTransport.apply_update(
+               &1,
+               &2,
+               note_id,
+               update,
+               :room_free_update,
+               frame_times(payload)
+             )
            ) do
       note_sync_activity(socket)
-      put_frame_times(socket, note_id, payload)
       {:reply, {:ok, %{doc_id: note_id, head: head}}, socket}
     else
       {:error, :rate_limited} ->
@@ -885,14 +895,44 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   # The optional `mtime` / `ctime` the plugin attaches to a frame (epoch
-  # seconds). A metadata write beside the CRDT write, never part of it
-  # (`Notes.put_frame_times/5`): it cannot change content, hash, version or
-  # CRDT state, and a failure here must not fail a frame that already landed.
-  # Absent keys (an old plugin) are a no-op without a query.
-  defp put_frame_times(socket, doc_id, payload) do
+  # seconds), validated by `FileTime.from_frame/2`: `{mtime_at, ctime_at}`,
+  # either nil. An old plugin sends none: `{nil, nil}`.
+  defp frame_times(payload) do
+    now = DateTime.utc_now()
+    {FileTime.from_frame(payload["mtime"], now), FileTime.from_frame(payload["ctime"], now)}
+  end
+
+  # An edit frame's times go to the ROOM's memory, never the DB: the checkpoint
+  # that already runs writes them (`CrdtCheckpoint`). Only forwarded when they
+  # add something (a later mtime, a first ctime) per this channel process, so a
+  # steady stream of edits costs no room call for an unchanged time.
+  defp hand_room_times(socket, doc_id, payload) do
     _ =
-      with true <- Map.has_key?(payload, "mtime") or Map.has_key?(payload, "ctime"),
-           {:ok, note_id} <- Ecto.UUID.cast(doc_id) do
+      with {m, c} when not (is_nil(m) and is_nil(c)) <- frame_times(payload),
+           %{room: room} <- Map.get(socket.assigns.rooms, doc_id),
+           {m, c} when not (is_nil(m) and is_nil(c)) <- unseen_times(doc_id, m, c) do
+        CrdtTransport.put_file_times(room, m, c)
+      end
+
+    :ok
+  end
+
+  # Remembers (in this channel's process dictionary) the newest mtime and
+  # whether a ctime went out per doc; returns only what is new.
+  defp unseen_times(doc_id, m, c) do
+    key = {:crdt_times_sent, doc_id}
+    {sm, sc} = Process.get(key, {nil, nil})
+    m = if m && (is_nil(sm) or DateTime.compare(m, sm) == :gt), do: m
+    c = if c && is_nil(sc), do: c
+    Process.put(key, {m || sm, c || sc})
+    {m, c}
+  end
+
+  # `crdt_create` (rare, once per note): one metadata statement beside the
+  # genesis, only when times were sent (`Notes.put_frame_times/5`).
+  defp put_frame_times(socket, note_id, payload) do
+    _ =
+      with true <- Map.has_key?(payload, "mtime") or Map.has_key?(payload, "ctime") do
         Notes.put_frame_times(
           socket.assigns.current_user,
           socket.assigns.vault,

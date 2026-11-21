@@ -18,7 +18,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
   """
   import Ecto.Query
 
-  alias Engram.{Accounts, Crypto, Notes, Repo, Vaults}
+  alias Engram.{Accounts, Crypto, FileTime, Notes, Repo, Vaults}
   alias Engram.Crypto.RotationGate
   alias Engram.Logger.Metadata
 
@@ -633,10 +633,11 @@ defmodule Engram.Notes.CrdtCheckpoint do
         # Text unchanged: compact the snapshot + prune, but do NOT touch
         # version/seq/content — legacy /changes pullers must not see phantom edits.
         case Repo.update_all(snapshot_fence(note_id, note),
-               set: [
-                 crdt_state_nonce: nonce,
-                 dek_version: Crypto.row_version_aad_bound()
-               ]
+               set:
+                 [
+                   crdt_state_nonce: nonce,
+                   dek_version: Crypto.row_version_aad_bound()
+                 ] ++ file_times_set(note, opts)
              ) do
           {1, _} ->
             _ = NoteBody.put!({note_id, crdt_state_ciphertext: ct, crdt_state_nonce: nonce})
@@ -668,6 +669,9 @@ defmodule Engram.Notes.CrdtCheckpoint do
           |> Map.put(:crdt_state_ciphertext, ct)
           |> Map.put(:crdt_state_nonce, nonce)
           |> Map.put(:content_hash, content_hash)
+          # The frame times the room held, through the changeset so the
+          # effective dates follow (`FileTime.advance/2`: forward only).
+          |> Map.merge(FileTime.advance(note, Keyword.get(opts, :file_times, {nil, nil})))
 
         # #902 fence. When the caller captured the doc at a known row version,
         # persist only if the row is STILL at that version. A REST/MCP write
@@ -746,6 +750,23 @@ defmodule Engram.Notes.CrdtCheckpoint do
             :ok = NoteCommitted.discard!(job)
             fence_missed(note, note_id)
         end
+    end
+  end
+
+  # The compaction write's share of the room's frame times: the `*_at` columns
+  # and effective dates `Note.changeset/2` derives for them. `[]` when the
+  # times add nothing (the common case), so the write is unchanged.
+  defp file_times_set(note, opts) do
+    case FileTime.advance(note, Keyword.get(opts, :file_times, {nil, nil})) do
+      attrs when map_size(attrs) == 0 ->
+        []
+
+      attrs ->
+        note
+        |> Note.changeset(attrs)
+        |> Map.fetch!(:changes)
+        |> Map.take([:mtime_at, :ctime_at, :eff_updated, :eff_created])
+        |> Map.to_list()
     end
   end
 

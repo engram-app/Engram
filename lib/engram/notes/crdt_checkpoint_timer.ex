@@ -314,7 +314,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
   # A late room_snapshot/1 reply (its call timed out). Dropped: a crash here
   # would take the linked room down with it. Exactly that shape, so nothing
   # else ref-tagged disappears silently.
-  def handle_info({ref, _snapshot, ids, failures}, state)
+  def handle_info({ref, _snapshot, ids, failures, _times}, state)
       when is_reference(ref) and is_list(ids) and is_integer(failures),
       do: {:noreply, state}
 
@@ -468,7 +468,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
     # Prune EXACTLY those (#1146 spec 0a). A row anyone else appended after the
     # room bound, or one that failed to decrypt at bind, is in no snapshot and
     # is not in the list, so it stays. Same rule #1391 set for the index room.
-    with {:ok, encoded, ids, failures} <- room_snapshot(room_pid, room_log_meta(state)),
+    with {:ok, encoded, ids, failures, times} <- room_snapshot(room_pid, room_log_meta(state)),
          :ok <- interleave_hook(:after_room_snapshot),
          {:written, pruned} <-
            CrdtCheckpoint.checkpoint_pruning(
@@ -476,7 +476,8 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
              state.vault_id,
              state.room_key,
              encoded,
-             prune_ids: ids
+             prune_ids: ids,
+             file_times: times
            ) do
       # The snapshot is durable: the room stops offering the pruned rows (rows
       # it appended since stay on its list) and, if every append that failed
@@ -568,7 +569,7 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
       send(
         parent,
         {ref, Yex.encode_state_as_update(doc), CrdtPersistence.known_tail_ids(),
-         CrdtPersistence.append_failures()}
+         CrdtPersistence.append_failures(), CrdtPersistence.file_times()}
       )
     end
 
@@ -579,8 +580,8 @@ defmodule Engram.Notes.CrdtCheckpointTimer do
 
   defp receive_snapshot(ref) do
     receive do
-      {^ref, {:ok, encoded}, ids, failures} -> {:ok, encoded, ids, failures}
-      {^ref, error, _ids, _failures} -> error
+      {^ref, {:ok, encoded}, ids, failures, times} -> {:ok, encoded, ids, failures, times}
+      {^ref, error, _ids, _failures, _times} -> error
     after
       0 -> {:error, :no_snapshot}
     end
