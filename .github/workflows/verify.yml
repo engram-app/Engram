@@ -2601,6 +2601,10 @@ jobs:
           cargo clippy --workspace --release --locked --all-targets -- -D warnings
           cargo clippy --workspace --release --locked --all-targets --all-features -- -D warnings
           cargo test --workspace --release --locked --all-features
+          # Keyword encode throughput and peak (ns/byte, bytes) in the log,
+          # for before/after reads on native perf PRs. Seconds; it asserts no
+          # timing, so it only fails on a real encode bug.
+          cargo test -p engram_native --release --locked --all-features keyword_encode_bench -- --ignored --nocapture
 
       - name: engram_core links for wasm32 with no host imports (native/)
         # The plugin and web app will run native/engram_core as wasm32, so a
