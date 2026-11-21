@@ -102,6 +102,51 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteFleetTest do
     assert markers_by_user(made) == %{two.id => 2}
   end
 
+  # #2678 review L2: a live marker whose `user_id` is not its vault owner's
+  # (no constraint ties them) is skipped by the markers lock, which binds the
+  # owners and is not widened. It stays, the ledger stays open, and the pass
+  # says why: one warning per vault per day with the vault id and the count,
+  # no paths. Fleet only: a per-tenant walk never sees another tenant's vault.
+  test "a marker whose owner is not its vault's is kept, and warned about", %{
+    made: [one, two] = made
+  } do
+    Engram.ServiceConfig.put_override(:marker_stop_floors, :assume)
+    Engram.ServiceConfig.put_override(:folder_marker_stop, true)
+    Engram.ServiceConfig.put_override(:marker_delete_floors, :assume)
+
+    vault =
+      Sandbox.unboxed_run(Repo, fn ->
+        %{rows: [[marker, vault]]} =
+          Repo.query!(
+            "SELECT id, vault_id FROM notes WHERE user_id = $1 AND kind = 'folder' " <>
+              "ORDER BY id LIMIT 1",
+            [Ecto.UUID.dump!(one.id)]
+          )
+
+        Repo.query!("UPDATE notes SET user_id = $1 WHERE id = $2", [
+          Ecto.UUID.dump!(two.id),
+          marker
+        ])
+
+        Ecto.UUID.load!(vault)
+      end)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        for _ <- 1..2 do
+          IdWindows.reset_walk(Delete.name())
+          Delete.run_pass()
+        end
+      end)
+
+    warnings = Regex.scan(~r/live markers whose owner is not the vault's, skipped/, log)
+    assert length(warnings) == 1, log
+    assert log =~ vault
+    # Tenant one's own marker went; the foreign one (now counted under two)
+    # stays beside two's unmatched vault.
+    assert markers_by_user(made) == %{two.id => 3}
+  end
+
   # The stamp's ids come from the statement's snapshot. A writer that stamps
   # the row and commits while the stamp waits on its lock leaves a newer
   # version, which Postgres re-checks against the UPDATE's own WHERE only.

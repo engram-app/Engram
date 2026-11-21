@@ -364,7 +364,7 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
     statements =
       for %{sql: sql, params: params, pid: ^me} <- queries,
           sql =~
-            ~r/FOR UPDATE OF n|UPDATE folders|DELETE FROM notes|FROM vaults|count\(\*\)::int FROM w|DISTINCT vault_id FROM w/,
+            ~r/FOR UPDATE OF n|UPDATE folders|DELETE FROM notes|FROM vaults|FROM w\b/,
           do: {sql, params}
 
     assert Enum.any?(statements, fn {sql, _} -> sql =~ "UPDATE folders" end),
@@ -410,6 +410,21 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
     full = msg <> "\n" <> plan
     QueryPlan.assert_notes_reads_bound!(plan, msg)
 
+    # The window's notes (statement 1, the markers lock, the delete, the
+    # leftover count) by primary key only: O(markers in the window), never a
+    # read of the vault's notes.
+    for [index, next] <-
+          Regex.scan(
+            ~r/(?:Index (?:Only )?Scan using|Bitmap Index Scan on) (notes_\w+)[^\n]*\n([^\n]*)/,
+            plan,
+            capture: :all_but_first
+          ),
+        do:
+          assert(
+            index == "notes_pkey" and next =~ ~r/^\s*Index Cond: \(\w*\.?id = /,
+            "window notes read by #{index}, not the primary key: #{next}\n" <> full
+          )
+
     if sql =~ "DELETE FROM notes", do: assert(plan =~ @notes_by_id, full)
 
     # The vault lock: vaults by primary key over the window's vault ids, never
@@ -422,8 +437,26 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
       refute plan =~ "Seq Scan on vaults", full
     end
 
-    # The stamp at the pinned shape is exempt (see the stamp check below).
+    # The stamp at the pinned shape gets its own check (below).
     pinned_stamp? = stamp?(sql) and String.starts_with?(msg, "own vault only")
+
+    # At the pinned shape the stamp may tie the primary key with
+    # `folders_vault_id_id_key`; either is fine, any other read is not, and
+    # every read has an `id` condition (#2678 review L1).
+    if pinned_stamp? do
+      for [index, next] <-
+            Regex.scan(
+              ~r/(?:Index (?:Only )?Scan using|Bitmap Index Scan on) (folders\w*)[^\n]*\n([^\n]*)/,
+              plan,
+              capture: :all_but_first
+            ) do
+        assert index in ["folders_pkey", "folders_vault_id_id_key"] and
+                 next =~ ~r/^\s*Index Cond: .*\bid = /,
+               "stamp at the pinned shape reads #{index}: #{next}\n" <> full
+      end
+
+      refute plan =~ "Seq Scan on folders", full
+    end
 
     if plan =~ ~r/on folders\b|on folders_/ and not pinned_stamp? do
       QueryPlan.assert_scans_vault_bound!(plan, fn -> msg end)
