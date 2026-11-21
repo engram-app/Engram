@@ -600,8 +600,10 @@ following closes part of it:
    `cargo test`, where no BEAM exists.
 2. **Report every call's peak.** A dirty-scheduler NIF runs start to finish
    on one OS thread, so a thread-local live/peak pair, reset on entry, is
-   that call's native high-water mark. Exact only if the NIF spawns no
-   threads: **ours must not** (no rayon).
+   that call's native high-water mark. The one exception is the keyword
+   encoder's worker pool (below, "Worker threads"): each worker run is
+   measured on its own thread and the runs' peaks are added to the caller's.
+   Any other NIF that hands work to a thread must do the same.
 3. **One telemetry shape for every NIF.** `Engram.Native.call/4` emits
    `[:engram, :nif, :call, :stop]` with `duration`, `native_peak_bytes`,
    `input_bytes`, metadata `%{nif: atom}`. `Engram.PromEx.Native` exports a
@@ -672,14 +674,21 @@ bumping pulldown-cmark: `ENGRAM_FUZZ_CASES=2000000 ENGRAM_FUZZ_SEED=7 cargo test
 ## Scheduling
 
 `schedule = "DirtyCpu"` on everything whose input size the caller controls,
-EXCEPT small inputs on a hot path. Fifteen NIFs export a normal and a
+EXCEPT small inputs on a hot path. Sixteen NIFs export a normal and a
 `_dirty_nif` variant: `link_extract`, `note_title`, `note_meta`, `chunk`,
 `frontmatter_split`, `frontmatter_parse`, `text_diff`, `utf16_offsets`,
 `hmac_hex_many`, `json_decode`, `envelope_seal`, `envelope_open`, `envelope_open_many`,
-`b64_decode`, `b64_encode`. `envelope_open`'s
+`b64_decode`, `b64_encode`, `yjs_inserts_cr`. `tokens_with_len` is always
+dirty (through `call/4`): it allocates and stems per token, and
+`keyword_encode_bench` found no size small enough to be safely inline.
+`frontmatter_split` calls its inline
+variant at any size, which reads at most 16 KB (`INLINE_FENCE_SCAN`; the
+scan is line by line to the closing fence, so an unclosed fence over many
+short lines is its worst case) and answers `:reschedule` past that, like
+`envelope_open`; both go through `rescheduled/4` in `Engram.Native`. `envelope_open`'s
 inline variant also refuses to inflate a zstd body declaring over 16 KB
 (decompression work is not bounded by input size): it returns `:reschedule`
-and the wrapper reruns the dirty variant (`sized/4`'s `force_dirty`). That
+and the wrapper reruns the dirty variant (`sized/4`'s `dirty: true`). That
 budget is in the NIF, so the pair is written out in `lib.rs` rather than with
 `sized_nif!`. `md_outline` does not: comrak takes ~10 ms on 16 KB of
 dense markup (tight list, `# h` lines; 0.1 ms on prose), so it is always
@@ -712,6 +721,37 @@ with lingua. Calls queue behind each other there, which is
 fine while each is short (the keyword encode is ~0.25 s per MB). If a NIF ever
 runs for seconds per call in prod, chunk the input or raise `+SDcpu` before
 adding callers.
+
+### Worker threads (keyword encode)
+
+`encode_documents_nif` may split a batch into contiguous runs on a rayon
+pool owned by the NIF (`lib.rs` `pool()`), sized from the worker count the
+wrapper passes: `:erlang.system_info(:dirty_cpu_schedulers_online)`, which
+`rel/env.sh.eex` sizes from the real CPU quota (`BEAM_SCHEDULERS` on
+Fargate). NOT `std::thread::available_parallelism()`: on Fargate the quota is
+on the task's microVM, the container cgroup reads `max`, and std sees 2 CPUs
+on the 0.5 vCPU task. Prod passes 1, so it keeps the sequential path (each
+vector becomes a BEAM binary as it is built) and never builds the pool; a
+bigger task spreads the batch with no code change. Batches under 64 KiB stay sequential too. Output
+is identical for any worker count (results merge in input order; dims are a
+pure function of the token), pinned by `parallel_runs_equal_the_sequential_run`.
+The pool is kept while the passed count holds (so each worker's `re!`
+regexes are made once) and rebuilt at the new size when it changes. Peaks: each run is measured on its worker and the sum is added to the
+caller's (an upper bound); worker threads' live counters drift because
+output is freed on the caller (memory.rs).
+
+### Keyword encode cost (2026-11)
+
+Per call the encoder keys HMAC once (`keyed()`), interns each distinct
+word once (stem and HMAC on first sight only), and lowercases ASCII text in
+place without NFKC or the Latin-mark regex (`is_nfkc_quick` skips NFKC for
+other already-normalized text). The packed output is pinned byte for byte
+by `encode_documents_output_matches_the_golden_bytes`
+(`src/testdata/keyword_encode_golden.json`); regenerate it only for a
+deliberate output change, which is a keyword index version bump. Throughput
+and peak: `keyword_encode_bench` (ignored; CI's Rust step prints it).
+`QdrantSparse` sends at most 256 KiB of text per call (a bigger text goes
+alone).
 
 ## Build
 

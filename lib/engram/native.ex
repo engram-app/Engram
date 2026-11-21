@@ -47,9 +47,6 @@ defmodule Engram.Native do
   @doc "Language codes (strings) with a Snowball stemmer."
   def stem_languages, do: :erlang.nif_error(:nif_not_loaded)
 
-  @doc "The keyword tokenizer: `{tokens, raw_len}`."
-  def tokens_with_len(_text, _language), do: :erlang.nif_error(:nif_not_loaded)
-
   # These run on the calling scheduler up to this many input bytes (well
   # under 1 ms on real notes; 2.8 ms worst seen, on adversarial backtick
   # runs), and on a dirty CPU scheduler above it. Prod has ONE dirty
@@ -80,7 +77,8 @@ defmodule Engram.Native do
 
   # NIFs reached only through a wrapper below that fixes their schedule.
   @single [
-    encode_documents_nif: 6,
+    encode_documents_nif: 5,
+    tokens_with_len_nif: 2,
     mmr_select_nif: 5,
     pack_f32_nif: 1,
     dense_json_nif: 1,
@@ -171,7 +169,36 @@ defmodule Engram.Native do
   `{block_start, block_end, body_start, add_newline}` or nil. Any binary:
   the scan is over bytes.
   """
-  def frontmatter_split(content), do: sized(:frontmatter_split, content, [content])
+  #
+  # Inline at any size: the inline NIF reads at most 16 KB (a note without a
+  # leading fence answers at once) and answers `:reschedule` when the fence
+  # is still open there; the line-by-line scan of an unclosed fence over a
+  # large note then runs dirty.
+  #
+  # One event per call: the dirty rerun's when the inline attempt hands off
+  # (that attempt is not reported), else the inline one's.
+  def frontmatter_split(content) do
+    t0 = System.monotonic_time()
+
+    case frontmatter_split_nif(content) do
+      {:reschedule, _peak} ->
+        # The dirty rerun's event, timed from the inline attempt's start.
+        call(:frontmatter_split, content, %{dirty: true}, t0, fn ->
+          frontmatter_split_dirty_nif(content)
+        end)
+
+      done ->
+        emit(:frontmatter_split, content, %{dirty: false}, t0, done)
+    end
+  end
+
+  @doc """
+  The keyword tokenizer: `{tokens, raw_len}`. Always on a dirty scheduler:
+  it allocates and stems per token (see `keyword_encode_bench`).
+  """
+  def tokens_with_len(text, language),
+    do:
+      call(:tokens_with_len, text, %{dirty: true}, fn -> tokens_with_len_nif(text, language) end)
 
   @doc """
   The common shape of a frontmatter YAML block, parsed natively:
@@ -257,12 +284,18 @@ defmodule Engram.Native do
   def utf16_offsets(text, offsets) when is_binary(text) and is_list(offsets),
     do: sized(:utf16_offsets, text, [text, offsets])
 
-  # `input` as for `call/4`; up to @inline_max bytes of it runs `<name>_nif`
-  # on the calling scheduler, more runs `<name>_dirty_nif`. `force_dirty`
-  # is for a call whose work its input size does not bound.
-  defp sized(name, input, args, force_dirty \\ false) do
+  # `input` as for `call/4`; up to @inline_max bytes of it (`:inline_max`
+  # overrides) runs `<name>_nif` on the calling scheduler, more runs
+  # `<name>_dirty_nif`. `dirty: true` is for a call whose work its input
+  # size does not bound.
+  # An inline NIF that stopped at its in-NIF budget answers `:reschedule`;
+  # rerun the same call dirty. Shared by every budgeted inline NIF.
+  defp rescheduled(:reschedule, name, input, args), do: sized(name, input, args, dirty: true)
+  defp rescheduled(result, _name, _input, _args), do: result
+
+  defp sized(name, input, args, opts \\ []) do
     bytes = if is_integer(input), do: input, else: :erlang.iolist_size(input)
-    dirty = force_dirty or bytes > @inline_max
+    dirty = opts[:dirty] == true or bytes > Keyword.get(opts, :inline_max, @inline_max)
     {inline_nif, dirty_nif} = nifs(name)
     nif = if dirty, do: dirty_nif, else: inline_nif
     call(name, bytes, %{dirty: dirty}, fn -> apply(__MODULE__, nif, args) end)
@@ -294,8 +327,13 @@ defmodule Engram.Native do
     b = b / 1
     cap = cap && cap / 1
 
+    # Worker threads for the batch: the dirty CPU schedulers online, which
+    # rel/env.sh.eex sizes from the real CPU quota (1 on prod's 0.5 vCPU
+    # task: the sequential path). See lib.rs `POOL` for why not the OS count.
+    workers = :erlang.system_info(:dirty_cpu_schedulers_online)
+
     call(:keyword_encode, texts, %{dirty: true}, fn ->
-      encode_documents_nif(texts, filter_key, avgdl, language, b, cap)
+      encode_documents_nif(texts, filter_key, avgdl, language, {b, cap, workers})
     end)
   end
 
@@ -523,10 +561,8 @@ defmodule Engram.Native do
 
     opened =
       if byte_size(ct) <= @inline_max do
-        case envelope_open_nif(ct, nonce, key, aad) do
-          {:reschedule, _peak} -> sized(:envelope_open, ct, args, true)
-          {opened, _peak} -> opened
-        end
+        {opened, _peak} = envelope_open_nif(ct, nonce, key, aad)
+        rescheduled(opened, :envelope_open, ct, args)
       else
         sized(:envelope_open, ct, args)
       end
@@ -575,10 +611,13 @@ defmodule Engram.Native do
   # so a dashboard or alert written for one covers the next.
   # `input` is the binary/iolist the NIF reads, or its byte count when it
   # reads terms (a float list has no iolist size).
-  defp call(name, input, meta, fun) do
-    t0 = System.monotonic_time()
-    {result, peak} = fun.()
+  # `t0`: when the logical call started, if before this NIF (an inline
+  # attempt that handed off).
+  defp call(name, input, meta, t0 \\ System.monotonic_time(), fun),
+    do: emit(name, input, meta, t0, fun.())
 
+  # The event for a NIF call that started at `t0` and returned `{result, peak}`.
+  defp emit(name, input, meta, t0, {result, peak}) do
     :telemetry.execute(
       [:engram, :nif, :call, :stop],
       %{

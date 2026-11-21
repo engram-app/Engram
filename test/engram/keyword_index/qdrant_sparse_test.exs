@@ -207,6 +207,17 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
       assert_receive {[:engram, :nif, :call, :stop], ^ref, %{input_bytes: ^rest}, _}
     end
 
+    test "a call holds at most 256 KiB of text; a bigger text goes alone", %{key_a: key} do
+      ref = Engram.NativeScheduled.attach_nif_events()
+      word = fn i, n -> String.duplicate("w#{i} ", div(n, 3) + 1) |> binary_part(0, n) end
+      texts = [word.(1, 100_000), word.(2, 100_000), word.(3, 100_000), word.(4, 300_000)]
+
+      assert length(QdrantSparse.encode_documents(texts, key, 7.5, nil)) == 4
+
+      for n <- [200_000, 100_000, 300_000],
+          do: assert_receive({[:engram, :nif, :call, :stop], ^ref, %{input_bytes: ^n}, _})
+    end
+
     # The old Elixir BM25 raised on avgdl <= 0; the NIF would return all-zero
     # weights, silently killing the keyword leg for the note.
     test "a non-positive avgdl is refused, not encoded to zeros", %{key_a: key} do

@@ -27,11 +27,41 @@ defmodule Engram.Native.FrontmatterSplitTest do
     assert Frontmatter.split(content) == {"a: \xff\n", "body \xfe"}
   end
 
-  test "16 KB splits on the calling scheduler, a byte more dirty" do
-    Engram.NativeScheduled.assert_scheduled(
-      :frontmatter_split,
-      &Frontmatter.split("---\n" <> String.duplicate("x", &1 - 4))
-    )
+  # The inline NIF reads at most 16 KB. A note without a leading fence, or
+  # one whose fence closes early, is answered inline at any size; an
+  # unclosed fence over many short lines (the scan's worst case) is handed
+  # to the dirty variant, with the same answer.
+  test "the inline split is budgeted and reschedules an unclosed fence" do
+    ref = Engram.NativeScheduled.attach_nif_events()
+
+    for content <- [
+          String.duplicate("plain\n", 400_000),
+          "---\na: 1\n---\n" <> String.duplicate("body\n", 400_000)
+        ] do
+      Frontmatter.split(content)
+      n = byte_size(content)
+      assert_receive {_, ^ref, %{input_bytes: ^n}, %{nif: :frontmatter_split, dirty: false}}
+      refute_receive {_, ^ref, _, %{nif: :frontmatter_split}}, 50
+    end
+
+    unclosed = "---\n" <> String.duplicate("a: 1\n", 200_000)
+    assert {:reschedule, _} = Engram.Native.frontmatter_split_nif(unclosed)
+    {dirty, _} = Engram.Native.frontmatter_split_dirty_nif(unclosed)
+    assert Engram.Native.frontmatter_split(unclosed) == dirty
+    # One event for the call (the dirty rerun's, timed from the inline
+    # attempt's start), not one per attempt.
+    n = byte_size(unclosed)
+
+    assert_receive {_, ^ref, %{input_bytes: ^n, duration: d},
+                    %{nif: :frontmatter_split, dirty: true}}
+
+    assert d > 0
+    refute_receive {_, ^ref, _, %{nif: :frontmatter_split}}, 50
+
+    closed_late = unclosed <> "---\nbody\n"
+    {dirty, _} = Engram.Native.frontmatter_split_dirty_nif(closed_late)
+    assert dirty != nil
+    assert Engram.Native.frontmatter_split(closed_late) == dirty
   end
 
   test "split emits [:engram, :nif, :call, :stop]" do
