@@ -7,7 +7,9 @@
 //! * a thread-local live/peak pair. A dirty-scheduler NIF runs start to finish
 //!   on ONE OS thread, so resetting the peak on entry and reading it on exit
 //!   gives that call's native peak, the analogue of a process's heap high-water
-//!   mark. It is only exact for NIFs that do not spawn threads; ours must not.
+//!   mark. Work handed to the keyword encoder's worker pool (lib.rs
+//!   `encode_parallel`) is measured on each worker and added to the caller's
+//!   peak; any other NIF that used threads would have to do the same.
 //!
 //! Never a hard limit that returns null: an allocation failure aborts the
 //! whole node, and catch_unwind cannot stop it. Bound memory by design and
@@ -61,9 +63,41 @@ unsafe impl GlobalAlloc for Counting {
         INNER.dealloc(ptr, layout);
         track(-(layout.size() as isize));
     }
-    // `realloc` keeps the default (alloc + copy + dealloc through the two
-    // methods above), so growth is counted. EnifAllocator has no realloc of
-    // its own, so size buffers with `with_capacity`.
+
+    /// `enif_realloc` (grows in place when it can, no copy through Rust),
+    /// counted as the size change. EnifAllocator stores a header in front of
+    /// a block aligned past 8, which `enif_realloc` would not move, so those
+    /// keep the default: alloc + copy + dealloc through the methods above.
+    /// The peak counts logical bytes: a moving realloc's brief old + new
+    /// overlap happens inside the BEAM allocator and is not added.
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        if layout.align() > MAX_ALIGN {
+            let new = self.alloc(Layout::from_size_align_unchecked(new_size, layout.align()));
+            if !new.is_null() {
+                std::ptr::copy_nonoverlapping(ptr, new, layout.size().min(new_size));
+                self.dealloc(ptr, layout);
+            }
+            return new;
+        }
+        let new = inner_realloc(ptr, layout, new_size);
+        if !new.is_null() {
+            track(new_size as isize - layout.size() as isize);
+        }
+        new
+    }
+}
+
+/// The alignment `enif_alloc` guarantees (rustler's EnifAllocator MAX_ALIGN).
+const MAX_ALIGN: usize = 8;
+
+#[cfg(not(test))]
+unsafe fn inner_realloc(ptr: *mut u8, _layout: Layout, new_size: usize) -> *mut u8 {
+    rustler::sys::enif_realloc(ptr.cast(), new_size).cast()
+}
+
+#[cfg(test)]
+unsafe fn inner_realloc(ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+    INNER.realloc(ptr, layout, new_size)
 }
 
 /// `f`'s result and the peak bytes this thread allocated while it ran,
@@ -91,6 +125,43 @@ mod tests {
         // Other test threads allocate concurrently; only this thread's
         // counter is exact.
         assert_eq!(T_LIVE.with(|l| l.get()), base);
+    }
+
+    fn here() -> isize {
+        T_LIVE.with(|l| l.get())
+    }
+
+    // Growth through `realloc` counts the size change once: the peak of a
+    // vector grown to capacity C is C, not C plus the block it moved from.
+    #[test]
+    fn realloc_growth_and_shrink_are_counted_once() {
+        let base = here();
+        let ((), peak) = measured(|| {
+            let mut v = Vec::<u8>::with_capacity(1);
+            for i in 0..(1u32 << 20) {
+                v.push(i as u8);
+            }
+            let cap = v.capacity() as isize;
+            assert_eq!(here() - base, cap);
+            v.truncate(10);
+            v.shrink_to_fit();
+            assert_eq!(here() - base, v.capacity() as isize);
+        });
+        assert_eq!(here(), base);
+        assert_eq!(peak, 1 << 20);
+
+        // Over-aligned blocks take the alloc + copy + dealloc path.
+        #[derive(Clone, Copy)]
+        #[repr(align(64))]
+        struct Wide(u8);
+        let ((), peak) = measured(|| {
+            let mut v = vec![Wide(1); 4];
+            v.extend(std::iter::repeat_n(Wide(2), 60));
+            assert_eq!(here() - base, (v.capacity() * 64) as isize);
+            assert!(v.iter().skip(4).all(|w| w.0 == 2) && v[0].0 == 1);
+        });
+        assert_eq!(here(), base);
+        assert!(peak >= 64 * 64);
     }
 
     // A shared regex's cache pool moved caches between threads, so bytes one

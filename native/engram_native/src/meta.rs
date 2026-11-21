@@ -6,7 +6,7 @@
 //! The one change: the H1 title and inline `#tags` skip CommonMark code
 //! ranges (pulldown-cmark, as for links) instead of the old ```` ``` ````,
 //! `~~~` and `` ` `` regexes.
-use crate::links::{code_ranges, SEGMENT};
+use crate::links::{range_at, LazyCode, SEGMENT};
 use std::borrow::Cow;
 use std::collections::HashSet;
 use unicode_segmentation::UnicodeSegmentation;
@@ -27,12 +27,35 @@ fn frontmatter(s: &str) -> Option<(&str, usize)> {
 /// Frontmatter `title:`, else the first `# heading` outside code. The
 /// caller falls back to the file name.
 pub fn title(s: &str) -> Option<String> {
+    title_in(s, SEGMENT)
+}
+
+/// `title`, its code parse cut in `segment`-byte segments.
+pub(crate) fn title_in(s: &str, segment: usize) -> Option<String> {
+    let fm = frontmatter(s);
+    if let Some(t) = fm.and_then(|(fm, _)| fm_title(fm)) {
+        return Some(t);
+    }
+    // Code ranges are parsed only up to the first heading outside code:
+    // most notes title near the top, and the parse is the costly part.
+    let body = body_of(s, fm);
+    let mut code = LazyCode::new(body, segment);
+    heading_title(body, |pos| code.at(pos))
+}
+
+/// `title_in` as it was before the lazy parse: every code range first.
+#[cfg(test)]
+pub(crate) fn title_whole(s: &str, segment: usize) -> Option<String> {
     let fm = frontmatter(s);
     if let Some(t) = fm.and_then(|(fm, _)| fm_title(fm)) {
         return Some(t);
     }
     let body = body_of(s, fm);
-    heading_title(body, &code_of(body))
+    let mut code = Vec::new();
+    if body.contains('#') {
+        crate::links::code_ranges(body, 0, segment, &mut code);
+    }
+    heading_title(body, |pos| range_at(&code, pos))
 }
 
 /// `title`, plus frontmatter tags then inline `#tags` outside code (first
@@ -46,7 +69,7 @@ pub fn title_and_tags(s: &str, emit: impl FnMut(&str)) -> Option<String> {
     let code = code_of(body);
     let title = fm
         .and_then(|(fm, _)| fm_title(fm))
-        .or_else(|| heading_title(body, &code));
+        .or_else(|| heading_title(body, |pos| range_at(&code, pos)));
     emit_tags(fm, body, &code, emit);
     title
 }
@@ -57,11 +80,11 @@ fn body_of<'a>(s: &'a str, fm: Option<(&str, usize)>) -> &'a str {
 
 /// CommonMark code ranges of the body; none needed without a `#`.
 fn code_of(body: &str) -> Vec<(usize, usize)> {
-    let mut code = Vec::new();
     if body.contains('#') {
-        code_ranges(body, 0, SEGMENT, &mut code);
+        LazyCode::new(body, SEGMENT).all()
+    } else {
+        Vec::new()
     }
-    code
 }
 
 fn fm_title(fm: &str) -> Option<String> {
@@ -69,19 +92,21 @@ fn fm_title(fm: &str) -> Option<String> {
     title_re.captures(fm).map(|c| c[1].trim().to_string())
 }
 
-fn heading_title(body: &str, code: &[(usize, usize)]) -> Option<String> {
+/// The first `# heading` whose start `code_at` puts in no code range.
+fn heading_title(
+    body: &str,
+    mut code_at: impl FnMut(usize) -> Option<(usize, usize)>,
+) -> Option<String> {
     if !body.contains('#') {
         return None;
     }
     let heading_re = re!(&format!(r"(?m)^#{ASCII_WS}+(.+)$"));
     let mut pos = 0;
     while let Some(c) = heading_re.captures_at(body, pos) {
-        let start = c.get(0)?.start();
-        // The first range ending after `start`; matches only move forward.
-        let i = code.partition_point(|&(_, end)| end <= start);
-        match code.get(i) {
-            Some(&(s, end)) if s <= start => pos = end,
-            _ => return Some(c[1].trim().to_string()),
+        // Matches only move forward, past each code range they land in.
+        match code_at(c.get(0)?.start()) {
+            Some((_, end)) => pos = end,
+            None => return Some(c[1].trim().to_string()),
         }
     }
     None
@@ -251,6 +276,44 @@ mod tests {
         assert_eq!(n, 1);
     }
 
+    // The lazy code parse (stop at the first heading outside code) titles
+    // every note exactly as parsing the whole body first did: the golden
+    // set, plus notes long enough to span many 64 KB segments.
+    #[test]
+    fn lazy_title_equals_whole_body_title() {
+        let golden: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../test/support/fixtures/note_meta_golden.json"
+        ))
+        .unwrap();
+        let fence = "```\n# not a title\n".repeat(20_000) + "```\n";
+        let mut notes: Vec<String> = golden
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["input"].as_str().unwrap().to_string())
+            .collect();
+        notes.extend([
+            format!("{fence}# Real\n{fence}"),
+            format!("# First\n{fence}"),
+            format!("{fence}    # indented code\n\n# After"),
+            format!(
+                "text\n{}\n```\n# open fence to the end\n",
+                "`#a` ".repeat(40_000)
+            ),
+            format!("{fence}~~~\n# never closed\n{}", "# x\n".repeat(30_000)),
+            "no heading at all\n".repeat(10_000),
+        ]);
+        for (i, note) in notes.iter().enumerate() {
+            for segment in [super::SEGMENT, 1] {
+                assert_eq!(
+                    super::title_in(note, segment),
+                    super::title_whole(note, segment),
+                    "note {i} segment {segment}"
+                );
+            }
+        }
+    }
+
     // Skipping a heading inside code must not rescan the code ranges from
     // the start: 480 KB of code-fenced `# x` lines took 1.3 s.
     #[test]
@@ -312,7 +375,8 @@ mod tests {
                 return Some(t);
             }
             let body = &s[fm.map_or(0, |f| f.1)..];
-            super::super::heading_title(body, &super::super::code_of(body))
+            let code = super::super::code_of(body);
+            super::super::heading_title(body, |pos| crate::links::range_at(&code, pos))
         }
     }
 

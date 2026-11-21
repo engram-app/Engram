@@ -25,12 +25,12 @@ defmodule Engram.NativeScheduled do
   end
 
   # `call.(n)` must reach NIF `nif` with exactly `n` input bytes, as
-  # `Engram.Native` counts them. Asserts the `sized/3` boundary: 16 KB runs
-  # on the calling scheduler, one byte more on a dirty one.
-  def assert_scheduled(nif, call) do
+  # `Engram.Native` counts them. Asserts the `sized/4` boundary: `max`
+  # (default 16 KB) runs on the calling scheduler, one byte more on a dirty one.
+  def assert_scheduled(nif, call, max \\ 16_384) do
     ref = attach_nif_events()
 
-    for {n, dirty} <- [{16_384, false}, {16_385, true}] do
+    for {n, dirty} <- [{max, false}, {max + 1, true}] do
       call.(n)
       assert_receive {_, ^ref, %{input_bytes: ^n}, %{nif: ^nif, dirty: ^dirty}}
     end

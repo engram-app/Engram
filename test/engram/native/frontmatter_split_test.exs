@@ -27,10 +27,13 @@ defmodule Engram.Native.FrontmatterSplitTest do
     assert Frontmatter.split(content) == {"a: \xff\n", "body \xfe"}
   end
 
-  test "16 KB splits on the calling scheduler, a byte more dirty" do
+  # The scan stops at the closing fence; only an unclosed one (this input)
+  # reads the whole note, and 1 MiB of that is still a short memchr.
+  test "1 MiB splits on the calling scheduler, a byte more dirty" do
     Engram.NativeScheduled.assert_scheduled(
       :frontmatter_split,
-      &Frontmatter.split("---\n" <> String.duplicate("x", &1 - 4))
+      &Frontmatter.split("---\n" <> String.duplicate("x", &1 - 4)),
+      1_048_576
     )
   end
 
