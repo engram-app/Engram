@@ -509,9 +509,23 @@ defmodule Engram.Notes.CrdtCheckpoint do
     if prev_hash == Crypto.hmac_content_hash(key, "") do
       false
     else
-      {:ok, %Note{content: text}} = Crypto.maybe_decrypt_note_fields(note, user)
-      text not in [nil, ""]
+      case Crypto.maybe_decrypt_note_body(note, user) do
+        {:ok, %Note{content: text}} -> text not in [nil, ""]
+        {:error, reason} -> old_body_unreadable!(note.id, reason)
+      end
     end
+  end
+
+  # The finalize decision cannot be made without the old text, so the
+  # checkpoint raises (and is skipped) as it always has; this names it.
+  defp old_body_unreadable!(note_id, reason) do
+    Logger.warning(
+      "crdt checkpoint old body unreadable, finalize undecidable " <>
+        "note_id=#{note_id} reason=#{Metadata.safe_reason(reason)}",
+      Metadata.with_category(:warning, :sync, note_id: note_id)
+    )
+
+    raise ArgumentError, "crdt checkpoint old body unreadable note_id=#{note_id}"
   end
 
   defp do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user) do

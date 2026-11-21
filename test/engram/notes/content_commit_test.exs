@@ -258,6 +258,25 @@ defmodule Engram.Notes.ContentCommitTest do
       assert finalize_flags(note.id) == [false]
     end
 
+    # Recording on and a non-empty hash: the old text decides, and an
+    # unreadable one skips the checkpoint (as before) under a named warning.
+    test "an unreadable old body with recording on is skipped and named", %{user: u, vault: v} do
+      note = written(u, v, "f6.md", "before")
+      unreadable_body!(u, note.id)
+      {:ok, raw} = Repo.with_tenant(u.id, fn -> Engram.Fixtures.raw_note!(note.id) end)
+      {:ok, state} = Crypto.decrypt_crdt_state(raw, u)
+      {:ok, doc} = CrdtBridge.doc_from_state(state)
+      :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), "after")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :skipped = CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc)
+        end)
+
+      assert log =~ "crdt checkpoint old body unreadable"
+      assert finalize_flags(note.id) == []
+    end
+
     test "the hash of empty text decides without reading the body", %{user: u, vault: v} do
       note = written(u, v, "f5.md", "")
       unreadable_body!(u, note.id)
