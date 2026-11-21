@@ -287,13 +287,7 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
       # it was a skip scan over every tenant, so its conditions name both).
       QueryPlan.assert_scans_vault_bound!(plan)
 
-      for [cond] <-
-            Regex.scan(
-              ~r/folders_explicit_user_vault on folders[^\n]*\n\s*Index Cond: ([^\n]*)/,
-              plan,
-              capture: :all_but_first
-            ),
-          do: assert(cond =~ "user_id =", cond <> "\n" <> plan)
+      QueryPlan.assert_explicit_index_bound!(plan)
 
       refute plan =~ "Seq Scan on notes", plan
     end
@@ -319,19 +313,16 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
   # #2652 re-review L1: the window's delete (stamp the folder rows, delete
   # the markers) planned as the fleet role, EXPLAIN only (it writes). Every
   # folders read vault-bound or a primary-key probe, notes by primary key,
-  # with real statistics and with nested loops costed out (a planner that
-  # would rather hash must have no tenant-wide side to hash).
+  # with nested loops costed out too (a planner that would rather hash must
+  # have no tenant-wide side to hash), custom and generic plans.
+  #
+  # Statistics shapes: first only this vault's rows analyzed, the shape
+  # 0.91.0's CI drew, where the stamp UPDATE read `folders_explicit_user_vault`
+  # with no condition (every tenant's explicit rows); then 40 other tenants'
+  # explicit rows under the 2639 shapes (n_distinct 40/40, -1/40, and dead
+  # explicit index entries).
   test "plans the delete as engram_maintenance", %{user: u, vault: v} do
     for i <- 1..10, do: {:ok, _} = Folders.create_markers(u, v, ["D#{i}"])
-
-    for _ <- 1..5 do
-      {:ok, other} = Engram.Fixtures.user_with_dek_fixture()
-      ov = insert(:vault, user: other)
-      for i <- 1..20, do: {:ok, _} = Folders.create_markers(other, ov, ["O#{i}"])
-    end
-
-    Repo.query!("ANALYZE notes")
-    Repo.query!("ANALYZE folders")
 
     %{rows: ids} =
       Repo.query!("SELECT id FROM notes WHERE vault_id = $1 AND kind = 'folder'", [
@@ -340,24 +331,48 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
 
     params = [List.flatten(ids), [Ecto.UUID.dump!(v.id)]]
 
-    for shape <- [:analyzed, :no_nestloop] do
-      if shape == :no_nestloop, do: Repo.query!("SET LOCAL enable_nestloop = off")
+    Repo.query!("ANALYZE notes")
+    Repo.query!("ANALYZE folders")
+    assert_delete_plans!(u, params, "own vault only")
+
+    for _ <- 1..40 do
+      {:ok, other} = Engram.Fixtures.user_with_dek_fixture()
+      ov = insert(:vault, user: other)
+      {:ok, _} = Folders.create_markers(other, ov, Enum.map(1..25, &"O#{&1}"))
+    end
+
+    Repo.query!("ANALYZE notes")
+
+    for {users, vaults, dead} <- [{40, 40, 0}, {-1, 40, 0}, {40, 40, 1500}] do
+      if dead > 0, do: QueryPlan.dead_explicit_folders!(dead)
+      QueryPlan.folders_tenant_shape!(users, vaults)
+      assert_delete_plans!(u, params, "n_distinct #{users}/#{vaults}, #{dead} dead rows")
+    end
+  end
+
+  defp assert_delete_plans!(user, params, label) do
+    for nestloop <- ["on", "off"] do
+      Repo.query!("SET LOCAL enable_nestloop = #{nestloop}")
 
       %{custom: custom, generic: generic} =
-        QueryPlan.rls_plans(u.id, FolderMarkerDelete.delete_sql(), params,
+        QueryPlan.rls_plans(user.id, FolderMarkerDelete.delete_sql(), params,
           role: "engram_maintenance",
           analyze: false
         )
 
-      for plan <- [custom, generic] do
-        QueryPlan.assert_scans_vault_bound!(plan)
-        assert plan =~ @notes_by_id, plan
-        refute plan =~ "Seq Scan on notes", plan
+      for {kind, plan} <- [custom: custom, generic: generic] do
+        msg = "#{label}, #{kind} plan, enable_nestloop #{nestloop}"
+        QueryPlan.assert_scans_vault_bound!(plan, fn -> msg end)
+        QueryPlan.assert_explicit_index_bound!(plan, msg)
+        assert plan =~ @notes_by_id, msg <> "\n" <> plan
+        refute plan =~ "Seq Scan on notes", msg <> "\n" <> plan
 
         refute plan =~ ~r/Index (Only )?Scan using notes_\w+ on notes n\s*\n(?!\s*Index Cond)/,
-               plan
+               msg <> "\n" <> plan
       end
     end
+
+    Repo.query!("SET LOCAL enable_nestloop = on")
   end
 
   # done?/2's per-vault probe runs on every folder op (PathHashStop): planned

@@ -103,7 +103,7 @@ defmodule Engram.Folders.ExplicitReadsTest do
 
   # The listing's new statement as the app role, under RLS: the partial
   # index, never a read of the vault's or the tenant's folders. At the
-  # 40-tenant shape (`tenant_shape!/0`) the policy's tenant is costed as an
+  # 40-tenant shape (`QueryPlan.folders_tenant_shape!/2`) the policy's tenant is costed as an
   # average tenant, and with no bound `user_id` the custom plan read
   # `folders_user`, every folder of the tenant
   # (docs/context/notes-generic-plan-mis-pick.md, third instance).
@@ -114,18 +114,6 @@ defmodule Engram.Folders.ExplicitReadsTest do
     assert_vault_bound_plans!(u, fn -> Notes.list_explicit_folders(u, v) end, fn s ->
       s =~ ~r/FROM "folders".*"explicit"/s
     end)
-  end
-
-  # Prod's statistics shape: 40 tenants, so a tenant or a vault is a fraction
-  # of `folders`. The physical leftovers of earlier tests are kept (no
-  # CLUSTER): the plan must hold on them too. The visibility map is left as
-  # the inserts left it, so the partial index wins on its keys, not on an
-  # index-only read a restore or CLUSTER would take away.
-  defp tenant_shape!(users, vaults) do
-    for {col, n} <- [user_id: users, vault_id: vaults],
-        do: Repo.query!("ALTER TABLE folders ALTER COLUMN #{col} SET (n_distinct = #{n})")
-
-    Repo.query!("ANALYZE folders")
   end
 
   # The explicit read (the statement of `fun` that `pick` matches) is bound
@@ -142,8 +130,8 @@ defmodule Engram.Folders.ExplicitReadsTest do
     other_vault_folders!(user)
 
     for {users, vaults, dead} <- [{40, 40, 0}, {-1, 40, 0}, {40, 40, 1500}] do
-      if dead > 0, do: dead_explicit_rows!(dead)
-      tenant_shape!(users, vaults)
+      if dead > 0, do: QueryPlan.dead_explicit_folders!(dead)
+      QueryPlan.folders_tenant_shape!(users, vaults)
       {_, queries} = QueryRecorder.record(fun)
       [{sql, params}] = for %{sql: s, params: p, pid: ^me} <- queries, pick.(s), do: {s, p}
       %{custom: custom, generic: generic} = QueryPlan.rls_plans(user.id, sql, params)
@@ -175,25 +163,6 @@ defmodule Engram.Folders.ExplicitReadsTest do
       ])
 
     assert n >= 200, "precondition: the other vault holds #{n} folder rows"
-  end
-
-  # Dead explicit entries in the folder indexes: `n` explicit folder rows of
-  # another tenant, inserted and rolled back (a savepoint inside the test's
-  # transaction). The sandbox never vacuums them, as CI's runs never do.
-  defp dead_explicit_rows!(n) do
-    other = insert(:user)
-    vault = insert(:vault, user: other)
-
-    Repo.transaction(fn ->
-      Repo.query!(
-        "INSERT INTO folders (vault_id, user_id, name_ciphertext, name_nonce, name_hmac, " <>
-          "dek_version, explicit) SELECT $1, $2, '\\x00', '\\x00', " <>
-          "decode(md5(i::text), 'hex'), 1, true FROM generate_series(1, $3) i",
-        [Ecto.UUID.dump!(vault.id), Ecto.UUID.dump!(other.id), n]
-      )
-
-      Repo.rollback(:dead)
-    end)
   end
 
   # On a failing plan test: the plan with cost estimates, and the statistics
