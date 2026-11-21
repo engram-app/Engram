@@ -174,10 +174,16 @@ defmodule Engram.Native do
   # leading fence answers at once) and answers `:reschedule` when the fence
   # is still open there; the line-by-line scan of an unclosed fence over a
   # large note then runs dirty.
+  #
+  # One event per call: the dirty rerun's when the inline attempt hands off
+  # (that attempt is not reported), else the inline one's.
   def frontmatter_split(content) do
-    :frontmatter_split
-    |> call(content, %{dirty: false}, fn -> frontmatter_split_nif(content) end)
-    |> rescheduled(:frontmatter_split, content, [content])
+    t0 = System.monotonic_time()
+
+    case frontmatter_split_nif(content) do
+      {:reschedule, _peak} -> rescheduled(:reschedule, :frontmatter_split, content, [content])
+      done -> emit(:frontmatter_split, content, %{dirty: false}, t0, done)
+    end
   end
 
   @doc """
@@ -601,8 +607,11 @@ defmodule Engram.Native do
   # reads terms (a float list has no iolist size).
   defp call(name, input, meta, fun) do
     t0 = System.monotonic_time()
-    {result, peak} = fun.()
+    emit(name, input, meta, t0, fun.())
+  end
 
+  # The event for a NIF call that started at `t0` and returned `{result, peak}`.
+  defp emit(name, input, meta, t0, {result, peak}) do
     :telemetry.execute(
       [:engram, :nif, :call, :stop],
       %{

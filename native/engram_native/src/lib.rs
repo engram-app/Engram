@@ -66,6 +66,7 @@ use sha2::Sha256;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::{Arc, Mutex};
 
 const K1: f64 = 1.2;
 // Same bound and reason as QdrantSparse's @memo_max.
@@ -214,9 +215,9 @@ fn encode_run<'t>(
     }
 }
 
-/// The NIF's own worker pool, built once (on first parallel use) with the
-/// worker count that call passed, and kept for the node's life, so each
-/// worker's `re!` regexes are made once.
+/// The NIF's own worker pool with the worker count this call passed, built
+/// on first parallel use and kept while that count holds, so each worker's
+/// `re!` regexes are made once (see `pool_in`).
 ///
 /// The count comes from Elixir: the BEAM's dirty CPU schedulers online,
 /// which rel/env.sh.eex sizes from the real CPU quota. NOT
@@ -224,9 +225,29 @@ fn encode_run<'t>(
 /// task's microVM, the container cgroup reads `max`, and std sees the VM's
 /// 2 CPUs on a 0.5 vCPU task, so two workers would burn the quota twice as
 /// fast and throttle every scheduler on the node.
-fn pool(workers: usize) -> &'static rayon::ThreadPool {
-    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
-    POOL.get_or_init(|| build_pool(workers))
+fn pool(workers: usize) -> Arc<rayon::ThreadPool> {
+    static POOL: Mutex<Option<Arc<rayon::ThreadPool>>> = Mutex::new(None);
+    pool_in(&POOL, workers)
+}
+
+/// The pool in `slot` when it has `workers` threads, else a new one in its
+/// place, so the pool follows the current dirty-scheduler count instead of
+/// the first call's (a self-host node whose count drops must not keep more
+/// threads than it now has). The old pool's threads exit once its last
+/// in-flight call drops it.
+/// ponytail: each rebuild's threads leak their `re!` regex clones (see the
+/// macro); the count changes only on an operator's system_flag, so rarely.
+fn pool_in(slot: &Mutex<Option<Arc<rayon::ThreadPool>>>, workers: usize) -> Arc<rayon::ThreadPool> {
+    let workers = workers.max(1);
+    let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+    match &*slot {
+        Some(p) if p.current_num_threads() == workers => p.clone(),
+        _ => {
+            let p = Arc::new(build_pool(workers));
+            *slot = Some(p.clone());
+            p
+        }
+    }
 }
 
 fn build_pool(workers: usize) -> rayon::ThreadPool {
@@ -760,6 +781,10 @@ const INLINE_FENCE_SCAN: usize = 16_384;
 fn split_within(s: &[u8], budget: usize) -> Option<frontmatter::Split> {
     if s.len() <= budget {
         return Some(frontmatter::split(s));
+    }
+    // An opening fence is up to 5 bytes (`---\r\n`): less cannot tell.
+    if budget < 5 {
+        return None;
     }
     let head = &s[..budget];
     match frontmatter::split(head) {
@@ -1314,8 +1339,28 @@ mod tests {
         assert_eq!(runs_for(4, 100, 10 * big), 4);
         assert_eq!(runs_for(4, 2, 10 * big), 2);
         assert_eq!(runs_for(4, 100, big - 1), 1);
-        for n in [1, 3] {
-            assert_eq!(build_pool(n).current_num_threads(), n);
+        // The pool follows the count passed now, and is reused while it
+        // holds (a local slot: other tests share the global one).
+        let slot = Mutex::new(None);
+        let two = pool_in(&slot, 2);
+        assert_eq!(two.current_num_threads(), 2);
+        assert!(Arc::ptr_eq(&two, &pool_in(&slot, 2)));
+        assert_eq!(pool_in(&slot, 3).current_num_threads(), 3);
+        assert_eq!(pool_in(&slot, 1).current_num_threads(), 1);
+        assert_eq!(pool_in(&slot, 0).current_num_threads(), 1);
+    }
+
+    // Under 5 bytes a budget cannot see a whole opening fence: hand off.
+    #[test]
+    fn split_within_hands_off_a_budget_too_small_for_a_fence() {
+        for s in ["---\r\n---\r\nbody", "---\n---\nbody", "plain text here"] {
+            for budget in 0..5 {
+                assert_eq!(split_within(s.as_bytes(), budget), None, "{s:?} {budget}");
+            }
+            assert_eq!(
+                split_within(s.as_bytes(), 64),
+                Some(frontmatter::split(s.as_bytes()))
+            );
         }
     }
 

@@ -735,8 +735,8 @@ vector becomes a BEAM binary as it is built) and never builds the pool; a
 bigger task spreads the batch with no code change. Batches under 64 KiB stay sequential too. Output
 is identical for any worker count (results merge in input order; dims are a
 pure function of the token), pinned by `parallel_runs_equal_the_sequential_run`.
-The pool lives as long as the node, so each worker's `re!` regexes are made
-once. Peaks: each run is measured on its worker and the sum is added to the
+The pool is kept while the passed count holds (so each worker's `re!`
+regexes are made once) and rebuilt at the new size when it changes. Peaks: each run is measured on its worker and the sum is added to the
 caller's (an upper bound); worker threads' live counters drift because
 output is freed on the caller (memory.rs).
 
