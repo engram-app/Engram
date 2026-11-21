@@ -1137,4 +1137,98 @@ mod tests {
         }
         assert_eq!(got, want);
     }
+
+    /// Deterministic text: `n` bytes of `line(i)` lines.
+    fn generated(n: usize, line: impl Fn(u64) -> String) -> String {
+        let mut out = String::with_capacity(n + 256);
+        let mut i = 0u64;
+        while out.len() < n {
+            out.push_str(&line(i));
+            i += 1;
+        }
+        out
+    }
+
+    fn rng(i: u64) -> u64 {
+        i.wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407)
+            >> 33
+    }
+
+    const WORDS: [&str; 24] = [
+        "the", "running", "notes", "vault", "keyword", "index", "search", "läuft",
+        "Straße", "naïve", "embedding", "quickly", "of", "and", "système", "données",
+        "synchronisation", "conflict", "merge", "Москва", "ζωή", "東京タワー", "data", "is",
+    ];
+
+    fn prose(n: usize) -> String {
+        generated(n, |i| {
+            let words: Vec<String> = (0..12)
+                .map(|k| {
+                    let r = rng(i * 12 + k);
+                    // Mostly common words, a tail of rarer ones.
+                    match r % 4 {
+                        0 => format!("term{}", r % 5_000),
+                        _ => WORDS[(r % WORDS.len() as u64) as usize].to_string(),
+                    }
+                })
+                .collect();
+            format!("{}.\n", words.join(" "))
+        })
+    }
+
+    fn code(n: usize) -> String {
+        generated(n, |i| {
+            format!(
+                "fn handler_{a}(ctx: &mut Ctx{b}, req: Request) -> Result<Response, Error> {{\n    let value_{a} = ctx.lookup(\"key_{c}\")?; // TODO {c}\n    Ok(Response::new(value_{a} + {i}))\n}}\n",
+                a = rng(i) % 400,
+                b = rng(i + 1) % 30,
+                c = rng(i + 2) % 2_000,
+            )
+        })
+    }
+
+    fn markdown(n: usize) -> String {
+        generated(n, |i| match i % 6 {
+            0 => format!("## Section {i}\n\n"),
+            1 => format!("- [[Note {}]] links to #tag{} and **bold** text\n", i % 300, i % 40),
+            2 => format!("```elixir\ndef f{i}(x), do: x + {i}\n```\n"),
+            3 => format!("> quote about {} and {}\n\n", WORDS[(i % 24) as usize], rng(i) % 999),
+            _ => prose(160),
+        })
+    }
+
+    /// 2 KB chunks at line ends, as the indexer sends them.
+    fn chunks(text: &str) -> Vec<String> {
+        let mut out = vec![String::new()];
+        for line in text.split_inclusive('\n') {
+            if out.last().unwrap().len() + line.len() > 2_048 {
+                out.push(String::new());
+            }
+            out.last_mut().unwrap().push_str(line);
+        }
+        out
+    }
+
+    // Throughput and peak of encode_documents' per-document work. Not run by
+    // default; compare like with like (a debug build reads ~10x slower):
+    //   cargo test -p engram_native --release keyword_encode_bench -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn keyword_encode_bench() {
+        let bm25 = configs()[0].1;
+        for (name, text) in [
+            ("prose 1 MiB", prose(1 << 20)),
+            ("code 1 MiB", code(1 << 20)),
+            ("markdown 1.4 MB", markdown(1_400_000)),
+        ] {
+            for (shape, texts) in [("2 KB chunks", chunks(&text)), ("one doc", vec![text.clone()])] {
+                let t = std::time::Instant::now();
+                let (out, peak) = memory::measured(|| encode_batch(&texts, &KEY, bm25, Some("en")));
+                let ns = t.elapsed().as_nanos() as f64 / text.len() as f64;
+                assert_eq!(out.len(), texts.len());
+                println!("{name:>16} {shape:>11}: {ns:8.1} ns/byte, peak {peak} bytes");
+            }
+        }
+    }
 }
