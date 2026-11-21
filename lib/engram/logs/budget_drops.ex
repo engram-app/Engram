@@ -10,6 +10,13 @@ defmodule Engram.Logs.BudgetDrops do
   req/s wrote ~16k of them an hour, and with no owner ids on the line nobody
   could say whose device it was.
 
+  Requests refused at the front of the pipeline
+  (`EngramWeb.Plugs.ClientLogsThrottle`) have no user yet. The controller
+  `remember/2`s which user a spent token belongs to when it first refuses it,
+  and `add_by_key/3` credits the later refusals to that user. A node that
+  never saw the first refusal (the mark reached it by cluster broadcast) has
+  no claim, so its refusals reach the metric but not this line.
+
   Per node, in ETS, as `Engram.Analytics.Folds`: a hard crash loses up to one
   window of counts. The exact totals are on
   `[:engram, :client_logs, :dropped]`; this line is for finding the device.
@@ -34,9 +41,27 @@ defmodule Engram.Logs.BudgetDrops do
     :ok
   end
 
+  @doc "Remember which user the spent-token `key` belongs to, for `add_by_key/3`."
+  @spec remember(String.t(), String.t()) :: :ok
+  def remember(key, user_id) do
+    _ = :ets.insert(@table, {{:claim, key}, user_id, System.monotonic_time(:millisecond)})
+    :ok
+  end
+
+  @doc "`add/3` for a front-of-pipeline refusal: the user is whoever `remember/2`d `key`."
+  @spec add_by_key(String.t(), String.t(), pos_integer()) :: :ok
+  def add_by_key(key, device, lines) do
+    case :ets.lookup(@table, {:claim, key}) do
+      [{_, user_id, _}] -> add(user_id, device, lines)
+      [] -> :ok
+    end
+  end
+
   @doc "Log one warning per device with drops since the last flush, and reset them."
   @spec flush() :: :ok
   def flush do
+    drop_stale_claims()
+
     for key <- :ets.select(@table, [{{:"$1", :_}, [], [:"$1"]}]),
         [{{user_id, device}, dropped}] <- [:ets.take(@table, key)],
         dropped > 0 do
@@ -73,6 +98,13 @@ defmodule Engram.Logs.BudgetDrops do
   @impl true
   def terminate(_reason, _state) do
     flush()
+    :ok
+  end
+
+  # A claim is only read while its token's mark lives: one budget window.
+  defp drop_stale_claims do
+    cutoff = System.monotonic_time(:millisecond) - EngramWeb.Plugs.ClientLogsThrottle.window_ms()
+    :ets.select_delete(@table, [{{{:claim, :_}, :_, :"$1"}, [{:<, :"$1", cutoff}], [true]}])
     :ok
   end
 

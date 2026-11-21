@@ -99,7 +99,7 @@ defmodule Engram.Logs do
   @doc """
   Insert a batch of log entries for a user.
   Returns {:ok, count} with the number of entries inserted. On SaaS that is 0
-  unless the `client_logs_stop_writes` service override is false: no row is
+  while the `client_logs_stop_writes` service override is true: no row is
   written, the lines still ship to Loki. CI and self-host always write.
 
   `vault_id` stamps the vault the request addressed, so `list_logs/2` can keep
@@ -195,26 +195,37 @@ defmodule Engram.Logs do
   end
 
   # SaaS switch to stop writing `client_logs` rows (`client_logs_stop_writes`
-  # service override, default ON for SaaS: a DB override of false turns
-  # writes back on without a deploy); every kept line still ships to Loki
+  # service override, default OFF: writes continue until the code default is
+  # flipped in a later release; `true` stops them without a deploy, for an
+  # operator with rpc access); every kept line still ships to Loki
   # (`reemit_to_logger/2`). CI and self-host always write: there
   # `:client_logs_persist_all` is true (`Engram.RuntimeConfig`, the one place
   # that decides "CI or self-host"), the e2e log oracle and self-host
   # operators read `GET /api/logs`, and self-host has no Loki.
   defp writes_stopped? do
     not Application.get_env(:engram, :client_logs_persist_all, false) and
-      ServiceConfig.get(:client_logs_stop_writes, true) != false
+      ServiceConfig.get(:client_logs_stop_writes, false) == true
   end
 
   defp count_dropped(entries, reason) do
     entries
     |> Enum.frequencies_by(&PersistPolicy.metric_level(&1.level))
-    |> Enum.each(fn {level, n} ->
-      :telemetry.execute([:engram, :client_logs, :dropped], %{lines: n}, %{
-        reason: reason,
-        level: level
-      })
-    end)
+    |> Enum.each(fn {level, n} -> count_dropped_lines(n, reason, level) end)
+  end
+
+  @doc """
+  Count `lines` refused on `[:engram, :client_logs, :dropped]`. Public for the
+  front-of-pipeline refusal (`EngramWeb.Plugs.ClientLogsThrottle`), which
+  counts a batch it never parsed beyond its length: its `level` is `"other"`.
+  """
+  @spec count_dropped_lines(non_neg_integer(), :filtered | :over_budget, String.t()) :: :ok
+  def count_dropped_lines(0, _reason, _level), do: :ok
+
+  def count_dropped_lines(n, reason, level) do
+    :telemetry.execute([:engram, :client_logs, :dropped], %{lines: n}, %{
+      reason: reason,
+      level: level
+    })
   end
 
   defp store(user, entries, vault_id, now) do

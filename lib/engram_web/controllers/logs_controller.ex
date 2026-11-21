@@ -68,7 +68,7 @@ defmodule EngramWeb.LogsController do
       # ignores the extra keys exactly as it ignored the bare count: 0.
       {:over_budget, lines} ->
         BudgetDrops.add(user.id, device, lines)
-        :ok = ClientLogsThrottle.mark_spent(conn)
+        :ok = ClientLogsThrottle.mark_spent(conn, user.id)
         ClientLogsThrottle.throttled(conn)
     end
   end

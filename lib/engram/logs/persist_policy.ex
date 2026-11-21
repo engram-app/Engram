@@ -19,10 +19,10 @@ defmodule Engram.Logs.PersistPolicy do
   them being there; making them always ship needs the plugin's forced path.
   The web SPA sends its info lines with no opt-in, so its breadcrumbs do arrive.
 
-  On SaaS the table is not written at all by default
-  (`client_logs_stop_writes`, `docs/context/client-logs-loki-only-on-saas.md`);
-  Loki holds every line this policy keeps. The filter still decides which
-  info lines ship to Loki and what a SaaS override of false stores.
+  Loki holds every line this policy keeps, and with `client_logs_stop_writes`
+  on (default off, `docs/context/client-logs-loki-only-on-saas.md`) SaaS
+  writes no row at all. The filter still decides which info lines ship to
+  Loki and what SaaS stores while writes are on.
 
   Applies only when `:client_logs_persist_all` is false: SaaS. CI (the e2e log
   oracle reads info lines), test and self-host (no Loki, so `client_logs` is
