@@ -7,7 +7,9 @@
 //! * a thread-local live/peak pair. A dirty-scheduler NIF runs start to finish
 //!   on ONE OS thread, so resetting the peak on entry and reading it on exit
 //!   gives that call's native peak, the analogue of a process's heap high-water
-//!   mark. It is only exact for NIFs that do not spawn threads; ours must not.
+//!   mark. Work handed to the keyword encoder's worker pool (lib.rs
+//!   `encode_parallel`) is measured on each worker and added to the caller's
+//!   peak; any other NIF that used threads would have to do the same.
 //!
 //! Never a hard limit that returns null: an allocation failure aborts the
 //! whole node, and catch_unwind cannot stop it. Bound memory by design and
@@ -136,8 +138,8 @@ mod tests {
         let base = here();
         let ((), peak) = measured(|| {
             let mut v = Vec::<u8>::with_capacity(1);
-            for _ in 0..(1 << 20) {
-                v.push(1);
+            for i in 0..(1u32 << 20) {
+                v.push(i as u8);
             }
             let cap = v.capacity() as isize;
             assert_eq!(here() - base, cap);
