@@ -910,7 +910,7 @@ defmodule EngramWeb.CrdtChannel do
     _ =
       with {m, c} when not (is_nil(m) and is_nil(c)) <- frame_times(payload),
            %{room: room} <- Map.get(socket.assigns.rooms, doc_id),
-           {m, c} when not (is_nil(m) and is_nil(c)) <- unseen_times(doc_id, m, c) do
+           {m, c} when not (is_nil(m) and is_nil(c)) <- unseen_times(room, m, c) do
         CrdtTransport.put_file_times(room, m, c)
       end
 
@@ -918,15 +918,19 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   # Remembers (in this channel's process dictionary) the newest mtime and
-  # whether a ctime went out per doc; returns only what is new.
-  defp unseen_times(doc_id, m, c) do
-    key = {:crdt_times_sent, doc_id}
+  # whether a ctime went out per ROOM (a new room starts empty, so a time the
+  # old one lost before its checkpoint can go again); returns only what is new.
+  # Dropped by `forget_times/1` wherever the socket lets a room go.
+  defp unseen_times(room, m, c) do
+    key = {:crdt_times_sent, room}
     {sm, sc} = Process.get(key, {nil, nil})
     m = if m && (is_nil(sm) or DateTime.compare(m, sm) == :gt), do: m
     c = if c && is_nil(sc), do: c
     Process.put(key, {m || sm, c || sc})
     {m, c}
   end
+
+  defp forget_times(room), do: Process.delete({:crdt_times_sent, room})
 
   # `crdt_create` (rare, once per note): one metadata statement beside the
   # genesis, only when times were sent (`Notes.put_frame_times/5`).
@@ -1907,6 +1911,8 @@ defmodule EngramWeb.CrdtChannel do
         {:noreply, socket}
 
       doc_id ->
+        forget_times(pid)
+
         socket =
           socket
           |> assign(:rooms, Map.delete(socket.assigns.rooms, doc_id))
@@ -2079,6 +2085,8 @@ defmodule EngramWeb.CrdtChannel do
             {:noreply, socket}
 
           :gone ->
+            forget_times(room)
+
             case Map.get(socket.assigns.rooms, doc_id) do
               %{ref: ref} -> Process.demonitor(ref, [:flush])
               _ -> :ok

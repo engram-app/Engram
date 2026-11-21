@@ -178,6 +178,30 @@ defmodule EngramWeb.CrdtChannelFileTimesTest do
     assert secs(row(note.id).ctime_at) == @t1
   end
 
+  test "a room lost before its checkpoint does not swallow the ctime on the next edit",
+       %{socket: socket, note: note} do
+    client = handshake_room(socket, note.id)
+    b64 = frame_b64(client, "A-")
+    ref = push(socket, "crdt_msg", %{"doc_id" => note.id, "b64" => b64, "ctime" => @t1})
+    assert_reply ref, :ok, %{}
+
+    # Killed before any checkpoint: the in-memory ctime dies with the room.
+    Engram.Notes.CrdtRegistry.terminate_room(note.id)
+    assert is_nil(row(note.id).ctime_at)
+
+    client2 = handshake_room(socket, note.id)
+
+    ref =
+      push(socket, "crdt_msg", %{
+        "doc_id" => note.id,
+        "b64" => frame_b64(client2, "B-"),
+        "ctime" => @t1
+      })
+
+    assert_reply ref, :ok, %{}
+    assert eventually(fn -> secs(row(note.id).ctime_at) == @t1 end)
+  end
+
   test "an older mtime does not regress it", %{socket: socket, note: note} do
     edit(socket, note.id, %{"mtime" => @t2})
     assert eventually(fn -> secs(row(note.id).mtime_at) == @t2 end)
