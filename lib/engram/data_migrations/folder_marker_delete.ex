@@ -176,6 +176,7 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   # snapshot. Both writes take their rows by primary key from an ARRAY of
   # ids: the folder ids from a correlated, vault-bound probe per marker (an
   # ARRAY sublink is never pulled up into a join), the note ids from `m`.
+  # The folder write is also bound by `m`'s tenants and vaults.
   # As joins the planner could hash every tenant's folders or notes.
   @delete_sql """
   WITH m AS MATERIALIZED (
@@ -193,6 +194,12 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
           AND f2.full_path_hmac = m.folder_hmac
           AND f2.deleted_at IS NULL AND f2.explicit AND f2.explicit_seq IS NULL))
       FROM m))
+      -- Bound to the window's tenants and vaults, so every plan has an index
+      -- condition on them: with only the ids above, a plan could read
+      -- `folders_explicit_user_vault` with no condition (every tenant's
+      -- explicit rows; 0.91.0's CI). Always true for those ids.
+      AND f.user_id = ANY(ARRAY(SELECT user_id FROM m))
+      AND f.vault_id = ANY(ARRAY(SELECT vault_id FROM m))
       -- Again on the row itself: re-checked on the row's latest version when
       -- it waited on a concurrent writer's lock, so a row stamped meanwhile
       -- keeps its seq (defence in depth beyond the vault lock).
