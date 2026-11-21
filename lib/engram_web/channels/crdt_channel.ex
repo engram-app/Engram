@@ -890,16 +890,17 @@ defmodule EngramWeb.CrdtChannel do
   # CRDT state, and a failure here must not fail a frame that already landed.
   # Absent keys (an old plugin) are a no-op without a query.
   defp put_frame_times(socket, doc_id, payload) do
-    with true <- Map.has_key?(payload, "mtime") or Map.has_key?(payload, "ctime"),
-         {:ok, note_id} <- Ecto.UUID.cast(doc_id) do
-      Notes.put_frame_times(
-        socket.assigns.current_user,
-        socket.assigns.vault,
-        note_id,
-        payload["mtime"],
-        payload["ctime"]
-      )
-    end
+    _ =
+      with true <- Map.has_key?(payload, "mtime") or Map.has_key?(payload, "ctime"),
+           {:ok, note_id} <- Ecto.UUID.cast(doc_id) do
+        Notes.put_frame_times(
+          socket.assigns.current_user,
+          socket.assigns.vault,
+          note_id,
+          payload["mtime"],
+          payload["ctime"]
+        )
+      end
 
     :ok
   rescue
