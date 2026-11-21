@@ -38,14 +38,28 @@ defmodule Engram.PromEx.NativeTest do
     assert %Event{metrics: metrics} = PromExMetrics.of(Native, opts)
     for m <- metrics, do: assert(m.tags == [:nif, :dirty])
 
-    # Count + integer microsecond sum only: no per-call histograms, and no
-    # peak/input bytes (the polled envelope counters carry input volume).
+    # Count + microsecond sum stay (cheap averages); the two histograms add
+    # the per-call shape, so the slowest/largest single call is visible.
     assert [
              %Telemetry.Metrics.Counter{name: [:engram, :prom_ex, :nif, :call, :total]},
              %Telemetry.Metrics.Sum{
                name: [:engram, :prom_ex, :nif, :call, :duration, :microseconds, :total]
-             }
+             },
+             %Telemetry.Metrics.Distribution{
+               name: [:engram, :prom_ex, :nif, :call, :duration, :milliseconds]
+             } = duration,
+             %Telemetry.Metrics.Distribution{
+               name: [:engram, :prom_ex, :nif, :call, :input, :bytes],
+               measurement: :input_bytes
+             } = bytes
            ] = metrics
+
+    # 1 ms to 60 s: a ~9 MB note's keyword_encode must not fall into +Inf.
+    les = duration.reporter_options[:buckets]
+    assert hd(les) == 1 and List.last(les) == 60_000
+    assert duration.measurement == :duration
+    assert duration.unit == {:native, :millisecond}
+    assert List.last(bytes.reporter_options[:buckets]) >= 16_777_216
 
     assert [%Polling{}, %Polling{}] = Native.polling_metrics(opts)
   end

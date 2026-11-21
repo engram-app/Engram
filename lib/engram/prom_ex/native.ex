@@ -4,9 +4,9 @@ defmodule Engram.PromEx.Native do
   memory standard (see `Engram.Native`):
 
     * `[:engram, :nif, :call, :stop]`, per call: a call count and summed
-      duration, tagged by `:nif` and `:dirty` (which scheduler ran it). The
-      event also carries native peak and input bytes; they are not exported
-      (series cost with no reader). Envelope calls that stay inline and write or read
+      duration, plus per-call duration and input-bytes histograms, tagged by
+      `:nif` and `:dirty` (which scheduler ran it). The event also carries
+      native peak bytes; it is not exported (series cost with no reader). Envelope calls that stay inline and write or read
       format 0 (seal `:none` up to 16 KB, a successful inline open) emit no
       event, so the envelope series cover format-1 seals (`dirty="false"`
       for small inline ones) and every dirty seal or open.
@@ -27,6 +27,8 @@ defmodule Engram.PromEx.Native do
   `Engram.Native`, `:dirty` a boolean. Never tag with user, vault or note ids.
   """
   use PromEx.Plugin
+
+  alias Engram.PromEx.Buckets
 
   @call_event [:engram, :nif, :call, :stop]
   @memory_event [:engram, :vm, :native_memory]
@@ -50,6 +52,23 @@ defmodule Engram.PromEx.Native do
           System.convert_time_unit(native, :native, :microsecond)
         end,
         description: "NIF call wall time, microseconds.",
+        tags: [:nif, :dirty]
+      ),
+      # Per-call shape: the sum above hides a single huge call (a ~9 MB note
+      # in keyword_encode). 1 ms to 60 s; sub-ms calls share the first bucket.
+      distribution(prefix ++ [:call, :duration, :milliseconds],
+        event_name: @call_event,
+        measurement: :duration,
+        unit: {:native, :millisecond},
+        description: "NIF call wall time per call, milliseconds.",
+        reporter_options: Buckets.opts(Engram.PromEx.Native.DurationBuckets),
+        tags: [:nif, :dirty]
+      ),
+      distribution(prefix ++ [:call, :input, :bytes],
+        event_name: @call_event,
+        measurement: :input_bytes,
+        description: "Bytes handed to one NIF call.",
+        reporter_options: Buckets.opts(Engram.PromEx.Native.InputBytesBuckets),
         tags: [:nif, :dirty]
       )
     ])
@@ -119,4 +138,15 @@ defmodule Engram.PromEx.Native do
     # skips a nil measurement but records 1 for an absent key.
     :telemetry.execute(@memory_event, Engram.Native.memory_snapshot(), %{})
   end
+end
+
+defmodule Engram.PromEx.Native.DurationBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [1, 5, 25, 100, 500, 1_000, 2_500, 5_000, 10_000, 30_000, 60_000]
+end
+
+defmodule Engram.PromEx.Native.InputBytesBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets,
+      [1_024, 16_384, 262_144, 1_048_576, 4_194_304, 16_777_216, 67_108_864]
 end

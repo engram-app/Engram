@@ -98,6 +98,28 @@ defmodule Engram.PromEx.FixedBucketsTest do
       5_000
     ],
     "engram_prom_ex_mcp_tool_result_bytes" => [64, 256, 1_024, 4_096, 16_384, 65_536, 262_144],
+    "engram_prom_ex_nif_call_duration_milliseconds" => [
+      1,
+      5,
+      25,
+      100,
+      500,
+      1_000,
+      2_500,
+      5_000,
+      10_000,
+      30_000,
+      60_000
+    ],
+    "engram_prom_ex_nif_call_input_bytes" => [
+      1_024,
+      16_384,
+      262_144,
+      1_048_576,
+      4_194_304,
+      16_777_216,
+      67_108_864
+    ],
     "engram_prom_ex_profiling_sample_duration_milliseconds" => [0.5, 1, 2, 5, 10, 20, 50, 100],
     "engram_prom_ex_qdrant_payload_write_bytes" => [128, 512, 2_048, 8_192, 32_768, 131_072],
     "engram_prom_ex_qdrant_payload_write_ids" => [1, 10, 100, 1_000, 10_000],
