@@ -230,6 +230,7 @@ static POOL: PoolSlot = PoolSlot::new();
 
 struct PoolSlot {
     pool: Mutex<Option<Arc<rayon::ThreadPool>>>,
+    // Pools built; read by tests. Kept in prod: one relaxed add per rebuild.
     builds: AtomicUsize,
 }
 
@@ -297,7 +298,7 @@ fn runs_for(workers: usize, texts: usize, bytes: usize) -> usize {
 /// worker costs more than the work.
 const PAR_MIN_BYTES: usize = 64 * 1024;
 
-/// `encode_run` over `workers` contiguous runs of `texts` on the pool, each
+/// `encode_run` over `runs` contiguous runs of `texts` on `pool`, each
 /// with its own memo (dims are a pure function of the token, so the output
 /// is the same), results in input order. Also the sum of the runs' peaks:
 /// a worker's allocations are counted on its own thread (memory.rs), and

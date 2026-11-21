@@ -329,7 +329,7 @@ defmodule Engram.Native do
 
     # Worker threads for the batch: the dirty CPU schedulers online, which
     # rel/env.sh.eex sizes from the real CPU quota (1 on prod's 0.5 vCPU
-    # task: the sequential path). See lib.rs `pool` for why not the OS count.
+    # task: the sequential path). See lib.rs `POOL` for why not the OS count.
     workers = :erlang.system_info(:dirty_cpu_schedulers_online)
 
     call(:keyword_encode, texts, %{dirty: true}, fn ->
