@@ -78,6 +78,29 @@ unnoticed: prod formats with `{:all_except, [:__sentry__]}`.
 what ships to Loki; the formatted string depends on a per-env allowlist that no
 static check defends.
 
+## Moving a Logger call into a helper silently breaks the alert on it
+
+Prod Grafana alerts filter Loki lines on `metadata_mfa`: the
+module/function/arity of the `Logger` call site, which Elixir stamps at compile
+time. Example: `engram-prod-crdt-save-loop` (engram-infra
+`main/envs/prod/grafana_alerts.tf`, `crdt_save_loop_mfa`) keys on
+`Elixir.Engram.Workers.CrdtBloatSweep.log_save_loops/2`.
+
+So a DRY refactor that moves a `Logger.warning` into a shared private helper
+changes the mfa to the helper's, and the alert then matches nothing. Nothing
+fails: the line still ships, the message is identical, the alert just goes
+quiet forever. Caught in review of PR 2676, not by any test.
+
+Rule:
+
+- Shared helpers **select or format** (build the message, the metadata, the
+  list of offenders). The `Logger` call itself stays in the function the alert
+  names.
+- Pin it: a test that captures the event (`Engram.Test.LogCapture.with_events/1`)
+  and asserts its `mfa` equals the one the alert filters on.
+- Before renaming or re-arity-ing a function that logs, grep engram-infra for
+  its mfa (`git grep metadata_mfa origin/main`).
+
 ## References
 
 - `lib/engram/notes/frontmatter.ex` — `split/1`, `strip_open_fence/1`,
