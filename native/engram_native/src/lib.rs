@@ -283,11 +283,6 @@ fn live_bytes() -> isize {
     memory::live_bytes()
 }
 
-#[rustler::nif(schedule = "DirtyCpu")]
-fn tokens_with_len(text: &str, lang: Option<String>) -> (Vec<String>, usize) {
-    tokenizer::tokens_with_len(text, lang.as_deref())
-}
-
 // The note parsers come in two schedules. A note up to `Engram.Native`'s
 // @inline_max (16 KB) parses in well under a millisecond (adversarial input,
 // growing backtick runs, measured 2.8 ms for title plus tags) and runs on the
@@ -353,6 +348,13 @@ fn link_extract<'a>(
 }
 
 sized_nif!(link_extract, link_extract_nif, link_extract_dirty_nif, <'a>(env, content: &str, limit: usize) [content, limit] -> ((Vec<Term<'a>>, usize, bool), usize));
+
+/// The keyword tokenizer: `{tokens, raw_len}`, and the peak.
+fn tokens_with_len(text: &str, lang: Option<String>) -> ((Vec<String>, usize), usize) {
+    memory::measured(|| tokenizer::tokens_with_len(text, lang.as_deref()))
+}
+
+sized_nif!(tokens_with_len, tokens_with_len_nif, tokens_with_len_dirty_nif, (text: &str, lang: Option<String>) [text, lang] -> ((Vec<String>, usize), usize));
 
 /// `Helpers.extract_title/2` without the file-name fallback, and the peak.
 fn note_title(content: &str) -> (Option<String>, usize) {

@@ -46,8 +46,10 @@ defmodule Engram.KeywordIndex.QdrantSparse do
   @docs_per_call 256
   # And this many bytes of text: the encoder's token -> dim memo spans the
   # call, so a call over merged (30 KB) or floor (1 MiB) documents held every
-  # term of all of them at once. Ordinary chunks never reach it (256 x 2.5 KB).
-  @bytes_per_call 1_048_576
+  # term of all of them at once. 256 KiB keeps one call, which holds the one
+  # dirty scheduler, a quarter of the old 1 MiB; a text over it still goes
+  # alone (one call, never split).
+  @bytes_per_call 262_144
   # A query's keyword leg reads this many characters. Search input is
   # otherwise bounded only by the request body limit, and NIF memory and
   # time scale with it.

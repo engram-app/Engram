@@ -22,6 +22,13 @@ defmodule Engram.Native.KeywordEncodeTest do
     end
   end
 
+  test "tokens_with_len runs inline up to 16 KB, dirty above, and emits" do
+    Engram.NativeScheduled.assert_scheduled(
+      :tokens_with_len,
+      &Engram.Native.tokens_with_len(String.duplicate("a", &1), "en")
+    )
+  end
+
   test "every stemmer language is covered by the golden set" do
     covered = @golden |> Enum.map(& &1["lang"]) |> MapSet.new()
     assert MapSet.subset?(MapSet.new(Engram.Native.stem_languages()), covered)
