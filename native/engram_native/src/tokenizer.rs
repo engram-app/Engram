@@ -280,7 +280,11 @@ mod tests {
                 .collect();
             let (got, raw) = super::tokens_with_len(text, lang);
             assert_eq!(got, want, "{text:?} {lang:?}");
-            assert_eq!(raw as u64, c["raw_len"].as_u64().unwrap(), "{text:?} {lang:?}");
+            assert_eq!(
+                raw as u64,
+                c["raw_len"].as_u64().unwrap(),
+                "{text:?} {lang:?}"
+            );
         }
     }
 }

@@ -194,6 +194,84 @@ fn to_binary<'a>(env: Env<'a>, bytes: &[u8]) -> Binary<'a> {
     b.into()
 }
 
+/// One document's packed sparse vector: (indices, values, doc_len).
+type Encoded = (Vec<u8>, Vec<u8>, usize);
+
+/// Encodes `texts` in order with one memo and buffer, handing each result
+/// to `out` as soon as it is built.
+fn encode_run<'t>(
+    texts: impl IntoIterator<Item = &'t [u8]>,
+    keyed: &Hmac<Sha256>,
+    bm25: Bm25,
+    lang: Option<&str>,
+    mut out: impl FnMut(Encoded),
+) {
+    let mut memo = HashMap::new();
+    let mut buf = String::new();
+    for t in texts {
+        let text = String::from_utf8_lossy(t);
+        out(encode(&text, keyed, bm25, lang, &mut memo, &mut buf));
+    }
+}
+
+/// Threads for per-document work: what this machine (or container's CPU
+/// quota: std reads the cgroup limit on Linux) gives, at least 1. Prod's
+/// 0.5 vCPU task gets 1, so it runs the sequential path; a bigger task
+/// spreads a batch without a code change.
+fn workers() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
+}
+
+/// The NIF's own pool, built on first parallel use and kept for the node's
+/// life (so each worker's `re!` regexes are made once, not per call).
+fn pool() -> &'static rayon::ThreadPool {
+    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers())
+            .thread_name(|i| format!("engram-nif-{i}"))
+            .build()
+            .expect("NIF worker pool")
+    })
+}
+
+/// A batch smaller than this stays on the calling thread: the handoff to a
+/// worker costs more than the work.
+const PAR_MIN_BYTES: usize = 64 * 1024;
+
+/// `encode_run` over `workers` contiguous runs of `texts` on the pool, each
+/// with its own memo (dims are a pure function of the token, so the output
+/// is the same), results in input order. Also the sum of the runs' peaks:
+/// a worker's allocations are counted on its own thread (memory.rs), and
+/// summing is the bound when all runs overlap.
+/// ponytail: runs split by count, so one huge text can leave its run the
+/// long pole; split by bytes if batches ever mix sizes that much.
+fn encode_parallel(
+    texts: &[&[u8]],
+    keyed: &Hmac<Sha256>,
+    bm25: Bm25,
+    lang: Option<&str>,
+    workers: usize,
+) -> (Vec<Encoded>, usize) {
+    use rayon::prelude::*;
+    let per = texts.len().div_ceil(workers.max(1)).max(1);
+    let runs: Vec<(Vec<Encoded>, usize)> = pool().install(|| {
+        texts
+            .par_chunks(per)
+            .map(|run| {
+                memory::measured(|| {
+                    let mut out = Vec::with_capacity(run.len());
+                    encode_run(run.iter().copied(), keyed, bm25, lang, |e| out.push(e));
+                    out
+                })
+            })
+            .collect()
+    });
+    let peak = runs.iter().map(|r| r.1).sum();
+    (runs.into_iter().flat_map(|r| r.0).collect(), peak)
+}
+
 #[rustler::nif(schedule = "DirtyCpu")]
 fn encode_documents_nif<'a>(
     env: Env<'a>,
@@ -205,26 +283,30 @@ fn encode_documents_nif<'a>(
     cap: Option<f64>,
 ) -> (Vec<(Binary<'a>, Binary<'a>, usize)>, usize) {
     let bm25 = Bm25 { avgdl, b, cap };
-    memory::measured(|| {
+    let lang = lang.as_deref();
+    let bytes: usize = texts.iter().map(|t| t.len()).sum();
+    let workers = workers().min(texts.len());
+    let packed = |(i, v, n): Encoded| (to_binary(env, &i), to_binary(env, &v), n);
+    let ((out, worker_peak), peak) = memory::measured(|| {
         let keyed = keyed(key.as_slice());
-        let mut memo = HashMap::new();
-        let mut buf = String::new();
-        texts
-            .iter()
-            .map(|t| {
-                let text = String::from_utf8_lossy(t.as_slice());
-                let (i, v, n) = encode(
-                    &text,
-                    &keyed,
-                    bm25,
-                    lang.as_deref(),
-                    &mut memo,
-                    &mut buf,
-                );
-                (to_binary(env, &i), to_binary(env, &v), n)
-            })
-            .collect()
-    })
+        if workers <= 1 || bytes < PAR_MIN_BYTES {
+            // One thread: each vector becomes a BEAM binary as it is built.
+            let mut out = Vec::with_capacity(texts.len());
+            encode_run(
+                texts.iter().map(|t| t.as_slice()),
+                &keyed,
+                bm25,
+                lang,
+                |e| out.push(packed(e)),
+            );
+            (out, 0)
+        } else {
+            let slices: Vec<&[u8]> = texts.iter().map(|t| t.as_slice()).collect();
+            let (encoded, worker_peak) = encode_parallel(&slices, &keyed, bm25, lang, workers);
+            (encoded.into_iter().map(packed).collect(), worker_peak)
+        }
+    });
+    (out, peak + worker_peak)
 }
 
 /// Query vector: distinct tokens, value 1.0 each (Qdrant applies IDF).
@@ -1119,19 +1201,29 @@ mod tests {
         out
     }
 
-    fn encode_batch(
-        texts: &[String],
-        key: &[u8],
-        bm25: Bm25,
-        lang: Option<&str>,
-    ) -> Vec<(Vec<u8>, Vec<u8>, usize)> {
-        let keyed = keyed(key);
-        let mut memo = HashMap::new();
-        let mut buf = String::new();
-        texts
-            .iter()
-            .map(|t| encode(t, &keyed, bm25, lang, &mut memo, &mut buf))
-            .collect()
+    fn encode_batch(texts: &[String], key: &[u8], bm25: Bm25, lang: Option<&str>) -> Vec<Encoded> {
+        let mut out = Vec::new();
+        let texts = texts.iter().map(|t| t.as_bytes());
+        encode_run(texts, &keyed(key), bm25, lang, |e| out.push(e));
+        out
+    }
+
+    // Runs on worker threads give the sequential output, in input order, for
+    // any worker count, and report a peak that covers what they built.
+    #[test]
+    fn parallel_runs_equal_the_sequential_run() {
+        let texts = corpus();
+        let slices: Vec<&[u8]> = texts.iter().map(|t| t.as_bytes()).collect();
+        for lang in [None, Some("en"), Some("de")] {
+            let bm25 = configs()[0].1;
+            let want = encode_batch(&texts, &KEY, bm25, lang);
+            for workers in [1, 2, 3, 7, slices.len() + 5] {
+                let (got, peak) = encode_parallel(&slices, &keyed(&KEY), bm25, lang, workers);
+                assert!(got == want, "{lang:?} x{workers}");
+                let bytes: usize = got.iter().map(|(i, v, _)| i.len() + v.len()).sum();
+                assert!(peak >= bytes, "{peak} < {bytes}");
+            }
+        }
     }
 
     // Generated from the encoder BEFORE the per-word interning rewrite, so
@@ -1146,7 +1238,10 @@ mod tests {
         }
         let want: std::collections::BTreeMap<String, String> =
             serde_json::from_str(&std::fs::read_to_string(GOLDEN).unwrap()).unwrap();
-        assert_eq!(got.len(), (tokenizer::LANGUAGES.len() + 1) * configs().len());
+        assert_eq!(
+            got.len(),
+            (tokenizer::LANGUAGES.len() + 1) * configs().len()
+        );
         for (k, v) in &want {
             assert_eq!(got.get(k), Some(v), "{k}");
         }
@@ -1162,7 +1257,10 @@ mod tests {
             let mut fresh = Hmac::<Sha256>::new_from_slice(&KEY).unwrap();
             fresh.update(t.as_bytes());
             let out = fresh.finalize().into_bytes();
-            assert_eq!(dim(&k, t), u32::from_be_bytes([out[0], out[1], out[2], out[3]]));
+            assert_eq!(
+                dim(&k, t),
+                u32::from_be_bytes([out[0], out[1], out[2], out[3]])
+            );
         }
     }
 
@@ -1184,9 +1282,30 @@ mod tests {
     }
 
     const WORDS: [&str; 24] = [
-        "the", "running", "notes", "vault", "keyword", "index", "search", "läuft",
-        "Straße", "naïve", "embedding", "quickly", "of", "and", "système", "données",
-        "synchronisation", "conflict", "merge", "Москва", "ζωή", "東京タワー", "data", "is",
+        "the",
+        "running",
+        "notes",
+        "vault",
+        "keyword",
+        "index",
+        "search",
+        "läuft",
+        "Straße",
+        "naïve",
+        "embedding",
+        "quickly",
+        "of",
+        "and",
+        "système",
+        "données",
+        "synchronisation",
+        "conflict",
+        "merge",
+        "Москва",
+        "ζωή",
+        "東京タワー",
+        "data",
+        "is",
     ];
 
     fn prose(n: usize) -> String {
@@ -1219,9 +1338,17 @@ mod tests {
     fn markdown(n: usize) -> String {
         generated(n, |i| match i % 6 {
             0 => format!("## Section {i}\n\n"),
-            1 => format!("- [[Note {}]] links to #tag{} and **bold** text\n", i % 300, i % 40),
+            1 => format!(
+                "- [[Note {}]] links to #tag{} and **bold** text\n",
+                i % 300,
+                i % 40
+            ),
             2 => format!("```elixir\ndef f{i}(x), do: x + {i}\n```\n"),
-            3 => format!("> quote about {} and {}\n\n", WORDS[(i % 24) as usize], rng(i) % 999),
+            3 => format!(
+                "> quote about {} and {}\n\n",
+                WORDS[(i % 24) as usize],
+                rng(i) % 999
+            ),
             _ => prose(160),
         })
     }
@@ -1250,13 +1377,23 @@ mod tests {
             ("code 1 MiB", code(1 << 20)),
             ("markdown 1.4 MB", markdown(1_400_000)),
         ] {
-            for (shape, texts) in [("2 KB chunks", chunks(&text)), ("one doc", vec![text.clone()])] {
+            for (shape, texts) in [
+                ("2 KB chunks", chunks(&text)),
+                ("one doc", vec![text.clone()]),
+            ] {
                 let t = std::time::Instant::now();
                 let (out, peak) = memory::measured(|| encode_batch(&texts, &KEY, bm25, Some("en")));
                 let ns = t.elapsed().as_nanos() as f64 / text.len() as f64;
                 assert_eq!(out.len(), texts.len());
                 println!("{name:>16} {shape:>11}: {ns:8.1} ns/byte, peak {peak} bytes");
             }
+            let texts = chunks(&text);
+            let slices: Vec<&[u8]> = texts.iter().map(|t| t.as_bytes()).collect();
+            let t = std::time::Instant::now();
+            let (_, peak) = encode_parallel(&slices, &keyed(&KEY), bm25, Some("en"), workers());
+            let ns = t.elapsed().as_nanos() as f64 / text.len() as f64;
+            let shape = format!("chunks x{}", workers());
+            println!("{name:>16} {shape:>11}: {ns:8.1} ns/byte, peak {peak} bytes (workers)");
         }
     }
 }

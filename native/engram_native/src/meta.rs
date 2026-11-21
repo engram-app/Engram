@@ -296,7 +296,10 @@ mod tests {
             format!("{fence}# Real\n{fence}"),
             format!("# First\n{fence}"),
             format!("{fence}    # indented code\n\n# After"),
-            format!("text\n{}\n```\n# open fence to the end\n", "`#a` ".repeat(40_000)),
+            format!(
+                "text\n{}\n```\n# open fence to the end\n",
+                "`#a` ".repeat(40_000)
+            ),
             format!("{fence}~~~\n# never closed\n{}", "# x\n".repeat(30_000)),
             "no heading at all\n".repeat(10_000),
         ]);
