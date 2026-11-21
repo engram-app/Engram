@@ -6,8 +6,8 @@ defmodule Engram.PromEx.Native do
     * `[:engram, :nif, :call, :stop]`, per call: a call count and summed
       duration, plus per-call duration and input-bytes histograms, tagged by
       `:nif` and `:dirty` (which scheduler ran it). The event also carries
-      native peak bytes; it is not exported (series cost with no reader). Envelope calls that stay inline and write or read
-      format 0 (seal `:none` up to 16 KB, a successful inline open) emit no
+      native peak bytes; it is not exported (series cost with no reader).
+      Envelope calls that stay inline and write or read format 0 (seal `:none` up to 16 KB, a successful inline open) emit no
       event, so the envelope series cover format-1 seals (`dirty="false"`
       for small inline ones) and every dirty seal or open.
     * `[:engram, :nif, :envelope]`, polled: envelope seal/open calls and
@@ -56,6 +56,9 @@ defmodule Engram.PromEx.Native do
       ),
       # Per-call shape: the sum above hides a single huge call (a ~9 MB note
       # in keyword_encode). 1 ms to 60 s; sub-ms calls share the first bucket.
+      # Peep rounds each sample to an integer `_sum`, so sub-ms calls add 0 and
+      # the ms `_sum` under-reads: use the microsecond counter for averages and
+      # these buckets for the per-call max.
       distribution(prefix ++ [:call, :duration, :milliseconds],
         event_name: @call_event,
         measurement: :duration,

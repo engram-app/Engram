@@ -275,6 +275,12 @@ two `:counters.add` cost about 300 ns per call, leaving a 40-byte decrypt
 26% behind `:crypto`. Nothing observable is lost: an inline envelope call
 runs in microseconds (the duration histogram's first bucket is 1 ms) and its
 peak is bounded by its input, so per call those histograms only counted it.
+Every NIF call that does emit (all non-envelope NIFs, and dirty envelope
+calls) now has per-call histograms, `engram_prom_ex_nif_call_duration_milliseconds`
+(1 ms to 60 s) and `engram_prom_ex_nif_call_input_bytes`, labelled `nif` and
+`dirty`, to expose the slowest single call that the totals hide. Envelope
+calls keep the polled `[:engram, :nif, :envelope]` counts for the event-free
+inline path.
 
 No batch decrypt: callers decrypt one field per call (`Crypto.decrypt_*`),
 and with the wrapper at about 0.1 us over the raw NIF, a batch NIF would save
