@@ -223,3 +223,29 @@ pub fn phrase_seq(text: &str, lang: Option<&str>) -> Vec<String> {
         .map(|(_, end)| tokens[end - 1].clone())
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    // The Elixir-side golden set (test/engram/native/keyword_encode_test.exs)
+    // checked here too, so a tokenizer change is proven by `cargo test`.
+    #[test]
+    fn tokens_match_the_golden_set() {
+        let golden: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../test/support/fixtures/keyword_tokens_golden.json"
+        ))
+        .unwrap();
+        for c in golden.as_array().unwrap() {
+            let text = c["text"].as_str().unwrap();
+            let lang = c["lang"].as_str();
+            let want: Vec<&str> = c["tokens"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t.as_str().unwrap())
+                .collect();
+            let (got, raw) = super::tokens_with_len(text, lang);
+            assert_eq!(got, want, "{text:?} {lang:?}");
+            assert_eq!(raw as u64, c["raw_len"].as_u64().unwrap(), "{text:?} {lang:?}");
+        }
+    }
+}
