@@ -153,11 +153,27 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   SELECT id, vault_id, user_id FROM w WHERE kind = 'folder' AND deleted_at IS NULL
   """
 
+  # The live folder rows at a marker's path (`m`, the marker): a key lookup
+  # on `folders_full_path (vault_id, full_path_hmac) WHERE full_path_hmac IS
+  # NOT NULL AND deleted_at IS NULL`, O(1) a marker (`deleted_at IS NULL`
+  # stays on the scan to match that predicate). Its callers check the tenant,
+  # `explicit` (and `explicit_seq`) above the OFFSET 0 fence: on the scan,
+  # `explicit` qualifies the partial `folders_explicit_user_vault (user_id,
+  # vault_id)`, which prod's planner chose, reading every explicit folder of
+  # the vault per marker (prod EXPLAIN, 2026-11-21). Shared by statements 3
+  # and 4.
+  @folders_at_marker """
+  SELECT id, user_id, explicit, explicit_seq FROM folders
+  WHERE vault_id = m.vault_id AND full_path_hmac = m.folder_hmac AND deleted_at IS NULL
+  OFFSET 0
+  """
+
   # Statement 3: of the locked vaults (`$1` ids, `$2` their owners, paired by
   # position), those holding a live marker with no live explicit folder row at
   # its path hash, and how many such markers each has. Vault-wide: a
   # `(user_id, vault_id)` range of `notes_user_vault_folder_marker`, then one
-  # vault-bound folder probe a marker: O(the vault's markers), once a window.
+  # folder key lookup a marker (`@folders_at_marker`): O(the vault's
+  # markers), once a window.
   # A scalar subquery, not NOT EXISTS: Postgres never pulls it up into a
   # join, so it stays one parameterized probe per marker. As an anti join
   # the planner could hash every explicit folder row of every tenant
@@ -169,9 +185,8 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   JOIN notes AS m
     ON m.user_id = v.user_id AND m.vault_id = v.id AND m.kind = 'folder' AND m.deleted_at IS NULL
   WHERE (
-    SELECT 1 FROM folders AS f
-    WHERE f.user_id = m.user_id AND f.vault_id = m.vault_id
-      AND f.full_path_hmac = m.folder_hmac AND f.deleted_at IS NULL AND f.explicit
+    SELECT 1 FROM (#{@folders_at_marker}) AS f
+    WHERE f.user_id = m.user_id AND f.explicit
     LIMIT 1) IS NULL
   GROUP BY m.vault_id
   """
@@ -182,9 +197,9 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   # locking read returns the row's latest version: still a live marker of
   # vault `$2`, owner `$3`), each with the id of its live explicit folder row
   # still to stamp. With the marker filters on the scan the planner read
-  # `notes_folder_ref` by vault (every note of the vault). One keyed probe a
-  # marker: `folders_full_path (vault_id, full_path_hmac)`, the marker's
-  # tenant re-checked on the row, so O(markers in the window). An ARRAY
+  # `notes_folder_ref` by vault (every note of the vault). One key lookup a
+  # marker (`@folders_at_marker`), the marker's tenant re-checked on the row,
+  # so O(markers in the window). An ARRAY
   # sublink is never pulled up into a join, so it stays a probe a marker;
   # the CTE locks the markers before any probe runs.
   @markers_sql """
@@ -195,10 +210,8 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
     FOR UPDATE OF n SKIP LOCKED
   )
   SELECT m.id, m.user_id, m.vault_id, ARRAY(
-    SELECT f.id FROM folders AS f
-    WHERE f.user_id = m.user_id AND f.vault_id = m.vault_id
-      AND f.full_path_hmac = m.folder_hmac
-      AND f.deleted_at IS NULL AND f.explicit AND f.explicit_seq IS NULL)
+    SELECT f.id FROM (#{@folders_at_marker}) AS f
+    WHERE f.user_id = m.user_id AND f.explicit AND f.explicit_seq IS NULL)
   FROM m
   WHERE m.kind = 'folder' AND m.deleted_at IS NULL
     AND m.user_id = ANY($3) AND m.vault_id = ANY($2)

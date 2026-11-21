@@ -498,6 +498,76 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
     end
   end
 
+  # #2678: the per-marker folder probe (the markers lock and the unmatched
+  # check, `@folders_at_marker`) is a key lookup on `folders_full_path
+  # (vault_id, full_path_hmac)`, never a read of the vault's explicit
+  # folders: prod's planner chose `folders_explicit_user_vault (user_id,
+  # vault_id)` and filtered the hash, every explicit folder of the vault per
+  # marker. A vault holding 3,000 explicit folders among 40 tenants, `folders`
+  # pinned, as analyzed and at the 2639 n_distinct shapes; custom and
+  # generic, nested loops on and off.
+  test "plans: the marker probe is a folders_full_path key lookup", %{user: u, vault: v} do
+    for chunk <- Enum.chunk_every(1..3000, 500),
+        do: {:ok, _} = Folders.create_markers(u, v, Enum.map(chunk, &"P#{&1}"))
+
+    for _ <- 1..40 do
+      {:ok, other} = Engram.Fixtures.user_with_dek_fixture()
+      ov = insert(:vault, user: other)
+      {:ok, _} = Folders.create_markers(other, ov, Enum.map(1..25, &"O#{&1}"))
+    end
+
+    Repo.query!("ANALYZE notes")
+    QueryPlan.fresh!("folders")
+
+    %{rows: mids} =
+      Repo.query!(
+        "SELECT id FROM notes WHERE vault_id = $1 AND kind = 'folder' ORDER BY id LIMIT 200",
+        [Ecto.UUID.dump!(v.id)]
+      )
+
+    vaults = [Ecto.UUID.dump!(v.id)]
+    owners = [Ecto.UUID.dump!(u.id)]
+
+    for shape <- [:analyzed, {40, 40}, {-1, 40}] do
+      with {users, vaults_nd} <- shape, do: QueryPlan.folders_tenant_shape!(users, vaults_nd)
+
+      for {name, sql, params} <- [
+            {"markers lock", FolderMarkerDelete.markers_sql(),
+             [List.flatten(mids), vaults, owners]},
+            {"unmatched", FolderMarkerDelete.unmatched_sql(), [vaults, owners]}
+          ],
+          nestloop <- ["on", "off"] do
+        Repo.query!("SET LOCAL enable_nestloop = #{nestloop}")
+
+        %{custom: custom, generic: generic} =
+          QueryPlan.rls_plans(u.id, sql, params, role: "engram_maintenance", analyze: false)
+
+        for {kind, plan} <- [custom: custom, generic: generic] do
+          msg = "#{inspect(shape)}, #{name}, #{kind} plan, enable_nestloop #{nestloop}\n#{plan}"
+
+          reads =
+            Regex.scan(
+              ~r/(?:Index (?:Only )?Scan using|Bitmap Index Scan on) (folders\w*)[^\n]*\n([^\n]*)/,
+              plan,
+              capture: :all_but_first
+            )
+
+          assert reads != [], "no folders read\n" <> msg
+
+          for [index, next] <- reads,
+              do:
+                assert(
+                  index == "folders_full_path" and next =~ ~r/^\s*Index Cond: / and
+                    next =~ "vault_id =" and next =~ "full_path_hmac =",
+                  "probe reads #{index}: #{next}\n" <> msg
+                )
+        end
+      end
+
+      Repo.query!("SET LOCAL enable_nestloop = on")
+    end
+  end
+
   # done?/2's per-vault probe runs on every folder op (PathHashStop): planned
   # as the app role under RLS and as the fleet role, it must be one probe of
   # the marker index, never a scan.
