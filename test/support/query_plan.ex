@@ -347,6 +347,111 @@ defmodule Engram.QueryPlan do
   end
 
   @doc """
+  Prod's statistics shape on `folders`: `n_distinct` of `user_id` and
+  `vault_id` set (40 tenants: a tenant or a vault is a fraction of the
+  table; -1: every row looks unique), then ANALYZE. Callers pin the table
+  first (`fresh!/1`), so no earlier test's dead rows decide the plan. The
+  visibility map is left as the inserts left it, so a partial index wins on
+  its keys, not on an index-only read. Inside the test's transaction,
+  rolled back with it.
+  """
+  @spec folders_tenant_shape!(integer(), integer()) :: :ok
+  def folders_tenant_shape!(users, vaults) do
+    for {col, n} <- [user_id: users, vault_id: vaults],
+        do: Repo.query!("ALTER TABLE folders ALTER COLUMN #{col} SET (n_distinct = #{n})")
+
+    Repo.query!("ANALYZE folders")
+    :ok
+  end
+
+  @doc """
+  Dead explicit entries in the folder indexes: `n` explicit folder rows of
+  another tenant, inserted and rolled back (a savepoint inside the test's
+  transaction). The sandbox never vacuums them, as CI's runs never do. A
+  partial index holding dead entries is costed as a read of all its pages.
+  """
+  @spec dead_explicit_folders!(pos_integer()) :: :ok
+  def dead_explicit_folders!(n) do
+    other = Engram.Factory.insert(:user)
+    vault = Engram.Factory.insert(:vault, user: other)
+
+    Repo.transaction(fn ->
+      Repo.query!(
+        "INSERT INTO folders (vault_id, user_id, name_ciphertext, name_nonce, name_hmac, " <>
+          "dek_version, explicit) SELECT $1, $2, '\\x00', '\\x00', " <>
+          "decode(md5(i::text), 'hex'), 1, true FROM generate_series(1, $3) i",
+        [Ecto.UUID.dump!(vault.id), Ecto.UUID.dump!(other.id), n]
+      )
+
+      Repo.rollback(:dead)
+    end)
+
+    :ok
+  end
+
+  @doc """
+  Every read of notes is keyed: no seq scan, and every notes index read
+  (index, index-only or bitmap index scan, a BitmapAnd arm included) has an
+  Index Cond naming its index's leading column: `user_id` (and `vault_id`)
+  on a `notes_user_*` index, `vault_id` on any other but `notes_pkey`, `id`
+  on `notes_pkey`. A partial index read with no condition is every
+  account's rows of that index; a `(user_id, vault_id, ...)` index read by
+  `vault_id` alone is a skip scan over every tenant.
+  """
+  @spec assert_notes_reads_bound!(String.t(), String.t()) :: true
+  def assert_notes_reads_bound!(plan, msg \\ "") do
+    full = msg <> "\n" <> plan
+    refute plan =~ "Seq Scan on notes", "seq scan on notes\n" <> full
+
+    for [index, next] <-
+          Regex.scan(
+            ~r/(?:Index (?:Only )?Scan using|Bitmap Index Scan on) (notes_\w+)[^\n]*\n([^\n]*)/,
+            plan,
+            capture: :all_but_first
+          ) do
+      assert next =~ ~r/^\s*Index Cond: /, "notes read with no condition: #{index}\n" <> full
+
+      bound? =
+        cond do
+          index == "notes_pkey" ->
+            next =~ ~r/\bid = /
+
+          String.starts_with?(index, "notes_user_") ->
+            next =~ "user_id =" and next =~ "vault_id ="
+
+          true ->
+            next =~ "vault_id ="
+        end
+
+      assert bound?, "notes read not bound by its leading key: #{index} #{next}\n" <> full
+    end
+
+    true
+  end
+
+  @doc """
+  Every `folders_explicit_user_vault` node in `plan` (index, index-only or
+  bitmap index scan) has an Index Cond naming both `user_id` and `vault_id`.
+  The index holds every tenant's explicit rows: read with no condition, or
+  with `vault_id` alone (a skip scan), it walks the fleet.
+  """
+  @spec assert_explicit_index_bound!(String.t(), String.t()) :: true
+  def assert_explicit_index_bound!(plan, msg \\ "") do
+    for [next] <-
+          Regex.scan(
+            ~r/(?:Scan using folders_explicit_user_vault on folders\b|Bitmap Index Scan on folders_explicit_user_vault)[^\n]*\n([^\n]*)/,
+            plan,
+            capture: :all_but_first
+          ) do
+      assert next =~ ~r/^\s*Index Cond: / and next =~ "user_id =" and next =~ "vault_id =",
+             "folders_explicit_user_vault not bound by user_id and vault_id: " <>
+               next <> "\n" <> msg <> "\n" <> plan
+    end
+
+    true
+  end
+
+  @doc """
   Every read of folders is bound to the vault: each index scan, index-only
   scan and bitmap index scan (a BitmapAnd/BitmapOr arm included) on a
   folders index has a condition naming `vault_id`; `folders_user`

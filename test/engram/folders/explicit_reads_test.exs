@@ -103,7 +103,7 @@ defmodule Engram.Folders.ExplicitReadsTest do
 
   # The listing's new statement as the app role, under RLS: the partial
   # index, never a read of the vault's or the tenant's folders. At the
-  # 40-tenant shape (`tenant_shape!/0`) the policy's tenant is costed as an
+  # 40-tenant shape (`QueryPlan.folders_tenant_shape!/2`) the policy's tenant is costed as an
   # average tenant, and with no bound `user_id` the custom plan read
   # `folders_user`, every folder of the tenant
   # (docs/context/notes-generic-plan-mis-pick.md, third instance).
@@ -116,18 +116,6 @@ defmodule Engram.Folders.ExplicitReadsTest do
     end)
   end
 
-  # Prod's statistics shape: 40 tenants, so a tenant or a vault is a fraction
-  # of `folders`. The physical leftovers of earlier tests are kept (no
-  # CLUSTER): the plan must hold on them too. The visibility map is left as
-  # the inserts left it, so the partial index wins on its keys, not on an
-  # index-only read a restore or CLUSTER would take away.
-  defp tenant_shape!(users, vaults) do
-    for {col, n} <- [user_id: users, vault_id: vaults],
-        do: Repo.query!("ALTER TABLE folders ALTER COLUMN #{col} SET (n_distinct = #{n})")
-
-    Repo.query!("ANALYZE folders")
-  end
-
   # The explicit read (the statement of `fun` that `pick` matches) is bound
   # to the vault in its custom AND its forced generic plan, at the 40-tenant
   # statistics shape, at one where every tenant looks unique, and with dead
@@ -137,13 +125,19 @@ defmodule Engram.Folders.ExplicitReadsTest do
   # folder of the tenant: #2639's CI). With `folders_explicit_user_vault`
   # it reads one vault. `scope` picks the part of the plan to check (the
   # counts statement's explicit leg).
+  #
+  # Pinned (#2678): `folders` is rewritten and analyzed from this test's rows
+  # alone first (`QueryPlan.fresh!/1`), so dead rows an earlier test in the
+  # partition left (a rolled-back insert keeps its pages) cannot decide the
+  # plan; the dead-entries shape adds its own.
   defp assert_vault_bound_plans!(user, fun, pick, scope \\ & &1) do
     me = self()
     other_vault_folders!(user)
+    QueryPlan.fresh!("folders")
 
     for {users, vaults, dead} <- [{40, 40, 0}, {-1, 40, 0}, {40, 40, 1500}] do
-      if dead > 0, do: dead_explicit_rows!(dead)
-      tenant_shape!(users, vaults)
+      if dead > 0, do: QueryPlan.dead_explicit_folders!(dead)
+      QueryPlan.folders_tenant_shape!(users, vaults)
       {_, queries} = QueryRecorder.record(fun)
       [{sql, params}] = for %{sql: s, params: p, pid: ^me} <- queries, pick.(s), do: {s, p}
       %{custom: custom, generic: generic} = QueryPlan.rls_plans(user.id, sql, params)
@@ -175,25 +169,6 @@ defmodule Engram.Folders.ExplicitReadsTest do
       ])
 
     assert n >= 200, "precondition: the other vault holds #{n} folder rows"
-  end
-
-  # Dead explicit entries in the folder indexes: `n` explicit folder rows of
-  # another tenant, inserted and rolled back (a savepoint inside the test's
-  # transaction). The sandbox never vacuums them, as CI's runs never do.
-  defp dead_explicit_rows!(n) do
-    other = insert(:user)
-    vault = insert(:vault, user: other)
-
-    Repo.transaction(fn ->
-      Repo.query!(
-        "INSERT INTO folders (vault_id, user_id, name_ciphertext, name_nonce, name_hmac, " <>
-          "dek_version, explicit) SELECT $1, $2, '\\x00', '\\x00', " <>
-          "decode(md5(i::text), 'hex'), 1, true FROM generate_series(1, $3) i",
-        [Ecto.UUID.dump!(vault.id), Ecto.UUID.dump!(other.id), n]
-      )
-
-      Repo.rollback(:dead)
-    end)
   end
 
   # On a failing plan test: the plan with cost estimates, and the statistics
@@ -766,35 +741,91 @@ defmodule Engram.Folders.ExplicitReadsTest do
            )
   end
 
-  # The re-review: the walk's statements as the fleet role, on a realistic
-  # vault (notes, markers, explicit rows; ANALYZE): index probes, no scan.
+  # The walk's statements as the fleet role (#2678 review H1, M1). Pinned so
+  # the partition's leftovers cannot decide it: first a 20-folder vault with
+  # `folders` rewritten and analyzed alone (`QueryPlan.fresh!/1`), then a
+  # 2,000-folder vault among 40 other tenants, as analyzed and at the 2639
+  # n_distinct shapes. Every read keyed: the window's folder rows by primary
+  # key (an owner or vault bound on that scan lets the planner read
+  # `folders_user`, every folder of the tenant, per window), the vaults by
+  # primary key, one marker probe a row.
   test "plans: the reconcile's statements as engram_maintenance", %{user: u, vault: v} do
-    for i <- 1..200 do
-      {:ok, _} =
-        Notes.upsert_note(u, v, %{"path" => "F#{rem(i, 20)}/n#{i}.md", "content" => "x"},
-          actor: "api"
-        )
+    {:ok, _} = Notes.create_folder_markers(u, v, Enum.map(1..20, &"M#{&1}"))
+    Repo.query!("ANALYZE notes")
+    QueryPlan.fresh!("folders")
+    assert_reconcile_plans!(u, v, "20 folders, pinned")
+
+    for chunk <- Enum.chunk_every(21..2000, 500),
+        do: {:ok, _} = Notes.create_folder_markers(u, v, Enum.map(chunk, &"M#{&1}"))
+
+    for _ <- 1..40 do
+      {:ok, other} = Engram.Fixtures.user_with_dek_fixture()
+      {:ok, _} = Notes.create_folder_markers(other, insert(:vault, user: other), ["X", "Y", "Z"])
     end
 
-    {:ok, _} = Notes.create_folder_markers(u, v, Enum.map(1..10, &"M#{&1}"))
-    for t <- ["notes", "folders", "vaults"], do: Repo.query!("ANALYZE #{t}")
+    Repo.query!("ANALYZE notes")
+    QueryPlan.fresh!("folders")
+    assert_reconcile_plans!(u, v, "2,000 folders, pinned")
 
+    for {users, vaults} <- [{40, 40}, {-1, 40}] do
+      QueryPlan.folders_tenant_shape!(users, vaults)
+      assert_reconcile_plans!(u, v, "2,000 folders, n_distinct #{users}/#{vaults}")
+    end
+  end
+
+  defp reconcile_plans(user, sql, params, nestloop) do
+    Repo.query!("SET LOCAL enable_nestloop = #{nestloop}")
+
+    %{custom: custom, generic: generic} =
+      QueryPlan.rls_plans(user.id, sql, params, role: "engram_maintenance", analyze: false)
+
+    Repo.query!("SET LOCAL enable_nestloop = on")
+    [custom: custom, generic: generic]
+  end
+
+  defp assert_reconcile_plans!(user, vault, label) do
     ids =
-      u |> FolderRows.tree() |> Map.values() |> Enum.map(&Ecto.UUID.dump!(&1.id)) |> Enum.take(20)
+      Repo.query!("SELECT id FROM folders WHERE vault_id = $1 ORDER BY id LIMIT 200", [
+        Ecto.UUID.dump!(vault.id)
+      ]).rows
+      |> List.flatten()
 
-    vaults = [Ecto.UUID.dump!(v.id)]
+    vaults = [Ecto.UUID.dump!(vault.id)]
 
-    for {sql, params} <- [
-          {ExplicitFolderReconcile.lock_vaults_sql(), [ids]},
-          {ExplicitFolderReconcile.clear_sql(), [ids, vaults]},
-          {ExplicitFolderReconcile.left_sql(), [ids]}
+    for {name, sql, params} <- [
+          {"window vaults", ExplicitFolderReconcile.window_vaults_sql(), [ids]},
+          {"vault lock", Engram.DataMigrations.VaultLock.sql(), [vaults]},
+          {"stale", ExplicitFolderReconcile.stale_sql(), [ids, vaults]},
+          {"clear", ExplicitFolderReconcile.clear_sql(), [ids]},
+          {"left", ExplicitFolderReconcile.left_sql(), [ids]}
         ] do
-      %{custom: custom, generic: generic} =
-        QueryPlan.rls_plans(u.id, sql, params, role: "engram_maintenance")
+      # Nested loops off too: a planner that would rather hash must have no
+      # unkeyed side to hash (an anti join's notes side, a whole folders read).
+      for nestloop <- ["on", "off"],
+          {kind, plan} <- reconcile_plans(user, sql, params, nestloop) do
+        msg = "#{label}, #{name}, #{kind} plan, enable_nestloop #{nestloop}"
+        refute plan =~ ~r/Seq Scan on (notes|folders|vaults)/, msg <> "\n" <> plan
+        QueryPlan.assert_notes_reads_bound!(plan, msg)
 
-      for plan <- [custom, generic] do
-        refute plan =~ ~r/Seq Scan on (notes|folders|vaults)/, plan
-        if sql =~ "kind = 'folder'", do: assert(plan =~ "notes_user_vault_folder_marker", plan)
+        for [index, next] <-
+              Regex.scan(
+                ~r/(?:Index (?:Only )?Scan using|Bitmap Index Scan on) ((?:folders|vaults)\w*)[^\n]*\n([^\n]*)/,
+                plan,
+                capture: :all_but_first
+              ) do
+          # At the pinned 20-folder shape the planner is told the table is
+          # one vault, so a skip scan of `folders_vault_id_id_key` by `id`
+          # ties the primary key (a CI-stats artifact; the 2,000-folder
+          # shapes require the primary key).
+          allowed =
+            if String.starts_with?(label, "20 folders"),
+              do: ["folders_pkey", "folders_vault_id_id_key", "vaults_pkey"],
+              else: ["folders_pkey", "vaults_pkey"]
+
+          assert index in allowed and
+                   next =~ ~r/^\s*Index Cond: \(\(?(?:\w+\.)?id = /,
+                 "#{msg}: #{index} read, not a primary-key probe: #{next}\n#{plan}"
+        end
       end
     end
   end
