@@ -125,9 +125,15 @@ defmodule Engram.Folders.ExplicitReadsTest do
   # folder of the tenant: #2639's CI). With `folders_explicit_user_vault`
   # it reads one vault. `scope` picks the part of the plan to check (the
   # counts statement's explicit leg).
+  #
+  # Pinned (#2678): `folders` is rewritten and analyzed from this test's rows
+  # alone first (`QueryPlan.fresh!/1`), so dead rows an earlier test in the
+  # partition left (a rolled-back insert keeps its pages) cannot decide the
+  # plan; the dead-entries shape adds its own.
   defp assert_vault_bound_plans!(user, fun, pick, scope \\ & &1) do
     me = self()
     other_vault_folders!(user)
+    QueryPlan.fresh!("folders")
 
     for {users, vaults, dead} <- [{40, 40, 0}, {-1, 40, 0}, {40, 40, 1500}] do
       if dead > 0, do: QueryPlan.dead_explicit_folders!(dead)

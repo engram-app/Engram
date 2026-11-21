@@ -493,8 +493,17 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
             capture: :all_but_first
           ),
         not (node =~ "folders_pkey") do
-      assert lines =~ "user_id =" and lines =~ "vault_id =",
-             "folders read not bound by user_id and vault_id: " <> node <> "\n" <> full
+      if node =~ "folders_full_path" do
+        # The per-marker key lookup (`@folders_at_marker`): vault and path
+        # hash on the index, the tenant re-checked above its fence.
+        assert lines =~ "vault_id =" and lines =~ "full_path_hmac =",
+               "marker probe not keyed by vault_id and full_path_hmac: " <> node <> "\n" <> full
+
+        assert full =~ "user_id = m.user_id", "marker probe without its tenant check\n" <> full
+      else
+        assert lines =~ "user_id =" and lines =~ "vault_id =",
+               "folders read not bound by user_id and vault_id: " <> node <> "\n" <> full
+      end
     end
   end
 

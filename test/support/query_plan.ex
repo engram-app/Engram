@@ -349,11 +349,11 @@ defmodule Engram.QueryPlan do
   @doc """
   Prod's statistics shape on `folders`: `n_distinct` of `user_id` and
   `vault_id` set (40 tenants: a tenant or a vault is a fraction of the
-  table; -1: every row looks unique), then ANALYZE. The physical leftovers
-  of earlier tests are kept (no CLUSTER), and the visibility map is left as
-  the inserts left it, so a partial index wins on its keys, not on an
-  index-only read a restore or CLUSTER would take away. Inside the test's
-  transaction, rolled back with it.
+  table; -1: every row looks unique), then ANALYZE. Callers pin the table
+  first (`fresh!/1`), so no earlier test's dead rows decide the plan. The
+  visibility map is left as the inserts left it, so a partial index wins on
+  its keys, not on an index-only read. Inside the test's transaction,
+  rolled back with it.
   """
   @spec folders_tenant_shape!(integer(), integer()) :: :ok
   def folders_tenant_shape!(users, vaults) do
