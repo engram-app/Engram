@@ -601,6 +601,18 @@ defmodule Engram.Crypto do
   end
 
   @doc """
+  `maybe_decrypt_note_fields/2` for every field but the body: `content` stays
+  nil and `content_ciphertext` is kept, so a caller that only needs the row's
+  path, title and tags does not decrypt a body of any size.
+  """
+  @spec maybe_decrypt_note_meta(Engram.Notes.Note.t(), User.t()) ::
+          {:ok, Engram.Notes.Note.t()} | {:error, term()}
+  def maybe_decrypt_note_meta(%Engram.Notes.Note{} = note, %User{} = user) do
+    with {:ok, decrypted} <- maybe_decrypt_note_fields(%{note | content_ciphertext: nil}, user),
+         do: {:ok, %{decrypted | content_ciphertext: note.content_ciphertext}}
+  end
+
+  @doc """
   Decrypts a note's encrypted fields WITHOUT the read-boundary UTF-8 scrub.
 
   Internal — only the #739 backfill (`Engram.Notes.Utf8Backfill`) uses this, to
