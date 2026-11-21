@@ -63,4 +63,36 @@ defmodule Engram.PromEx.NativeTest do
 
     assert [%Polling{}, %Polling{}] = Native.polling_metrics(opts)
   end
+
+  # A nif name no real call uses, so concurrent tests cannot move its series.
+  test "a call event records one duration and one input-bytes sample per nif and dirty" do
+    :telemetry.execute(
+      [:engram, :nif, :call, :stop],
+      %{
+        duration: System.convert_time_unit(2_000, :millisecond, :native),
+        native_peak_bytes: 0,
+        input_bytes: 5_000_000
+      },
+      %{nif: :histogram_probe, dirty: true}
+    )
+
+    body = Engram.PromEx |> PromEx.get_metrics() |> IO.iodata_to_binary()
+
+    for {name, sum} <- [
+          {"engram_prom_ex_nif_call_duration_milliseconds", 2_000},
+          {"engram_prom_ex_nif_call_input_bytes", 5_000_000}
+        ] do
+      series = sample_lines(body, name, "histogram_probe")
+      assert [1] = for({"_count", v} <- series, do: round(v))
+      assert [^sum] = for({"_sum", v} <- series, do: round(v))
+    end
+  end
+
+  # `[{suffix, value}]` for the dirty="true" series of one nif.
+  defp sample_lines(body, name, nif) do
+    for line <- String.split(body, "\n"),
+        [_, suffix, labels, v] <- [Regex.run(~r/^#{name}(_count|_sum)\{(.*)\} (\S+)$/, line)],
+        labels =~ ~s(nif="#{nif}") and labels =~ ~s(dirty="true"),
+        do: {suffix, v |> Float.parse() |> elem(0)}
+  end
 end
