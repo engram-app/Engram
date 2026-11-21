@@ -196,10 +196,10 @@ defmodule Engram.CacheEvictionTriggersTest do
     %{rows: [[id]]} =
       sql(
         """
-        INSERT INTO notes (user_id, vault_id, path_hmac, mtime, created_at, updated_at, seq,
+        INSERT INTO notes (user_id, vault_id, path_hmac, mtime_at, created_at, updated_at, seq,
                            folder_ciphertext, folder_nonce, folder_hmac,
                            title_ciphertext, tags_ciphertext)
-        VALUES ($1, $2, $3, 1.0, now(), now(), 1, '\\x00', '\\x00', '\\x00', '\\x00',
+        VALUES ($1, $2, $3, to_timestamp(1), now(), now(), 1, '\\x00', '\\x00', '\\x00', '\\x00',
                 '\\x00')
         RETURNING id
         """,
@@ -216,9 +216,12 @@ defmodule Engram.CacheEvictionTriggersTest do
       assert_receive {:notification, _, _, "note_counts_changed", ^user_id}, 1_000
       flush()
 
-      sql("UPDATE notes SET version = version + 1, seq = seq + 1, mtime = 2.0 WHERE id = $1", [
-        note_id
-      ])
+      sql(
+        "UPDATE notes SET version = version + 1, seq = seq + 1, mtime_at = now() WHERE id = $1",
+        [
+          note_id
+        ]
+      )
 
       refute_receive {:notification, _, _, "note_counts_changed", _}, 300
 

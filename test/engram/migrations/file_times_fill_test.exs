@@ -19,7 +19,18 @@ defmodule Engram.Migrations.FileTimesFillTest do
     :ok
   end
 
+  # Step (c) dropped the double columns; this migration runs before that
+  # drop in every database. Re-add them inside the test's sandbox
+  # transaction (rolled back with it) so the fill still runs as it does at
+  # its own boot.
   setup do
+    for sql <- [
+          "ALTER TABLE notes ADD COLUMN IF NOT EXISTS mtime float8, ADD COLUMN IF NOT EXISTS ctime float8",
+          "ALTER TABLE attachments ADD COLUMN IF NOT EXISTS mtime float8",
+          "ALTER TABLE attachment_uploads ADD COLUMN IF NOT EXISTS mtime float8"
+        ],
+        do: Repo.query!(sql)
+
     {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
     %{user: user, vault: insert(:vault, user: user)}
   end

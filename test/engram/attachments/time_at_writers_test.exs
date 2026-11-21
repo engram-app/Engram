@@ -26,13 +26,12 @@ defmodule Engram.Attachments.TimeAtWritersTest do
         "mtime" => mtime
       })
 
-  # Every row's `{mtime double, mtime_at}`, by raw SQL: the schema no
-  # longer maps the double column.
+  # Every row's `mtime_at`.
   defp rows(ctx, table \\ "attachments") do
-    Repo.query!("SELECT mtime, mtime_at FROM #{table} WHERE vault_id = $1", [
+    Repo.query!("SELECT mtime_at FROM #{table} WHERE vault_id = $1", [
       Ecto.UUID.dump!(ctx.vault.id)
     ]).rows
-    |> Enum.map(fn [m, at] -> {m, at} end)
+    |> Enum.map(fn [at] -> at end)
   end
 
   test "an upload stores the double as sent and the timestamp normalized", ctx do
@@ -40,14 +39,14 @@ defmodule Engram.Attachments.TimeAtWritersTest do
     {:ok, _} = put(ctx, "ms.png", 1_776_072_500_928.0)
 
     assert rows(ctx) == [
-             {nil, ~U[2026-04-13 09:28:20.928000Z]},
-             {nil, ~U[2026-04-13 09:28:20.928000Z]}
+             ~U[2026-04-13 09:28:20.928000Z],
+             ~U[2026-04-13 09:28:20.928000Z]
            ]
   end
 
   test "the plugin's 0 for an unknown time is the epoch, served as 0", ctx do
     {:ok, _} = put(ctx, "z.png", 0)
-    assert rows(ctx) == [{nil, ~U[1970-01-01 00:00:00.000000Z]}]
+    assert rows(ctx) == [~U[1970-01-01 00:00:00.000000Z]]
     {:ok, att} = Attachments.get_attachment(ctx.user, ctx.vault, "z.png")
     assert FileTime.mtime(att) === 0.0
   end
@@ -62,7 +61,7 @@ defmodule Engram.Attachments.TimeAtWritersTest do
     end)
 
     assert {:ok, _} = Attachments.move_attachment(ctx.user, ctx.vault, "old.png", "new.png")
-    assert Enum.uniq(rows(ctx)) == [{nil, nil}]
+    assert Enum.uniq(rows(ctx)) == [nil]
   end
 
   test "a move's tombstone, a delete and a restore keep the timestamp with the double", ctx do
@@ -74,7 +73,7 @@ defmodule Engram.Attachments.TimeAtWritersTest do
 
     rows = rows(ctx)
     assert length(rows) >= 2
-    assert Enum.uniq(rows) == [{nil, ~U[2026-04-13 09:28:20.928000Z]}]
+    assert Enum.uniq(rows) == [~U[2026-04-13 09:28:20.928000Z]]
   end
 
   test "a chunked upload writes the session's and the attachment's timestamp", ctx do
@@ -95,7 +94,7 @@ defmodule Engram.Attachments.TimeAtWritersTest do
     assert att.mtime_at == ~U[2026-04-13 09:28:20.928000Z]
 
     assert Enum.uniq(rows(ctx) ++ rows(ctx, "attachment_uploads")) == [
-             {nil, ~U[2026-04-13 09:28:20.928000Z]}
+             ~U[2026-04-13 09:28:20.928000Z]
            ]
   end
 end

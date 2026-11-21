@@ -105,7 +105,7 @@ defmodule Engram.Notes.NoteSplitTest do
     refute edited["b_content"] == before["b_content"]
 
     %{num_rows: 1} =
-      Repo.query!("UPDATE notes SET mtime = 42 WHERE id = $1", [Ecto.UUID.dump!(note.id)])
+      Repo.query!("UPDATE notes SET mtime_at = now() WHERE id = $1", [Ecto.UUID.dump!(note.id)])
 
     assert row(note.id)["b_xmin"] == edited["b_xmin"]
   end
