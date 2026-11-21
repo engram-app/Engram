@@ -195,12 +195,12 @@ defmodule Engram.LogsPersistPolicyTest do
     end
   end
 
-  # SaaS switch to stop writing `client_logs` rows (the lines still reach the
-  # server log pipeline). Default off; self-host ignores it.
-  # SaaS switch to stop writing `client_logs` rows (the lines still reach
-  # Loki). CI and self-host (`:client_logs_persist_all` true, the one place
-  # that decides "CI or self-host") always write: the e2e oracle and
-  # self-host operators read `GET /api/logs`.
+  # SaaS stops writing `client_logs` rows by default (the lines still reach
+  # Loki); a `client_logs_stop_writes` DB override beats the default, so ops
+  # can turn writes back on without a deploy. CI and self-host
+  # (`:client_logs_persist_all` true, the one place that decides "CI or
+  # self-host") always write: the e2e oracle and self-host operators read
+  # `GET /api/logs`.
   describe "client_logs_stop_writes" do
     import ExUnit.CaptureLog
 
@@ -210,17 +210,8 @@ defmodule Engram.LogsPersistPolicyTest do
 
     defp saas!, do: Application.put_env(:engram, :client_logs_persist_all, false)
 
-    test "SaaS, switch off: rows are written", %{user: user} do
+    test "SaaS default: no row is written, the line still reaches Loki", %{user: user} do
       saas!()
-      Engram.ServiceConfig.put_override(:client_logs_stop_writes, false)
-
-      assert {:ok, 1} = Logs.insert_logs(user, [line("warn", "kept")], nil)
-      assert stored(user) == ["kept"]
-    end
-
-    test "SaaS, switch on: no row is written, the line is still re-emitted", %{user: user} do
-      saas!()
-      Engram.ServiceConfig.put_override(:client_logs_stop_writes, true)
 
       log =
         capture_log(fn ->
@@ -231,7 +222,28 @@ defmodule Engram.LogsPersistPolicyTest do
       assert log =~ "not stored"
     end
 
-    test "CI and self-host: the switch is ignored, rows are written", %{user: user} do
+    test "SaaS, override false: writes are restored", %{user: user} do
+      saas!()
+      Engram.ServiceConfig.put_override(:client_logs_stop_writes, false)
+
+      assert {:ok, 1} = Logs.insert_logs(user, [line("warn", "kept")], nil)
+      assert stored(user) == ["kept"]
+    end
+
+    test "SaaS, override true: still no row", %{user: user} do
+      saas!()
+      Engram.ServiceConfig.put_override(:client_logs_stop_writes, true)
+
+      assert {:ok, 0} = Logs.insert_logs(user, [line("warn", "not stored")], nil)
+      assert stored(user) == []
+    end
+
+    test "CI and self-host: rows are written with no override", %{user: user} do
+      assert {:ok, 1} = Logs.insert_logs(user, [line("warn", "kept")], nil)
+      assert stored(user) == ["kept"]
+    end
+
+    test "CI and self-host: the override cannot stop writes", %{user: user} do
       Engram.ServiceConfig.put_override(:client_logs_stop_writes, true)
 
       assert {:ok, 1} = Logs.insert_logs(user, [line("warn", "kept")], nil)
