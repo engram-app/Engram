@@ -63,6 +63,7 @@ use rustler::{
     ResourceArc, Term,
 };
 use sha2::Sha256;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
@@ -94,6 +95,13 @@ struct Bm25 {
 }
 
 /// One chunk -> (u32 LE indices sorted ascending, f64 LE values, raw doc_len).
+///
+/// Work is per DISTINCT word, not per occurrence: each word slice of the
+/// normalized text is looked up once per occurrence, and only the first
+/// sight of it stems and interns its tokens. Token ids follow first
+/// occurrence, so same-dim collisions sum in that order (deterministic; the
+/// HashMap this replaced summed in a randomly seeded order, which only
+/// differs from this for three or more tokens on one dim).
 fn encode(
     text: &str,
     key: &[u8],
@@ -101,8 +109,41 @@ fn encode(
     lang: Option<&str>,
     memo: &mut HashMap<String, u32>,
 ) -> (Vec<u8>, Vec<u8>, usize) {
-    let (tokens, raw) = tokenizer::tokenize(text, lang);
-    let doc_len = raw.len();
+    let mut buf = String::new();
+    let norm = tokenizer::normalize(text, &mut buf);
+    // token -> id, and id -> occurrences (tf).
+    let mut ids: HashMap<Cow<str>, u32> = HashMap::new();
+    let mut tf: Vec<u32> = Vec::new();
+    // raw word -> (its token id, its stem's token id when it has one).
+    let mut words: HashMap<&str, (u32, Option<u32>)> = HashMap::new();
+    let mut doc_len = 0;
+    tokenizer::for_each_raw(&norm, |word, stemmable| {
+        doc_len += 1;
+        let (raw, stem) = *words.entry(word).or_insert_with(|| {
+            let mut intern = |t| -> u32 {
+                let next = tf.len() as u32;
+                *ids.entry(t).or_insert_with(|| {
+                    tf.push(0);
+                    next
+                })
+            };
+            let raw = intern(Cow::Borrowed(word));
+            let stem = stemmable
+                .then(|| tokenizer::stem_of(word, lang))
+                .flatten()
+                .map(|s| intern(Cow::Owned(s)));
+            (raw, stem)
+        });
+        tf[raw as usize] += 1;
+        if let Some(s) = stem {
+            tf[s as usize] += 1;
+        }
+    });
+    let mut tokens: Vec<&str> = vec![""; tf.len()];
+    for (t, &id) in &ids {
+        tokens[id as usize] = t;
+    }
+
     // Uncapped, this is the exact expression the encoder always used, so a
     // b 0.75 uncapped vector is bit-identical to before the options existed.
     let len = doc_len as f64;
@@ -112,14 +153,9 @@ fn encode(
     };
     let norm = (1.0 - bm25.b) + bm25.b * len / bm25.avgdl;
 
-    let mut tf: HashMap<&str, u32> = HashMap::new();
-    for t in &tokens {
-        *tf.entry(t.as_str()).or_insert(0) += 1;
-    }
-
-    let mut by_dim: HashMap<u32, f64> = HashMap::with_capacity(tf.len());
-    for (token, n) in tf {
-        let d = match memo.get(token) {
+    let mut pairs: Vec<(u32, f64)> = Vec::with_capacity(tf.len());
+    for (token, &n) in tokens.iter().zip(&tf) {
+        let d = match memo.get(*token) {
             Some(d) => *d,
             None => {
                 let d = dim(key, token);
@@ -130,17 +166,23 @@ fn encode(
             }
         };
         let n = n as f64;
-        let w = n * (K1 + 1.0) / (n + K1 * norm);
-        *by_dim.entry(d).or_insert(0.0) += w;
+        pairs.push((d, n * (K1 + 1.0) / (n + K1 * norm)));
     }
-
-    let mut pairs: Vec<(u32, f64)> = by_dim.into_iter().collect();
-    pairs.sort_unstable_by_key(|p| p.0);
+    // Stable: tokens on one dim stay in first-occurrence order to be summed.
+    pairs.sort_by_key(|p| p.0);
     let mut idx = Vec::with_capacity(pairs.len() * 4);
-    let mut val = Vec::with_capacity(pairs.len() * 8);
+    let mut val: Vec<u8> = Vec::with_capacity(pairs.len() * 8);
+    let mut last = None;
     for (d, w) in pairs {
-        idx.extend_from_slice(&d.to_le_bytes());
-        val.extend_from_slice(&w.to_le_bytes());
+        if last == Some(d) {
+            let at = val.len() - 8;
+            let sum = f64::from_le_bytes(val[at..].try_into().unwrap()) + w;
+            val[at..].copy_from_slice(&sum.to_le_bytes());
+        } else {
+            idx.extend_from_slice(&d.to_le_bytes());
+            val.extend_from_slice(&w.to_le_bytes());
+            last = Some(d);
+        }
     }
     (idx, val, doc_len)
 }
