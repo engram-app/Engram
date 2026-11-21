@@ -100,7 +100,7 @@ defmodule Engram.Logs do
   Insert a batch of log entries for a user.
   Returns {:ok, count} with the number of entries inserted (0 on SaaS while
   the `client_logs_stop_writes` service override is on: no row is written,
-  the lines are still re-emitted to the server log).
+  the lines still ship to Loki; CI and self-host always write).
 
   `vault_id` stamps the vault the request addressed, so `list_logs/2` can keep
   a credential scoped to one vault out of another vault's lines.
@@ -195,11 +195,13 @@ defmodule Engram.Logs do
   end
 
   # SaaS switch to stop writing `client_logs` rows (`client_logs_stop_writes`
-  # service override, default off); the lines still re-emit to the server log
-  # pipeline. Self-host ignores it: there `GET /api/logs` is the only place an
-  # operator reads client lines.
+  # service override, default off); every kept line still ships to Loki
+  # (`reemit_to_logger/2`). CI and self-host always write: there
+  # `:client_logs_persist_all` is true (`Engram.RuntimeConfig`, the one place
+  # that decides "CI or self-host"), the e2e log oracle and self-host
+  # operators read `GET /api/logs`, and self-host has no Loki.
   defp writes_stopped? do
-    Application.get_env(:engram, :billing_enabled, false) and
+    not Application.get_env(:engram, :client_logs_persist_all, false) and
       ServiceConfig.get(:client_logs_stop_writes, false) == true
   end
 
