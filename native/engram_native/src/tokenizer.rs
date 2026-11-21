@@ -7,7 +7,7 @@
 //! sides.
 use snowball_stemmers_rs::{Algorithm, Stemmer};
 use std::borrow::Cow;
-use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::{is_nfkc_quick, IsNormalized, UnicodeNormalization};
 use unicode_segmentation::UnicodeSegmentation;
 
 // Unicode data is Rust's (regex / unicode-normalization / unicode-segmentation),
@@ -152,10 +152,22 @@ pub fn stem_of(token: &str, lang: Option<&str>) -> Option<String> {
 /// mark was dropped.
 pub fn normalize<'b>(text: &str, buf: &'b mut String) -> Cow<'b, str> {
     buf.clear();
+    // ASCII is its own NFKC and has no combining marks to drop.
+    if text.is_ascii() {
+        buf.push_str(text);
+        buf.make_ascii_lowercase();
+        return Cow::Borrowed(buf);
+    }
     // Per-char lowercase, NOT `str::to_lowercase`: the latter applies the
     // contextual Greek final-sigma rule (Σ -> ς at word end) and Elixir's
     // `String.downcase(:default)` does not. Different sigma, different token.
-    buf.extend(text.nfkc().flat_map(char::to_lowercase));
+    // A text the quick check says is already NFKC skips the normalizer
+    // (`Maybe` still runs it).
+    if is_nfkc_quick(text.chars()) == IsNormalized::Yes {
+        buf.extend(text.chars().flat_map(char::to_lowercase));
+    } else {
+        buf.extend(text.nfkc().flat_map(char::to_lowercase));
+    }
     // Drop combining marks right after a Latin letter (casefold artifacts like
     // İ -> i + U+0307, and zalgo spam), keeping Arabic/Hebrew marks attached.
     re!(r"(\p{Latin})\p{Mn}+").replace_all(buf, "$1")
@@ -236,6 +248,19 @@ pub fn phrase_seq(text: &str, lang: Option<&str>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use unicode_normalization::UnicodeNormalization;
+
+    // The fast paths (ASCII, already-NFKC) change no text.
+    #[test]
+    fn normalize_equals_the_full_pipeline() {
+        for text in crate::tests::corpus() {
+            let full: String = text.nfkc().flat_map(char::to_lowercase).collect();
+            let full = re!(r"(\p{Latin})\p{Mn}+").replace_all(&full, "$1");
+            let mut buf = String::new();
+            assert_eq!(super::normalize(&text, &mut buf), full, "{text:?}");
+        }
+    }
+
     // The Elixir-side golden set (test/engram/native/keyword_encode_test.exs)
     // checked here too, so a tokenizer change is proven by `cargo test`.
     #[test]

@@ -108,9 +108,9 @@ fn encode(
     bm25: Bm25,
     lang: Option<&str>,
     memo: &mut HashMap<String, u32>,
+    buf: &mut String,
 ) -> (Vec<u8>, Vec<u8>, usize) {
-    let mut buf = String::new();
-    let norm = tokenizer::normalize(text, &mut buf);
+    let norm = tokenizer::normalize(text, buf);
     // token -> id, and id -> occurrences (tf).
     let mut ids: HashMap<Cow<str>, u32> = HashMap::new();
     let mut tf: Vec<u32> = Vec::new();
@@ -206,11 +206,19 @@ fn encode_documents_nif<'a>(
     let bm25 = Bm25 { avgdl, b, cap };
     memory::measured(|| {
         let mut memo = HashMap::new();
+        let mut buf = String::new();
         texts
             .iter()
             .map(|t| {
                 let text = String::from_utf8_lossy(t.as_slice());
-                let (i, v, n) = encode(&text, key.as_slice(), bm25, lang.as_deref(), &mut memo);
+                let (i, v, n) = encode(
+                    &text,
+                    key.as_slice(),
+                    bm25,
+                    lang.as_deref(),
+                    &mut memo,
+                    &mut buf,
+                );
                 (to_binary(env, &i), to_binary(env, &v), n)
             })
             .collect()
@@ -1113,9 +1121,10 @@ mod tests {
         lang: Option<&str>,
     ) -> Vec<(Vec<u8>, Vec<u8>, usize)> {
         let mut memo = HashMap::new();
+        let mut buf = String::new();
         texts
             .iter()
-            .map(|t| encode(t, key, bm25, lang, &mut memo))
+            .map(|t| encode(t, key, bm25, lang, &mut memo, &mut buf))
             .collect()
     }
 
