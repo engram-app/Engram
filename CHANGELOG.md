@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.92.0](https://github.com/engram-app/Engram/compare/0.91.0...0.92.0) (2026-11-21)
+
+
+### Features
+
+* **db:** drop the file-time doubles (R25 contract c) ([#2627](https://github.com/engram-app/Engram/issues/2627)) ([6524f08](https://github.com/engram-app/Engram/commit/6524f086a3ea030b42f61b87b93d6bfd80ee6717))
+* **metrics:** per-call NIF duration and input histograms ([#2681](https://github.com/engram-app/Engram/issues/2681)) ([aec2ea5](https://github.com/engram-app/Engram/commit/aec2ea5f6160e1239552512049424f1c3d645f23))
+
+
+### Bug Fixes
+
+* **logs:** tell an over-budget client to back off ([#2680](https://github.com/engram-app/Engram/issues/2680)) ([265bef3](https://github.com/engram-app/Engram/commit/265bef387be6a078d1a66525ea54153d22dcbaa7))
+
 ## [0.91.0](https://github.com/engram-app/Engram/compare/0.90.0...0.91.0) (2026-11-20)
 
 
