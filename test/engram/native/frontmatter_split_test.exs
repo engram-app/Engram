@@ -48,8 +48,14 @@ defmodule Engram.Native.FrontmatterSplitTest do
     assert {:reschedule, _} = Engram.Native.frontmatter_split_nif(unclosed)
     {dirty, _} = Engram.Native.frontmatter_split_dirty_nif(unclosed)
     assert Engram.Native.frontmatter_split(unclosed) == dirty
-    # One event for the call (the dirty rerun's), not one per attempt.
-    assert_receive {_, ^ref, _, %{nif: :frontmatter_split, dirty: true}}
+    # One event for the call (the dirty rerun's, timed from the inline
+    # attempt's start), not one per attempt.
+    n = byte_size(unclosed)
+
+    assert_receive {_, ^ref, %{input_bytes: ^n, duration: d},
+                    %{nif: :frontmatter_split, dirty: true}}
+
+    assert d > 0
     refute_receive {_, ^ref, _, %{nif: :frontmatter_split}}, 50
 
     closed_late = unclosed <> "---\nbody\n"

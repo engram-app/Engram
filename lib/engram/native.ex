@@ -181,8 +181,14 @@ defmodule Engram.Native do
     t0 = System.monotonic_time()
 
     case frontmatter_split_nif(content) do
-      {:reschedule, _peak} -> rescheduled(:reschedule, :frontmatter_split, content, [content])
-      done -> emit(:frontmatter_split, content, %{dirty: false}, t0, done)
+      {:reschedule, _peak} ->
+        # The dirty rerun's event, timed from the inline attempt's start.
+        call(:frontmatter_split, content, %{dirty: true}, t0, fn ->
+          frontmatter_split_dirty_nif(content)
+        end)
+
+      done ->
+        emit(:frontmatter_split, content, %{dirty: false}, t0, done)
     end
   end
 
@@ -605,10 +611,10 @@ defmodule Engram.Native do
   # so a dashboard or alert written for one covers the next.
   # `input` is the binary/iolist the NIF reads, or its byte count when it
   # reads terms (a float list has no iolist size).
-  defp call(name, input, meta, fun) do
-    t0 = System.monotonic_time()
-    emit(name, input, meta, t0, fun.())
-  end
+  # `t0`: when the logical call started, if before this NIF (an inline
+  # attempt that handed off).
+  defp call(name, input, meta, t0 \\ System.monotonic_time(), fun),
+    do: emit(name, input, meta, t0, fun.())
 
   # The event for a NIF call that started at `t0` and returned `{result, peak}`.
   defp emit(name, input, meta, t0, {result, peak}) do

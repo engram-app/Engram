@@ -65,7 +65,7 @@ use rustler::{
 use sha2::Sha256;
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 
 const K1: f64 = 1.2;
@@ -215,36 +215,61 @@ fn encode_run<'t>(
     }
 }
 
-/// The NIF's own worker pool with the worker count this call passed, built
-/// on first parallel use and kept while that count holds, so each worker's
-/// `re!` regexes are made once (see `pool_in`).
+/// The NIF's own worker pool, sized to the BEAM's dirty CPU schedulers
+/// online (passed raw from Elixir on every call), built on first parallel use
+/// and rebuilt only when that count changes, so each worker's `re!` regexes
+/// are made once. A batch's size never resizes it: it only decides how many
+/// runs the work splits into (`runs_for`).
 ///
-/// The count comes from Elixir: the BEAM's dirty CPU schedulers online,
-/// which rel/env.sh.eex sizes from the real CPU quota. NOT
-/// `std::thread::available_parallelism()`: on Fargate the quota is on the
-/// task's microVM, the container cgroup reads `max`, and std sees the VM's
-/// 2 CPUs on a 0.5 vCPU task, so two workers would burn the quota twice as
-/// fast and throttle every scheduler on the node.
-fn pool(workers: usize) -> Arc<rayon::ThreadPool> {
-    static POOL: Mutex<Option<Arc<rayon::ThreadPool>>> = Mutex::new(None);
-    pool_in(&POOL, workers)
+/// The count comes from Elixir because rel/env.sh.eex sizes the schedulers
+/// from the real CPU quota. NOT `std::thread::available_parallelism()`: on
+/// Fargate the quota is on the task's microVM, the container cgroup reads
+/// `max`, and std sees the VM's 2 CPUs on a 0.5 vCPU task, so two workers
+/// would burn the quota twice as fast and throttle every scheduler.
+static POOL: PoolSlot = PoolSlot::new();
+
+struct PoolSlot {
+    pool: Mutex<Option<Arc<rayon::ThreadPool>>>,
+    builds: AtomicUsize,
 }
 
-/// The pool in `slot` when it has `workers` threads, else a new one in its
-/// place, so the pool follows the current dirty-scheduler count instead of
-/// the first call's (a self-host node whose count drops must not keep more
-/// threads than it now has). The old pool's threads exit once its last
-/// in-flight call drops it.
+impl PoolSlot {
+    const fn new() -> Self {
+        PoolSlot {
+            pool: Mutex::new(None),
+            builds: AtomicUsize::new(0),
+        }
+    }
+}
+
+/// The pool and run count for a batch, or None for the sequential path
+/// (one run: one scheduler, one text, or a small batch), which never builds
+/// a pool.
+fn batch_pool(
+    slot: &PoolSlot,
+    schedulers: usize,
+    texts: usize,
+    bytes: usize,
+) -> Option<(Arc<rayon::ThreadPool>, usize)> {
+    let runs = runs_for(schedulers, texts, bytes);
+    (runs > 1).then(|| (pool_in(slot, schedulers), runs))
+}
+
+/// The pool in `slot` when it has `schedulers` threads, else a new one in its
+/// place (a self-host node whose count drops must not keep more threads than
+/// it now has). The old pool's threads exit once its last in-flight call
+/// drops it.
 /// ponytail: each rebuild's threads leak their `re!` regex clones (see the
 /// macro); the count changes only on an operator's system_flag, so rarely.
-fn pool_in(slot: &Mutex<Option<Arc<rayon::ThreadPool>>>, workers: usize) -> Arc<rayon::ThreadPool> {
-    let workers = workers.max(1);
-    let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
-    match &*slot {
-        Some(p) if p.current_num_threads() == workers => p.clone(),
+fn pool_in(slot: &PoolSlot, schedulers: usize) -> Arc<rayon::ThreadPool> {
+    let n = schedulers.max(1);
+    let mut pool = slot.pool.lock().unwrap_or_else(|e| e.into_inner());
+    match &*pool {
+        Some(p) if p.current_num_threads() == n => p.clone(),
         _ => {
-            let p = Arc::new(build_pool(workers));
-            *slot = Some(p.clone());
+            slot.builds.fetch_add(1, Relaxed);
+            let p = Arc::new(build_pool(n));
+            *pool = Some(p.clone());
             p
         }
     }
@@ -284,11 +309,12 @@ fn encode_parallel(
     keyed: &Hmac<Sha256>,
     bm25: Bm25,
     lang: Option<&str>,
-    workers: usize,
+    pool: &rayon::ThreadPool,
+    runs: usize,
 ) -> (Vec<Encoded>, usize) {
     use rayon::prelude::*;
-    let per = texts.len().div_ceil(workers.max(1)).max(1);
-    let runs: Vec<(Vec<Encoded>, usize)> = pool(workers).install(|| {
+    let per = texts.len().div_ceil(runs.max(1)).max(1);
+    let runs: Vec<(Vec<Encoded>, usize)> = pool.install(|| {
         texts
             .par_chunks(per)
             .map(|run| {
@@ -317,11 +343,15 @@ fn encode_documents_nif<'a>(
     let bm25 = Bm25 { avgdl, b, cap };
     let lang = lang.as_deref();
     let bytes: usize = texts.iter().map(|t| t.len()).sum();
-    let workers = runs_for(workers, texts.len(), bytes);
+    let parallel = batch_pool(&POOL, workers, texts.len(), bytes);
     let packed = |(i, v, n): Encoded| (to_binary(env, &i), to_binary(env, &v), n);
     let ((out, worker_peak), peak) = memory::measured(|| {
         let keyed = keyed(key.as_slice());
-        if workers == 1 {
+        if let Some((pool, runs)) = parallel {
+            let slices: Vec<&[u8]> = texts.iter().map(|t| t.as_slice()).collect();
+            let (encoded, worker_peak) = encode_parallel(&slices, &keyed, bm25, lang, &pool, runs);
+            (encoded.into_iter().map(packed).collect(), worker_peak)
+        } else {
             // One thread: each vector becomes a BEAM binary as it is built.
             let mut out = Vec::with_capacity(texts.len());
             encode_run(
@@ -332,10 +362,6 @@ fn encode_documents_nif<'a>(
                 |e| out.push(packed(e)),
             );
             (out, 0)
-        } else {
-            let slices: Vec<&[u8]> = texts.iter().map(|t| t.as_slice()).collect();
-            let (encoded, worker_peak) = encode_parallel(&slices, &keyed, bm25, lang, workers);
-            (encoded.into_iter().map(packed).collect(), worker_peak)
         }
     });
     (out, peak + worker_peak)
@@ -1341,13 +1367,36 @@ mod tests {
         assert_eq!(runs_for(4, 100, big - 1), 1);
         // The pool follows the count passed now, and is reused while it
         // holds (a local slot: other tests share the global one).
-        let slot = Mutex::new(None);
+        let slot = PoolSlot::new();
         let two = pool_in(&slot, 2);
         assert_eq!(two.current_num_threads(), 2);
         assert!(Arc::ptr_eq(&two, &pool_in(&slot, 2)));
         assert_eq!(pool_in(&slot, 3).current_num_threads(), 3);
-        assert_eq!(pool_in(&slot, 1).current_num_threads(), 1);
         assert_eq!(pool_in(&slot, 0).current_num_threads(), 1);
+    }
+
+    // With a fixed scheduler count, batches of any size share one pool of
+    // that size: only the run count follows the batch. One scheduler never
+    // builds a pool.
+    #[test]
+    fn alternating_batches_build_the_pool_once() {
+        let big = 10 * PAR_MIN_BYTES;
+        let batches = [(2, big), (100, big), (3, big), (1, big), (50, 10), (7, big)];
+        let slot = PoolSlot::new();
+        for _ in 0..3 {
+            for (texts, bytes) in batches {
+                if let Some((pool, runs)) = batch_pool(&slot, 4, texts, bytes) {
+                    assert_eq!(pool.current_num_threads(), 4);
+                    assert_eq!(runs, texts.min(4));
+                }
+            }
+        }
+        assert_eq!(slot.builds.load(Relaxed), 1);
+        let one = PoolSlot::new();
+        for (texts, bytes) in batches {
+            assert!(batch_pool(&one, 1, texts, bytes).is_none());
+        }
+        assert_eq!(one.builds.load(Relaxed), 0);
     }
 
     // Under 5 bytes a budget cannot see a whole opening fence: hand off.
@@ -1370,11 +1419,13 @@ mod tests {
     fn parallel_runs_equal_the_sequential_run() {
         let texts = corpus();
         let slices: Vec<&[u8]> = texts.iter().map(|t| t.as_bytes()).collect();
+        let pool = build_pool(3);
         for lang in [None, Some("en"), Some("de")] {
             let bm25 = configs()[0].1;
             let want = encode_batch(&texts, &KEY, bm25, lang);
             for workers in [1, 2, 3, 7, slices.len() + 5] {
-                let (got, peak) = encode_parallel(&slices, &keyed(&KEY), bm25, lang, workers);
+                let (got, peak) =
+                    encode_parallel(&slices, &keyed(&KEY), bm25, lang, &pool, workers);
                 assert!(got == want, "{lang:?} x{workers}");
                 let bytes: usize = got.iter().map(|(i, v, _)| i.len() + v.len()).sum();
                 assert!(peak >= bytes, "{peak} < {bytes}");
@@ -1564,7 +1615,8 @@ mod tests {
             let texts = chunks(&text);
             let slices: Vec<&[u8]> = texts.iter().map(|t| t.as_bytes()).collect();
             let t = std::time::Instant::now();
-            let (_, peak) = encode_parallel(&slices, &keyed(&KEY), bm25, Some("en"), 4);
+            let (_, peak) =
+                encode_parallel(&slices, &keyed(&KEY), bm25, Some("en"), &build_pool(4), 4);
             let ns = t.elapsed().as_nanos() as f64 / text.len() as f64;
             let shape = "chunks x4";
             println!("{name:>16} {shape:>11}: {ns:8.1} ns/byte, peak {peak} bytes (workers)");
