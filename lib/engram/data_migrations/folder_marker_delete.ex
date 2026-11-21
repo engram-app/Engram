@@ -137,22 +137,29 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
     end
   end
 
-  # Statement 1: the vault rows (and owners) of the window's live markers,
-  # FOR SHARE SKIP LOCKED, in a statement of their own so the later ones take
-  # their snapshot after the lock (see `ExplicitFolderReconcile`). The
-  # window's notes are read by primary key alone in a MATERIALIZED CTE and
-  # filtered outside it: with `kind = 'folder' AND deleted_at IS NULL` on the
-  # scan, the planner ANDed in `notes_user_vault_folder_marker` read with no
-  # condition (every account's live markers; staging, real statistics).
-  @lock_vaults_sql """
+  # Statement 1: the vaults of the window's live markers. The window's notes
+  # are read by primary key alone in a MATERIALIZED CTE and filtered outside
+  # it: with `kind = 'folder' AND deleted_at IS NULL` on the scan, the
+  # planner ANDed in `notes_user_vault_folder_marker` read with no condition
+  # (every account's live markers; staging, real statistics).
+  #
+  # Statement 2: those vault rows (and owners) FOR SHARE SKIP LOCKED, by
+  # primary key from a bound array (a maintenance job reads no table whole:
+  # as a semi join on the window's notes the planner read every vault row).
+  # In a statement of its own so the later ones take their snapshot after
+  # the lock (see `ExplicitFolderReconcile`).
+  @window_vaults_sql """
   WITH w AS MATERIALIZED (
     SELECT vault_id, kind, deleted_at FROM notes WHERE id = ANY($1))
-  SELECT id, user_id FROM vaults
-  WHERE id IN (SELECT vault_id FROM w WHERE kind = 'folder' AND deleted_at IS NULL)
-  FOR SHARE OF vaults SKIP LOCKED
+  SELECT DISTINCT vault_id FROM w WHERE kind = 'folder' AND deleted_at IS NULL
   """
 
-  # Statement 2: of the locked vaults (`$1` ids, `$2` their owners, paired by
+  @lock_vaults_sql """
+  SELECT id, user_id FROM vaults WHERE id = ANY($1::uuid[])
+  FOR SHARE SKIP LOCKED
+  """
+
+  # Statement 3: of the locked vaults (`$1` ids, `$2` their owners, paired by
   # position), those holding a live marker with no live explicit folder row at
   # its path hash, and how many such markers each has. Vault-wide: a
   # `(user_id, vault_id)` range of `notes_user_vault_folder_marker`, then one
@@ -175,7 +182,7 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   GROUP BY m.vault_id
   """
 
-  # Statement 3: the window's live markers in the vaults that passed (`$2`,
+  # Statement 4: the window's live markers in the vaults that passed (`$2`,
   # their owners `$3`), locked, each with the id of its live explicit folder
   # row still to stamp. The owners bind any read of `notes_user_vault_live
   # (user_id, vault_id)`: by `vault_id` alone it is a skip scan over every
@@ -200,14 +207,14 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   FROM m
   """
 
-  # Statement 4, once per folder row from statement 3: the row stamped by
+  # Statement 5, once per folder row from statement 4: the row stamped by
   # its primary key, a scalar, so O(markers in the window), capped by the
   # window (`@batch`). By an array of ids the planner costed the key probe
   # as a guess: an ARRAY sublink read `folders_explicit_user_vault` with no
   # condition, every tenant's explicit rows (0.91.0's CI). By `id` alone:
   # a `vault_id`/`user_id` equality here makes the partial explicit-folder
   # indexes usable, and they tie with the key probe. The row's tenant and
-  # vault come from statement 3's probe, under the vault lock. The guards
+  # vault come from statement 4's probe, under the vault lock. The guards
   # again on the row itself: re-checked on the row's latest version when it
   # waited on a concurrent writer's lock, so a row stamped meanwhile keeps
   # its seq (defence in depth beyond the vault lock).
@@ -216,7 +223,7 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   WHERE id = $1 AND explicit_seq IS NULL AND explicit AND deleted_at IS NULL
   """
 
-  # Statement 5: the markers locked by statement 3, by primary key.
+  # Statement 6: the markers locked by statement 4, by primary key.
   @delete_sql "DELETE FROM notes AS n WHERE n.id = ANY($1::uuid[])"
 
   # What is left in a window: any live marker (a skipped lock or an
@@ -226,6 +233,8 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
   SELECT count(*)::int FROM w WHERE kind = 'folder' AND deleted_at IS NULL
   """
 
+  @doc false
+  def window_vaults_sql, do: @window_vaults_sql
   @doc false
   def lock_vaults_sql, do: @lock_vaults_sql
   @doc false
@@ -260,11 +269,13 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
     _ = repo.query!("SET LOCAL lock_timeout = '2s'", [])
     _ = repo.query!("SET LOCAL statement_timeout = '5s'", [])
 
-    case repo.query!(@lock_vaults_sql, [ids]) do
-      %{rows: []} ->
+    %{rows: window_vaults} = repo.query!(@window_vaults_sql, [ids])
+
+    case lock_vaults(repo, List.flatten(window_vaults)) do
+      [] ->
         {0, left?(repo, ids)}
 
-      %{rows: locked} ->
+      locked ->
         vaults = Enum.map(locked, &hd/1)
         owners = Enum.map(locked, &List.last/1)
         %{rows: unmatched} = repo.query!(@unmatched_sql, [vaults, owners])
@@ -277,11 +288,18 @@ defmodule Engram.DataMigrations.FolderMarkerDelete do
     end
   end
 
+  defp lock_vaults(_repo, []), do: []
+
+  defp lock_vaults(repo, vaults) do
+    %{rows: locked} = repo.query!(@lock_vaults_sql, [vaults])
+    locked
+  end
+
   defp owners_by_vault(locked),
     do: {Enum.map(locked, &hd/1), locked |> Enum.map(&List.last/1) |> Enum.uniq()}
 
-  # Statements 3 to 5 run in the window's transaction, under its vault lock.
-  # Statement 3's rows: `[marker id, user id, vault id, folder ids]`.
+  # Statements 4 to 6 run in the window's transaction, under its vault lock.
+  # Statement 4's rows: `[marker id, user id, vault id, folder ids]`.
   defp lock_markers(_repo, _ids, [], _owners), do: {[], []}
 
   defp lock_markers(repo, ids, vaults, owners) do
