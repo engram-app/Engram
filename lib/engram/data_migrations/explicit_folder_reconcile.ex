@@ -112,12 +112,17 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
   end
 
   # A live explicit row of the window that no live marker names. `f` the
-  # folder row; the marker probe is `notes_user_vault_folder_marker`.
+  # folder row; the marker probe is `notes_user_vault_folder_marker`. A
+  # scalar subquery, not NOT EXISTS: Postgres never pulls it up into a join,
+  # so it stays one keyed probe a folder row. As an anti join the planner
+  # could read `notes_user_vault_live` with no condition (every live note,
+  # materialized), which it did on the test database.
   @stale """
-  f.id = ANY($1) AND f.explicit AND f.explicit_seq IS NULL AND f.deleted_at IS NULL AND NOT EXISTS (
+  f.id = ANY($1) AND f.explicit AND f.explicit_seq IS NULL AND f.deleted_at IS NULL AND (
     SELECT 1 FROM notes AS n
     WHERE n.user_id = f.user_id AND n.vault_id = f.vault_id AND n.kind = 'folder'
-      AND n.deleted_at IS NULL AND n.folder_hmac = f.full_path_hmac)
+      AND n.deleted_at IS NULL AND n.folder_hmac = f.full_path_hmac
+    LIMIT 1) IS NULL
   """
 
   # Statement 1: the window's vault rows FOR SHARE SKIP LOCKED. Its own
@@ -133,17 +138,20 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
   # (its rows count as left), and a writer that starts later waits for this
   # transaction. No interleaving clears the flag of a live marker.
   @lock_vaults_sql """
-  SELECT id FROM vaults
+  SELECT id, user_id FROM vaults
   WHERE id IN (SELECT vault_id FROM folders WHERE id = ANY($1))
   FOR SHARE SKIP LOCKED
   """
 
   # Statement 2, a later snapshot: the stale rows of the locked vaults
-  # (`$2`), in a MATERIALIZED CTE evaluated once, then the update.
+  # (`$2`, their owners `$3`), in a MATERIALIZED CTE evaluated once, then the
+  # update. The owners bind any read of `folders_explicit_user_vault
+  # (user_id, vault_id)`: by `vault_id` alone it is a skip scan over every
+  # tenant's explicit rows.
   @clear_sql """
   WITH c AS MATERIALIZED (
     SELECT f.id FROM folders AS f
-    WHERE #{@stale} AND f.vault_id = ANY($2)
+    WHERE #{@stale} AND f.user_id = ANY($3) AND f.vault_id = ANY($2)
     ORDER BY f.id
     FOR NO KEY UPDATE OF f SKIP LOCKED
   )
@@ -153,7 +161,16 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
   """
 
   # What is left in a window: the vaults of stale rows a held lock skipped.
-  @left_sql "SELECT DISTINCT f.vault_id FROM folders AS f WHERE #{@stale}"
+  # The window's folder rows read by primary key alone in a MATERIALIZED CTE
+  # (named `f` for `@stale`): with the explicit predicate on the scan, the
+  # planner read `folders_explicit_user_vault` with no condition (every
+  # account's explicit rows).
+  @left_sql """
+  WITH f AS MATERIALIZED (
+    SELECT id, user_id, vault_id, full_path_hmac, explicit, explicit_seq, deleted_at
+    FROM folders WHERE id = ANY($1))
+  SELECT DISTINCT f.vault_id FROM f WHERE #{@stale}
+  """
 
   @doc false
   def lock_vaults_sql, do: @lock_vaults_sql
@@ -167,7 +184,9 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
     _ = repo.query!("SET LOCAL lock_timeout = '2s'", [])
     _ = repo.query!("SET LOCAL statement_timeout = '5s'", [])
     %{rows: locked} = repo.query!(@lock_vaults_sql, [ids])
-    %{num_rows: fixed} = repo.query!(@clear_sql, [ids, List.flatten(locked)])
+    vaults = Enum.map(locked, &hd/1)
+    owners = locked |> Enum.map(&List.last/1) |> Enum.uniq()
+    %{num_rows: fixed} = repo.query!(@clear_sql, [ids, vaults, owners])
     %{rows: left} = repo.query!(@left_sql, [ids])
     vaults = List.flatten(left)
     if vaults != [], do: Process.put(@left_key, vaults ++ (Process.get(@left_key) || []))
