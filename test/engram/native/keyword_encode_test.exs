@@ -22,11 +22,14 @@ defmodule Engram.Native.KeywordEncodeTest do
     end
   end
 
-  test "tokens_with_len runs inline up to 16 KB, dirty above, and emits" do
-    Engram.NativeScheduled.assert_scheduled(
-      :tokens_with_len,
-      &Engram.Native.tokens_with_len(String.duplicate("a", &1), "en")
-    )
+  test "tokens_with_len runs dirty and emits its call event" do
+    ref = Engram.NativeScheduled.attach_nif_events()
+    assert {["a", "b"], 2} = Engram.Native.tokens_with_len("a b", "en")
+
+    assert_receive {_, ^ref, %{input_bytes: 3, native_peak_bytes: p},
+                    %{nif: :tokens_with_len, dirty: true}}
+
+    assert p > 0
   end
 
   test "every stemmer language is covered by the golden set" do
@@ -61,7 +64,7 @@ defmodule Engram.Native.KeywordEncodeTest do
             [String.duplicate("a", 2_000_000)],
             for(i <- 1..2_000, do: "chunk #{i} " <> String.duplicate("word#{i} ", 100))
           ] do
-        {_, peak} = Engram.Native.encode_documents_nif(texts, @key, 300.0, "en", 0.75, nil)
+        {_, peak} = Engram.Native.encode_documents_nif(texts, @key, 300.0, "en", {0.75, nil, 1})
         assert peak <= 4 * :erlang.iolist_size(texts) + 65_536
       end
     end
@@ -70,7 +73,7 @@ defmodule Engram.Native.KeywordEncodeTest do
       texts = for i <- 1..20, do: "note #{i} running fast and far"
 
       Engram.NativeLeak.assert_no_leak(fn ->
-        Engram.Native.encode_documents_nif(texts, @key, 300.0, "en", 0.75, nil)
+        Engram.Native.encode_documents_nif(texts, @key, 300.0, "en", {0.75, nil, 1})
       end)
     end
 

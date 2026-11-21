@@ -674,14 +674,18 @@ bumping pulldown-cmark: `ENGRAM_FUZZ_CASES=2000000 ENGRAM_FUZZ_SEED=7 cargo test
 ## Scheduling
 
 `schedule = "DirtyCpu"` on everything whose input size the caller controls,
-EXCEPT small inputs on a hot path. Seventeen NIFs export a normal and a
+EXCEPT small inputs on a hot path. Sixteen NIFs export a normal and a
 `_dirty_nif` variant: `link_extract`, `note_title`, `note_meta`, `chunk`,
 `frontmatter_split`, `frontmatter_parse`, `text_diff`, `utf16_offsets`,
 `hmac_hex_many`, `json_decode`, `envelope_seal`, `envelope_open`, `envelope_open_many`,
-`b64_decode`, `b64_encode`, `yjs_inserts_cr`, `tokens_with_len`.
-`frontmatter_split` stays inline up to 1 MiB (`inline_max:` on `sized/4`):
-its scan stops at the closing fence, so only an unclosed fence reads the
-whole note. `envelope_open`'s
+`b64_decode`, `b64_encode`, `yjs_inserts_cr`. `tokens_with_len` is always
+dirty (through `call/4`): it allocates and stems per token, and
+`keyword_encode_bench` found no size small enough to be safely inline.
+`frontmatter_split` calls its inline
+variant at any size, which reads at most 16 KB (`INLINE_FENCE_SCAN`; the
+scan is line by line to the closing fence, so an unclosed fence over many
+short lines is its worst case) and answers `:reschedule` past that, like
+`envelope_open`; both go through `rescheduled/4` in `Engram.Native`. `envelope_open`'s
 inline variant also refuses to inflate a zstd body declaring over 16 KB
 (decompression work is not bounded by input size): it returns `:reschedule`
 and the wrapper reruns the dirty variant (`sized/4`'s `dirty: true`). That
@@ -721,16 +725,20 @@ adding callers.
 ### Worker threads (keyword encode)
 
 `encode_documents_nif` may split a batch into contiguous runs on a rayon
-pool owned by the NIF (`lib.rs` `workers()`/`pool()`), sized from
-`std::thread::available_parallelism()`, which reads the cgroup CPU quota on
-Linux. Prod's 0.5 vCPU task gets 1, so prod keeps the sequential path (each
-vector becomes a BEAM binary as it is built); a bigger task spreads the
-batch with no code change. Batches under 64 KiB stay sequential too. Output
+pool owned by the NIF (`lib.rs` `pool()`), sized from the worker count the
+wrapper passes: `:erlang.system_info(:dirty_cpu_schedulers_online)`, which
+`rel/env.sh.eex` sizes from the real CPU quota (`BEAM_SCHEDULERS` on
+Fargate). NOT `std::thread::available_parallelism()`: on Fargate the quota is
+on the task's microVM, the container cgroup reads `max`, and std sees 2 CPUs
+on the 0.5 vCPU task. Prod passes 1, so it keeps the sequential path (each
+vector becomes a BEAM binary as it is built) and never builds the pool; a
+bigger task spreads the batch with no code change. Batches under 64 KiB stay sequential too. Output
 is identical for any worker count (results merge in input order; dims are a
 pure function of the token), pinned by `parallel_runs_equal_the_sequential_run`.
 The pool lives as long as the node, so each worker's `re!` regexes are made
-once. The BEAM's dirty CPU scheduler count already follows the same quota
-(`rel/env.sh.eex`, `+SDcpu`, rounded up).
+once. Peaks: each run is measured on its worker and the sum is added to the
+caller's (an upper bound); worker threads' live counters drift because
+output is freed on the caller (memory.rs).
 
 ### Keyword encode cost (2026-11)
 

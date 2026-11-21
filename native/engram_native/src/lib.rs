@@ -214,26 +214,37 @@ fn encode_run<'t>(
     }
 }
 
-/// Threads for per-document work: what this machine (or container's CPU
-/// quota: std reads the cgroup limit on Linux) gives, at least 1. Prod's
-/// 0.5 vCPU task gets 1, so it runs the sequential path; a bigger task
-/// spreads a batch without a code change.
-fn workers() -> usize {
-    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *N.get_or_init(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
+/// The NIF's own worker pool, built once (on first parallel use) with the
+/// worker count that call passed, and kept for the node's life, so each
+/// worker's `re!` regexes are made once.
+///
+/// The count comes from Elixir: the BEAM's dirty CPU schedulers online,
+/// which rel/env.sh.eex sizes from the real CPU quota. NOT
+/// `std::thread::available_parallelism()`: on Fargate the quota is on the
+/// task's microVM, the container cgroup reads `max`, and std sees the VM's
+/// 2 CPUs on a 0.5 vCPU task, so two workers would burn the quota twice as
+/// fast and throttle every scheduler on the node.
+fn pool(workers: usize) -> &'static rayon::ThreadPool {
+    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| build_pool(workers))
 }
 
-/// The NIF's own pool, built on first parallel use and kept for the node's
-/// life (so each worker's `re!` regexes are made once, not per call).
-fn pool() -> &'static rayon::ThreadPool {
-    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
-    POOL.get_or_init(|| {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(workers())
-            .thread_name(|i| format!("engram-nif-{i}"))
-            .build()
-            .expect("NIF worker pool")
-    })
+fn build_pool(workers: usize) -> rayon::ThreadPool {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers.max(1))
+        .thread_name(|i| format!("engram-nif-{i}"))
+        .build()
+        .expect("NIF worker pool")
+}
+
+/// How many runs a batch splits into: 1 (the sequential path, and nothing
+/// touches the pool) with one worker, one text, or under PAR_MIN_BYTES.
+fn runs_for(workers: usize, texts: usize, bytes: usize) -> usize {
+    if bytes < PAR_MIN_BYTES {
+        1
+    } else {
+        workers.min(texts).max(1)
+    }
 }
 
 /// A batch smaller than this stays on the calling thread: the handoff to a
@@ -256,7 +267,7 @@ fn encode_parallel(
 ) -> (Vec<Encoded>, usize) {
     use rayon::prelude::*;
     let per = texts.len().div_ceil(workers.max(1)).max(1);
-    let runs: Vec<(Vec<Encoded>, usize)> = pool().install(|| {
+    let runs: Vec<(Vec<Encoded>, usize)> = pool(workers).install(|| {
         texts
             .par_chunks(per)
             .map(|run| {
@@ -279,17 +290,17 @@ fn encode_documents_nif<'a>(
     key: Binary<'a>,
     avgdl: f64,
     lang: Option<String>,
-    b: f64,
-    cap: Option<f64>,
+    // `{b, cap, workers}`: BM25 length weight and cap, and worker threads.
+    (b, cap, workers): (f64, Option<f64>, usize),
 ) -> (Vec<(Binary<'a>, Binary<'a>, usize)>, usize) {
     let bm25 = Bm25 { avgdl, b, cap };
     let lang = lang.as_deref();
     let bytes: usize = texts.iter().map(|t| t.len()).sum();
-    let workers = workers().min(texts.len());
+    let workers = runs_for(workers, texts.len(), bytes);
     let packed = |(i, v, n): Encoded| (to_binary(env, &i), to_binary(env, &v), n);
     let ((out, worker_peak), peak) = memory::measured(|| {
         let keyed = keyed(key.as_slice());
-        if workers <= 1 || bytes < PAR_MIN_BYTES {
+        if workers == 1 {
             // One thread: each vector becomes a BEAM binary as it is built.
             let mut out = Vec::with_capacity(texts.len());
             encode_run(
@@ -431,12 +442,13 @@ fn link_extract<'a>(
 
 sized_nif!(link_extract, link_extract_nif, link_extract_dirty_nif, <'a>(env, content: &str, limit: usize) [content, limit] -> ((Vec<Term<'a>>, usize, bool), usize));
 
-/// The keyword tokenizer: `{tokens, raw_len}`, and the peak.
-fn tokens_with_len(text: &str, lang: Option<String>) -> ((Vec<String>, usize), usize) {
+/// The keyword tokenizer: `{tokens, raw_len}`, and the peak. Always dirty:
+/// it allocates and stems per token (only the batch encoder interns words),
+/// and `keyword_encode_bench` shows no size small enough to be safely inline.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn tokens_with_len_nif(text: &str, lang: Option<String>) -> ((Vec<String>, usize), usize) {
     memory::measured(|| tokenizer::tokens_with_len(text, lang.as_deref()))
 }
-
-sized_nif!(tokens_with_len, tokens_with_len_nif, tokens_with_len_dirty_nif, (text: &str, lang: Option<String>) [text, lang] -> ((Vec<String>, usize), usize));
 
 /// `Helpers.extract_title/2` without the file-name fallback, and the peak.
 fn note_title(content: &str) -> (Option<String>, usize) {
@@ -738,11 +750,46 @@ sized_nif!(chunk, chunk_nif, chunk_dirty_nif, <'a>(env, content: &str, folder: &
 /// `Frontmatter.split/1` as offsets: nil, or {block_start, block_end,
 /// body_start, add_newline}, with the native peak. Takes raw bytes: invalid
 /// UTF-8 splits as the Elixir regexes did.
-fn frontmatter_split(content: Binary) -> (frontmatter::Split, usize) {
-    memory::measured(|| frontmatter::split(content.as_slice()))
+/// Bytes the inline split reads. The scan runs line by line to the closing
+/// fence, so an opened fence that never closes reads the whole note (1 MiB of
+/// short lines is ~1M steps); past this the inline variant hands off.
+const INLINE_FENCE_SCAN: usize = 16_384;
+
+/// `frontmatter::split` reading at most `budget` bytes: None when the answer
+/// needs more. A note without a leading fence answers at once at any size.
+fn split_within(s: &[u8], budget: usize) -> Option<frontmatter::Split> {
+    if s.len() <= budget {
+        return Some(frontmatter::split(s));
+    }
+    let head = &s[..budget];
+    match frontmatter::split(head) {
+        // The closing line ended (its newline) inside `head`, so the full
+        // text gives the same answer; a close at `head`'s end could be a
+        // longer line in the full text.
+        Some(r) if r.2 < budget => Some(Some(r)),
+        // No opening fence: none in the full text either.
+        None if !head.starts_with(b"---\n") && !head.starts_with(b"---\r\n") => Some(None),
+        _ => None,
+    }
 }
 
-sized_nif!(frontmatter_split, frontmatter_split_nif, frontmatter_split_dirty_nif, (content: Binary) [content] -> (frontmatter::Split, usize));
+// The split pair is written out, not `sized_nif!`: the inline one has a scan
+// budget and answers `:reschedule` past it (the envelope_open pattern).
+#[rustler::nif]
+fn frontmatter_split_nif<'a>(env: Env<'a>, content: Binary<'a>) -> (Term<'a>, usize) {
+    memory::measured(
+        || match split_within(content.as_slice(), INLINE_FENCE_SCAN) {
+            Some(split) => split.encode(env),
+            None => reschedule().encode(env),
+        },
+    )
+}
+
+/// `Frontmatter.split/1` as offsets with no budget, and the native peak.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn frontmatter_split_dirty_nif(content: Binary) -> (frontmatter::Split, usize) {
+    memory::measured(|| frontmatter::split(content.as_slice()))
+}
 
 /// `Frontmatter.parse/1`'s common case: `[{key, json}]` in source order, or
 /// nil (YamlElixir decides), with the native peak.
@@ -1221,6 +1268,57 @@ mod tests {
         out
     }
 
+    // The budgeted split answers exactly as the full scan, or hands off.
+    #[test]
+    fn split_within_equals_split_or_hands_off() {
+        let short_lines = "---\n".to_string() + &"a: 1\n".repeat(50_000);
+        let cases = [
+            "plain note\n".repeat(10_000),
+            "---\ntitle: x\n---\n".to_string() + &"body\n".repeat(10_000),
+            short_lines.clone(),
+            short_lines.clone() + "---\nbody\n",
+            "---\n".to_string() + &"x".repeat(40_000) + "\n---\n",
+            "---\r\n---\r\n".to_string() + &"y".repeat(40_000),
+            "---\n".to_string() + &"a\n".repeat(8_190) + "---x\n---\n",
+            "---".to_string() + &"\n".repeat(30_000),
+        ];
+        for (i, s) in cases.iter().enumerate() {
+            for budget in [5, 64, 16_384, 1 << 20] {
+                if let Some(got) = split_within(s.as_bytes(), budget) {
+                    assert_eq!(
+                        got,
+                        frontmatter::split(s.as_bytes()),
+                        "case {i} budget {budget}"
+                    );
+                }
+            }
+        }
+        // An unclosed fence over many short lines is handed off; a note
+        // without a fence, or one closed early, is answered inline.
+        assert_eq!(
+            split_within(short_lines.as_bytes(), INLINE_FENCE_SCAN),
+            None
+        );
+        assert!(split_within(cases[0].as_bytes(), INLINE_FENCE_SCAN).is_some());
+        assert!(split_within(cases[1].as_bytes(), INLINE_FENCE_SCAN).is_some());
+    }
+
+    // One worker is the sequential path (no pool); more split the batch,
+    // never into more runs than texts; small batches never leave the caller.
+    // A pool is as big as the count it is built with.
+    #[test]
+    fn worker_count_follows_the_passed_value() {
+        let big = PAR_MIN_BYTES;
+        assert_eq!(runs_for(1, 100, 10 * big), 1);
+        assert_eq!(runs_for(0, 100, 10 * big), 1);
+        assert_eq!(runs_for(4, 100, 10 * big), 4);
+        assert_eq!(runs_for(4, 2, 10 * big), 2);
+        assert_eq!(runs_for(4, 100, big - 1), 1);
+        for n in [1, 3] {
+            assert_eq!(build_pool(n).current_num_threads(), n);
+        }
+    }
+
     // Runs on worker threads give the sequential output, in input order, for
     // any worker count, and report a peak that covers what they built.
     #[test]
@@ -1385,6 +1483,24 @@ mod tests {
     #[ignore]
     fn keyword_encode_bench() {
         let bm25 = configs()[0].1;
+        // tokens_with_len stays dirty; these show why (the worst shape is
+        // many one-letter words: a token, and a list cell, each).
+        // Warm this thread's regexes and stemmers first, as a long-lived
+        // scheduler thread is.
+        tokenizer::tokens_with_len("warm up running ünïcode", Some("en"));
+        for n in [4_096, 16_384] {
+            let words = "a b c d e f g h i j ".repeat(n / 20 + 1)[..n].to_string();
+            let prose_n = prose(n);
+            for (shape, text) in [("short words", &words), ("prose", &prose_n)] {
+                let t = std::time::Instant::now();
+                let (tokens, _) = tokenizer::tokens_with_len(text, Some("en"));
+                let us = t.elapsed().as_micros();
+                println!(
+                    "tokens_with_len {n:>6} B {shape:>11}: {us} us, {} tokens",
+                    tokens.len()
+                );
+            }
+        }
         for (name, text) in [
             ("prose 1 MiB", prose(1 << 20)),
             ("code 1 MiB", code(1 << 20)),
@@ -1403,9 +1519,9 @@ mod tests {
             let texts = chunks(&text);
             let slices: Vec<&[u8]> = texts.iter().map(|t| t.as_bytes()).collect();
             let t = std::time::Instant::now();
-            let (_, peak) = encode_parallel(&slices, &keyed(&KEY), bm25, Some("en"), workers());
+            let (_, peak) = encode_parallel(&slices, &keyed(&KEY), bm25, Some("en"), 4);
             let ns = t.elapsed().as_nanos() as f64 / text.len() as f64;
-            let shape = format!("chunks x{}", workers());
+            let shape = "chunks x4";
             println!("{name:>16} {shape:>11}: {ns:8.1} ns/byte, peak {peak} bytes (workers)");
         }
     }

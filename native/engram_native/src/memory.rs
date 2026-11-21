@@ -9,7 +9,12 @@
 //!   gives that call's native peak, the analogue of a process's heap high-water
 //!   mark. Work handed to the keyword encoder's worker pool (lib.rs
 //!   `encode_parallel`) is measured on each worker and added to the caller's
-//!   peak; any other NIF that used threads would have to do the same.
+//!   peak; any other NIF that used threads would have to do the same. That
+//!   sum is an upper bound (it assumes every run peaked at once). A worker's
+//!   output is freed on the caller thread, so a worker's T_LIVE only climbs
+//!   and the caller's drops below its base: both are expected, not a leak.
+//!   `measured` is relative to the thread's live count on entry, so peaks
+//!   stay right, and LIVE (process-wide) stays exact.
 //!
 //! Never a hard limit that returns null: an allocation failure aborts the
 //! whole node, and catch_unwind cannot stop it. Bound memory by design and

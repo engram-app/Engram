@@ -53,12 +53,6 @@ defmodule Engram.Native do
   # CPU scheduler, and a write must not queue behind a long keyword encode.
   @inline_max 16_384
 
-  # frontmatter_split reads bytes only to the closing fence (memchr per
-  # line), so a normal note's frontmatter is microseconds at any note size;
-  # only an unclosed fence scans the whole note. Inline up to here, so a
-  # note write does not queue behind a keyword encode for it.
-  @frontmatter_inline_max 1_048_576
-
   # Every NIF with an inline and a dirty variant: `{name, inline_nif,
   # dirty_nif, arity}`. Rust exports both; `sized/3` picks one by size.
   # Spelled out (not built from `name`) so a grep for either NIF lands here.
@@ -68,7 +62,6 @@ defmodule Engram.Native do
     {:note_meta, :note_meta_nif, :note_meta_dirty_nif, 1},
     {:chunk, :chunk_nif, :chunk_dirty_nif, 6},
     {:frontmatter_split, :frontmatter_split_nif, :frontmatter_split_dirty_nif, 1},
-    {:tokens_with_len, :tokens_with_len_nif, :tokens_with_len_dirty_nif, 2},
     {:frontmatter_parse, :frontmatter_parse_nif, :frontmatter_parse_dirty_nif, 1},
     {:text_diff, :text_diff_nif, :text_diff_dirty_nif, 2},
     {:utf16_offsets, :utf16_offsets_nif, :utf16_offsets_dirty_nif, 2},
@@ -84,7 +77,8 @@ defmodule Engram.Native do
 
   # NIFs reached only through a wrapper below that fixes their schedule.
   @single [
-    encode_documents_nif: 6,
+    encode_documents_nif: 5,
+    tokens_with_len_nif: 2,
     mmr_select_nif: 5,
     pack_f32_nif: 1,
     dense_json_nif: 1,
@@ -175,12 +169,24 @@ defmodule Engram.Native do
   `{block_start, block_end, body_start, add_newline}` or nil. Any binary:
   the scan is over bytes.
   """
-  def frontmatter_split(content),
-    do: sized(:frontmatter_split, content, [content], inline_max: @frontmatter_inline_max)
+  #
+  # Inline at any size: the inline NIF reads at most 16 KB (a note without a
+  # leading fence answers at once) and answers `:reschedule` when the fence
+  # is still open there; the line-by-line scan of an unclosed fence over a
+  # large note then runs dirty.
+  def frontmatter_split(content) do
+    :frontmatter_split
+    |> call(content, %{dirty: false}, fn -> frontmatter_split_nif(content) end)
+    |> rescheduled(:frontmatter_split, content, [content])
+  end
 
-  @doc "The keyword tokenizer: `{tokens, raw_len}`."
+  @doc """
+  The keyword tokenizer: `{tokens, raw_len}`. Always on a dirty scheduler:
+  it allocates and stems per token (see `keyword_encode_bench`).
+  """
   def tokens_with_len(text, language),
-    do: sized(:tokens_with_len, text, [text, language])
+    do:
+      call(:tokens_with_len, text, %{dirty: true}, fn -> tokens_with_len_nif(text, language) end)
 
   @doc """
   The common shape of a frontmatter YAML block, parsed natively:
@@ -270,6 +276,11 @@ defmodule Engram.Native do
   # overrides) runs `<name>_nif` on the calling scheduler, more runs
   # `<name>_dirty_nif`. `dirty: true` is for a call whose work its input
   # size does not bound.
+  # An inline NIF that stopped at its in-NIF budget answers `:reschedule`;
+  # rerun the same call dirty. Shared by every budgeted inline NIF.
+  defp rescheduled(:reschedule, name, input, args), do: sized(name, input, args, dirty: true)
+  defp rescheduled(result, _name, _input, _args), do: result
+
   defp sized(name, input, args, opts \\ []) do
     bytes = if is_integer(input), do: input, else: :erlang.iolist_size(input)
     dirty = opts[:dirty] == true or bytes > Keyword.get(opts, :inline_max, @inline_max)
@@ -304,8 +315,13 @@ defmodule Engram.Native do
     b = b / 1
     cap = cap && cap / 1
 
+    # Worker threads for the batch: the dirty CPU schedulers online, which
+    # rel/env.sh.eex sizes from the real CPU quota (1 on prod's 0.5 vCPU
+    # task: the sequential path). See lib.rs `pool` for why not the OS count.
+    workers = :erlang.system_info(:dirty_cpu_schedulers_online)
+
     call(:keyword_encode, texts, %{dirty: true}, fn ->
-      encode_documents_nif(texts, filter_key, avgdl, language, b, cap)
+      encode_documents_nif(texts, filter_key, avgdl, language, {b, cap, workers})
     end)
   end
 
@@ -533,10 +549,8 @@ defmodule Engram.Native do
 
     opened =
       if byte_size(ct) <= @inline_max do
-        case envelope_open_nif(ct, nonce, key, aad) do
-          {:reschedule, _peak} -> sized(:envelope_open, ct, args, dirty: true)
-          {opened, _peak} -> opened
-        end
+        {opened, _peak} = envelope_open_nif(ct, nonce, key, aad)
+        rescheduled(opened, :envelope_open, ct, args)
       else
         sized(:envelope_open, ct, args)
       end
