@@ -194,4 +194,39 @@ defmodule Engram.LogsPersistPolicyTest do
       end
     end
   end
+
+  # SaaS switch to stop writing `client_logs` rows (the lines still reach the
+  # server log pipeline). Default off; self-host ignores it.
+  describe "client_logs_stop_writes" do
+    import ExUnit.CaptureLog
+
+    setup do
+      on_exit(fn -> Application.put_env(:engram, :billing_enabled, true) end)
+    end
+
+    test "off by default: rows are written", %{user: user} do
+      assert {:ok, 1} = Logs.insert_logs(user, [line("warn", "kept")], nil)
+      assert stored(user) == ["kept"]
+    end
+
+    test "on in SaaS: no row is written, the line is still re-emitted", %{user: user} do
+      Engram.ServiceConfig.put_override(:client_logs_stop_writes, true)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, 0} = Logs.insert_logs(user, [line("warn", "not stored")], nil)
+        end)
+
+      assert stored(user) == []
+      assert log =~ "not stored"
+    end
+
+    test "on in self-host: ignored, rows are written", %{user: user} do
+      Application.put_env(:engram, :billing_enabled, false)
+      Engram.ServiceConfig.put_override(:client_logs_stop_writes, true)
+
+      assert {:ok, 1} = Logs.insert_logs(user, [line("warn", "kept")], nil)
+      assert stored(user) == ["kept"]
+    end
+  end
 end

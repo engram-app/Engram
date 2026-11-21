@@ -74,7 +74,59 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
   test "a device already over budget is refused with the same throttled shape", %{conn: conn} do
     exhaust(conn, "dev-a")
     assert %{"throttled" => true} = send_logs(conn, 1, "dev-a")
-    assert %{"count" => 0, "throttled" => true, "retry_after_ms" => _} = send_logs(conn, 5, "dev-a")
+
+    assert %{"count" => 0, "throttled" => true, "retry_after_ms" => _} =
+             send_logs(conn, 5, "dev-a")
+  end
+
+  # Once a refusal has been answered, the same token and device are refused at
+  # the front of the pipeline (EngramWeb.Plugs.ClientLogsThrottle): no auth,
+  # no tenant transaction, no query at all.
+  test "a client known to be over budget is refused before auth, with no DB query", %{
+    conn: conn
+  } do
+    exhaust(conn, "dev-a")
+    assert %{"throttled" => true} = send_logs(conn, 1, "dev-a")
+
+    me = self()
+
+    # Control: the recorder does see the full path's queries.
+    {_, full} = Engram.QueryRecorder.record(fn -> send_logs(conn, 1, "dev-b") end)
+    assert Enum.any?(full, &(&1.pid == me))
+
+    {body, queries} = Engram.QueryRecorder.record(fn -> send_logs(conn, 1, "dev-a") end)
+
+    assert %{"ok" => true, "count" => 0, "throttled" => true, "retry_after_ms" => ms} = body
+    assert ms > 0 and ms <= :timer.minutes(10)
+    assert Enum.filter(queries, &(&1.pid == me)) == []
+  end
+
+  # The pre-auth key is the bearer token's hash plus the device id. A device id
+  # is client-chosen, so another account sending the same one must not inherit
+  # the refusal; nor may an unauthenticated request with that device id.
+  test "one client's spent budget does not throttle another client's request", %{
+    conn: conn
+  } do
+    exhaust(conn, "dev-a")
+    assert %{"throttled" => true} = send_logs(conn, 1, "dev-a")
+
+    other = insert(:user)
+    _vault = insert(:vault, user: other, is_default: true)
+    {:ok, other_key, _} = Engram.Accounts.create_api_key(other, "other-key")
+    lift_api_rps_cap!(other)
+
+    other_conn =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{other_key}")
+      |> put_req_header("x-device-id", "dev-a")
+
+    assert %{"count" => 1} =
+             other_conn |> post("/api/logs", %{logs: lines(1)}) |> json_response(200)
+
+    assert stored(other) == 1
+
+    anon = build_conn() |> put_req_header("x-device-id", "dev-a")
+    assert anon |> post("/api/logs", %{logs: lines(1)}) |> response(401)
   end
 
   # The warning is the tally's (Engram.Logs.BudgetDrops), at most once per
