@@ -81,6 +81,78 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
     assert [_] = Links.links_for_note(user, note.id)
   end
 
+  describe "reads one copy of the note" do
+    # Envelope sealed under the wrong AAD: decrypts as an error, so any read
+    # of the column it lands in fails the job.
+    defp unreadable(user) do
+      {:ok, dek} = Crypto.get_dek(user)
+      Engram.Crypto.Envelope.encrypt("junk", dek, "wrong-aad")
+    end
+
+    defp put_body!(user, note_id, values),
+      do:
+        {:ok, _} =
+          Repo.with_tenant(user.id, fn -> Engram.Fixtures.write_note_body!(note_id, values) end)
+
+    # A real tail row whose update changes nothing: the text with and without
+    # it is the same.
+    defp append_noop_tail!(user, vault, note_id) do
+      {:ok, %{state: update}} = CrdtBridge.merge_plaintext(nil, "")
+      {:ok, dek} = Crypto.get_dek(user)
+      aad = Crypto.aad_for_row(:notes, :crdt_state, note_id)
+      {ct, nonce} = Engram.Crypto.Envelope.encrypt(update, dek, aad)
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.insert!(%Engram.Notes.CrdtUpdateLog{
+            note_id: note_id,
+            user_id: user.id,
+            vault_id: vault.id,
+            update_ciphertext: ct,
+            update_nonce: nonce,
+            inserted_at: DateTime.utc_now()
+          })
+        end)
+    end
+
+    defp extract!(user, note_id) do
+      assert :ok = perform_job(ExtractNoteLinks, %{note_id: note_id, user_id: user.id})
+      user |> Links.links_for_note(note_id) |> Enum.map(& &1.target_text) |> Enum.sort()
+    end
+
+    setup %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "One.md", "content" => "[[A]] and [[B]]"},
+          actor: "api"
+        )
+
+      %{note: note}
+    end
+
+    test "the same links with and without a tail", %{user: user, vault: vault, note: note} do
+      without = extract!(user, note.id)
+      append_noop_tail!(user, vault, note.id)
+      assert extract!(user, note.id) == without
+      assert without == ["A", "B"]
+    end
+
+    # An empty tail: the stored body IS the doc's text, so the state is never
+    # decrypted or rebuilt. An unreadable state proves it is not read.
+    test "an empty tail never reads the CRDT state", %{user: user, note: note} do
+      {ct, nonce} = unreadable(user)
+      put_body!(user, note.id, crdt_state_ciphertext: ct, crdt_state_nonce: nonce)
+      assert extract!(user, note.id) == ["A", "B"]
+    end
+
+    # A tail: the doc is the text, so the stored body is never decrypted.
+    test "a tail never reads the stored body", %{user: user, vault: vault, note: note} do
+      {ct, nonce} = unreadable(user)
+      put_body!(user, note.id, content_ciphertext: ct, content_nonce: nonce)
+      append_noop_tail!(user, vault, note.id)
+      assert extract!(user, note.id) == ["A", "B"]
+    end
+  end
+
   test "missing note discards", %{user: _user} do
     assert {:discard, _} = perform_job(ExtractNoteLinks, %{note_id: Ecto.UUID.generate()})
   end

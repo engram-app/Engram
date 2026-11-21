@@ -59,6 +59,7 @@ defmodule Engram.Workers.ExtractNoteLinks do
   alias Engram.Links
   alias Engram.Links.Parser
   alias Engram.Logger.DecryptFailure
+  alias Engram.Notes.CrdtBridge
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vaults.Vault
@@ -123,31 +124,47 @@ defmodule Engram.Workers.ExtractNoteLinks do
     with {:ok, note} <- Engram.Notes.fetch_note_for_worker_job(args), do: {:ok, note, nil}
   end
 
-  defp authoritative(user, decrypted, nil),
-    do: Engram.Notes.authoritative_content(user, decrypted)
+  # notes.content is the REST/search FACADE: since #1141 it is only
+  # materialized from the CRDT doc at checkpoint, so it lags a live doc write
+  # (#1159, `Engram.Notes.authoritative_content/2`). A rewrite's
+  # `Rewriter.finish/4` writes its edges from the doc's text and leaves the
+  # facade alone; re-deriving them from the facade would clobber its repair
+  # (#1280). So the text comes from the authority, reading ONE copy of it:
+  #
+  #   * A tail and a CRDT state: the doc (state + tail) is the text. The body
+  #     is not decrypted at all.
+  #   * An empty tail on a markdown note: every writer of `crdt_state` writes
+  #     the body projected from it in the same UPDATE (checkpoint, upsert,
+  #     seed), so the stored body IS the doc's text, the rule `get_note/3`
+  #     serves reads by. The state is not decrypted or rebuilt (a 1.4 MB note
+  #     paid both on every edit).
+  #   * Otherwise (no state, a canvas, a legacy job with no tail read): as
+  #     before, decrypt and resolve through the authority.
+  defp current_text(user, note, nil) do
+    with {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user),
+         do: Engram.Notes.authoritative_content(user, decrypted)
+  end
 
-  defp authoritative(user, decrypted, tail),
-    do: Engram.Notes.authoritative_content(user, decrypted, tail)
+  defp current_text(user, %Note{crdt_state_ciphertext: state} = note, [_ | _] = tail)
+       when is_binary(state),
+       do: Engram.Notes.authoritative_content(user, note, tail)
+
+  defp current_text(user, note, tail) do
+    with {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user) do
+      if tail == [] and CrdtBridge.markdown_path?(decrypted.path),
+        do: {:ok, decrypted.content || ""},
+        else: Engram.Notes.authoritative_content(user, decrypted, tail)
+    end
+  end
 
   defp extract(note, tail, user, vault) do
-    # notes.content is the REST/search FACADE — since #1141 it's only
-    # materialized from the CRDT doc at checkpoint, so it lags a live doc
-    # write (same staleness class as #1159, see
-    # `Engram.Notes.authoritative_content/2` moduledoc and
-    # `NotesController.append/2`). A rewrite's `Rewriter.finish/4` writes
-    # the correct edges immediately via the CRDT-projected content but
-    # (deliberately) does not materialize the facade — reading it here
-    # would re-derive stale edges on the very next extraction and clobber
-    # what the rewrite just fixed. Decrypt first (still needed to recover
-    # a legacy/no-crdt-state row's plaintext as the fallback base), then
-    # resolve through the authority.
-    with {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user),
-         {:ok, content} <- authoritative(user, decrypted, tail) do
-      parsed = Parser.extract(content)
-      basenames = Links.replace_links_basenames(user, vault, note.id, parsed)
-      :ok = repair_rename_danglers(user, vault, parsed, basenames)
-      :ok
-    else
+    case current_text(user, note, tail) do
+      {:ok, content} ->
+        parsed = Parser.extract(content)
+        basenames = Links.replace_links_basenames(user, vault, note.id, parsed)
+        :ok = repair_rename_danglers(user, vault, parsed, basenames)
+        :ok
+
       {:error, reason} ->
         DecryptFailure.log("extract_links_decrypt_failed", reason,
           user_id: note.user_id,

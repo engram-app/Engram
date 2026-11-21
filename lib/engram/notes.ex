@@ -4547,6 +4547,11 @@ defmodule Engram.Notes do
   `authoritative_content/2` for a DECRYPTED note whose tail rows were read in
   the same statement as the row (`fetch_note_with_tail_for_worker/2`), so the
   row is not read a second time.
+
+  Only a row with no `crdt_state` reads the decrypted body (its fallback). A
+  row with one is resolved from the state and tail alone, so a caller holding
+  such a row may pass it undecrypted (`ExtractNoteLinks` does, to skip the
+  body decrypt).
   """
   @spec authoritative_content(map(), Note.t(), [map()]) :: {:ok, String.t()} | {:error, term()}
   def authoritative_content(user, %Note{} = note, tail) when is_list(tail) do
