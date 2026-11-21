@@ -102,6 +102,23 @@ defmodule EngramWeb.CrdtChannelFileTimesTest do
 
   defp settle, do: Process.sleep(500)
 
+  # Forces the room's checkpoint now (what the debounce timer does when it
+  # fires): sustained frames cancel the eager flush, so waiting for the
+  # settle debounce (5 s) would make these tests slow, not deterministic.
+  defp flush_room(note_id) do
+    room = Engram.Notes.CrdtRegistry.lookup(note_id)
+    assert is_pid(room), "the room must be resident"
+    me = self()
+    # The timer pid lives in the process that runs the room's callbacks.
+    :ok =
+      Engram.Notes.CrdtRoom.update_doc(room, fn _doc ->
+        send(me, {:timer, Process.get(:crdt_timer_pid)})
+      end)
+
+    assert_receive {:timer, timer} when is_pid(timer)
+    send(timer, :tick)
+  end
+
   # Handshake a client doc over `crdt_msg`: leaves a room resident. The server
   # also pushes its own syncStep1 (and an earlier handshake leaves one in the
   # mailbox), so skip pushes until the syncStep2 arrives.
@@ -227,6 +244,26 @@ defmodule EngramWeb.CrdtChannelFileTimesTest do
     assert row(note.id).version == before.version + 1
   end
 
+  test "over crdt_msg the newest mtime in the room wins, whatever order frames arrive",
+       %{socket: socket, note: note} do
+    client = handshake_room(socket, note.id)
+
+    for {prefix, t} <- [{"a", @t2}, {"b", @t1}] do
+      ref =
+        push(socket, "crdt_msg", %{
+          "doc_id" => note.id,
+          "b64" => frame_b64(client, prefix),
+          "mtime" => t
+        })
+
+      assert_reply ref, :ok, %{}
+    end
+
+    flush_room(note.id)
+    assert eventually(fn -> row(note.id).mtime_at != nil end)
+    assert secs(row(note.id).mtime_at) == @t2
+  end
+
   test "an older mtime does not regress it", %{socket: socket, note: note} do
     edit(socket, note.id, %{"mtime" => @t2})
     assert eventually(fn -> secs(row(note.id).mtime_at) == @t2 end)
@@ -335,13 +372,9 @@ defmodule EngramWeb.CrdtChannelFileTimesTest do
     end
 
     refute_received {:channel_notes_write, _}
-    # The checkpoint writes whatever the room held when it ran (the first
-    # one fires before the last frames land; the settle debounce is longer
-    # than this test), so assert a stored time from the stream, not the last.
-    assert eventually(fn ->
-             stored = secs(row(note.id).mtime_at)
-             stored != nil and stored >= @t1 + 1 and stored <= @t1 + 10
-           end)
+    # The room holds the newest time handed to it; the checkpoint writes it.
+    flush_room(note.id)
+    assert eventually(fn -> secs(row(note.id).mtime_at) == @t1 + 10 end)
   end
 
   test "put_frame_times never moves version, hash or seq and is tenant scoped",

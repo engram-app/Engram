@@ -54,6 +54,7 @@ defmodule Engram.Notes do
   alias Engram.Folders.MarkerStop
   alias Engram.Folders.Rows
   alias Engram.Folders.WalkSql
+  alias Engram.Folders.WriteStop
   alias Engram.Pager
   alias Engram.Repo
   alias Engram.Search.NameTerms
@@ -8546,33 +8547,62 @@ defmodule Engram.Notes do
   def rename_folder_uncascaded(user, vault, old_folder, new_folder) do
     new_folder = String.trim_trailing(new_folder, "/")
 
-    with {:ok, user} <- Crypto.ensure_user_dek(user),
-         false <- old_folder == new_folder,
-         ids =
-           Repo.with_tenant!(user.id, fn ->
-             Rows.ids_by_path(user, vault.id, [old_folder, new_folder])
-           end),
-         %{^old_folder => folder_id} when is_binary(folder_id) <- ids,
-         nil <- ids[new_folder],
-         {rows, drift} = scan_with_drift(user, vault, [old_folder]),
-         {markers, notes} = Enum.split_with(rows, &(&1.kind == "folder")),
-         # Nothing under it: the cascade answers (REST's 404 for an empty
-         # path-made folder, or the wire's bare-row move).
-         false <- notes == [] and markers == [],
-         true <- Enum.all?(notes, &uncascadable?/1),
-         # Any placed drift in the vault (0 in steady state): a drift row the
-         # stored-folder filter dropped may still name this folder by
-         # reference, and would move silently. The cascade decides it.
-         [] <- drift do
-      case key_names(user, vault, notes) do
-        :ok -> move_folder_row(user, vault, folder_id, {old_folder, new_folder}, notes, markers)
-        # A row the trigger cannot key (no name hash): only the cascade moves it.
-        :unkeyed -> :cascade
+    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      case plan_uncascaded(user, vault, old_folder, new_folder) do
+        {:move, folder_id, notes, markers} ->
+          case key_names(user, vault, notes) do
+            :ok ->
+              move_folder_row(user, vault, folder_id, {old_folder, new_folder}, notes, markers)
+
+            # A row the trigger cannot key (no name hash): only the cascade moves it.
+            :unkeyed ->
+              cascade(user, vault, :unkeyed)
+          end
+
+        {:cascade, reason} ->
+          cascade(user, vault, reason)
       end
-    else
-      {:error, _} = err -> err
-      _ -> :cascade
     end
+  end
+
+  # What the uncascaded leg may do: `{:move, folder_id, notes, markers}`, or
+  # `{:cascade, reason}` with the branch that decided it (one log line,
+  # `WriteStop.log_cascade/3`). The decisions are the ones the leg documents.
+  defp plan_uncascaded(_user, _vault, folder, folder), do: {:cascade, :no_op}
+
+  defp plan_uncascaded(user, vault, old_folder, new_folder) do
+    ids =
+      Repo.with_tenant!(user.id, fn ->
+        Rows.ids_by_path(user, vault.id, [old_folder, new_folder])
+      end)
+
+    cond do
+      not is_binary(ids[old_folder]) -> {:cascade, :no_old_row}
+      ids[new_folder] != nil -> {:cascade, :new_folder_exists}
+      true -> plan_scanned(user, vault, ids[old_folder], old_folder)
+    end
+  end
+
+  defp plan_scanned(user, vault, folder_id, old_folder) do
+    {rows, drift} = scan_with_drift(user, vault, [old_folder])
+    {markers, notes} = Enum.split_with(rows, &(&1.kind == "folder"))
+
+    cond do
+      # Nothing under it: the cascade answers (REST's 404 for an empty
+      # path-made folder, or the wire's bare-row move).
+      notes == [] and markers == [] -> {:cascade, :empty}
+      not Enum.all?(notes, &uncascadable?/1) -> {:cascade, :not_derivable}
+      # Any placed drift in the vault (0 in steady state): a drift row the
+      # stored-folder filter dropped may still name this folder by
+      # reference, and would move silently. The cascade decides it.
+      drift != [] -> {:cascade, :drift}
+      true -> {:move, folder_id, notes, markers}
+    end
+  end
+
+  defp cascade(user, vault, reason) do
+    :ok = WriteStop.log_cascade(user, vault, reason)
+    :cascade
   end
 
   defp uncascadable?(note), do: Location.derivable?(note)
@@ -8665,7 +8695,7 @@ defmodule Engram.Notes do
       # A folder appeared at the target: the cascade runs instead and
       # consumes (or, called directly, re-claims) every note it scans.
       {:ok, {:error, :merge}} ->
-        :cascade
+        cascade(user, vault, :new_folder_exists)
 
       # A note under this folder was written after the scan. The cascade
       # re-claims what it scans, but a scanned note that moved out or died
@@ -8674,7 +8704,7 @@ defmodule Engram.Notes do
       # Preclaimed, the cascade's consume finds the plan stale and re-plans.
       {:ok, {:error, :raced}} ->
         orphan.(:raced)
-        :cascade
+        cascade(user, vault, :raced)
 
       {:ok, {:error, reason}} ->
         # The claim committed but no row moved: report it, as the cascade

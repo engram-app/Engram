@@ -320,9 +320,12 @@ defmodule Engram.Folders do
   # it (`attachments_leg/5`).
   defp notes_leg(user, vault, old, new, stop?) do
     uncascaded =
-      if stop?,
-        do: Notes.rename_folder_uncascaded(user, vault, old, new),
-        else: :cascade
+      if stop? do
+        Notes.rename_folder_uncascaded(user, vault, old, new)
+      else
+        WriteStop.log_cascade(user, vault, :stop_off)
+        :cascade
+      end
 
     case uncascaded do
       :cascade ->
