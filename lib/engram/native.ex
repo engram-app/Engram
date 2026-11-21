@@ -47,14 +47,17 @@ defmodule Engram.Native do
   @doc "Language codes (strings) with a Snowball stemmer."
   def stem_languages, do: :erlang.nif_error(:nif_not_loaded)
 
-  @doc "The keyword tokenizer: `{tokens, raw_len}`."
-  def tokens_with_len(_text, _language), do: :erlang.nif_error(:nif_not_loaded)
-
   # These run on the calling scheduler up to this many input bytes (well
   # under 1 ms on real notes; 2.8 ms worst seen, on adversarial backtick
   # runs), and on a dirty CPU scheduler above it. Prod has ONE dirty
   # CPU scheduler, and a write must not queue behind a long keyword encode.
   @inline_max 16_384
+
+  # frontmatter_split reads bytes only to the closing fence (memchr per
+  # line), so a normal note's frontmatter is microseconds at any note size;
+  # only an unclosed fence scans the whole note. Inline up to here, so a
+  # note write does not queue behind a keyword encode for it.
+  @frontmatter_inline_max 1_048_576
 
   # Every NIF with an inline and a dirty variant: `{name, inline_nif,
   # dirty_nif, arity}`. Rust exports both; `sized/3` picks one by size.
@@ -65,6 +68,7 @@ defmodule Engram.Native do
     {:note_meta, :note_meta_nif, :note_meta_dirty_nif, 1},
     {:chunk, :chunk_nif, :chunk_dirty_nif, 6},
     {:frontmatter_split, :frontmatter_split_nif, :frontmatter_split_dirty_nif, 1},
+    {:tokens_with_len, :tokens_with_len_nif, :tokens_with_len_dirty_nif, 2},
     {:frontmatter_parse, :frontmatter_parse_nif, :frontmatter_parse_dirty_nif, 1},
     {:text_diff, :text_diff_nif, :text_diff_dirty_nif, 2},
     {:utf16_offsets, :utf16_offsets_nif, :utf16_offsets_dirty_nif, 2},
@@ -171,7 +175,12 @@ defmodule Engram.Native do
   `{block_start, block_end, body_start, add_newline}` or nil. Any binary:
   the scan is over bytes.
   """
-  def frontmatter_split(content), do: sized(:frontmatter_split, content, [content])
+  def frontmatter_split(content),
+    do: sized(:frontmatter_split, content, [content], inline_max: @frontmatter_inline_max)
+
+  @doc "The keyword tokenizer: `{tokens, raw_len}`."
+  def tokens_with_len(text, language),
+    do: sized(:tokens_with_len, text, [text, language])
 
   @doc """
   The common shape of a frontmatter YAML block, parsed natively:
@@ -257,12 +266,13 @@ defmodule Engram.Native do
   def utf16_offsets(text, offsets) when is_binary(text) and is_list(offsets),
     do: sized(:utf16_offsets, text, [text, offsets])
 
-  # `input` as for `call/4`; up to @inline_max bytes of it runs `<name>_nif`
-  # on the calling scheduler, more runs `<name>_dirty_nif`. `force_dirty`
-  # is for a call whose work its input size does not bound.
-  defp sized(name, input, args, force_dirty \\ false) do
+  # `input` as for `call/4`; up to @inline_max bytes of it (`:inline_max`
+  # overrides) runs `<name>_nif` on the calling scheduler, more runs
+  # `<name>_dirty_nif`. `dirty: true` is for a call whose work its input
+  # size does not bound.
+  defp sized(name, input, args, opts \\ []) do
     bytes = if is_integer(input), do: input, else: :erlang.iolist_size(input)
-    dirty = force_dirty or bytes > @inline_max
+    dirty = opts[:dirty] == true or bytes > Keyword.get(opts, :inline_max, @inline_max)
     {inline_nif, dirty_nif} = nifs(name)
     nif = if dirty, do: dirty_nif, else: inline_nif
     call(name, bytes, %{dirty: dirty}, fn -> apply(__MODULE__, nif, args) end)
@@ -524,7 +534,7 @@ defmodule Engram.Native do
     opened =
       if byte_size(ct) <= @inline_max do
         case envelope_open_nif(ct, nonce, key, aad) do
-          {:reschedule, _peak} -> sized(:envelope_open, ct, args, true)
+          {:reschedule, _peak} -> sized(:envelope_open, ct, args, dirty: true)
           {opened, _peak} -> opened
         end
       else
