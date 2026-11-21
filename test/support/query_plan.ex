@@ -390,12 +390,13 @@ defmodule Engram.QueryPlan do
   end
 
   @doc """
-  Every read of notes is keyed: no seq scan, every notes index read (index,
-  index-only or bitmap index scan, a BitmapAnd arm included) has an Index
-  Cond, and every one but a `notes_pkey` probe names both `user_id` and
-  `vault_id` in it. A partial index read with no condition is every
-  account's rows of that index; one by `vault_id` alone on a
-  `(user_id, vault_id, ...)` index is a skip scan over every tenant.
+  Every read of notes is keyed: no seq scan, and every notes index read
+  (index, index-only or bitmap index scan, a BitmapAnd arm included) has an
+  Index Cond naming its index's leading column: `user_id` (and `vault_id`)
+  on a `notes_user_*` index, `vault_id` on any other but `notes_pkey`, `id`
+  on `notes_pkey`. A partial index read with no condition is every
+  account's rows of that index; a `(user_id, vault_id, ...)` index read by
+  `vault_id` alone is a skip scan over every tenant.
   """
   @spec assert_notes_reads_bound!(String.t(), String.t()) :: true
   def assert_notes_reads_bound!(plan, msg \\ "") do
@@ -410,12 +411,19 @@ defmodule Engram.QueryPlan do
           ) do
       assert next =~ ~r/^\s*Index Cond: /, "notes read with no condition: #{index}\n" <> full
 
-      unless index == "notes_pkey",
-        do:
-          assert(
-            next =~ "user_id =" and next =~ "vault_id =",
-            "notes read not bound by user_id and vault_id: #{index} #{next}\n" <> full
-          )
+      bound? =
+        cond do
+          index == "notes_pkey" ->
+            next =~ ~r/\bid = /
+
+          String.starts_with?(index, "notes_user_") ->
+            next =~ "user_id =" and next =~ "vault_id ="
+
+          true ->
+            next =~ "vault_id ="
+        end
+
+      assert bound?, "notes read not bound by its leading key: #{index} #{next}\n" <> full
     end
 
     true

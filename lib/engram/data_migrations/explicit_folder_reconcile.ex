@@ -19,8 +19,10 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
   pool on SaaS, per tenant on self-host). Each window is one transaction under
   `SET LOCAL lock_timeout = '2s'` and `statement_timeout = '5s'`: first the
   window's vault rows `FOR SHARE SKIP LOCKED` in their own statement, then
-  the marker probe and the update in a later one (see `@lock_vaults_sql` for
-  why the order makes a marker being written impossible to miss). A row in a vault held by a writer, or a row a writer
+  the marker probe and the update in later ones (see statement 2 above
+  `@stale_sql` for why the order makes a marker being written impossible to
+  miss). Every read is keyed: the window's rows by primary key, the vaults
+  by primary key, one marker probe a row. A row in a vault held by a writer, or a row a writer
   holds, is skipped and counts as left (the next pass retries it). The
   marker probe is `notes_user_vault_folder_marker`, one index probe a row.
   Steady state is 0 rows: a clean walk writes nothing.
@@ -50,6 +52,7 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
 
   alias Engram.Backfill.IdWindows
   alias Engram.DataMigrations
+  alias Engram.DataMigrations.VaultLock
   alias Engram.Folders.Folder
   alias Engram.Logger.Metadata
 
@@ -125,68 +128,90 @@ defmodule Engram.DataMigrations.ExplicitFolderReconcile do
     LIMIT 1) IS NULL
   """
 
-  # Statement 1: the window's vault rows FOR SHARE SKIP LOCKED. Its own
-  # statement on purpose: under READ COMMITTED a statement's snapshot is
-  # taken when it starts, so a marker probe in the SAME statement could miss
-  # a marker committed after that snapshot but before the lock was reached
-  # (`FOR SHARE` follows the update chain; the probe does not), and clear a
-  # flag a live marker now names (#2639 re-review, M-A). Every marker writer
-  # takes its vault row FOR UPDATE (`Vaults.next_seq!/1`) before it inserts
-  # a marker and holds it to commit, so once statement 1 holds a vault row:
-  # a writer that committed before it is visible to statement 2's fresh
-  # snapshot, a writer still holding the row made SKIP LOCKED skip the vault
-  # (its rows count as left), and a writer that starts later waits for this
-  # transaction. No interleaving clears the flag of a live marker.
-  @lock_vaults_sql """
-  SELECT id, user_id FROM vaults
-  WHERE id IN (SELECT vault_id FROM folders WHERE id = ANY($1))
-  FOR SHARE SKIP LOCKED
-  """
-
-  # Statement 2, a later snapshot: the stale rows of the locked vaults
-  # (`$2`, their owners `$3`), in a MATERIALIZED CTE evaluated once, then the
-  # update. The owners bind any read of `folders_explicit_user_vault
-  # (user_id, vault_id)`: by `vault_id` alone it is a skip scan over every
-  # tenant's explicit rows.
-  @clear_sql """
-  WITH c AS MATERIALIZED (
-    SELECT f.id FROM folders AS f
-    WHERE #{@stale} AND f.user_id = ANY($3) AND f.vault_id = ANY($2)
-    ORDER BY f.id
-    FOR NO KEY UPDATE OF f SKIP LOCKED
-  )
-  UPDATE folders AS f SET explicit = false, updated_at = now()
-  FROM c
-  WHERE f.id = c.id
-  """
-
-  # What is left in a window: the vaults of stale rows a held lock skipped.
-  # The window's folder rows read by primary key alone in a MATERIALIZED CTE
-  # (named `f` for `@stale`): with the explicit predicate on the scan, the
-  # planner read `folders_explicit_user_vault` with no condition (every
-  # account's explicit rows).
-  @left_sql """
+  # The window's folder rows, read by primary key alone in a MATERIALIZED CTE
+  # (named `f` for `@stale`); every check runs on these rows, outside it.
+  # With the explicit predicate on a folders scan the planner read
+  # `folders_explicit_user_vault` with no condition (every account's
+  # explicit rows), and with an owner bound it read `folders_user` (every
+  # folder of the tenant) per window.
+  @window_rows """
   WITH f AS MATERIALIZED (
     SELECT id, user_id, vault_id, full_path_hmac, explicit, explicit_seq, deleted_at
     FROM folders WHERE id = ANY($1))
-  SELECT DISTINCT f.vault_id FROM f WHERE #{@stale}
   """
 
+  # Statement 1: the window's vaults.
+  @window_vaults_sql "#{@window_rows} SELECT DISTINCT f.vault_id FROM f"
+
+  # Statement 2: those vault rows FOR SHARE SKIP LOCKED
+  # (`Engram.DataMigrations.VaultLock`). Its own statement on purpose: under
+  # READ COMMITTED a statement's snapshot is taken when it starts, so a
+  # marker probe in the SAME statement could miss a marker committed after
+  # that snapshot but before the lock was reached (`FOR SHARE` follows the
+  # update chain; the probe does not), and clear a flag a live marker now
+  # names (#2639 re-review, M-A). Every marker writer takes its vault row FOR
+  # UPDATE (`Vaults.next_seq!/1`) before it inserts a marker and holds it to
+  # commit, so once statement 2 holds a vault row: a writer that committed
+  # before it is visible to statement 3's fresh snapshot, a writer still
+  # holding the row made SKIP LOCKED skip the vault (its rows count as left),
+  # and a writer that starts later waits for this transaction. No
+  # interleaving clears the flag of a live marker.
+
+  # Statement 3, a later snapshot: the window's stale rows in the locked
+  # vaults (`$2`).
+  @stale_sql "#{@window_rows} SELECT f.id FROM f WHERE #{@stale} AND f.vault_id = ANY($2) ORDER BY f.id"
+
+  # Statement 4: those rows (`$1`) locked SKIP LOCKED by primary key alone,
+  # the guards re-checked on the locked rows (a locking read returns the
+  # row's latest version, so a row a writer changed meanwhile keeps its
+  # flag; the vault lock already bars marker writers), then cleared by
+  # primary key. The guards stay off every folders scan: on one they let the
+  # planner hash-join a whole-table read, or read a partial explicit index
+  # with no condition.
+  @clear_sql """
+  WITH c AS MATERIALIZED (
+    SELECT id, explicit, explicit_seq, deleted_at FROM folders
+    WHERE id = ANY($1::uuid[])
+    ORDER BY id
+    FOR NO KEY UPDATE SKIP LOCKED)
+  UPDATE folders SET explicit = false, updated_at = now()
+  WHERE id = ANY($1::uuid[])
+    AND id IN (
+      SELECT id FROM c WHERE explicit AND explicit_seq IS NULL AND deleted_at IS NULL)
+  """
+
+  # What is left in a window: the vaults of stale rows a held lock skipped.
+  @left_sql "#{@window_rows} SELECT DISTINCT f.vault_id FROM f WHERE #{@stale}"
+
   @doc false
-  def lock_vaults_sql, do: @lock_vaults_sql
+  def window_vaults_sql, do: @window_vaults_sql
+  @doc false
+  def stale_sql, do: @stale_sql
   @doc false
   def clear_sql, do: @clear_sql
   @doc false
   def left_sql, do: @left_sql
 
+  defp clear_stale(_repo, _ids, []), do: 0
+
+  defp clear_stale(repo, ids, vaults) do
+    case repo.query!(@stale_sql, [ids, vaults]).rows do
+      [] ->
+        0
+
+      stale ->
+        %{num_rows: fixed} = repo.query!(@clear_sql, [List.flatten(stale)])
+        fixed
+    end
+  end
+
   defp clear(ids, %{repo: repo}) do
     ids = Enum.map(ids, &Ecto.UUID.dump!/1)
     _ = repo.query!("SET LOCAL lock_timeout = '2s'", [])
     _ = repo.query!("SET LOCAL statement_timeout = '5s'", [])
-    %{rows: locked} = repo.query!(@lock_vaults_sql, [ids])
-    vaults = Enum.map(locked, &hd/1)
-    owners = locked |> Enum.map(&List.last/1) |> Enum.uniq()
-    %{num_rows: fixed} = repo.query!(@clear_sql, [ids, vaults, owners])
+    %{rows: window_vaults} = repo.query!(@window_vaults_sql, [ids])
+    vaults = repo |> VaultLock.lock(List.flatten(window_vaults)) |> Enum.map(&hd/1)
+    fixed = clear_stale(repo, ids, vaults)
     %{rows: left} = repo.query!(@left_sql, [ids])
     vaults = List.flatten(left)
     if vaults != [], do: Process.put(@left_key, vaults ++ (Process.get(@left_key) || []))
