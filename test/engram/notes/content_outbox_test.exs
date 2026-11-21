@@ -418,11 +418,25 @@ defmodule Engram.Notes.ContentOutboxTest do
       assert all_enqueued(worker: NoteCommitted) == []
     end
 
-    test "an unchanged rewrite queues nothing", %{user: u, vault: v} do
-      {:ok, note} = Notes.upsert_note(u, v, %{"path" => "s.md", "content" => "one"}, actor: "api")
-      Repo.delete_all(Oban.Job)
-      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "s.md", "content" => "one"}, actor: "api")
-      assert committed(note.id) == []
+    # An identical push (same content hash) is the common agent/API retry: it
+    # must cost no embed and no link extraction. Pinned per actor because each
+    # takes its own commit options (`commit_opts/2`).
+    for actor <- ["api", "mcp"] do
+      test "an unchanged #{actor} rewrite queues nothing", %{user: u, vault: v} do
+        put = fn ->
+          Notes.upsert_note(u, v, %{"path" => "s.md", "content" => "one"}, actor: unquote(actor))
+        end
+
+        {:ok, note} = put.()
+        Repo.delete_all(Oban.Job)
+        {:ok, again} = put.()
+
+        assert again.content_hash == note.content_hash
+        assert committed(note.id) == []
+        _ = Engram.Test.NoteCommittedDispatch.run()
+        refute_enqueued(worker: EmbedNote, args: %{note_id: note.id})
+        refute_enqueued(worker: Engram.Workers.ExtractNoteLinks, args: %{note_id: note.id})
+      end
     end
 
     # #2294: an MCP write keeps its 2 s agent settle through the dispatcher.
