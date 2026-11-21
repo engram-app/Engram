@@ -413,5 +413,6 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
 
     Engram.ServiceConfig.put_override(:marker_delete_floors, :enforce)
     refute FolderMarkerDelete.run_pass() == {:more, rows: 0, blocked: 1}
+    assert markers(v) == 0
   end
 end
