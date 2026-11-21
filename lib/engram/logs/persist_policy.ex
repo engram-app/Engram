@@ -44,8 +44,8 @@ defmodule Engram.Logs.PersistPolicy do
     # also the "pullAll(deleteLocalExtras)" variant.
     "pullAll",
     # Web SPA deaf-note breadcrumbs (frontend/src/observability/remote-log.ts:
-    # a deaf-note hunt is a `GET /api/logs` query). Not diagnostic, so they
-    # never reach Loki; this is their only store. One line per join / resync.
+    # a deaf-note hunt is a `GET /api/logs` query, or Loki: every line this
+    # policy keeps is also shipped there, `Engram.Logs`). One line per join / resync.
     "crdt channel joined",
     "resync ("
   ]

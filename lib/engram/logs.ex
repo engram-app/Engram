@@ -410,7 +410,7 @@ defmodule Engram.Logs do
 
     entries
     |> Enum.map_reduce(ship_ok, fn entry, budget ->
-      {{entry, entry.diagnostic and budget > 0},
+      {{entry, (entry.diagnostic and budget > 0) or kept_info?(entry)},
        if(entry.diagnostic, do: max(budget - 1, 0), else: budget)}
     end)
     |> elem(0)
@@ -419,7 +419,7 @@ defmodule Engram.Logs do
     |> Enum.each(fn {{entry, ship?}, repeat} ->
       try do
         level = normalize_level(entry.level)
-        msg = "[client:#{entry.category}] #{entry.message}"
+        msg = "[client:#{entry.category}] #{entry.message}#{stack_suffix(entry.stack)}"
 
         meta =
           Metadata.with_category(level, :client,
@@ -471,6 +471,16 @@ defmodule Engram.Logs do
     end
   end
 
+  # An info line `client_logs` keeps (the `PersistPolicy` allowlist) ships to
+  # Loki like a diagnostic one and outside its cap, so Loki holds every line
+  # the table does (`client_logs_stop_writes`). Low volume: one per milestone.
+  defp kept_info?(entry),
+    do: normalize_level(entry.level) == :info and PersistPolicy.persist?(entry)
+
+  # The stack is a `client_logs` column; on the line it reaches Loki too.
+  defp stack_suffix(stack) when is_binary(stack) and stack != "", do: "\n" <> stack
+  defp stack_suffix(_stack), do: ""
+
   # Identical lines of one batch (a refused frame retried per flush) as one
   # `{first, count}`, in first-seen order. Everything that ends up in the line
   # or its metadata is part of the key, so collapsing never merges two lines
@@ -482,8 +492,8 @@ defmodule Engram.Logs do
     {order, groups} =
       Enum.reduce(items, {[], %{}}, fn {e, ship?} = item, {order, groups} ->
         key =
-          {e.level, e.category, e.message, ship?, e.forced, e.conn_id, e.device_id, e.platform,
-           e.plugin_version, Keyword.delete(e.context, :elapsed_ms)}
+          {e.level, e.category, e.message, e.stack, ship?, e.forced, e.conn_id, e.device_id,
+           e.platform, e.plugin_version, Keyword.delete(e.context, :elapsed_ms)}
 
         case groups do
           %{^key => {first, elapsed}} ->
