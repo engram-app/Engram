@@ -348,7 +348,8 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
   end
 
   # One pass over the vault's markers, rolled back, its statements recorded;
-  # then the window's statements planned: the vault lock, locking the markers
+  # then the window's statements planned: the window's vaults, the vault
+  # lock, locking the markers
   # (and probing their folder rows), the stamp, the delete, the leftover
   # count. The unmatched-vaults check has its own plan test above.
   defp assert_window_plans!(user, label) do
@@ -363,7 +364,7 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
     statements =
       for %{sql: sql, params: params, pid: ^me} <- queries,
           sql =~
-            ~r/FOR UPDATE OF n|UPDATE folders|DELETE FROM notes|FROM vaults|count\(\*\)::int FROM w/,
+            ~r/FOR UPDATE OF n|UPDATE folders|DELETE FROM notes|FROM vaults|count\(\*\)::int FROM w|DISTINCT vault_id FROM w/,
           do: {sql, params}
 
     assert Enum.any?(statements, fn {sql, _} -> sql =~ "UPDATE folders" end),
@@ -407,13 +408,19 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
 
   defp assert_window_plan!(sql, plan, msg) do
     full = msg <> "\n" <> plan
-    refute plan =~ "Seq Scan on notes", full
-    # Every notes index read has a condition (a partial index read with none,
-    # even inside a BitmapAnd, is every account's rows of that index).
-    refute plan =~ ~r/(?:Scan using|Bitmap Index Scan on) notes_\w+[^\n]*\n(?!\s*Index Cond)/,
-           "notes index read with no condition\n" <> full
+    QueryPlan.assert_notes_reads_bound!(plan, msg)
 
     if sql =~ "DELETE FROM notes", do: assert(plan =~ @notes_by_id, full)
+
+    # The vault lock: vaults by primary key over the window's vault ids, never
+    # the whole table (a maintenance job reads no table whole).
+    if sql =~ "FROM vaults" do
+      assert plan =~
+               ~r/(?:Scan using vaults_pkey on vaults|Bitmap Index Scan on vaults_pkey)\s*\n\s*Index Cond: \(id = ANY /,
+             "vaults not read by primary key\n" <> full
+
+      refute plan =~ "Seq Scan on vaults", full
+    end
 
     # The stamp at the pinned shape is exempt (see the stamp check below).
     pinned_stamp? = stamp?(sql) and String.starts_with?(msg, "own vault only")
@@ -440,16 +447,6 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
       assert length(Regex.scan(~r/Scan (?:using|on) folders\w*/, plan)) == 1,
              "stamp reads another folders index\n" <> full
     end
-
-    # `notes_user_vault*` lead with `user_id`: read by `vault_id` alone they
-    # are a skip scan over every tenant's entries.
-    for [cond] <-
-          Regex.scan(
-            ~r/(?:Scan using|Bitmap Index Scan on) notes_user_vault\w*[^\n]*\n\s*Index Cond: ([^\n]*)/,
-            plan,
-            capture: :all_but_first
-          ),
-        do: assert(cond =~ "user_id =", "notes read without user_id: #{cond}\n" <> full)
   end
 
   # Every folders index read is a primary-key probe or names the tenant AND
