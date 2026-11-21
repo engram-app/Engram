@@ -5,6 +5,8 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
   import Ecto.Query
   import ExUnit.CaptureLog
 
+  alias Engram.Crypto.HMAC
+  alias Engram.Logs.BudgetDrops
   alias Engram.Logs.ClientLog
   alias Engram.Repo
 
@@ -13,6 +15,7 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
 
   setup %{conn: conn} do
     EngramWeb.RateLimiter.reset_buckets!()
+    _ = capture_log(fn -> BudgetDrops.flush() end)
     user = insert(:user)
     _vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
@@ -35,6 +38,9 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
         do: assert(%{"count" => @batch} = send_logs(conn, @batch, device))
       )
 
+  defp exhaust_rest(conn, device, n),
+    do: assert(%{"count" => ^n} = send_logs(conn, n, device))
+
   defp stored(user),
     do:
       Repo.aggregate(from(l in ClientLog, where: l.user_id == ^user.id), :count,
@@ -48,12 +54,135 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
   } do
     exhaust(conn, "dev-a")
 
-    log =
-      capture_log(fn -> assert %{"ok" => true, "count" => 0} = send_logs(conn, 1, "dev-a") end)
+    assert %{"ok" => true, "count" => 0} = send_logs(conn, 1, "dev-a")
+    assert stored(user) == @budget
+  end
+
+  # Over budget the answer stays 200 (an old plugin re-buffers a failed batch,
+  # so a 429 is a retry storm) but says so, and says for how long: the rest of
+  # the budget window, after which the next line is admitted again.
+  test "an over-budget answer is throttled with retry_after_ms up to the window end", %{
+    conn: conn
+  } do
+    refute Map.has_key?(send_logs(conn, 1, "dev-a"), "throttled")
+    exhaust_rest(conn, "dev-a", @budget - 1)
+
+    assert %{"ok" => true, "count" => 0, "throttled" => true, "retry_after_ms" => ms} =
+             send_logs(conn, 1, "dev-a")
+
+    assert is_integer(ms) and ms > 0 and ms <= :timer.minutes(10)
+  end
+
+  # The pre-bounding check answers the same shape once the bucket is spent.
+  test "a device already over budget is refused with the same throttled shape", %{conn: conn} do
+    exhaust(conn, "dev-a")
+    assert %{"throttled" => true} = send_logs(conn, 1, "dev-a")
+
+    assert %{"count" => 0, "throttled" => true, "retry_after_ms" => _} =
+             send_logs(conn, 5, "dev-a")
+  end
+
+  # Once a refusal has been answered, the same token and device are refused at
+  # the front of the pipeline (EngramWeb.Plugs.ClientLogsThrottle): no auth,
+  # no tenant transaction, no query at all.
+  test "a client known to be over budget is refused before auth, with no DB query", %{
+    conn: conn
+  } do
+    exhaust(conn, "dev-a")
+    assert %{"throttled" => true} = send_logs(conn, 1, "dev-a")
+
+    me = self()
+
+    # Control: the recorder does see the full path's queries.
+    {_, full} = Engram.QueryRecorder.record(fn -> send_logs(conn, 1, "dev-b") end)
+    assert Enum.any?(full, &(&1.pid == me))
+
+    {body, queries} = Engram.QueryRecorder.record(fn -> send_logs(conn, 1, "dev-a") end)
+
+    assert %{"ok" => true, "count" => 0, "throttled" => true, "retry_after_ms" => ms} = body
+    assert ms > 0 and ms <= :timer.minutes(10)
+    assert Enum.filter(queries, &(&1.pid == me)) == []
+  end
+
+  # The refusal in the controller feeds the once-per-window warning: delete the
+  # `BudgetDrops.add/3` call and only this test notices.
+  test "a refused batch is tallied for the budget warning", %{conn: conn} do
+    exhaust(conn, "dev-a")
+    assert %{"throttled" => true} = send_logs(conn, 1, "dev-a")
+
+    log = capture_log([metadata: [:user_id, :device_id, :dropped]], &BudgetDrops.flush/0)
 
     assert log =~ "client log budget exceeded"
-    assert log =~ "dropped 1"
-    assert stored(user) == @budget
+    assert log =~ "device_id=#{HMAC.hash_id("dev-a")}"
+    assert log =~ "dropped=1"
+  end
+
+  # Requests refused at the front of the pipeline are the bulk of a looping
+  # client's traffic. They must reach the dropped-lines metric and the warning
+  # too, or the loop looks quiet.
+  test "a request refused before auth is counted: metric and warning", %{conn: conn} do
+    exhaust(conn, "dev-a")
+    assert %{"throttled" => true} = send_logs(conn, 1, "dev-a")
+
+    ref = make_ref()
+    me = self()
+    id = "early-refusal-#{inspect(ref)}"
+
+    :telemetry.attach(
+      id,
+      [:engram, :client_logs, :dropped],
+      fn _e, m, meta, _ -> send(me, {:dropped, m, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+
+    assert %{"throttled" => true} = send_logs(conn, 3, "dev-a")
+
+    assert_receive {:dropped, %{lines: 3}, %{reason: :over_budget}}
+
+    log = capture_log([metadata: [:user_id, :device_id, :dropped]], &BudgetDrops.flush/0)
+    assert log =~ "device_id=#{HMAC.hash_id("dev-a")}"
+    # 1 line refused in the controller + 3 refused at the front.
+    assert log =~ "dropped=4"
+  end
+
+  # The pre-auth key is the bearer token's hash plus the device id. A device id
+  # is client-chosen, so another account sending the same one must not inherit
+  # the refusal; nor may an unauthenticated request with that device id.
+  test "one client's spent budget does not throttle another client's request", %{
+    conn: conn
+  } do
+    exhaust(conn, "dev-a")
+    assert %{"throttled" => true} = send_logs(conn, 1, "dev-a")
+
+    other = insert(:user)
+    _vault = insert(:vault, user: other, is_default: true)
+    {:ok, other_key, _} = Engram.Accounts.create_api_key(other, "other-key")
+    lift_api_rps_cap!(other)
+
+    other_conn =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{other_key}")
+      |> put_req_header("x-device-id", "dev-a")
+
+    assert %{"count" => 1} =
+             other_conn |> post("/api/logs", %{logs: lines(1)}) |> json_response(200)
+
+    assert stored(other) == 1
+
+    anon = build_conn() |> put_req_header("x-device-id", "dev-a")
+    assert anon |> post("/api/logs", %{logs: lines(1)}) |> response(401)
+  end
+
+  # The warning is the tally's (Engram.Logs.BudgetDrops), at most once per
+  # device per window, not one line per refused request.
+  test "refused requests do not each log a warning", %{conn: conn} do
+    exhaust(conn, "dev-a")
+
+    log = capture_log(fn -> for _ <- 1..5, do: send_logs(conn, 1, "dev-a") end)
+
+    refute log =~ "client log budget exceeded"
   end
 
   test "a batch that would cross the budget is dropped whole", %{conn: conn, user: user} do

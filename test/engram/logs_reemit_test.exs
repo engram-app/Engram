@@ -570,6 +570,45 @@ defmodule Engram.LogsReemitTest do
       assert meta[:ship] == "loki"
       assert meta[:repeat] == 3
     end
+
+    # Loki parity for `client_logs_stop_writes`: every line the table keeps
+    # must also reach Loki. Allowlisted info lines (first-sync milestones, the
+    # web deaf-note breadcrumbs) were stored but never re-emitted.
+    test "an allowlisted info line ships to Loki without the diagnostic flag" do
+      user = insert(:user)
+
+      line = %{
+        "level" => "info",
+        "category" => "crdt",
+        "message" => "crdt channel joined note=n1",
+        "conn_id" => "c2"
+      }
+
+      lines = emitted_lines(fn -> {:ok, 1} = Logs.insert_logs(user, [line]) end)
+
+      assert [%{msg: msg, meta: meta}] = lines
+      assert msg =~ "crdt channel joined"
+      assert meta[:ship] == "loki"
+    end
+
+    # The stack is a `client_logs` column; without it in the line, Loki lost it.
+    test "a line's stack reaches the re-emitted line" do
+      user = insert(:user)
+
+      line = %{
+        "level" => "error",
+        "category" => "push",
+        "message" => "push failed",
+        "stack" => "Error: boom\n    at push (app.js:1:2)",
+        "conn_id" => "c2"
+      }
+
+      lines = emitted_lines(fn -> {:ok, 1} = Logs.insert_logs(user, [line]) end)
+
+      assert [%{msg: msg}] = lines
+      assert msg =~ "push failed"
+      assert msg =~ "at push (app.js:1:2)"
+    end
   end
 
   defmodule Lines do

@@ -380,6 +380,8 @@ defmodule Engram.Application do
       # Per-request origin counters, flushed in one statement every 30s. After
       # Repo so the shutdown flush can still write.
       Engram.Abuse.OriginStats.Buffer,
+      # `client log budget exceeded`, summed per device per 10 minutes.
+      Engram.Logs.BudgetDrops,
       rate_limiter_child(),
       # Walk cursors of the data-migration ledger passes (IdWindows); before
       # Oban, whose runner job uses them.

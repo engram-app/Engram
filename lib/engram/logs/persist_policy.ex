@@ -19,6 +19,11 @@ defmodule Engram.Logs.PersistPolicy do
   them being there; making them always ship needs the plugin's forced path.
   The web SPA sends its info lines with no opt-in, so its breadcrumbs do arrive.
 
+  Loki holds every line this policy keeps, and with `client_logs_stop_writes`
+  on (default off, `docs/context/client-logs-loki-only-on-saas.md`) SaaS
+  writes no row at all. The filter still decides which info lines ship to
+  Loki and what SaaS stores while writes are on.
+
   Applies only when `:client_logs_persist_all` is false: SaaS. CI (the e2e log
   oracle reads info lines), test and self-host (no Loki, so `client_logs` is
   the only copy of a client line) keep everything; see
@@ -44,8 +49,8 @@ defmodule Engram.Logs.PersistPolicy do
     # also the "pullAll(deleteLocalExtras)" variant.
     "pullAll",
     # Web SPA deaf-note breadcrumbs (frontend/src/observability/remote-log.ts:
-    # a deaf-note hunt is a `GET /api/logs` query). Not diagnostic, so they
-    # never reach Loki; this is their only store. One line per join / resync.
+    # a deaf-note hunt is a `GET /api/logs` query, or Loki: every line this
+    # policy keeps is also shipped there, `Engram.Logs`). One line per join / resync.
     "crdt channel joined",
     "resync ("
   ]

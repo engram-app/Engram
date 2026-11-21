@@ -11,6 +11,7 @@ defmodule Engram.Logs do
   alias Engram.Logs.PersistPolicy
   alias Engram.Logs.TextScrubber
   alias Engram.Repo
+  alias Engram.ServiceConfig
 
   require Logger
 
@@ -97,7 +98,9 @@ defmodule Engram.Logs do
 
   @doc """
   Insert a batch of log entries for a user.
-  Returns {:ok, count} with the number of entries inserted.
+  Returns {:ok, count} with the number of entries inserted. On SaaS that is 0
+  while the `client_logs_stop_writes` service override is true: no row is
+  written, the lines still ship to Loki. CI and self-host always write.
 
   `vault_id` stamps the vault the request addressed, so `list_logs/2` can keep
   a credential scoped to one vault out of another vault's lines.
@@ -105,18 +108,44 @@ defmodule Engram.Logs do
   Options:
     * `:persist_all` - store every line. Default `:client_logs_persist_all`;
       when false only `Engram.Logs.PersistPolicy.persist?/1` lines are stored.
+    * `:exhausted?` - `fn -> boolean end`, asked first: `true` (the caller's
+      budget is already spent) refuses the whole batch before any line is
+      bounded, so a looping client's refused batches cost one lookup, not a
+      scrub per line.
     * `:admit` - `fn kept_lines -> boolean end`, the caller's line budget. Asked
       once with the number of lines that would leave a trace (stored, or
       re-emitted as diagnostic); `false` drops the batch. Not asked when
       nothing would be kept, so filtered lines never spend a budget.
 
+  Returns `{:over_budget, lines}` when either refuses: the lines refused.
+
   Dropped lines are counted on `[:engram, :client_logs, :dropped]`
-  (`%{lines: n}`, `%{reason: :filtered | :over_budget, level: level}`).
+  (`%{lines: n}`, `%{reason: :filtered | :over_budget, level: level}`). A
+  batch refused by `:exhausted?` counts every line it carried, since it is
+  refused before the filter could tell kept from filtered.
   """
   def insert_logs(user, entries, vault_id \\ nil, opts \\ [])
   def insert_logs(_user, [], _vault_id, _opts), do: {:ok, 0}
 
   def insert_logs(user, entries, vault_id, opts) when is_list(entries) do
+    exhausted? = Keyword.get(opts, :exhausted?, fn -> false end)
+
+    if exhausted?.() do
+      entries |> Enum.map(&%{level: raw_level(&1)}) |> count_dropped(:over_budget)
+      {:over_budget, length(entries)}
+    else
+      bound_and_insert(user, entries, vault_id, opts)
+    end
+  end
+
+  # Only the level, read without bounding the line (same default as
+  # bound_entry/2); a non-map line is "other".
+  defp raw_level(%{} = entry),
+    do: entry |> get("level", :level) |> default("info") |> PersistPolicy.metric_level()
+
+  defp raw_level(_entry), do: "other"
+
+  defp bound_and_insert(user, entries, vault_id, opts) do
     now = DateTime.utc_now(:second)
 
     {kept, dropped} = take_bounded(entries)
@@ -155,25 +184,48 @@ defmodule Engram.Logs do
         {:ok, 0}
 
       admit.(cost) ->
-        count = store(user, stored, vault_id, now)
+        count = if writes_stopped?(), do: 0, else: store(user, stored, vault_id, now)
         reemit_to_logger(user, bounded)
         {:ok, count}
 
       true ->
         count_dropped(stored ++ Enum.filter(unstored, & &1.diagnostic), :over_budget)
-        {:ok, 0}
+        {:over_budget, cost}
     end
+  end
+
+  # SaaS switch to stop writing `client_logs` rows (`client_logs_stop_writes`
+  # service override, default OFF: writes continue until the code default is
+  # flipped in a later release; `true` stops them without a deploy, for an
+  # operator with rpc access); every kept line still ships to Loki
+  # (`reemit_to_logger/2`). CI and self-host always write: there
+  # `:client_logs_persist_all` is true (`Engram.RuntimeConfig`, the one place
+  # that decides "CI or self-host"), the e2e log oracle and self-host
+  # operators read `GET /api/logs`, and self-host has no Loki.
+  defp writes_stopped? do
+    not Application.get_env(:engram, :client_logs_persist_all, false) and
+      ServiceConfig.get(:client_logs_stop_writes, false) == true
   end
 
   defp count_dropped(entries, reason) do
     entries
     |> Enum.frequencies_by(&PersistPolicy.metric_level(&1.level))
-    |> Enum.each(fn {level, n} ->
-      :telemetry.execute([:engram, :client_logs, :dropped], %{lines: n}, %{
-        reason: reason,
-        level: level
-      })
-    end)
+    |> Enum.each(fn {level, n} -> count_dropped_lines(n, reason, level) end)
+  end
+
+  @doc """
+  Count `lines` refused on `[:engram, :client_logs, :dropped]`. Public for the
+  front-of-pipeline refusal (`EngramWeb.Plugs.ClientLogsThrottle`), which
+  counts a batch it never parsed beyond its length: its `level` is `"other"`.
+  """
+  @spec count_dropped_lines(non_neg_integer(), :filtered | :over_budget, String.t()) :: :ok
+  def count_dropped_lines(0, _reason, _level), do: :ok
+
+  def count_dropped_lines(n, reason, level) do
+    :telemetry.execute([:engram, :client_logs, :dropped], %{lines: n}, %{
+      reason: reason,
+      level: level
+    })
   end
 
   defp store(user, entries, vault_id, now) do
@@ -372,7 +424,7 @@ defmodule Engram.Logs do
 
     entries
     |> Enum.map_reduce(ship_ok, fn entry, budget ->
-      {{entry, entry.diagnostic and budget > 0},
+      {{entry, (entry.diagnostic and budget > 0) or kept_info?(entry)},
        if(entry.diagnostic, do: max(budget - 1, 0), else: budget)}
     end)
     |> elem(0)
@@ -381,7 +433,7 @@ defmodule Engram.Logs do
     |> Enum.each(fn {{entry, ship?}, repeat} ->
       try do
         level = normalize_level(entry.level)
-        msg = "[client:#{entry.category}] #{entry.message}"
+        msg = "[client:#{entry.category}] #{entry.message}#{stack_suffix(entry.stack)}"
 
         meta =
           Metadata.with_category(level, :client,
@@ -433,6 +485,16 @@ defmodule Engram.Logs do
     end
   end
 
+  # An info line `client_logs` keeps (the `PersistPolicy` allowlist) ships to
+  # Loki like a diagnostic one and outside its cap, so Loki holds every line
+  # the table does (`client_logs_stop_writes`). Low volume: one per milestone.
+  defp kept_info?(entry),
+    do: normalize_level(entry.level) == :info and PersistPolicy.persist?(entry)
+
+  # The stack is a `client_logs` column; on the line it reaches Loki too.
+  defp stack_suffix(stack) when is_binary(stack) and stack != "", do: "\n" <> stack
+  defp stack_suffix(_stack), do: ""
+
   # Identical lines of one batch (a refused frame retried per flush) as one
   # `{first, count}`, in first-seen order. Everything that ends up in the line
   # or its metadata is part of the key, so collapsing never merges two lines
@@ -444,8 +506,8 @@ defmodule Engram.Logs do
     {order, groups} =
       Enum.reduce(items, {[], %{}}, fn {e, ship?} = item, {order, groups} ->
         key =
-          {e.level, e.category, e.message, ship?, e.forced, e.conn_id, e.device_id, e.platform,
-           e.plugin_version, Keyword.delete(e.context, :elapsed_ms)}
+          {e.level, e.category, e.message, e.stack, ship?, e.forced, e.conn_id, e.device_id,
+           e.platform, e.plugin_version, Keyword.delete(e.context, :elapsed_ms)}
 
         case groups do
           %{^key => {first, elapsed}} ->

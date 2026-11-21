@@ -3033,6 +3033,18 @@
             "type": "boolean",
             "x-struct": null,
             "x-validate": null
+          },
+          "retry_after_ms": {
+            "description": "With throttled: milliseconds until the budget window resets.",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "throttled": {
+            "description": "Present (true) only when the device's log line budget refused the batch. Stop sending until retry_after_ms has passed.",
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
           }
         },
         "required": [

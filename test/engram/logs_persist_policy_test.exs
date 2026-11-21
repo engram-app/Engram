@@ -149,7 +149,7 @@ defmodule Engram.LogsPersistPolicyTest do
     end
 
     test "a refused batch stores nothing and counts the lines over budget", %{user: user} do
-      assert {:ok, 0} =
+      assert {:over_budget, 2} =
                Logs.insert_logs(user, [line("warn", "a"), line("error", "b")], nil,
                  admit: fn _ -> false end
                )
@@ -163,12 +163,90 @@ defmodule Engram.LogsPersistPolicyTest do
     test "a refused batch also counts its unstored diagnostic lines", %{user: user} do
       batch = [Map.put(line("info", "verbose"), "diagnostic", true), line("warn", "a")]
 
-      assert {:ok, 0} =
+      assert {:over_budget, 2} =
                Logs.insert_logs(user, batch, nil, persist_all: false, admit: fn _ -> false end)
 
       assert_receive {:dropped, %{lines: 1}, %{reason: :filtered, level: "info"}}
       assert_receive {:dropped, %{lines: 1}, %{reason: :over_budget, level: "info"}}
       assert_receive {:dropped, %{lines: 1}, %{reason: :over_budget, level: "warn"}}
+    end
+  end
+
+  # A device already over its budget is refused before any line is bounded
+  # (scrubbed, clamped, filtered): a looping client's refused batches must be
+  # cheap. `[:not_a_map]` is a line bounding would raise on, so getting a
+  # refusal back proves bounding never ran.
+  describe "exhausted? (the pre-bounding budget check)" do
+    test "refuses the whole batch before bounding it", %{user: user} do
+      batch = [[:not_a_map], line("warn", "a")]
+      admit = fn _ -> flunk("admit asked for a batch already refused") end
+
+      assert {:over_budget, 2} =
+               Logs.insert_logs(user, batch, nil, exhausted?: fn -> true end, admit: admit)
+
+      assert stored(user) == []
+      assert_receive {:dropped, %{lines: 1}, %{reason: :over_budget, level: "other"}}
+      assert_receive {:dropped, %{lines: 1}, %{reason: :over_budget, level: "warn"}}
+
+      # The control: the same batch with budget left does reach bounding.
+      assert_raise ArgumentError, fn ->
+        Logs.insert_logs(user, batch, nil, exhausted?: fn -> false end)
+      end
+    end
+  end
+
+  # `client_logs_stop_writes` (default off) stops writing `client_logs` rows on
+  # SaaS while every kept line still ships to Loki. CI and self-host
+  # (`:client_logs_persist_all` true, the one place that decides "CI or
+  # self-host") always write: the e2e oracle and self-host operators read
+  # `GET /api/logs`.
+  describe "client_logs_stop_writes" do
+    import ExUnit.CaptureLog
+
+    setup do
+      on_exit(fn -> Application.put_env(:engram, :client_logs_persist_all, true) end)
+    end
+
+    defp saas!, do: Application.put_env(:engram, :client_logs_persist_all, false)
+
+    test "SaaS, default (override unset): rows are written", %{user: user} do
+      saas!()
+
+      assert {:ok, 1} = Logs.insert_logs(user, [line("warn", "kept")], nil)
+      assert stored(user) == ["kept"]
+    end
+
+    test "SaaS, override true: no row is written, the line still reaches Loki", %{user: user} do
+      saas!()
+      Engram.ServiceConfig.put_override(:client_logs_stop_writes, true)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, 0} = Logs.insert_logs(user, [line("warn", "not stored")], nil)
+        end)
+
+      assert stored(user) == []
+      assert log =~ "not stored"
+    end
+
+    test "SaaS, override false: rows are written", %{user: user} do
+      saas!()
+      Engram.ServiceConfig.put_override(:client_logs_stop_writes, false)
+
+      assert {:ok, 1} = Logs.insert_logs(user, [line("warn", "kept")], nil)
+      assert stored(user) == ["kept"]
+    end
+
+    test "CI and self-host: rows are written with no override", %{user: user} do
+      assert {:ok, 1} = Logs.insert_logs(user, [line("warn", "kept")], nil)
+      assert stored(user) == ["kept"]
+    end
+
+    test "CI and self-host: the override cannot stop writes", %{user: user} do
+      Engram.ServiceConfig.put_override(:client_logs_stop_writes, true)
+
+      assert {:ok, 1} = Logs.insert_logs(user, [line("warn", "kept")], nil)
+      assert stored(user) == ["kept"]
     end
   end
 end

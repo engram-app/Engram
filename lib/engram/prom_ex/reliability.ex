@@ -52,7 +52,8 @@ defmodule Engram.PromEx.Reliability do
       `..._client_logs_dropped_lines_total`, tags `[:reason, :level]` — client
       log lines `POST /api/logs` accepted but did not store. `reason`:
       `filtered` (`Engram.Logs.PersistPolicy`, SaaS only) or `over_budget`
-      (the per-device line budget). `level` is bounded by
+      (the per-device line budget; a batch refused because the budget was
+      already spent counts all its lines, unfiltered). `level` is bounded by
       `PersistPolicy.metric_level/1`. A rising `over_budget` rate is a client
       stuck in a log loop.
     * `[:engram, :client_lock, :change]` → `..._client_lock_change_total`, tags
