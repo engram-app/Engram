@@ -197,19 +197,29 @@ defmodule Engram.LogsPersistPolicyTest do
 
   # SaaS switch to stop writing `client_logs` rows (the lines still reach the
   # server log pipeline). Default off; self-host ignores it.
+  # SaaS switch to stop writing `client_logs` rows (the lines still reach
+  # Loki). CI and self-host (`:client_logs_persist_all` true, the one place
+  # that decides "CI or self-host") always write: the e2e oracle and
+  # self-host operators read `GET /api/logs`.
   describe "client_logs_stop_writes" do
     import ExUnit.CaptureLog
 
     setup do
-      on_exit(fn -> Application.put_env(:engram, :billing_enabled, true) end)
+      on_exit(fn -> Application.put_env(:engram, :client_logs_persist_all, true) end)
     end
 
-    test "off by default: rows are written", %{user: user} do
+    defp saas!, do: Application.put_env(:engram, :client_logs_persist_all, false)
+
+    test "SaaS, switch off: rows are written", %{user: user} do
+      saas!()
+      Engram.ServiceConfig.put_override(:client_logs_stop_writes, false)
+
       assert {:ok, 1} = Logs.insert_logs(user, [line("warn", "kept")], nil)
       assert stored(user) == ["kept"]
     end
 
-    test "on in SaaS: no row is written, the line is still re-emitted", %{user: user} do
+    test "SaaS, switch on: no row is written, the line is still re-emitted", %{user: user} do
+      saas!()
       Engram.ServiceConfig.put_override(:client_logs_stop_writes, true)
 
       log =
@@ -221,8 +231,7 @@ defmodule Engram.LogsPersistPolicyTest do
       assert log =~ "not stored"
     end
 
-    test "on in self-host: ignored, rows are written", %{user: user} do
-      Application.put_env(:engram, :billing_enabled, false)
+    test "CI and self-host: the switch is ignored, rows are written", %{user: user} do
       Engram.ServiceConfig.put_override(:client_logs_stop_writes, true)
 
       assert {:ok, 1} = Logs.insert_logs(user, [line("warn", "kept")], nil)
