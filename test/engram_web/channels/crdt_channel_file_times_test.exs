@@ -335,7 +335,13 @@ defmodule EngramWeb.CrdtChannelFileTimesTest do
     end
 
     refute_received {:channel_notes_write, _}
-    assert eventually(fn -> secs(row(note.id).mtime_at) == @t1 + 10 end)
+    # The checkpoint writes whatever the room held when it ran (the first
+    # one fires before the last frames land; the settle debounce is longer
+    # than this test), so assert a stored time from the stream, not the last.
+    assert eventually(fn ->
+             stored = secs(row(note.id).mtime_at)
+             stored != nil and stored >= @t1 + 1 and stored <= @t1 + 10
+           end)
   end
 
   test "put_frame_times never moves version, hash or seq and is tenant scoped",
