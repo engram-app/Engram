@@ -38,8 +38,8 @@ defmodule Engram.PromEx.NativeTest do
     assert %Event{metrics: metrics} = PromExMetrics.of(Native, opts)
     for m <- metrics, do: assert(m.tags == [:nif, :dirty])
 
-    # Count + microsecond sum stay (cheap averages); the two histograms add
-    # the per-call shape, so the slowest/largest single call is visible.
+    # Count + microsecond sum stay (cheap averages). One duration histogram,
+    # kept to the suspect NIFs: a histogram is 10 series per nif/dirty pair.
     assert [
              %Telemetry.Metrics.Counter{name: [:engram, :prom_ex, :nif, :call, :total]},
              %Telemetry.Metrics.Sum{
@@ -47,29 +47,30 @@ defmodule Engram.PromEx.NativeTest do
              },
              %Telemetry.Metrics.Distribution{
                name: [:engram, :prom_ex, :nif, :call, :duration, :milliseconds]
-             } = duration,
-             %Telemetry.Metrics.Distribution{
-               name: [:engram, :prom_ex, :nif, :call, :input, :bytes],
-               measurement: :input_bytes
-             } = bytes
+             } = duration
            ] = metrics
 
-    # 1 ms to 60 s: a ~9 MB note's keyword_encode must not fall into +Inf.
-    les = duration.reporter_options[:buckets]
-    assert hd(les) == 1 and List.last(les) == 60_000
+    # Up to 60 s: a ~9 MB note's keyword_encode must not fall into +Inf.
+    assert duration.reporter_options[:buckets] == [10, 100, 500, 1_000, 2_500, 10_000, 60_000]
     # Telemetry.Metrics keeps the TARGET unit and wraps `measurement` in a
     # native->ms conversion, so check the behaviour, not the atom.
     assert duration.unit == :millisecond
     assert duration.tags == [:nif, :dirty]
     native_1500ms = System.convert_time_unit(1_500, :millisecond, :native)
     assert duration.measurement.(%{duration: native_1500ms}) == 1_500
-    assert List.last(bytes.reporter_options[:buckets]) >= 16_777_216
+
+    for nif <- [:keyword_encode, :chunk], do: assert(duration.keep.(%{nif: nif, dirty: true}))
+    for nif <- [:pack_f32, :zz_budget], do: refute(duration.keep.(%{nif: nif, dirty: false}))
 
     assert [%Polling{}, %Polling{}] = Native.polling_metrics(opts)
   end
 
-  # A nif name no real call uses, so concurrent tests cannot move its series.
-  test "a call event records one duration and one input-bytes sample per nif and dirty" do
+  # dirty: false is a series no real keyword_encode caller emits (it is always
+  # dirty), so concurrent tests cannot move it; deltas guard the rest.
+  test "a keyword_encode call event records one duration sample" do
+    name = "engram_prom_ex_nif_call_duration_milliseconds"
+    before = duration_samples(name)
+
     :telemetry.execute(
       [:engram, :nif, :call, :stop],
       %{
@@ -77,26 +78,25 @@ defmodule Engram.PromEx.NativeTest do
         native_peak_bytes: 0,
         input_bytes: 5_000_000
       },
-      %{nif: :histogram_probe, dirty: true}
+      %{nif: :keyword_encode, dirty: false}
     )
 
-    body = Engram.PromEx |> PromEx.get_metrics() |> IO.iodata_to_binary()
-
-    for {name, sum} <- [
-          {"engram_prom_ex_nif_call_duration_milliseconds", 2_000},
-          {"engram_prom_ex_nif_call_input_bytes", 5_000_000}
-        ] do
-      series = sample_lines(body, name, "histogram_probe")
-      assert [1] = for({"_count", v} <- series, do: round(v))
-      assert [^sum] = for({"_sum", v} <- series, do: round(v))
-    end
+    after_ = duration_samples(name)
+    assert after_.count - before.count == 1
+    assert after_.sum - before.sum == 2_000
   end
 
-  # `[{suffix, value}]` for the dirty="true" series of one nif.
-  defp sample_lines(body, name, nif) do
+  # `%{count, sum}` of the nif="keyword_encode",dirty="false" series, 0 if absent.
+  defp duration_samples(name) do
+    body = Engram.PromEx |> PromEx.get_metrics() |> IO.iodata_to_binary()
+
     for line <- String.split(body, "\n"),
         [_, suffix, labels, v] <- [Regex.run(~r/^#{name}(_count|_sum)\{(.*)\} (\S+)$/, line)],
-        labels =~ ~s(nif="#{nif}") and labels =~ ~s(dirty="true"),
-        do: {suffix, v |> Float.parse() |> elem(0)}
+        labels =~ ~s(nif="keyword_encode") and labels =~ ~s(dirty="false"),
+        reduce: %{count: 0, sum: 0} do
+      acc ->
+        n = v |> Float.parse() |> elem(0) |> round()
+        if suffix == "_count", do: %{acc | count: n}, else: %{acc | sum: n}
+    end
   end
 end
