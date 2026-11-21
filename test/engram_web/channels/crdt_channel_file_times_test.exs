@@ -102,16 +102,25 @@ defmodule EngramWeb.CrdtChannelFileTimesTest do
 
   defp settle, do: Process.sleep(500)
 
-  # Handshake a client doc over `crdt_msg`: leaves a room resident.
+  # Handshake a client doc over `crdt_msg`: leaves a room resident. The server
+  # also pushes its own syncStep1 (and an earlier handshake leaves one in the
+  # mailbox), so skip pushes until the syncStep2 arrives.
   defp handshake_room(socket, doc_id) do
     client = CrdtBridge.new_doc()
     {:ok, {:sync_step1, sv}} = Yex.Sync.get_sync_step1(client)
     {:ok, frame} = Yex.Sync.message_encode({:sync, {:sync_step1, sv}})
     push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(frame)})
-    assert_push "crdt_msg", %{"doc_id" => ^doc_id, "b64" => b64}, 3000
-    {:ok, {:sync, {:sync_step2, update}}} = Yex.Sync.message_decode(Base.decode64!(b64))
-    :ok = Yex.apply_update(client, update)
+    :ok = Yex.apply_update(client, await_step2(doc_id))
     client
+  end
+
+  defp await_step2(doc_id) do
+    assert_push "crdt_msg", %{"doc_id" => ^doc_id, "b64" => b64}, 3000
+
+    case Yex.Sync.message_decode(Base.decode64!(b64)) do
+      {:ok, {:sync, {:sync_step2, update}}} -> update
+      _other -> await_step2(doc_id)
+    end
   end
 
   test "create with times stores both", %{socket: socket} do
@@ -200,6 +209,22 @@ defmodule EngramWeb.CrdtChannelFileTimesTest do
 
     assert_reply ref, :ok, %{}
     assert eventually(fn -> secs(row(note.id).ctime_at) == @t1 end)
+  end
+
+  # Through the real checkpoint (no mock): a content change while the room
+  # holds a time. Failed outright on c76fcf5f3 (virtual mtime/ctime reached
+  # update_all and the checkpoint raised, leaving version at 1).
+  test "a content checkpoint holding a time stores it, bumps version once, does not raise",
+       %{socket: socket, note: note} do
+    before = row(note.id)
+    edit(socket, note.id, %{"mtime" => @t2, "ctime" => @t1})
+
+    assert eventually(fn -> row(note.id).version == before.version + 1 end)
+    after_ = row(note.id)
+    assert {secs(after_.mtime_at), secs(after_.ctime_at)} == {@t2, @t1}
+    assert after_.eff_updated == trunc(@t2)
+    settle()
+    assert row(note.id).version == before.version + 1
   end
 
   test "an older mtime does not regress it", %{socket: socket, note: note} do

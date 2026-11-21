@@ -219,7 +219,9 @@ defmodule Engram.Notes.CrdtCheckpointTimerTest do
   # is not this timer's and must not vanish silently.
   test "drops a late snapshot reply, and only that shape" do
     ref = make_ref()
-    assert {:noreply, :st} = CrdtCheckpointTimer.handle_info({ref, {:ok, "s"}, [], 0}, :st)
+
+    assert {:noreply, :st} =
+             CrdtCheckpointTimer.handle_info({ref, {:ok, "s"}, [], 0, {nil, nil}}, :st)
 
     assert_raise FunctionClauseError, fn ->
       CrdtCheckpointTimer.handle_info({ref, :unrelated}, :st)

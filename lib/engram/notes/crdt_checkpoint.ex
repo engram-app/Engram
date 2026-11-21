@@ -719,7 +719,12 @@ defmodule Engram.Notes.CrdtCheckpoint do
         # matching every sibling notes update_all, so the row's recency stays
         # truthful for everything that orders/filters on updated_at. (The
         # /api/notes/changes timestamp feed this originally guarded is retired.)
-        set = changeset.changes |> Map.put(:updated_at, DateTime.utc_now()) |> Map.to_list()
+        # `mtime` / `ctime` are virtual (the `*_at` twins are what is stored).
+        set =
+          changeset.changes
+          |> Map.drop([:mtime, :ctime])
+          |> Map.put(:updated_at, DateTime.utc_now())
+          |> Map.to_list()
 
         case Repo.update_all(fenced_query, set: NoteBody.notes_row(set)) do
           {1, _} ->
