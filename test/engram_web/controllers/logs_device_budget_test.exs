@@ -197,6 +197,8 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
   test "filtered info lines do not spend the budget", %{conn: conn, user: user} do
     Application.put_env(:engram, :client_logs_persist_all, false)
     on_exit(fn -> Application.put_env(:engram, :client_logs_persist_all, true) end)
+    # SaaS stops writing rows by default; this test counts them.
+    Engram.ServiceConfig.put_override(:client_logs_stop_writes, false)
 
     for _ <- 1..6, do: assert(%{"count" => 0} = send_logs(conn, @batch, "dev-a"))
 
