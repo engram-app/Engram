@@ -71,15 +71,16 @@ const K1: f64 = 1.2;
 // Same bound and reason as QdrantSparse's @memo_max.
 const MEMO_MAX: usize = 20_000;
 
-fn dim(key: &[u8], token: &str) -> u32 {
-    dim_parts(key, &[token.as_bytes()])
+/// HMAC-SHA256 state keyed once per call; each message clones it (the key
+/// setup is two SHA-256 blocks, more than hashing a short token).
+fn keyed(key: &[u8]) -> Hmac<Sha256> {
+    Hmac::<Sha256>::new_from_slice(key).expect("hmac accepts any key length")
 }
 
-fn dim_parts(key: &[u8], parts: &[&[u8]]) -> u32 {
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("hmac accepts any key length");
-    for p in parts {
-        mac.update(p);
-    }
+/// A token's sparse dim: the first 4 bytes of its HMAC, big-endian.
+fn dim(keyed: &Hmac<Sha256>, token: &str) -> u32 {
+    let mut mac = keyed.clone();
+    mac.update(token.as_bytes());
     let out = mac.finalize().into_bytes();
     u32::from_be_bytes([out[0], out[1], out[2], out[3]])
 }
@@ -104,7 +105,7 @@ struct Bm25 {
 /// differs from this for three or more tokens on one dim).
 fn encode(
     text: &str,
-    key: &[u8],
+    keyed: &Hmac<Sha256>,
     bm25: Bm25,
     lang: Option<&str>,
     memo: &mut HashMap<String, u32>,
@@ -158,7 +159,7 @@ fn encode(
         let d = match memo.get(*token) {
             Some(d) => *d,
             None => {
-                let d = dim(key, token);
+                let d = dim(keyed, token);
                 if memo.len() < MEMO_MAX {
                     memo.insert(token.to_string(), d);
                 }
@@ -205,6 +206,7 @@ fn encode_documents_nif<'a>(
 ) -> (Vec<(Binary<'a>, Binary<'a>, usize)>, usize) {
     let bm25 = Bm25 { avgdl, b, cap };
     memory::measured(|| {
+        let keyed = keyed(key.as_slice());
         let mut memo = HashMap::new();
         let mut buf = String::new();
         texts
@@ -213,7 +215,7 @@ fn encode_documents_nif<'a>(
                 let text = String::from_utf8_lossy(t.as_slice());
                 let (i, v, n) = encode(
                     &text,
-                    key.as_slice(),
+                    &keyed,
                     bm25,
                     lang.as_deref(),
                     &mut memo,
@@ -231,7 +233,8 @@ fn encode_documents_nif<'a>(
 #[rustler::nif(schedule = "DirtyCpu")]
 fn encode_query_nif(query: &str, key: Binary, lang: Option<String>) -> (Vec<u32>, Vec<f64>) {
     let (tokens, _) = tokenizer::tokens_with_len(query, lang.as_deref());
-    let mut dims: Vec<u32> = tokens.iter().map(|t| dim(key.as_slice(), t)).collect();
+    let keyed = keyed(key.as_slice());
+    let mut dims: Vec<u32> = tokens.iter().map(|t| dim(&keyed, t)).collect();
     dims.sort_unstable();
     dims.dedup();
     let values = vec![1.0; dims.len()];
@@ -477,7 +480,7 @@ fn hmac_hex_many<'a>(
 ) -> NifResult<(Vec<Binary<'a>>, usize)> {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let (out, peak) = memory::measured(|| -> NifResult<Vec<Binary<'a>>> {
-        let keyed = Hmac::<Sha256>::new_from_slice(key.as_slice()).map_err(|_| Error::BadArg)?;
+        let keyed = keyed(key.as_slice());
         Ok(texts
             .iter()
             .map(|t| {
@@ -1133,11 +1136,12 @@ mod tests {
         bm25: Bm25,
         lang: Option<&str>,
     ) -> Vec<(Vec<u8>, Vec<u8>, usize)> {
+        let keyed = keyed(key);
         let mut memo = HashMap::new();
         let mut buf = String::new();
         texts
             .iter()
-            .map(|t| encode(t, key, bm25, lang, &mut memo, &mut buf))
+            .map(|t| encode(t, &keyed, bm25, lang, &mut memo, &mut buf))
             .collect()
     }
 
@@ -1158,6 +1162,19 @@ mod tests {
             assert_eq!(got.get(k), Some(v), "{k}");
         }
         assert_eq!(got, want);
+    }
+
+    // A cloned keyed state gives the HMAC a fresh key setup gives, for
+    // every token in turn (encode_query and the encoder share `dim`).
+    #[test]
+    fn dim_from_one_keyed_state_equals_a_fresh_hmac() {
+        let k = keyed(&KEY);
+        for t in ["", "a", "running", "東京", &"x".repeat(200)] {
+            let mut fresh = Hmac::<Sha256>::new_from_slice(&KEY).unwrap();
+            fresh.update(t.as_bytes());
+            let out = fresh.finalize().into_bytes();
+            assert_eq!(dim(&k, t), u32::from_be_bytes([out[0], out[1], out[2], out[3]]));
+        }
     }
 
     /// Deterministic text: `n` bytes of `line(i)` lines.
