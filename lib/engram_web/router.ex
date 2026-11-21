@@ -70,20 +70,6 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RequireApiRpsBudget
   end
 
-  # The vault-scoped REST tail after `:authed_api`, shared by the two
-  # vault-scoped scopes below. Plugs listed in `pipe_through` itself, not a
-  # pipeline: `vault_access_attack_test.exs` finds vault routes by
-  # `VaultPlug in route_info.pipe_through`.
-  @vault_tail [
-    # Surfaces oauth_scope_vault_ids so VaultPlug's Permissions check sees the
-    # grant; must run before VaultPlug, which reads that assign.
-    EngramWeb.Plugs.OAuthScopeEnforce,
-    EngramWeb.Plugs.VaultPlug,
-    # Runs last so both current_user and current_vault are resolved:
-    # stamps app.user_id AND app.vault_id on the request span.
-    EngramWeb.Plugs.TraceUserAttrs
-  ]
-
   # Account, onboarding and billing scopes: reads get the short DB statement
   # bound, writes the vault one (EngramWeb.Plugs.StatementTimeout).
   pipeline :auth_statement_timeout do
@@ -675,6 +661,22 @@ defmodule EngramWeb.Router do
 
     get "/clients/:client_id", OAuthClientsController, :show
   end
+
+  # The vault-scoped REST tail after `:authed_api`, shared by the two
+  # vault-scoped scopes below. Plugs listed in `pipe_through` itself, not a
+  # pipeline: `vault_access_attack_test.exs` finds vault routes by
+  # `VaultPlug in route_info.pipe_through`. Defined here, not beside the
+  # pipelines, so the `.sobelow-skips` fingerprints (they carry line numbers)
+  # stay put.
+  @vault_tail [
+    # Surfaces oauth_scope_vault_ids so VaultPlug's Permissions check sees the
+    # grant; must run before VaultPlug, which reads that assign.
+    EngramWeb.Plugs.OAuthScopeEnforce,
+    EngramWeb.Plugs.VaultPlug,
+    # Runs last so both current_user and current_vault are resolved:
+    # stamps app.user_id AND app.vault_id on the request span.
+    EngramWeb.Plugs.TraceUserAttrs
+  ]
 
   # `POST /api/logs`: the vault-scoped stack with `ClientLogsThrottle` in front.
   # A client already refused over its log line budget is answered there from
