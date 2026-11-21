@@ -1357,6 +1357,73 @@ defmodule Engram.Notes do
     end
   end
 
+  @doc """
+  Stores the file times a CRDT socket frame carried (`mtime` / `ctime`, epoch
+  seconds, either may be absent or unusable) on one live note, in ONE statement.
+
+  Metadata-only, like `set_client_ctimes/3`: touches no content, content hash,
+  version, seq, `updated_at` or CRDT state and emits no fan-out, so a time can
+  never make an identical-content frame look like a change. mtime only moves
+  forward (`GREATEST`: an edit frame can leave before Obsidian saves the
+  file); a stored ctime is never replaced (`COALESCE`). The effective dates
+  follow the same rules: `eff_updated` unless the note has a frontmatter
+  updated date, `eff_created` only where none is stored. Unusable values are
+  dropped by `FileTime.from_frame/2`. Returns `{:ok, updated_count}`.
+  """
+  @spec put_frame_times(map(), map(), Ecto.UUID.t(), term(), term()) :: {:ok, non_neg_integer()}
+  def put_frame_times(user, vault, note_id, mtime, ctime) do
+    now = DateTime.utc_now()
+    m = FileTime.from_frame(mtime, now)
+    c = FileTime.from_frame(ctime, now)
+
+    if is_nil(m) and is_nil(c) do
+      {:ok, 0}
+    else
+      {:ok, put_frame_times_at(user, vault, note_id, m, c)}
+    end
+  end
+
+  defp put_frame_times_at(user, vault, note_id, m, c) do
+    mtime_changed =
+      if m, do: dynamic([n], is_nil(n.mtime_at) or n.mtime_at < ^m), else: dynamic(false)
+
+    ctime_changed = if c, do: dynamic([n], is_nil(n.ctime_at)), else: dynamic(false)
+
+    set =
+      [
+        mtime_at: m && dynamic([n], fragment("GREATEST(?, ?)", n.mtime_at, ^m)),
+        eff_updated:
+          m &&
+            dynamic(
+              [n],
+              fragment(
+                "COALESCE(?, floor(extract(epoch FROM GREATEST(?, ?)))::bigint)",
+                n.fm_updated,
+                n.mtime_at,
+                ^m
+              )
+            ),
+        ctime_at: c && dynamic([n], fragment("COALESCE(?, ?)", n.ctime_at, ^c)),
+        eff_created:
+          c &&
+            dynamic(
+              [n],
+              fragment("COALESCE(?, ?, ?)", n.eff_created, n.fm_created_s, ^DateTime.to_unix(c))
+            )
+      ]
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+
+    query =
+      from(n in scoped_live(user, vault),
+        where: n.id == ^note_id and n.kind == "note",
+        where: ^dynamic(^mtime_changed or ^ctime_changed),
+        update: [set: ^set]
+      )
+
+    {n, _} = Repo.with_tenant!(user.id, fn -> Repo.update_all(query, []) end)
+    n
+  end
+
   # Only carry ctime when sent: the key's absence leaves a stored value
   # untouched on update (older plugins must not null it). Same rule as
   # POST /notes/ctime: a number > 0, anything else is ignored rather than

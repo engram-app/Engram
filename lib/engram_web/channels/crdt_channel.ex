@@ -220,7 +220,7 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   @impl true
-  def handle_in("crdt_msg", %{"doc_id" => doc_id, "b64" => b64}, socket) do
+  def handle_in("crdt_msg", %{"doc_id" => doc_id, "b64" => b64} = payload, socket) do
     # Classify (O(1), first 4 b64 chars) BEFORE the rate check so sync
     # handshakes ride their own, larger bucket than edit frames: connect-time
     # enrollment fires one STEP1 (+ tiny STEP2 echo) per note, so on a
@@ -234,6 +234,7 @@ defmodule EngramWeb.CrdtChannel do
          :ok <- guard_frame(frame),
          {:ok, socket} <- deliver(socket, doc_id, frame, frame_class_b64(b64)) do
       if frame_class_b64(b64) == :edit, do: note_sync_activity(socket)
+      put_frame_times(socket, doc_id, payload)
 
       # ACK the push. Clients attach reply handlers to distinguish delivery
       # from loss; with no ack every successful push "times out" client-side —
@@ -393,10 +394,12 @@ defmodule EngramWeb.CrdtChannel do
         # count the create itself or an import-only user never shows as active.
         {:seeded, note, outcome} ->
           note_created_activity(socket)
+          put_frame_times(socket, note.id, payload)
           reply_created(note, reconcile_with_row(outcome, note), socket)
 
         {:ok, note} ->
           note_created_activity(socket)
+          put_frame_times(socket, note.id, payload)
           reply_created(note, note |> seed.() |> reconcile_with_row(note), socket)
 
         {:adopted, note} ->
@@ -580,7 +583,7 @@ defmodule EngramWeb.CrdtChannel do
   # monitor — for one malformed frame. A non-binary falls to the catch-all
   # `handle_in/3` and gets a `bad_frame` reply instead.
   @impl true
-  def handle_in("crdt_doc_update", %{"doc_id" => doc_id, "b64" => b64}, socket)
+  def handle_in("crdt_doc_update", %{"doc_id" => doc_id, "b64" => b64} = payload, socket)
       when is_binary(b64) do
     with :ok <- check_rate(socket, state_frame_class(b64)),
          {:ok, note_id} <- cast_doc_id(doc_id),
@@ -593,6 +596,7 @@ defmodule EngramWeb.CrdtChannel do
              &CrdtTransport.apply_update(&1, &2, note_id, update, :room_free_update)
            ) do
       note_sync_activity(socket)
+      put_frame_times(socket, note_id, payload)
       {:reply, {:ok, %{doc_id: note_id, head: head}}, socket}
     else
       {:error, :rate_limited} ->
@@ -878,6 +882,34 @@ defmodule EngramWeb.CrdtChannel do
       end)
 
     task.ref
+  end
+
+  # The optional `mtime` / `ctime` the plugin attaches to a frame (epoch
+  # seconds). A metadata write beside the CRDT write, never part of it
+  # (`Notes.put_frame_times/5`): it cannot change content, hash, version or
+  # CRDT state, and a failure here must not fail a frame that already landed.
+  # Absent keys (an old plugin) are a no-op without a query.
+  defp put_frame_times(socket, doc_id, payload) do
+    with true <- Map.has_key?(payload, "mtime") or Map.has_key?(payload, "ctime"),
+         {:ok, note_id} <- Ecto.UUID.cast(doc_id) do
+      Notes.put_frame_times(
+        socket.assigns.current_user,
+        socket.assigns.vault,
+        note_id,
+        payload["mtime"],
+        payload["ctime"]
+      )
+    end
+
+    :ok
+  rescue
+    e ->
+      Logger.warning(
+        "crdt_frame_times_failed",
+        Metadata.with_category(:warning, :sync, reason: inspect(Engram.Telemetry.error_kind(e)))
+      )
+
+      :ok
   end
 
   # Run the apply on a task so the ROOM'S OBSERVER is that task, not this
