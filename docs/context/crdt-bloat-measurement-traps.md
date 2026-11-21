@@ -40,6 +40,12 @@ node-local, 3h TTL). Two consequences:
 - A note first written in this window has no baseline version, so a loop that
   starts mid-hour shows one sweep later.
 
+The gauge is only a count. To find WHICH note fired it, search Loki for
+`crdt_bloat_note`: the sweep logs one warning per counted note (same `over`
+predicate as the gauge) with HMAC'd `note=` and `user=`, `state_bytes`,
+`content_bytes` and `ratio`, capped at 5 notes per account and 10 accounts
+per sweep, shared with `crdt_save_loop_note`.
+
 A save loop (a client rewriting a note forever) is what actually costs money.
 Alert on the save rate for that, and on the byte-floored count for real bloat.
 The save-loop rule is engram-infra#1578; it merges only after #2175 (merged to
