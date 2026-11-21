@@ -8,9 +8,10 @@ defmodule Engram.PromEx.Native do
       per-call duration histogram for `@histogram_nifs` only (series cost).
       The event also carries native peak and input bytes; they are not
       exported (series cost with no reader).
-      Envelope calls that stay inline and write or read format 0 (seal `:none` up to 16 KB, a successful inline open) emit no
-      event, so the envelope series cover format-1 seals (`dirty="false"`
-      for small inline ones) and every dirty seal or open.
+      Envelope calls that stay inline and write or read format 0 (seal
+      `:none` up to 16 KB, a successful inline open) emit no event, so the
+      envelope series cover format-1 seals (`dirty="false"` for small inline
+      ones) and every dirty seal or open.
     * `[:engram, :nif, :envelope]`, polled: envelope seal/open calls and
       input bytes since the NIF loaded (`Engram.Native.envelope_counts/0`),
       every call. Inline format-0 calls emit no per-call event, so this is

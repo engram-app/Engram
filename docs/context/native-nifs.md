@@ -273,8 +273,9 @@ EVERY seal and open (calls, input bytes) in relaxed atomics,
 `rate()`). Counting in Elixir first was too slow: `:persistent_term.get` plus
 two `:counters.add` cost about 300 ns per call, leaving a 40-byte decrypt
 26% behind `:crypto`. Nothing observable is lost: an inline envelope call
-runs in microseconds (the duration histogram's first bucket is 1 ms) and its
-peak is bounded by its input, so per call those histograms only counted it.
+runs in microseconds (far under the 10 ms first bucket of the one duration
+histogram, which covers only `keyword_encode` and `chunk`) and its peak is
+bounded by its input, so a per-call histogram would only count it.
 `keyword_encode` and `chunk` (only those two, to bound series cost: 10 per
 nif/dirty pair) also have a per-call duration histogram,
 `engram_prom_ex_nif_call_duration_milliseconds` (10 ms to 60 s, labels `nif`
