@@ -11,6 +11,7 @@ defmodule Engram.Logs do
   alias Engram.Logs.PersistPolicy
   alias Engram.Logs.TextScrubber
   alias Engram.Repo
+  alias Engram.ServiceConfig
 
   require Logger
 
@@ -97,7 +98,9 @@ defmodule Engram.Logs do
 
   @doc """
   Insert a batch of log entries for a user.
-  Returns {:ok, count} with the number of entries inserted.
+  Returns {:ok, count} with the number of entries inserted (0 on SaaS while
+  the `client_logs_stop_writes` service override is on: no row is written,
+  the lines are still re-emitted to the server log).
 
   `vault_id` stamps the vault the request addressed, so `list_logs/2` can keep
   a credential scoped to one vault out of another vault's lines.
@@ -181,7 +184,7 @@ defmodule Engram.Logs do
         {:ok, 0}
 
       admit.(cost) ->
-        count = store(user, stored, vault_id, now)
+        count = if writes_stopped?(), do: 0, else: store(user, stored, vault_id, now)
         reemit_to_logger(user, bounded)
         {:ok, count}
 
@@ -189,6 +192,15 @@ defmodule Engram.Logs do
         count_dropped(stored ++ Enum.filter(unstored, & &1.diagnostic), :over_budget)
         {:over_budget, cost}
     end
+  end
+
+  # SaaS switch to stop writing `client_logs` rows (`client_logs_stop_writes`
+  # service override, default off); the lines still re-emit to the server log
+  # pipeline. Self-host ignores it: there `GET /api/logs` is the only place an
+  # operator reads client lines.
+  defp writes_stopped? do
+    Application.get_env(:engram, :billing_enabled, false) and
+      ServiceConfig.get(:client_logs_stop_writes, false) == true
   end
 
   defp count_dropped(entries, reason) do

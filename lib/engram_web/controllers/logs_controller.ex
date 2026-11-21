@@ -6,6 +6,7 @@ defmodule EngramWeb.LogsController do
   alias Engram.Logs
   alias Engram.Logs.BudgetDrops
   alias EngramWeb.OriginDevice
+  alias EngramWeb.Plugs.ClientLogsThrottle
   alias EngramWeb.RateLimiter
 
   # Per-device line budget (2026-10-17 prod CPU alert: ingest jumped 296 -> 8,332
@@ -24,7 +25,9 @@ defmodule EngramWeb.LogsController do
   # buffer, so a 429 would turn into a retry storm of the lines we refused.
   # The 200 carries `throttled: true` and `retry_after_ms` (to the end of this
   # window) for a plugin that backs off on it. The warning for it is
-  # `Engram.Logs.BudgetDrops`'s, one per device per 10 minutes.
+  # `Engram.Logs.BudgetDrops`'s, one per device per 10 minutes. A refusal also
+  # marks the caller spent, so its next requests are refused at the front of
+  # the pipeline (`EngramWeb.Plugs.ClientLogsThrottle`), before auth or the DB.
   #
   # X-Device-Id is client-chosen, so a rotating id would mint a fresh device
   # budget per value; a per-user total (4 devices' worth) caps that. Requests
@@ -37,7 +40,7 @@ defmodule EngramWeb.LogsController do
   # carries no count to accept a partial batch); partial accept if it matters.
   @line_budget 500
   @user_budget_devices 4
-  @line_window_ms :timer.minutes(10)
+  @line_window_ms ClientLogsThrottle.window_ms()
 
   operation(:ingest,
     operation_id: "logs-ingest",
@@ -60,18 +63,13 @@ defmodule EngramWeb.LogsController do
       {:ok, count} ->
         json(conn, %{ok: true, count: count})
 
-      # Still a 200 (see below), but now it says so: a plugin that reads
+      # Still a 200 (see above), but now it says so: a plugin that reads
       # `throttled` stops shipping until the window ends; an older one
       # ignores the extra keys exactly as it ignored the bare count: 0.
       {:over_budget, lines} ->
         BudgetDrops.add(user.id, device, lines)
-
-        json(conn, %{
-          ok: true,
-          count: 0,
-          throttled: true,
-          retry_after_ms: RateLimiter.window_reset_ms(@line_window_ms)
-        })
+        :ok = ClientLogsThrottle.mark_spent(conn)
+        ClientLogsThrottle.throttled(conn)
     end
   end
 

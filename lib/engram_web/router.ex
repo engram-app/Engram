@@ -70,6 +70,20 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RequireApiRpsBudget
   end
 
+  # The vault-scoped REST tail after `:authed_api`, shared by the two
+  # vault-scoped scopes below. Plugs listed in `pipe_through` itself, not a
+  # pipeline: `vault_access_attack_test.exs` finds vault routes by
+  # `VaultPlug in route_info.pipe_through`.
+  @vault_tail [
+    # Surfaces oauth_scope_vault_ids so VaultPlug's Permissions check sees the
+    # grant; must run before VaultPlug, which reads that assign.
+    EngramWeb.Plugs.OAuthScopeEnforce,
+    EngramWeb.Plugs.VaultPlug,
+    # Runs last so both current_user and current_vault are resolved:
+    # stamps app.user_id AND app.vault_id on the request span.
+    EngramWeb.Plugs.TraceUserAttrs
+  ]
+
   # Account, onboarding and billing scopes: reads get the short DB statement
   # bound, writes the vault one (EngramWeb.Plugs.StatementTimeout).
   pipeline :auth_statement_timeout do
@@ -662,6 +676,16 @@ defmodule EngramWeb.Router do
     get "/clients/:client_id", OAuthClientsController, :show
   end
 
+  # `POST /api/logs`: the vault-scoped stack with `ClientLogsThrottle` in front.
+  # A client already refused over its log line budget is answered there from
+  # one ETS read, before PreAuthRateLimit, Auth or any DB query. Its own scope
+  # because a pipeline is per scope; this one matches before the scope below.
+  scope "/api", EngramWeb do
+    pipe_through [:api, EngramWeb.Plugs.ClientLogsThrottle, :authed_api] ++ @vault_tail
+
+    post "/logs", LogsController, :ingest
+  end
+
   # Vault-scoped authenticated endpoints (VaultPlug resolves current_vault)
   scope "/api", EngramWeb do
     # PreAuthRateLimit runs FIRST — before Auth — so 401-loop attacks against
@@ -673,17 +697,7 @@ defmodule EngramWeb.Router do
     # auth gate. RequireOnboarding gates vault access on TOS + active
     # subscription (skipped entirely in self-host mode; see
     # lib/engram/onboarding.ex).
-    pipe_through [
-      :api,
-      :authed_api,
-      # Surfaces oauth_scope_vault_ids so VaultPlug's Permissions check sees the
-      # grant — must run before VaultPlug, which reads that assign.
-      EngramWeb.Plugs.OAuthScopeEnforce,
-      EngramWeb.Plugs.VaultPlug,
-      # Runs last so both current_user and current_vault are resolved:
-      # stamps app.user_id AND app.vault_id on the request span.
-      EngramWeb.Plugs.TraceUserAttrs
-    ]
+    pipe_through [:api, :authed_api] ++ @vault_tail
 
     # Notes CRUD
     post "/notes/rename", NotesController, :rename
@@ -768,9 +782,8 @@ defmodule EngramWeb.Router do
       delete "/:id", AttachmentUploadsController, :abort, private: %{token_surface: :mcp}
     end
 
-    # Remote logging
+    # Remote logging (`POST /logs` is in its own scope above)
     get "/logs", LogsController, :index
-    post "/logs", LogsController, :ingest
 
     # Embedding status
     get "/embed-status", EmbedStatusController, :index

@@ -127,7 +127,10 @@ defmodule Engram.ServiceConfig.Overrides do
     # S6 step 1b: the root folder reference fill (`DataMigrations.RootRefs`).
     root_refs: :boolean,
     # S6 step 6 phase 2: folder renames leave attachments in place (kill switch).
-    attachment_write_stop: :boolean
+    attachment_write_stop: :boolean,
+    # SaaS only (`Engram.Logs`): on, `POST /api/logs` stops writing
+    # `client_logs` rows; lines still reach the server log pipeline. Default off.
+    client_logs_stop_writes: :boolean
   }
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})
