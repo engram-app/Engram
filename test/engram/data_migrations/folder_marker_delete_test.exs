@@ -310,30 +310,27 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
     refute "->  Index Scan using notes_pkey on notes n\n  Filter: (id = ANY ($1))" =~ @notes_by_id
   end
 
-  # #2652 re-review L1: the window's delete (stamp the folder rows, delete
-  # the markers) planned as the fleet role, EXPLAIN only (it writes). Every
-  # folders read vault-bound or a primary-key probe, notes by primary key,
-  # with nested loops costed out too (a planner that would rather hash must
-  # have no tenant-wide side to hash), custom and generic plans.
+  # #2652 re-review L1: the window's statements (lock the markers, stamp
+  # their folder rows, delete the markers), recorded from a real pass and
+  # planned as the fleet role, EXPLAIN only. Every folders read bound to the
+  # tenant and the vault or a primary-key probe, notes by primary key, custom
+  # and generic plans, nested loops on and off (a planner that would rather
+  # hash must have no tenant-wide side to hash).
   #
-  # Statistics shapes: first only this vault's rows analyzed, the shape
-  # 0.91.0's CI drew, where the stamp UPDATE read `folders_explicit_user_vault`
-  # with no condition (every tenant's explicit rows); then 40 other tenants'
-  # explicit rows under the 2639 shapes (n_distinct 40/40, -1/40, and dead
-  # explicit index entries).
+  # Statistics shapes: first `folders` rewritten and analyzed with only this
+  # vault's rows (`QueryPlan.fresh!/1`, so earlier tests' leftovers cannot
+  # decide it), the shape where 0.91.0's stamp read
+  # `folders_explicit_user_vault` with no condition (every tenant's explicit
+  # rows); then 40 other tenants' explicit rows
+  # under the 2639 shapes (n_distinct 40/40, -1/40, dead explicit entries).
   test "plans the delete as engram_maintenance", %{user: u, vault: v} do
     for i <- 1..10, do: {:ok, _} = Folders.create_markers(u, v, ["D#{i}"])
-
-    %{rows: ids} =
-      Repo.query!("SELECT id FROM notes WHERE vault_id = $1 AND kind = 'folder'", [
-        Ecto.UUID.dump!(v.id)
-      ])
-
-    params = [List.flatten(ids), [Ecto.UUID.dump!(v.id)]]
+    stop_on!()
 
     Repo.query!("ANALYZE notes")
-    Repo.query!("ANALYZE folders")
-    assert_delete_plans!(u, params, "own vault only")
+    QueryPlan.fresh!("folders")
+    assert_window_plans!(u, "own vault only")
+    assert_stamp_unnamed!()
 
     for _ <- 1..40 do
       {:ok, other} = Engram.Fixtures.user_with_dek_fixture()
@@ -346,33 +343,129 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteTest do
     for {users, vaults, dead} <- [{40, 40, 0}, {-1, 40, 0}, {40, 40, 1500}] do
       if dead > 0, do: QueryPlan.dead_explicit_folders!(dead)
       QueryPlan.folders_tenant_shape!(users, vaults)
-      assert_delete_plans!(u, params, "n_distinct #{users}/#{vaults}, #{dead} dead rows")
+      assert_window_plans!(u, "n_distinct #{users}/#{vaults}, #{dead} dead rows")
     end
   end
 
-  defp assert_delete_plans!(user, params, label) do
-    for nestloop <- ["on", "off"] do
+  # One pass over the vault's markers, rolled back, its statements recorded;
+  # then the window's statements planned: the vault lock, locking the markers
+  # (and probing their folder rows), the stamp, the delete, the leftover
+  # count. The unmatched-vaults check has its own plan test above.
+  defp assert_window_plans!(user, label) do
+    me = self()
+
+    {:error, {:recorded, queries}} =
+      Repo.transaction(fn ->
+        {_, queries} = QueryRecorder.record(fn -> FolderMarkerDelete.run_pass() end)
+        Repo.rollback({:recorded, queries})
+      end)
+
+    statements =
+      for %{sql: sql, params: params, pid: ^me} <- queries,
+          sql =~
+            ~r/FOR UPDATE OF n|UPDATE folders|DELETE FROM notes|FROM vaults|count\(\*\)::int FROM w/,
+          do: {sql, params}
+
+    assert Enum.any?(statements, fn {sql, _} -> sql =~ "UPDATE folders" end),
+           "#{label}: the pass stamped nothing\n#{inspect(queries, pretty: true)}"
+
+    for nestloop <- ["on", "off"], {sql, params} <- statements do
       Repo.query!("SET LOCAL enable_nestloop = #{nestloop}")
 
       %{custom: custom, generic: generic} =
-        QueryPlan.rls_plans(user.id, FolderMarkerDelete.delete_sql(), params,
-          role: "engram_maintenance",
-          analyze: false
-        )
+        QueryPlan.rls_plans(user.id, sql, params, role: "engram_maintenance", analyze: false)
 
-      for {kind, plan} <- [custom: custom, generic: generic] do
-        msg = "#{label}, #{kind} plan, enable_nestloop #{nestloop}"
-        QueryPlan.assert_scans_vault_bound!(plan, fn -> msg end)
-        QueryPlan.assert_explicit_index_bound!(plan, msg)
-        assert plan =~ @notes_by_id, msg <> "\n" <> plan
-        refute plan =~ "Seq Scan on notes", msg <> "\n" <> plan
+      # The stamp runs unnamed (`assert_stamp_unnamed!/0`), so only its custom
+      # plan ever runs.
+      plans = if stamp?(sql), do: [custom: custom], else: [custom: custom, generic: generic]
 
-        refute plan =~ ~r/Index (Only )?Scan using notes_\w+ on notes n\s*\n(?!\s*Index Cond)/,
-               msg <> "\n" <> plan
+      for {kind, plan} <- plans do
+        msg = "#{label}, #{kind} plan, enable_nestloop #{nestloop}\n#{sql}"
+        assert_window_plan!(sql, plan, msg)
       end
     end
 
     Repo.query!("SET LOCAL enable_nestloop = on")
+  end
+
+  defp stamp?(sql), do: String.starts_with?(String.trim_leading(sql), "UPDATE folders")
+
+  # Seven passes (Postgres may switch a NAMED statement to a generic plan
+  # from its 6th run): the stamp is never prepared by name.
+  defp assert_stamp_unnamed! do
+    for _ <- 1..7 do
+      Repo.transaction(fn ->
+        FolderMarkerDelete.run_pass()
+        Repo.rollback(:pass)
+      end)
+    end
+
+    assert Repo.query!(
+             "SELECT statement FROM pg_prepared_statements WHERE statement LIKE '%UPDATE folders%'"
+           ).rows == []
+  end
+
+  defp assert_window_plan!(sql, plan, msg) do
+    full = msg <> "\n" <> plan
+    refute plan =~ "Seq Scan on notes", full
+    # Every notes index read has a condition (a partial index read with none,
+    # even inside a BitmapAnd, is every account's rows of that index).
+    refute plan =~ ~r/(?:Scan using|Bitmap Index Scan on) notes_\w+[^\n]*\n(?!\s*Index Cond)/,
+           "notes index read with no condition\n" <> full
+
+    if sql =~ "DELETE FROM notes", do: assert(plan =~ @notes_by_id, full)
+
+    # The stamp at the pinned shape is exempt (see the stamp check below).
+    pinned_stamp? = stamp?(sql) and String.starts_with?(msg, "own vault only")
+
+    if plan =~ ~r/on folders\b|on folders_/ and not pinned_stamp? do
+      QueryPlan.assert_scans_vault_bound!(plan, fn -> msg end)
+      QueryPlan.assert_explicit_index_bound!(plan, msg)
+      assert_folder_reads_keyed!(plan, full)
+    end
+
+    # The stamp (a statement per folder row since the fix): the primary key
+    # by a scalar id, and no other folders index. Checked at the 40-tenant
+    # shapes only: the pinned one-vault shape tells the planner the whole
+    # table is one vault, so a skip scan of `folders_vault_id_id_key` by
+    # `id` costs the same as the key probe there. Prod has ~1,875 tenants;
+    # the real-stats EXPLAIN of the stamp is in staging table F2 and the
+    # flip runbook's step 1. The pinned shape still checks the lock and
+    # probe statements.
+    if stamp?(sql) and not pinned_stamp? do
+      assert plan =~
+               ~r/Index Scan using folders_pkey on folders\s*\n\s*Index Cond: \(id = '[0-9a-f-]{36}'::uuid\)\n/,
+             "stamp is not a primary-key probe by scalar id\n" <> full
+
+      assert length(Regex.scan(~r/Scan (?:using|on) folders\w*/, plan)) == 1,
+             "stamp reads another folders index\n" <> full
+    end
+
+    # `notes_user_vault*` lead with `user_id`: read by `vault_id` alone they
+    # are a skip scan over every tenant's entries.
+    for [cond] <-
+          Regex.scan(
+            ~r/(?:Scan using|Bitmap Index Scan on) notes_user_vault\w*[^\n]*\n\s*Index Cond: ([^\n]*)/,
+            plan,
+            capture: :all_but_first
+          ),
+        do: assert(cond =~ "user_id =", "notes read without user_id: #{cond}\n" <> full)
+  end
+
+  # Every folders index read is a primary-key probe or names the tenant AND
+  # the vault (Index Cond, or the Filter on the same node): a probe that
+  # drops either binding fails here.
+  defp assert_folder_reads_keyed!(plan, full) do
+    for [node, lines] <-
+          Regex.scan(
+            ~r/((?:Index (?:Only )?Scan using|Bitmap Index Scan on) folders\w*[^\n]*)\n((?:\s+(?:Index Cond|Recheck Cond|Filter):[^\n]*\n?)*)/,
+            plan,
+            capture: :all_but_first
+          ),
+        not (node =~ "folders_pkey") do
+      assert lines =~ "user_id =" and lines =~ "vault_id =",
+             "folders read not bound by user_id and vault_id: " <> node <> "\n" <> full
+    end
   end
 
   # done?/2's per-vault probe runs on every folder op (PathHashStop): planned
