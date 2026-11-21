@@ -5,6 +5,8 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
   import Ecto.Query
   import ExUnit.CaptureLog
 
+  alias Engram.Crypto.HMAC
+  alias Engram.Logs.BudgetDrops
   alias Engram.Logs.ClientLog
   alias Engram.Repo
 
@@ -13,6 +15,7 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
 
   setup %{conn: conn} do
     EngramWeb.RateLimiter.reset_buckets!()
+    _ = capture_log(fn -> BudgetDrops.flush() end)
     user = insert(:user)
     _vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
@@ -99,6 +102,49 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
     assert %{"ok" => true, "count" => 0, "throttled" => true, "retry_after_ms" => ms} = body
     assert ms > 0 and ms <= :timer.minutes(10)
     assert Enum.filter(queries, &(&1.pid == me)) == []
+  end
+
+  # The refusal in the controller feeds the once-per-window warning: delete the
+  # `BudgetDrops.add/3` call and only this test notices.
+  test "a refused batch is tallied for the budget warning", %{conn: conn} do
+    exhaust(conn, "dev-a")
+    assert %{"throttled" => true} = send_logs(conn, 1, "dev-a")
+
+    log = capture_log([metadata: [:user_id, :device_id, :dropped]], &BudgetDrops.flush/0)
+
+    assert log =~ "client log budget exceeded"
+    assert log =~ "device_id=#{HMAC.hash_id("dev-a")}"
+    assert log =~ "dropped=1"
+  end
+
+  # Requests refused at the front of the pipeline are the bulk of a looping
+  # client's traffic. They must reach the dropped-lines metric and the warning
+  # too, or the loop looks quiet.
+  test "a request refused before auth is counted: metric and warning", %{conn: conn} do
+    exhaust(conn, "dev-a")
+    assert %{"throttled" => true} = send_logs(conn, 1, "dev-a")
+
+    ref = make_ref()
+    me = self()
+    id = "early-refusal-#{inspect(ref)}"
+
+    :telemetry.attach(
+      id,
+      [:engram, :client_logs, :dropped],
+      fn _e, m, meta, _ -> send(me, {:dropped, m, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+
+    assert %{"throttled" => true} = send_logs(conn, 3, "dev-a")
+
+    assert_receive {:dropped, %{lines: 3}, %{reason: :over_budget}}
+
+    log = capture_log([metadata: [:user_id, :device_id, :dropped]], &BudgetDrops.flush/0)
+    assert log =~ "device_id=#{HMAC.hash_id("dev-a")}"
+    # 1 line refused in the controller + 3 refused at the front.
+    assert log =~ "dropped=4"
   end
 
   # The pre-auth key is the bearer token's hash plus the device id. A device id
@@ -197,8 +243,6 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
   test "filtered info lines do not spend the budget", %{conn: conn, user: user} do
     Application.put_env(:engram, :client_logs_persist_all, false)
     on_exit(fn -> Application.put_env(:engram, :client_logs_persist_all, true) end)
-    # SaaS stops writing rows by default; this test counts them.
-    Engram.ServiceConfig.put_override(:client_logs_stop_writes, false)
 
     for _ <- 1..6, do: assert(%{"count" => 0} = send_logs(conn, @batch, "dev-a"))
 
