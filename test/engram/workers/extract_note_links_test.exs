@@ -151,6 +151,13 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       append_noop_tail!(user, vault, note.id)
       assert extract!(user, note.id) == ["A", "B"]
     end
+
+    # A row with no CRDT state (pre-CRDT, or wiped): its body is the text and
+    # must be decrypted, never read as "" (which would drop every link).
+    test "a row with no CRDT state keeps its links", %{user: user, note: note} do
+      put_body!(user, note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil)
+      assert extract!(user, note.id) == ["A", "B"]
+    end
   end
 
   test "missing note discards", %{user: _user} do

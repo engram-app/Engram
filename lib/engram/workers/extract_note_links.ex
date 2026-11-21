@@ -59,7 +59,6 @@ defmodule Engram.Workers.ExtractNoteLinks do
   alias Engram.Links
   alias Engram.Links.Parser
   alias Engram.Logger.DecryptFailure
-  alias Engram.Notes.CrdtBridge
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vaults.Vault
@@ -129,33 +128,16 @@ defmodule Engram.Workers.ExtractNoteLinks do
   # (#1159, `Engram.Notes.authoritative_content/2`). A rewrite's
   # `Rewriter.finish/4` writes its edges from the doc's text and leaves the
   # facade alone; re-deriving them from the facade would clobber its repair
-  # (#1280). So the text comes from the authority, reading ONE copy of it:
-  #
-  #   * A tail and a CRDT state: the doc (state + tail) is the text. The body
-  #     is not decrypted at all.
-  #   * An empty tail on a markdown note: every writer of `crdt_state` writes
-  #     the body projected from it in the same UPDATE (checkpoint, upsert,
-  #     seed), so the stored body IS the doc's text, the rule `get_note/3`
-  #     serves reads by. The state is not decrypted or rebuilt (a 1.4 MB note
-  #     paid both on every edit).
-  #   * Otherwise (no state, a canvas, a legacy job with no tail read): as
-  #     before, decrypt and resolve through the authority.
+  # (#1280). So the text comes from the authority, decrypting one copy of the
+  # note (`Engram.Notes.current_text/3`; a 1.4 MB note used to pay a body
+  # decrypt plus a state decrypt and doc rebuild on every edit). A legacy job
+  # read no tail, so it resolves as before.
   defp current_text(user, note, nil) do
     with {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user),
          do: Engram.Notes.authoritative_content(user, decrypted)
   end
 
-  defp current_text(user, %Note{crdt_state_ciphertext: state} = note, [_ | _] = tail)
-       when is_binary(state),
-       do: Engram.Notes.authoritative_content(user, note, tail)
-
-  defp current_text(user, note, tail) do
-    with {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user) do
-      if tail == [] and CrdtBridge.markdown_path?(decrypted.path),
-        do: {:ok, decrypted.content || ""},
-        else: Engram.Notes.authoritative_content(user, decrypted, tail)
-    end
-  end
+  defp current_text(user, note, tail), do: Engram.Notes.current_text(user, note, tail)
 
   defp extract(note, tail, user, vault) do
     case current_text(user, note, tail) do
