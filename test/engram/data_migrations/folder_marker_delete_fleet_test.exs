@@ -201,4 +201,54 @@ defmodule Engram.DataMigrations.FolderMarkerDeleteFleetTest do
              Repo.query!("SELECT explicit_seq FROM folders WHERE id = $1", [row]).rows
            end) == [[9]]
   end
+
+  # #2678 review: another tenant's explicit row at the unmatched marker's path
+  # in tenant two's vault must not match it on the fleet path (the only path
+  # that sees another tenant's rows). The probe's tenant check above its
+  # fence keeps the vault unmatched, so the marker stays.
+  test "a foreign explicit row at the marker's path does not match it", %{made: [one, two]} do
+    Engram.ServiceConfig.put_override(:marker_stop_floors, :assume)
+    Engram.ServiceConfig.put_override(:folder_marker_stop, true)
+    Engram.ServiceConfig.put_override(:marker_delete_floors, :assume)
+    t = Ecto.UUID.dump!(two.id)
+
+    Sandbox.unboxed_run(Repo, fn ->
+      %{rows: [[un, hmac]]} =
+        Repo.query!(
+          "SELECT id, full_path_hmac FROM folders WHERE user_id = $1 AND NOT explicit",
+          [t]
+        )
+
+      %{rows: [[other, ohmac]]} =
+        Repo.query!(
+          "SELECT id, full_path_hmac FROM folders WHERE user_id = $1 AND explicit AND id <> $2",
+          [t, un]
+        )
+
+      Repo.query!("UPDATE notes SET deleted_at = now() WHERE user_id = $1 AND folder_hmac = $2", [
+        t,
+        ohmac
+      ])
+
+      Repo.query!(
+        "UPDATE folders SET user_id = $1, full_path_hmac = $2, explicit_seq = NULL WHERE id = $3",
+        [Ecto.UUID.dump!(one.id), hmac, other]
+      )
+    end)
+
+    for _ <- 1..2 do
+      IdWindows.reset_walk(Delete.name())
+      Delete.run_pass()
+    end
+
+    live =
+      Sandbox.unboxed_run(Repo, fn ->
+        Repo.query!(
+          "SELECT count(*)::int FROM notes WHERE user_id = $1 AND kind = 'folder' AND deleted_at IS NULL",
+          [t]
+        ).rows
+      end)
+
+    assert live == [[1]]
+  end
 end
