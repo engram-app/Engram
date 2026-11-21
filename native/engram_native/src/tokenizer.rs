@@ -6,6 +6,7 @@
 //! through this one function, so a term always tokenizes the same way on both
 //! sides.
 use snowball_stemmers_rs::{Algorithm, Stemmer};
+use std::borrow::Cow;
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -139,27 +140,62 @@ pub fn stem(token: &str, lang: &str) -> String {
 // "word" took 4 s), and a token this long is never a real word. Index it raw.
 const MAX_STEM_BYTES: usize = 64;
 
-fn emit(token: String, lang: Option<&str>, out: &mut Vec<String>) {
-    if let Some(l) = lang.filter(|_| token.len() <= MAX_STEM_BYTES) {
-        let s = stem(&token, l);
-        out.push(token);
-        if s != *out.last().unwrap() {
-            out.push(s);
-        }
-    } else {
-        out.push(token);
-    }
+/// The stem token a stemmable raw token adds after itself, if any: none
+/// without a language, past MAX_STEM_BYTES, or when the stem is the word.
+pub fn stem_of(token: &str, lang: Option<&str>) -> Option<String> {
+    let l = lang.filter(|_| token.len() <= MAX_STEM_BYTES)?;
+    Some(stem(token, l)).filter(|s| s != token)
 }
 
-fn bigrams(g: &[&str], out: &mut Vec<String>) -> usize {
-    if g.len() == 1 {
-        out.push(g[0].to_string());
-        return 1;
+/// NFKC, then per-char lowercase, then combining marks after a Latin letter
+/// dropped. `buf` holds the lowercased text; the result borrows it unless a
+/// mark was dropped.
+pub fn normalize<'b>(text: &str, buf: &'b mut String) -> Cow<'b, str> {
+    buf.clear();
+    // Per-char lowercase, NOT `str::to_lowercase`: the latter applies the
+    // contextual Greek final-sigma rule (Σ -> ς at word end) and Elixir's
+    // `String.downcase(:default)` does not. Different sigma, different token.
+    buf.extend(text.nfkc().flat_map(char::to_lowercase));
+    // Drop combining marks right after a Latin letter (casefold artifacts like
+    // İ -> i + U+0307, and zalgo spam), keeping Arabic/Hebrew marks attached.
+    re!(r"(\p{Latin})\p{Mn}+").replace_all(buf, "$1")
+}
+
+/// Each RAW token of normalized text, in order, as a slice of it, with
+/// whether it may be stemmed: word runs `[\p{L}\p{N}\p{M}_]+`, CJK runs in
+/// them as overlapping char bigrams (never stemmed; a lone CJK grapheme
+/// stands alone), other runs whole.
+pub fn for_each_raw<'s>(norm: &'s str, mut f: impl FnMut(&'s str, bool)) {
+    for word in re!(r"[\p{L}\p{N}\p{M}_]+")
+        .find_iter(norm)
+        .map(|m| m.as_str())
+    {
+        if !word.chars().any(is_cjk) {
+            f(word, true);
+            continue;
+        }
+        let g: Vec<(usize, &str)> = word.grapheme_indices(true).collect();
+        let end = |k: usize| g[k].0 + g[k].1.len();
+        let mut i = 0;
+        while i < g.len() {
+            let cjk = g[i].1.chars().any(is_cjk);
+            let mut j = i + 1;
+            while j < g.len() && g[j].1.chars().any(is_cjk) == cjk {
+                j += 1;
+            }
+            if !cjk {
+                f(&word[g[i].0..end(j - 1)], true);
+            } else if j - i == 1 {
+                f(g[i].1, false);
+            } else {
+                // Adjacent graphemes: a bigram is the slice spanning both.
+                for k in i..j - 1 {
+                    f(&word[g[k].0..end(k + 1)], false);
+                }
+            }
+            i = j;
+        }
     }
-    for w in g.windows(2) {
-        out.push(format!("{}{}", w[0], w[1]));
-    }
-    g.len() - 1
 }
 
 /// `{tokens, raw_len}` exactly as `Tokenizer.tokens_with_len/2`.
@@ -171,43 +207,17 @@ pub fn tokens_with_len(text: &str, lang: Option<&str>) -> (Vec<String>, usize) {
 /// Tokens, plus the position in them of each RAW token, in text order (a
 /// stem is never raw). `raw.len()` is the BM25 doc_len.
 pub fn tokenize(text: &str, lang: Option<&str>) -> (Vec<String>, Vec<usize>) {
-    // Per-char lowercase, NOT `str::to_lowercase`: the latter applies the
-    // contextual Greek final-sigma rule (Σ -> ς at word end) and Elixir's
-    // `String.downcase(:default)` does not. Different sigma, different token.
-    let norm: String = text.nfkc().flat_map(char::to_lowercase).collect();
-    // Drop combining marks right after a Latin letter (casefold artifacts like
-    // İ -> i + U+0307, and zalgo spam), keeping Arabic/Hebrew marks attached.
-    let stripped = re!(r"(\p{Latin})\p{Mn}+").replace_all(&norm, "$1");
+    let mut buf = String::new();
+    let norm = normalize(text, &mut buf);
     let mut out = Vec::new();
     let mut raw = Vec::new();
-    for word in re!(r"[\p{L}\p{N}\p{M}_]+")
-        .find_iter(&stripped)
-        .map(|m| m.as_str())
-    {
-        if !word.chars().any(is_cjk) {
-            raw.push(out.len());
-            emit(word.to_string(), lang, &mut out);
-            continue;
+    for_each_raw(&norm, |token, stemmable| {
+        raw.push(out.len());
+        out.push(token.to_string());
+        if let Some(s) = stemmable.then(|| stem_of(token, lang)).flatten() {
+            out.push(s);
         }
-        let graphemes: Vec<&str> = word.graphemes(true).collect();
-        let mut i = 0;
-        while i < graphemes.len() {
-            let cjk = graphemes[i].chars().any(is_cjk);
-            let mut j = i + 1;
-            while j < graphemes.len() && graphemes[j].chars().any(is_cjk) == cjk {
-                j += 1;
-            }
-            if cjk {
-                let at = out.len();
-                let n = bigrams(&graphemes[i..j], &mut out);
-                raw.extend(at..at + n);
-            } else {
-                raw.push(out.len());
-                emit(graphemes[i..j].concat(), lang, &mut out);
-            }
-            i = j;
-        }
-    }
+    });
     (out, raw)
 }
 
