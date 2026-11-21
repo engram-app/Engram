@@ -71,6 +71,7 @@ defmodule Engram.Folders.WriteStop do
     :no_op,
     :no_old_row,
     :new_folder_exists,
+    :merge_raced,
     :empty,
     :not_derivable,
     :drift,
@@ -100,10 +101,11 @@ defmodule Engram.Folders.WriteStop do
   @doc """
   One structured line for a folder op that fell back to the cascade, naming
   the branch that decided it (the reasons are the `@cascade_reasons` atoms;
-  `new_folder_exists`, `not_derivable`, `drift`, `stop_off`, `no_old_row`
-  and `unkeyed` are the ones that matter, `no_op`, `empty` and `raced` the
-  rest of the exits). Hashed user and vault ids only: no path, no name, no
-  count of notes. Called once per op, never per note.
+  `new_folder_exists` is the pre-check, `merge_raced` a folder that appeared
+  at the target during the locked move, `raced` a note written after the
+  scan). Hashed user and vault ids only: no path, no name, no count of
+  notes. Emitted once per op by `Folders.rename/5` after the claim retries
+  settle, never per attempt or per note.
   """
   @spec log_cascade(map(), map(), atom()) :: :ok
   def log_cascade(user, vault, reason) when reason in @cascade_reasons do

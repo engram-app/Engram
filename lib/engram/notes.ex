@@ -54,7 +54,6 @@ defmodule Engram.Notes do
   alias Engram.Folders.MarkerStop
   alias Engram.Folders.Rows
   alias Engram.Folders.WalkSql
-  alias Engram.Folders.WriteStop
   alias Engram.Pager
   alias Engram.Repo
   alias Engram.Search.NameTerms
@@ -8515,7 +8514,9 @@ defmodule Engram.Notes do
   tombstone inserted, nothing broadcast per note: every reader derives the
   notes' paths from the folder chain plus their names (`Location`). Returns
   `{:ok, notes}` (the live notes now under the new path), an error, or
-  `:cascade` when only the cascade (`rename_folder/4`) can serve the op:
+  `{:cascade, reason}` when only the cascade (`rename_folder/4`) can serve
+  the op (`reason` names the branch that decided it, for
+  `WriteStop.log_cascade/3`):
 
     * no live folder row at `old_folder` (a path-only folder, drift), a
       no-op, or nothing under it (the cascade's answer for that stands);
@@ -8543,7 +8544,7 @@ defmodule Engram.Notes do
   Runs in the caller's transaction (`Folders.rename/5`).
   """
   @spec rename_folder_uncascaded(map(), map(), String.t(), String.t()) ::
-          {:ok, non_neg_integer()} | :cascade | {:error, term()}
+          {:ok, non_neg_integer()} | {:cascade, atom()} | {:error, term()}
   def rename_folder_uncascaded(user, vault, old_folder, new_folder) do
     new_folder = String.trim_trailing(new_folder, "/")
 
@@ -8556,11 +8557,11 @@ defmodule Engram.Notes do
 
             # A row the trigger cannot key (no name hash): only the cascade moves it.
             :unkeyed ->
-              cascade(user, vault, :unkeyed)
+              {:cascade, :unkeyed}
           end
 
-        {:cascade, reason} ->
-          cascade(user, vault, reason)
+        {:cascade, _reason} = cascade ->
+          cascade
       end
     end
   end
@@ -8598,11 +8599,6 @@ defmodule Engram.Notes do
       drift != [] -> {:cascade, :drift}
       true -> {:move, folder_id, notes, markers}
     end
-  end
-
-  defp cascade(user, vault, reason) do
-    :ok = WriteStop.log_cascade(user, vault, reason)
-    :cascade
   end
 
   defp uncascadable?(note), do: Location.derivable?(note)
@@ -8695,7 +8691,7 @@ defmodule Engram.Notes do
       # A folder appeared at the target: the cascade runs instead and
       # consumes (or, called directly, re-claims) every note it scans.
       {:ok, {:error, :merge}} ->
-        cascade(user, vault, :new_folder_exists)
+        {:cascade, :merge_raced}
 
       # A note under this folder was written after the scan. The cascade
       # re-claims what it scans, but a scanned note that moved out or died
@@ -8704,7 +8700,7 @@ defmodule Engram.Notes do
       # Preclaimed, the cascade's consume finds the plan stale and re-plans.
       {:ok, {:error, :raced}} ->
         orphan.(:raced)
-        cascade(user, vault, :raced)
+        {:cascade, :raced}
 
       {:ok, {:error, reason}} ->
         # The claim committed but no row moved: report it, as the cascade
@@ -8743,6 +8739,9 @@ defmodule Engram.Notes do
        ) do
     Repo.with_tenant(user.id, fn ->
       seq = Engram.Vaults.next_seq!(vault.id)
+
+      # Test seam (nil outside tests): the folder lock and the seq are held.
+      :ok = interleave_hook(:folder_move_locked)
 
       with false <- raced?(user, vault, old_folder, notes),
            :ok <- Rows.rename(user, vault.id, old_folder, new_folder, uncascaded: seq) do

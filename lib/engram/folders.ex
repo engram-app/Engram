@@ -58,6 +58,8 @@ defmodule Engram.Folders do
 
   @type counts :: %{notes: non_neg_integer(), attachments: non_neg_integer()}
 
+  @cascade_key :engram_folder_op_cascade_reason
+
   # `atomic/2` for a rename or batch move, whose index claims were made
   # BEFORE the transaction (a claim cannot join one: see
   # `Notes.with_folder_claims/4`). The cascade consumes them under the lock,
@@ -302,16 +304,35 @@ defmodule Engram.Folders do
       # name and the whole fleet reads them so (`Attachments.WriteStop`).
       att_stop? = stop? and att_keyed? and AttachmentWriteStop.on?()
 
-      claimed_atomic(user, vault, claim, fn ->
-        with :ok <- check_expected(user, vault, old_folder, new_folder, expect),
-             {:ok, notes, how} <- notes_leg(user, vault, old_folder, new_folder, stop?),
-             {:ok, folders} <-
-               move_bare_row(user, vault, old_folder, new_folder, notes, how, expect),
-             {:ok, atts} <- attachments_leg(user, vault, att_pairs, how, att_stop?) do
-          seq = Wire.changed(user, vault, [new_folder], opts[:origin_device_id])
-          {:ok, %{notes: notes, attachments: atts, folders: folders, seq: seq}}
-        end
-      end)
+      result =
+        claimed_atomic(user, vault, claim, fn ->
+          # Each attempt starts clean: a stale claim reruns this, and only the
+          # last attempt's reason is logged.
+          Process.delete(@cascade_key)
+
+          with :ok <- check_expected(user, vault, old_folder, new_folder, expect),
+               {:ok, notes, how} <- notes_leg(user, vault, old_folder, new_folder, stop?),
+               {:ok, folders} <-
+                 move_bare_row(user, vault, old_folder, new_folder, notes, how, expect),
+               {:ok, atts} <- attachments_leg(user, vault, att_pairs, how, att_stop?) do
+            seq = Wire.changed(user, vault, [new_folder], opts[:origin_device_id])
+            {:ok, %{notes: notes, attachments: atts, folders: folders, seq: seq}}
+          end
+        end)
+
+      log_cascade(user, vault)
+      result
+    end
+  end
+
+  # The cascade reason of the attempt in flight, carried in the process
+  # dictionary because a stale claim reruns the whole attempt
+  # (`Notes.with_folder_claims/5`): `log_cascade/2` emits ONE line per op,
+  # after the retries settle.
+  defp log_cascade(user, vault) do
+    case Process.delete(@cascade_key) do
+      nil -> :ok
+      reason -> WriteStop.log_cascade(user, vault, reason)
     end
   end
 
@@ -320,15 +341,13 @@ defmodule Engram.Folders do
   # it (`attachments_leg/5`).
   defp notes_leg(user, vault, old, new, stop?) do
     uncascaded =
-      if stop? do
-        Notes.rename_folder_uncascaded(user, vault, old, new)
-      else
-        WriteStop.log_cascade(user, vault, :stop_off)
-        :cascade
-      end
+      if stop?,
+        do: Notes.rename_folder_uncascaded(user, vault, old, new),
+        else: {:cascade, :stop_off}
 
     case uncascaded do
-      :cascade ->
+      {:cascade, reason} ->
+        Process.put(@cascade_key, reason)
         with {:ok, n} <- Notes.rename_folder(user, vault, old, new), do: {:ok, n, :cascaded}
 
       {:ok, n} ->
