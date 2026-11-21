@@ -966,3 +966,133 @@ fn name_index_bytes_nif(index: ResourceArc<names::NameIndex>) -> usize {
 }
 
 rustler::init!("Elixir.Engram.Native");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::Digest;
+
+    const KEY: [u8; 32] = [7; 32];
+    const GOLDEN: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/testdata/keyword_encode_golden.json"
+    );
+
+    /// The tokenizer golden set's texts, plus shapes it lacks: repeated
+    /// words (tf > 1, stems shared with raw words), a word past the stem
+    /// limit, CJK beside Latin, zalgo, NFKC-relevant forms, and two long
+    /// generated notes (one ASCII, one not) so the memo is exercised.
+    pub(crate) fn corpus() -> Vec<String> {
+        let golden: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../test/support/fixtures/keyword_tokens_golden.json"
+        ))
+        .unwrap();
+        let mut texts: Vec<String> = golden
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["text"].as_str().unwrap().to_string())
+            .collect();
+        texts.sort();
+        texts.dedup();
+        texts.extend(
+            [
+                "the the the running runs ran run RUNNING Running run",
+                "Läuft läuft LAUFEN laufen gelaufen läuft",
+                "東京abc東京タワーtokyo running 東 京 한국어한국어",
+                "ẑ̷͎a̴l̸g̵o̶ zalgo İstanbul istanbul",
+                "ﬁ ① Ｆｕｌｌｗｉｄｔｈ ｶﾀｶﾅ ㎏ Ⅻ",
+                "snake_case_word 3.14159 x_y_z __init__ \r\nline\ttab",
+                "Σίσυφος ΣΊΣΥΦΟΣ σίσυφος Москва МОСКВА москва",
+            ]
+            .map(String::from),
+        );
+        texts.push(format!("{} short", "a".repeat(70)));
+        texts.push(
+            (0..3_000)
+                .map(|i| format!("word{} running{} the ", i % 97, i % 13))
+                .collect(),
+        );
+        texts.push(
+            (0..2_000)
+                .map(|i| format!("Ζωή{} жизнь{} Straße{} ", i % 31, i % 7, i % 5))
+                .collect(),
+        );
+        texts
+    }
+
+    fn configs() -> [(&'static str, Bm25); 2] {
+        [
+            (
+                "b0.75",
+                Bm25 {
+                    avgdl: 50.0,
+                    b: 0.75,
+                    cap: None,
+                },
+            ),
+            (
+                "b0.4cap3",
+                Bm25 {
+                    avgdl: 7.5,
+                    b: 0.4,
+                    cap: Some(3.0),
+                },
+            ),
+        ]
+    }
+
+    /// Per (language, BM25 config), the SHA-256 of every document's packed
+    /// output (indices bytes, values bytes, doc_len), encoded as one batch.
+    fn digests() -> std::collections::BTreeMap<String, String> {
+        let texts = corpus();
+        let langs = std::iter::once(None).chain(tokenizer::LANGUAGES.iter().map(|l| Some(*l)));
+        let mut out = std::collections::BTreeMap::new();
+        for lang in langs {
+            for (name, bm25) in configs() {
+                let mut h = Sha256::new();
+                for (i, v, n) in encode_batch(&texts, &KEY, bm25, lang) {
+                    h.update((i.len() as u64).to_le_bytes());
+                    h.update(&i);
+                    h.update(&v);
+                    h.update((n as u64).to_le_bytes());
+                }
+                let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+                out.insert(format!("{}|{name}", lang.unwrap_or("none")), hex);
+            }
+        }
+        out
+    }
+
+    fn encode_batch(
+        texts: &[String],
+        key: &[u8],
+        bm25: Bm25,
+        lang: Option<&str>,
+    ) -> Vec<(Vec<u8>, Vec<u8>, usize)> {
+        let mut memo = HashMap::new();
+        texts
+            .iter()
+            .map(|t| encode(t, key, bm25, lang, &mut memo))
+            .collect()
+    }
+
+    // Generated from the encoder BEFORE the per-word interning rewrite, so
+    // every later speedup must reproduce it byte for byte. Regenerate only
+    // for a deliberate output change (that is a keyword index version bump):
+    // ENGRAM_REGEN_KEYWORD_GOLDEN=1 cargo test -p engram_native golden
+    #[test]
+    fn encode_documents_output_matches_the_golden_bytes() {
+        let got = digests();
+        if std::env::var_os("ENGRAM_REGEN_KEYWORD_GOLDEN").is_some() {
+            std::fs::write(GOLDEN, serde_json::to_string_pretty(&got).unwrap() + "\n").unwrap();
+        }
+        let want: std::collections::BTreeMap<String, String> =
+            serde_json::from_str(&std::fs::read_to_string(GOLDEN).unwrap()).unwrap();
+        assert_eq!(got.len(), (tokenizer::LANGUAGES.len() + 1) * configs().len());
+        for (k, v) in &want {
+            assert_eq!(got.get(k), Some(v), "{k}");
+        }
+        assert_eq!(got, want);
+    }
+}
