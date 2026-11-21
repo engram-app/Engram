@@ -105,18 +105,44 @@ defmodule Engram.Logs do
   Options:
     * `:persist_all` - store every line. Default `:client_logs_persist_all`;
       when false only `Engram.Logs.PersistPolicy.persist?/1` lines are stored.
+    * `:exhausted?` - `fn -> boolean end`, asked first: `true` (the caller's
+      budget is already spent) refuses the whole batch before any line is
+      bounded, so a looping client's refused batches cost one lookup, not a
+      scrub per line.
     * `:admit` - `fn kept_lines -> boolean end`, the caller's line budget. Asked
       once with the number of lines that would leave a trace (stored, or
       re-emitted as diagnostic); `false` drops the batch. Not asked when
       nothing would be kept, so filtered lines never spend a budget.
 
+  Returns `{:over_budget, lines}` when either refuses: the lines refused.
+
   Dropped lines are counted on `[:engram, :client_logs, :dropped]`
-  (`%{lines: n}`, `%{reason: :filtered | :over_budget, level: level}`).
+  (`%{lines: n}`, `%{reason: :filtered | :over_budget, level: level}`). A
+  batch refused by `:exhausted?` counts every line it carried, since it is
+  refused before the filter could tell kept from filtered.
   """
   def insert_logs(user, entries, vault_id \\ nil, opts \\ [])
   def insert_logs(_user, [], _vault_id, _opts), do: {:ok, 0}
 
   def insert_logs(user, entries, vault_id, opts) when is_list(entries) do
+    exhausted? = Keyword.get(opts, :exhausted?, fn -> false end)
+
+    if exhausted?.() do
+      entries |> Enum.map(&%{level: raw_level(&1)}) |> count_dropped(:over_budget)
+      {:over_budget, length(entries)}
+    else
+      bound_and_insert(user, entries, vault_id, opts)
+    end
+  end
+
+  # Only the level, read without bounding the line (same default as
+  # bound_entry/2); a non-map line is "other".
+  defp raw_level(%{} = entry),
+    do: entry |> get("level", :level) |> default("info") |> PersistPolicy.metric_level()
+
+  defp raw_level(_entry), do: "other"
+
+  defp bound_and_insert(user, entries, vault_id, opts) do
     now = DateTime.utc_now(:second)
 
     {kept, dropped} = take_bounded(entries)
@@ -161,7 +187,7 @@ defmodule Engram.Logs do
 
       true ->
         count_dropped(stored ++ Enum.filter(unstored, & &1.diagnostic), :over_budget)
-        {:ok, 0}
+        {:over_budget, cost}
     end
   end
 

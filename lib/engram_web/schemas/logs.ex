@@ -63,7 +63,16 @@ defmodule EngramWeb.Schemas.LogIngestResponse do
     type: :object,
     properties: %{
       ok: %Schema{type: :boolean, example: true},
-      count: %Schema{type: :integer, description: "Number of log lines persisted."}
+      count: %Schema{type: :integer, description: "Number of log lines persisted."},
+      throttled: %Schema{
+        type: :boolean,
+        description:
+          "Present (true) only when the device's log line budget refused the batch. Stop sending until retry_after_ms has passed."
+      },
+      retry_after_ms: %Schema{
+        type: :integer,
+        description: "With throttled: milliseconds until the budget window resets."
+      }
     },
     required: [:ok, :count]
   })

@@ -3,34 +3,10 @@ defmodule EngramWeb.LogsController do
   use OpenApiSpex.ControllerSpecs
   alias EngramWeb.Schemas
 
-  alias Engram.Logger.Metadata
   alias Engram.Logs
+  alias Engram.Logs.BudgetDrops
   alias EngramWeb.OriginDevice
   alias EngramWeb.RateLimiter
-
-  require Logger
-
-  operation(:ingest,
-    operation_id: "logs-ingest",
-    summary: "Ingest client logs",
-    "x-internal": true,
-    tags: ["Logs"],
-    request_body: {"Log lines", "application/json", Schemas.LogIngestRequest, required: true},
-    responses: [ok: {"Persisted count", "application/json", Schemas.LogIngestResponse}]
-  )
-
-  def ingest(conn, %{"logs" => [_ | _] = logs}) do
-    user = conn.assigns.current_user
-
-    {:ok, count} =
-      Logs.insert_logs(user, logs, conn.assigns.current_vault.id,
-        admit: &within_line_budget?(conn, user, &1)
-      )
-
-    json(conn, %{ok: true, count: count})
-  end
-
-  def ingest(conn, _params), do: json(conn, %{ok: true, count: 0})
 
   # Per-device line budget (2026-10-17 prod CPU alert: ingest jumped 296 -> 8,332
   # lines per 10m). The per-request limiters bound request count, not lines,
@@ -46,6 +22,9 @@ defmodule EngramWeb.LogsController do
   # Over budget we answer 200 and drop the batch rather than 429: the plugin's
   # remote logger re-buffers a failed batch and logs the failure into the same
   # buffer, so a 429 would turn into a retry storm of the lines we refused.
+  # The 200 carries `throttled: true` and `retry_after_ms` (to the end of this
+  # window) for a plugin that backs off on it. The warning for it is
+  # `Engram.Logs.BudgetDrops`'s, one per device per 10 minutes.
   #
   # X-Device-Id is client-chosen, so a rotating id would mint a fresh device
   # budget per value; a per-user total (4 devices' worth) caps that. Requests
@@ -60,21 +39,58 @@ defmodule EngramWeb.LogsController do
   @user_budget_devices 4
   @line_window_ms :timer.minutes(10)
 
-  defp within_line_budget?(conn, user, lines) do
-    budget = Application.get_env(:engram, :client_log_line_budget_override) || @line_budget
-    device = OriginDevice.from_conn(conn) || "user"
+  operation(:ingest,
+    operation_id: "logs-ingest",
+    summary: "Ingest client logs",
+    "x-internal": true,
+    tags: ["Logs"],
+    request_body: {"Log lines", "application/json", Schemas.LogIngestRequest, required: true},
+    responses: [ok: {"Persisted count", "application/json", Schemas.LogIngestResponse}]
+  )
 
+  def ingest(conn, %{"logs" => [_ | _] = logs}) do
+    user = conn.assigns.current_user
+    device = OriginDevice.from_conn(conn) || "user"
+    budget = Application.get_env(:engram, :client_log_line_budget_override) || @line_budget
+
+    case Logs.insert_logs(user, logs, conn.assigns.current_vault.id,
+           exhausted?: fn -> budget_spent?(user, device, budget) end,
+           admit: &within_line_budget?(user, device, budget, &1)
+         ) do
+      {:ok, count} ->
+        json(conn, %{ok: true, count: count})
+
+      # Still a 200 (see below), but now it says so: a plugin that reads
+      # `throttled` stops shipping until the window ends; an older one
+      # ignores the extra keys exactly as it ignored the bare count: 0.
+      {:over_budget, lines} ->
+        BudgetDrops.add(user.id, device, lines)
+
+        json(conn, %{
+          ok: true,
+          count: 0,
+          throttled: true,
+          retry_after_ms: RateLimiter.window_reset_ms(@line_window_ms)
+        })
+    end
+  end
+
+  def ingest(conn, _params), do: json(conn, %{ok: true, count: 0})
+
+  # Checked before any line is bounded: once a bucket is spent (Hammer counts
+  # a denied increment too, so it stays spent until the window rolls), a
+  # refused batch costs two ETS reads, not a scrub per line.
+  defp budget_spent?(user, device, budget) do
+    RateLimiter.peek(device_key(user, device), @line_window_ms, budget) == 0 or
+      RateLimiter.peek(user_key(user), @line_window_ms, budget * @user_budget_devices) == 0
+  end
+
+  defp within_line_budget?(user, device, budget, lines) do
     with {:allow, _} <-
-           RateLimiter.hit(
-             "client_logs:#{user.id}:#{device}",
-             @line_window_ms,
-             budget,
-             :client_logs,
-             lines
-           ),
+           RateLimiter.hit(device_key(user, device), @line_window_ms, budget, :client_logs, lines),
          {:allow, _} <-
            RateLimiter.hit(
-             "client_logs:#{user.id}",
+             user_key(user),
              @line_window_ms,
              budget * @user_budget_devices,
              :client_logs,
@@ -82,15 +98,12 @@ defmodule EngramWeb.LogsController do
            ) do
       true
     else
-      {:deny, _} ->
-        Logger.warning(
-          "client log budget exceeded: dropped #{lines} lines",
-          Metadata.with_category(:warning, :client, dropped: lines)
-        )
-
-        false
+      {:deny, _} -> false
     end
   end
+
+  defp device_key(user, device), do: "client_logs:#{user.id}:#{device}"
+  defp user_key(user), do: "client_logs:#{user.id}"
 
   operation(:index,
     operation_id: "logs-list",

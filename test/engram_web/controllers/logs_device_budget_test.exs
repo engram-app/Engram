@@ -35,6 +35,9 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
         do: assert(%{"count" => @batch} = send_logs(conn, @batch, device))
       )
 
+  defp exhaust_rest(conn, device, n),
+    do: assert(%{"count" => ^n} = send_logs(conn, n, device))
+
   defp stored(user),
     do:
       Repo.aggregate(from(l in ClientLog, where: l.user_id == ^user.id), :count,
@@ -48,12 +51,40 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
   } do
     exhaust(conn, "dev-a")
 
-    log =
-      capture_log(fn -> assert %{"ok" => true, "count" => 0} = send_logs(conn, 1, "dev-a") end)
-
-    assert log =~ "client log budget exceeded"
-    assert log =~ "dropped 1"
+    assert %{"ok" => true, "count" => 0} = send_logs(conn, 1, "dev-a")
     assert stored(user) == @budget
+  end
+
+  # Over budget the answer stays 200 (an old plugin re-buffers a failed batch,
+  # so a 429 is a retry storm) but says so, and says for how long: the rest of
+  # the budget window, after which the next line is admitted again.
+  test "an over-budget answer is throttled with retry_after_ms up to the window end", %{
+    conn: conn
+  } do
+    refute Map.has_key?(send_logs(conn, 1, "dev-a"), "throttled")
+    exhaust_rest(conn, "dev-a", @budget - 1)
+
+    assert %{"ok" => true, "count" => 0, "throttled" => true, "retry_after_ms" => ms} =
+             send_logs(conn, 1, "dev-a")
+
+    assert is_integer(ms) and ms > 0 and ms <= :timer.minutes(10)
+  end
+
+  # The pre-bounding check answers the same shape once the bucket is spent.
+  test "a device already over budget is refused with the same throttled shape", %{conn: conn} do
+    exhaust(conn, "dev-a")
+    assert %{"throttled" => true} = send_logs(conn, 1, "dev-a")
+    assert %{"count" => 0, "throttled" => true, "retry_after_ms" => _} = send_logs(conn, 5, "dev-a")
+  end
+
+  # The warning is the tally's (Engram.Logs.BudgetDrops), at most once per
+  # device per window, not one line per refused request.
+  test "refused requests do not each log a warning", %{conn: conn} do
+    exhaust(conn, "dev-a")
+
+    log = capture_log(fn -> for _ <- 1..5, do: send_logs(conn, 1, "dev-a") end)
+
+    refute log =~ "client log budget exceeded"
   end
 
   test "a batch that would cross the budget is dropped whole", %{conn: conn, user: user} do

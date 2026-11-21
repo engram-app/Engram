@@ -75,6 +75,8 @@ config :engram, :origin_stats_flush_on_terminate, false
 # Folded analytics counts (Engram.Analytics.Folds): tests flush by hand.
 config :engram, :analytics_folds_flush_ms, nil
 config :engram, :analytics_folds_flush_on_terminate, false
+# Client-log budget warnings (Engram.Logs.BudgetDrops): tests flush by hand.
+config :engram, :client_log_budget_drops_flush_ms, nil
 
 # CheckpointGate inline limit raised out of the way for tests: the gate is a
 # process-global counter shared by the whole (partly async) suite, and many

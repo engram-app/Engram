@@ -149,7 +149,7 @@ defmodule Engram.LogsPersistPolicyTest do
     end
 
     test "a refused batch stores nothing and counts the lines over budget", %{user: user} do
-      assert {:ok, 0} =
+      assert {:over_budget, 2} =
                Logs.insert_logs(user, [line("warn", "a"), line("error", "b")], nil,
                  admit: fn _ -> false end
                )
@@ -163,12 +163,35 @@ defmodule Engram.LogsPersistPolicyTest do
     test "a refused batch also counts its unstored diagnostic lines", %{user: user} do
       batch = [Map.put(line("info", "verbose"), "diagnostic", true), line("warn", "a")]
 
-      assert {:ok, 0} =
+      assert {:over_budget, 2} =
                Logs.insert_logs(user, batch, nil, persist_all: false, admit: fn _ -> false end)
 
       assert_receive {:dropped, %{lines: 1}, %{reason: :filtered, level: "info"}}
       assert_receive {:dropped, %{lines: 1}, %{reason: :over_budget, level: "info"}}
       assert_receive {:dropped, %{lines: 1}, %{reason: :over_budget, level: "warn"}}
+    end
+  end
+
+  # A device already over its budget is refused before any line is bounded
+  # (scrubbed, clamped, filtered): a looping client's refused batches must be
+  # cheap. `[:not_a_map]` is a line bounding would raise on, so getting a
+  # refusal back proves bounding never ran.
+  describe "exhausted? (the pre-bounding budget check)" do
+    test "refuses the whole batch before bounding it", %{user: user} do
+      batch = [[:not_a_map], line("warn", "a")]
+      admit = fn _ -> flunk("admit asked for a batch already refused") end
+
+      assert {:over_budget, 2} =
+               Logs.insert_logs(user, batch, nil, exhausted?: fn -> true end, admit: admit)
+
+      assert stored(user) == []
+      assert_receive {:dropped, %{lines: 1}, %{reason: :over_budget, level: "other"}}
+      assert_receive {:dropped, %{lines: 1}, %{reason: :over_budget, level: "warn"}}
+
+      # The control: the same batch with budget left does reach bounding.
+      assert_raise ArgumentError, fn ->
+        Logs.insert_logs(user, batch, nil, exhausted?: fn -> false end)
+      end
     end
   end
 end

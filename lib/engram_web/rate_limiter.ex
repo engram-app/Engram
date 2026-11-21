@@ -91,6 +91,15 @@ defmodule EngramWeb.RateLimiter do
     max(limit - count, 0)
   end
 
+  @doc """
+  Milliseconds until the current `scale_ms` window ends, when every bucket
+  of that scale starts afresh. Both backends are Hammer's `:fix_window`,
+  whose windows are epoch-aligned (`div(now, scale)`) on the same clock, so
+  this is the wait a `{:deny, ms}` reports, without spending a hit to get it.
+  """
+  @spec window_reset_ms(pos_integer()) :: pos_integer()
+  def window_reset_ms(scale_ms), do: scale_ms - rem(System.system_time(:millisecond), scale_ms)
+
   @spec backend() :: :ets | :distributed_ets
   def backend do
     :engram |> Application.get_env(__MODULE__, []) |> Keyword.get(:backend, :ets)
