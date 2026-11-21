@@ -57,8 +57,12 @@ defmodule Engram.PromEx.NativeTest do
     # 1 ms to 60 s: a ~9 MB note's keyword_encode must not fall into +Inf.
     les = duration.reporter_options[:buckets]
     assert hd(les) == 1 and List.last(les) == 60_000
-    assert duration.measurement == :duration
-    assert duration.unit == {:native, :millisecond}
+    # Telemetry.Metrics keeps the TARGET unit and wraps `measurement` in a
+    # native->ms conversion, so check the behaviour, not the atom.
+    assert duration.unit == :millisecond
+    assert duration.tags == [:nif, :dirty]
+    native_1500ms = System.convert_time_unit(1_500, :millisecond, :native)
+    assert duration.measurement.(%{duration: native_1500ms}) == 1_500
     assert List.last(bytes.reporter_options[:buckets]) >= 16_777_216
 
     assert [%Polling{}, %Polling{}] = Native.polling_metrics(opts)
