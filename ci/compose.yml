@@ -166,6 +166,9 @@ services:
       # ci-local overlay. (The Playwright e2e job runs in the GitHub runner,
       # which sets CI=true automatically.)
       CI: "true"
+      # Self-host is gated off in prod releases (Engram.RuntimeConfig.selfhost_gate!/2);
+      # the local-auth CI stacks unlock it.
+      ENGRAM_SELFHOST_UNLOCK: "true"
       RATE_LIMIT_AUTH_OVERRIDE: "1000"
       # PreAuthRateLimit (the 401-loop defense in front of /api/notes etc.)
       # defaults to 600 req/60s per bucket — bulk/rapid E2E writes (test_77

@@ -640,8 +640,6 @@ export default {
 		"Непередбачена помилка призвела до збою цієї сторінки. Спробуйте перезавантажити. Якщо проблема повторюється, зверніться до {support}.",
 	"Copied to clipboard": "Скопіровано в буфер обміну",
 	"Could not copy": "Не вдалося скопіювати",
-	"Administration is only available on self-hosted instances.":
-		"Адміністрування доступне лише на самостійно розміщених інстансах.",
 	"Loading…": "Завантаження…",
 	"You don't have administrator access on this instance.":
 		"У вас немає прав адміністратора на цьому інстансі.",

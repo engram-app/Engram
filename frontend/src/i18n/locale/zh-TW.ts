@@ -548,7 +548,6 @@ export default {
 		"發生意外錯誤，此頁面已中斷。請嘗試重新載入。如果問題持續發生，請聯絡 {support}。",
 	"Copied to clipboard": "已複製到剪貼簿",
 	"Could not copy": "複製失敗",
-	"Administration is only available on self-hosted instances.": "管理功能僅限於自架設版本。",
 	"Loading…": "載入中…",
 	"You don't have administrator access on this instance.": "您沒有此版本的管理員權限。",
 	Administration: "管理",

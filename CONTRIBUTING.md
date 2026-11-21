@@ -10,7 +10,7 @@ Open an issue on GitHub with:
 - What you expected to happen
 - What actually happened
 - Steps to reproduce (commands, payloads, etc.)
-- Engram version (`mix.exs` `version:`) and deployment mode (SaaS / self-hosted)
+- Engram version (`mix.exs` `version:`) 
 - Relevant logs (sanitize secrets first)
 
 ## Proposing changes
@@ -87,7 +87,7 @@ To override (another database, Ollama or Voyage embeddings for search), edit
 `make dev-selfhost`) or export the variables. `.env.example` is for the
 `docker-compose.yml` production self-host only; `mix` never reads it.
 
-Full env reference: <https://engram.page/docs/self-host/environment-variables/>.
+Full env reference: `config/runtime.exs`.
 
 ### Start
 

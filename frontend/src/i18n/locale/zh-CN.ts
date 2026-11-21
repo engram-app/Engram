@@ -547,7 +547,6 @@ export default {
 		"出现意外错误，此页面已损坏。请重试。如果问题持续，请联系 {support}.",
 	"Copied to clipboard": "已复制到剪贴板",
 	"Could not copy": "复制失败",
-	"Administration is only available on self-hosted instances.": "管理功能仅在自托管实例可用。",
 	"Loading…": "正在加载…",
 	"You don't have administrator access on this instance.": "你没有该实例的管理员权限。",
 	Administration: "管理",
