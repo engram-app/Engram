@@ -390,6 +390,38 @@ defmodule Engram.QueryPlan do
   end
 
   @doc """
+  Every read of notes is keyed: no seq scan, every notes index read (index,
+  index-only or bitmap index scan, a BitmapAnd arm included) has an Index
+  Cond, and every one but a `notes_pkey` probe names both `user_id` and
+  `vault_id` in it. A partial index read with no condition is every
+  account's rows of that index; one by `vault_id` alone on a
+  `(user_id, vault_id, ...)` index is a skip scan over every tenant.
+  """
+  @spec assert_notes_reads_bound!(String.t(), String.t()) :: true
+  def assert_notes_reads_bound!(plan, msg \\ "") do
+    full = msg <> "\n" <> plan
+    refute plan =~ "Seq Scan on notes", "seq scan on notes\n" <> full
+
+    for [index, next] <-
+          Regex.scan(
+            ~r/(?:Index (?:Only )?Scan using|Bitmap Index Scan on) (notes_\w+)[^\n]*\n([^\n]*)/,
+            plan,
+            capture: :all_but_first
+          ) do
+      assert next =~ ~r/^\s*Index Cond: /, "notes read with no condition: #{index}\n" <> full
+
+      unless index == "notes_pkey",
+        do:
+          assert(
+            next =~ "user_id =" and next =~ "vault_id =",
+            "notes read not bound by user_id and vault_id: #{index} #{next}\n" <> full
+          )
+    end
+
+    true
+  end
+
+  @doc """
   Every `folders_explicit_user_vault` node in `plan` (index, index-only or
   bitmap index scan) has an Index Cond naming both `user_id` and `vault_id`.
   The index holds every tenant's explicit rows: read with no condition, or

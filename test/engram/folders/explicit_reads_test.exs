@@ -752,18 +752,24 @@ defmodule Engram.Folders.ExplicitReadsTest do
       u |> FolderRows.tree() |> Map.values() |> Enum.map(&Ecto.UUID.dump!(&1.id)) |> Enum.take(20)
 
     vaults = [Ecto.UUID.dump!(v.id)]
+    owners = [Ecto.UUID.dump!(u.id)]
 
     for {sql, params} <- [
           {ExplicitFolderReconcile.lock_vaults_sql(), [ids]},
-          {ExplicitFolderReconcile.clear_sql(), [ids, vaults]},
+          {ExplicitFolderReconcile.clear_sql(), [ids, vaults, owners]},
           {ExplicitFolderReconcile.left_sql(), [ids]}
         ] do
       %{custom: custom, generic: generic} =
         QueryPlan.rls_plans(u.id, sql, params, role: "engram_maintenance")
 
+      # The property, not an index name: the marker probe may read
+      # `notes_user_vault_folder_marker` or another (user_id, vault_id, ...)
+      # index; what matters is that every read is keyed.
       for plan <- [custom, generic] do
         refute plan =~ ~r/Seq Scan on (notes|folders|vaults)/, plan
-        if sql =~ "kind = 'folder'", do: assert(plan =~ "notes_user_vault_folder_marker", plan)
+        QueryPlan.assert_notes_reads_bound!(plan)
+        QueryPlan.assert_scans_vault_bound!(plan)
+        QueryPlan.assert_explicit_index_bound!(plan)
       end
     end
   end
