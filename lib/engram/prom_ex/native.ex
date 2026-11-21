@@ -4,12 +4,14 @@ defmodule Engram.PromEx.Native do
   memory standard (see `Engram.Native`):
 
     * `[:engram, :nif, :call, :stop]`, per call: a call count and summed
-      duration, tagged by `:nif` and `:dirty` (which scheduler ran it). The
-      event also carries native peak and input bytes; they are not exported
-      (series cost with no reader). Envelope calls that stay inline and write or read
-      format 0 (seal `:none` up to 16 KB, a successful inline open) emit no
-      event, so the envelope series cover format-1 seals (`dirty="false"`
-      for small inline ones) and every dirty seal or open.
+      duration, tagged by `:nif` and `:dirty` (which scheduler ran it), plus a
+      per-call duration histogram for `@histogram_nifs` only (series cost).
+      The event also carries native peak and input bytes; they are not
+      exported (series cost with no reader).
+      Envelope calls that stay inline and write or read format 0 (seal
+      `:none` up to 16 KB, a successful inline open) emit no event, so the
+      envelope series cover format-1 seals (`dirty="false"` for small inline
+      ones) and every dirty seal or open.
     * `[:engram, :nif, :envelope]`, polled: envelope seal/open calls and
       input bytes since the NIF loaded (`Engram.Native.envelope_counts/0`),
       every call. Inline format-0 calls emit no per-call event, so this is
@@ -28,7 +30,13 @@ defmodule Engram.PromEx.Native do
   """
   use PromEx.Plugin
 
+  alias Engram.PromEx.Buckets
+
   @call_event [:engram, :nif, :call, :stop]
+  # A histogram costs 10 series per (nif, dirty) pair (7 buckets, +Inf, sum,
+  # count); storage_test.exs budgets one NIF event at 2. Widen this list
+  # deliberately, one NIF at a time.
+  @histogram_nifs [:keyword_encode, :chunk]
   @memory_event [:engram, :vm, :native_memory]
   @envelope_event [:engram, :nif, :envelope]
 
@@ -50,6 +58,19 @@ defmodule Engram.PromEx.Native do
           System.convert_time_unit(native, :native, :microsecond)
         end,
         description: "NIF call wall time, microseconds.",
+        tags: [:nif, :dirty]
+      ),
+      # Per-call max for the suspect NIFs: the sum above hides one huge call (a
+      # ~9 MB note in keyword_encode). Peep rounds each sample to an integer
+      # `_sum`, so sub-ms calls add 0 and the ms `_sum` under-reads: use the
+      # microsecond counter for averages and these buckets for the per-call max.
+      distribution(prefix ++ [:call, :duration, :milliseconds],
+        event_name: @call_event,
+        measurement: :duration,
+        unit: {:native, :millisecond},
+        description: "NIF call wall time per call, milliseconds (keyword_encode, chunk only).",
+        reporter_options: Buckets.opts(Engram.PromEx.Native.DurationBuckets),
+        keep: &(&1.nif in @histogram_nifs),
         tags: [:nif, :dirty]
       )
     ])
@@ -119,4 +140,9 @@ defmodule Engram.PromEx.Native do
     # skips a nil measurement but records 1 for an absent key.
     :telemetry.execute(@memory_event, Engram.Native.memory_snapshot(), %{})
   end
+end
+
+defmodule Engram.PromEx.Native.DurationBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [10, 100, 500, 1_000, 2_500, 10_000, 60_000]
 end
