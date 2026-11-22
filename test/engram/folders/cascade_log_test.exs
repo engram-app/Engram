@@ -117,7 +117,7 @@ defmodule Engram.Folders.CascadeLogTest do
       ServiceConfig.put_override(:folder_write_stop, false)
 
       assert [line] = lines(rename_log(u, v, "A", "B"))
-      assert line =~ "reason=stop_off"
+      assert line =~ "reason=stop_off result=ok"
       assert line =~ HMAC.hash_user_id(u.id)
       assert line =~ HMAC.hash_id(v.id)
       refute line =~ u.id
@@ -128,7 +128,7 @@ defmodule Engram.Folders.CascadeLogTest do
     test "not_derivable cascades and logs its reason once", %{user: u, vault: v} do
       sql!("UPDATE notes SET name_stamp = NULL WHERE vault_id = $1", [Ecto.UUID.dump!(v.id)])
       assert [line] = lines(rename_log(u, v, "A", "B"))
-      assert line =~ "reason=not_derivable"
+      assert line =~ "reason=not_derivable result=ok"
     end
 
     test "a served uncascaded move logs nothing", %{user: u, vault: v} do
@@ -155,6 +155,90 @@ defmodule Engram.Folders.CascadeLogTest do
       assert :counters.get(counter, 1) == 2, "the op must have retried"
       assert [line] = lines(log)
       assert line =~ "reason=not_derivable"
+    end
+
+    test "a retry whose second claim fails logs NOTHING (the first attempt's reason is dropped)",
+         %{user: u, vault: v} do
+      sql!("UPDATE notes SET name_stamp = NULL WHERE vault_id = $1", [Ecto.UUID.dump!(v.id)])
+      counter = :counters.new(1, [])
+
+      {:ok, _} =
+        Engram.Attachments.upsert_attachment(u, v, %{
+          "path" => "A/x.png",
+          "content_base64" => Base.encode64("a")
+        })
+
+      # Attempt 1: a note lands in `A` after the claim (stale claims, rerun)
+      # and an attachment takes a path at the target, so attempt 2's claim is
+      # refused. Attempt 1 cascaded and set its reason; the op's last attempt
+      # never reached the cascade.
+      Engram.CheckpointInterleave.put_hook(fn
+        :folder_claimed ->
+          :counters.add(counter, 1, 1)
+
+          if :counters.get(counter, 1) == 1 do
+            put!(u, v, "A/late.md")
+
+            {:ok, _} =
+              Engram.Attachments.upsert_attachment(u, v, %{
+                "path" => "B/x.png",
+                "content_base64" => Base.encode64("x")
+              })
+          end
+
+          :ok
+
+        _ ->
+          :ok
+      end)
+
+      log =
+        capture_log([level: :info], fn -> assert {:error, _} = Folders.rename(u, v, "A", "B") end)
+
+      assert :counters.get(counter, 1) == 1, "attempt 2 must fail at its claim"
+      assert lines(log) == []
+    end
+
+    test "a raising op leaves no reason behind for the next one", %{user: u, vault: v} do
+      ServiceConfig.put_override(:folder_write_stop, false)
+
+      Engram.CheckpointInterleave.put_hook(fn
+        :folder_rename_seal -> raise "boom"
+        _ -> :ok
+      end)
+
+      assert_raise RuntimeError, "boom", fn -> Folders.rename(u, v, "A", "B") end
+      assert Process.get(:engram_folder_op_cascade_reason) == nil
+
+      ServiceConfig.put_override(:folder_write_stop, true)
+      Engram.CheckpointInterleave.put_hook(fn _ -> :ok end)
+      assert lines(rename_log(u, v, "A", "B")) == []
+    end
+  end
+
+  describe "WriteStop.log_cascade/4" do
+    alias Engram.Folders.WriteStop
+
+    test "an unknown reason reads unknown and does not raise", %{user: u, vault: v} do
+      log =
+        capture_log([level: :info], fn ->
+          assert :ok = WriteStop.log_cascade(u, v, :a_future_reason, :ok)
+        end)
+
+      assert [line] = lines(log)
+      assert line =~ "reason=unknown result=ok"
+    end
+
+    test "the result is on the line", %{user: u, vault: v} do
+      log = capture_log([level: :info], fn -> WriteStop.log_cascade(u, v, :drift, :error) end)
+      assert [line] = lines(log)
+      assert line =~ "reason=drift result=error"
+    end
+
+    test "a malformed caller cannot raise", %{vault: v} do
+      capture_log([level: :info], fn ->
+        assert :ok = WriteStop.log_cascade(nil, v, :drift, :ok)
+      end)
     end
   end
 end
