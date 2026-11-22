@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.93.0](https://github.com/engram-app/Engram/compare/0.92.0...0.93.0) (2026-11-22)
+
+
+### Features
+
+* **sync:** store file times from CRDT frames ([#2683](https://github.com/engram-app/Engram/issues/2683)) ([60160db](https://github.com/engram-app/Engram/commit/60160db05768e905727f39fc09fefbf02c80d2f8))
+
+
+### Performance Improvements
+
+* **native:** faster, lighter keyword encode and NIF scheduling ([#2682](https://github.com/engram-app/Engram/issues/2682)) ([587847e](https://github.com/engram-app/Engram/commit/587847e306f46890d381967f0608095e00db5519))
+
 ## [0.92.0](https://github.com/engram-app/Engram/compare/0.91.0...0.92.0) (2026-11-21)
 
 
