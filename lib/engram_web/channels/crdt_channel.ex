@@ -19,6 +19,7 @@ defmodule EngramWeb.CrdtChannel do
   use Phoenix.Channel
 
   alias Engram.Crypto.HMAC
+  alias Engram.FileTime
   alias Engram.Folders.Wire
   alias Engram.Logger.Metadata
   alias Engram.{Notes, Repo, Vaults}
@@ -220,7 +221,7 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   @impl true
-  def handle_in("crdt_msg", %{"doc_id" => doc_id, "b64" => b64}, socket) do
+  def handle_in("crdt_msg", %{"doc_id" => doc_id, "b64" => b64} = payload, socket) do
     # Classify (O(1), first 4 b64 chars) BEFORE the rate check so sync
     # handshakes ride their own, larger bucket than edit frames: connect-time
     # enrollment fires one STEP1 (+ tiny STEP2 echo) per note, so on a
@@ -233,7 +234,10 @@ defmodule EngramWeb.CrdtChannel do
          {:ok, frame} <- decode_frame(b64),
          :ok <- guard_frame(frame),
          {:ok, socket} <- deliver(socket, doc_id, frame, frame_class_b64(b64)) do
-      if frame_class_b64(b64) == :edit, do: note_sync_activity(socket)
+      if frame_class_b64(b64) == :edit do
+        note_sync_activity(socket)
+        hand_room_times(socket, doc_id, payload)
+      end
 
       # ACK the push. Clients attach reply handlers to distinguish delivery
       # from loss; with no ack every successful push "times out" client-side —
@@ -393,13 +397,16 @@ defmodule EngramWeb.CrdtChannel do
         # count the create itself or an import-only user never shows as active.
         {:seeded, note, outcome} ->
           note_created_activity(socket)
+          put_frame_times(socket, note.id, payload)
           reply_created(note, reconcile_with_row(outcome, note), socket)
 
         {:ok, note} ->
           note_created_activity(socket)
+          put_frame_times(socket, note.id, payload)
           reply_created(note, note |> seed.() |> reconcile_with_row(note), socket)
 
         {:adopted, note} ->
+          put_frame_times(socket, note.id, payload)
           # Unchanged behaviour for the single create: the client's crdtCreate
           # promise resolves to the authoritative id and pushFile's ADOPT then
           # transfers the local body onto that lineage. Only the BATCH leg has to
@@ -580,7 +587,7 @@ defmodule EngramWeb.CrdtChannel do
   # monitor — for one malformed frame. A non-binary falls to the catch-all
   # `handle_in/3` and gets a `bad_frame` reply instead.
   @impl true
-  def handle_in("crdt_doc_update", %{"doc_id" => doc_id, "b64" => b64}, socket)
+  def handle_in("crdt_doc_update", %{"doc_id" => doc_id, "b64" => b64} = payload, socket)
       when is_binary(b64) do
     with :ok <- check_rate(socket, state_frame_class(b64)),
          {:ok, note_id} <- cast_doc_id(doc_id),
@@ -590,7 +597,14 @@ defmodule EngramWeb.CrdtChannel do
          {:ok, %{head: head}} <-
            apply_room_free(
              socket,
-             &CrdtTransport.apply_update(&1, &2, note_id, update, :room_free_update)
+             &CrdtTransport.apply_update(
+               &1,
+               &2,
+               note_id,
+               update,
+               :room_free_update,
+               frame_times(payload)
+             )
            ) do
       note_sync_activity(socket)
       {:reply, {:ok, %{doc_id: note_id, head: head}}, socket}
@@ -878,6 +892,69 @@ defmodule EngramWeb.CrdtChannel do
       end)
 
     task.ref
+  end
+
+  # The optional `mtime` / `ctime` the plugin attaches to a frame (epoch
+  # seconds), validated by `FileTime.from_frame/2`: `{mtime_at, ctime_at}`,
+  # either nil. An old plugin sends none: `{nil, nil}`.
+  defp frame_times(payload) do
+    now = DateTime.utc_now()
+    {FileTime.from_frame(payload["mtime"], now), FileTime.from_frame(payload["ctime"], now)}
+  end
+
+  # An edit frame's times go to the ROOM's memory, never the DB: the checkpoint
+  # that already runs writes them (`CrdtCheckpoint`). Only forwarded when they
+  # add something (a later mtime, a first ctime) per this channel process, so a
+  # steady stream of edits costs no room call for an unchanged time.
+  defp hand_room_times(socket, doc_id, payload) do
+    _ =
+      with {m, c} when not (is_nil(m) and is_nil(c)) <- frame_times(payload),
+           %{room: room} <- Map.get(socket.assigns.rooms, doc_id),
+           {m, c} when not (is_nil(m) and is_nil(c)) <- unseen_times(room, m, c) do
+        CrdtTransport.put_file_times(room, m, c)
+      end
+
+    :ok
+  end
+
+  # Remembers (in this channel's process dictionary) the newest mtime and
+  # whether a ctime went out per ROOM (a new room starts empty, so a time the
+  # old one lost before its checkpoint can go again); returns only what is new.
+  # Dropped by `forget_times/1` wherever the socket lets a room go.
+  defp unseen_times(room, m, c) do
+    key = {:crdt_times_sent, room}
+    {sm, sc} = Process.get(key, {nil, nil})
+    m = if m && (is_nil(sm) or DateTime.compare(m, sm) == :gt), do: m
+    c = if c && is_nil(sc), do: c
+    Process.put(key, {m || sm, c || sc})
+    {m, c}
+  end
+
+  defp forget_times(room), do: Process.delete({:crdt_times_sent, room})
+
+  # `crdt_create` (rare, once per note): one metadata statement beside the
+  # genesis, only when times were sent (`Notes.put_frame_times/5`).
+  defp put_frame_times(socket, note_id, payload) do
+    _ =
+      with true <- Map.has_key?(payload, "mtime") or Map.has_key?(payload, "ctime") do
+        Notes.put_frame_times(
+          socket.assigns.current_user,
+          socket.assigns.vault,
+          note_id,
+          payload["mtime"],
+          payload["ctime"]
+        )
+      end
+
+    :ok
+  rescue
+    e ->
+      Logger.warning(
+        "crdt_frame_times_failed",
+        Metadata.with_category(:warning, :sync, reason: inspect(Engram.Telemetry.error_kind(e)))
+      )
+
+      :ok
   end
 
   # Run the apply on a task so the ROOM'S OBSERVER is that task, not this
@@ -1834,6 +1911,8 @@ defmodule EngramWeb.CrdtChannel do
         {:noreply, socket}
 
       doc_id ->
+        forget_times(pid)
+
         socket =
           socket
           |> assign(:rooms, Map.delete(socket.assigns.rooms, doc_id))
@@ -2006,6 +2085,8 @@ defmodule EngramWeb.CrdtChannel do
             {:noreply, socket}
 
           :gone ->
+            forget_times(room)
+
             case Map.get(socket.assigns.rooms, doc_id) do
               %{ref: ref} -> Process.demonitor(ref, [:flush])
               _ -> :ok

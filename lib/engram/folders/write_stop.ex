@@ -58,9 +58,27 @@ defmodule Engram.Folders.WriteStop do
   """
 
   alias Engram.Cluster.Readiness
+  alias Engram.Crypto.HMAC
   alias Engram.Folders.Wire
+  alias Engram.Logger.Metadata
   alias Engram.Notes.Location
   alias Engram.Release.Floor
+
+  require Logger
+
+  @cascade_reasons [
+    :stop_off,
+    :no_op,
+    :no_old_row,
+    :new_folder_exists,
+    :merge_raced,
+    :empty,
+    :not_derivable,
+    :drift,
+    :unkeyed,
+    :raced,
+    :unknown
+  ]
 
   # The release with the moved-folder feed and the shown-path announces
   # (release A, Engram#2609). The rollback floor reaching it (release B,
@@ -80,6 +98,38 @@ defmodule Engram.Folders.WriteStop do
   @verified_folder_move_plugin nil
   # `Location.s5_reads/0` level a node needs: the readers plus the moved-folder feed.
   @fleet_level 2
+
+  @doc """
+  One structured line for a folder op that fell back to the cascade, naming
+  the branch that decided it (the reasons are the `@cascade_reasons` atoms;
+  `new_folder_exists` is the pre-check, `merge_raced` a folder that appeared
+  at the target during the locked move, `raced` a note written after the
+  scan). Hashed user and vault ids only: no path, no name, no count of
+  notes. Emitted once per op by `Folders.rename/5` after the claim retries
+  settle, never per attempt or per note. `result` is whether the op
+  committed (`ok`) or was refused or rolled back (`error`); a reason not in
+  the list reads `unknown`, and this never raises.
+  """
+  @spec log_cascade(map(), map(), term(), :ok | :error) :: :ok
+  def log_cascade(user, vault, reason, result) when result in [:ok, :error] do
+    reason = if reason in @cascade_reasons, do: reason, else: :unknown
+
+    Logger.info(
+      "folder_op cascade reason=#{reason} result=#{result}",
+      Metadata.with_category(:info, :sync,
+        user_id: HMAC.hash_user_id(to_string(user.id)),
+        vault_id: HMAC.hash_id(to_string(vault.id))
+      )
+    )
+
+    :ok
+  rescue
+    # Logging must never fail an op that has already committed (or been
+    # refused): a raise here would turn a done rename into a 500.
+    _ ->
+      Logger.warning("folder_op cascade log failed", Metadata.with_category(:warning, :sync, []))
+      :ok
+  end
 
   @doc "The first release with the S5 readers: the rollback floor must reach it."
   @spec reads_release() :: String.t()

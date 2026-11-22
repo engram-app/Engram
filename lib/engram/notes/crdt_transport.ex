@@ -160,7 +160,14 @@ defmodule Engram.Notes.CrdtTransport do
   path is attributable in `engram_prom_ex_crdt_room_start_total` rather than
   landing in `:unknown` — the question #1493 is actually about.
   """
-  @spec apply_update(map(), map(), String.t(), binary(), atom()) ::
+  @spec apply_update(
+          map(),
+          map(),
+          String.t(),
+          binary(),
+          atom(),
+          {DateTime.t() | nil, DateTime.t() | nil}
+        ) ::
           {:ok, %{head: String.t()}}
           | {:error,
              :not_found
@@ -168,7 +175,7 @@ defmodule Engram.Notes.CrdtTransport do
              | :note_too_large
              | :missing_dependencies
              | :room_unavailable}
-  def apply_update(user, vault, note_id, update, source \\ :unknown) do
+  def apply_update(user, vault, note_id, update, source \\ :unknown, times \\ {nil, nil}) do
     # No separate existence check: a cold room's bind/3 reads the note and
     # refuses one outside this vault, or deleted ({:error, :not_found}), and a
     # running room is checked for its owner inside the apply.
@@ -182,7 +189,7 @@ defmodule Engram.Notes.CrdtTransport do
     # here in tests, the spawned caller), the room checkpoints and exits
     # unless a live channel is also observing it.
     with {:ok, room} <- CrdtRegistry.ensure_observed(user.id, vault.id, note_id, source),
-         {:ok, head} <- apply_in_room(room, {user.id, vault.id}, note_id, update) do
+         {:ok, head} <- apply_in_room(room, {user.id, vault.id}, note_id, update, times) do
       {:ok, %{head: head}}
     else
       {:error, reason}
@@ -204,7 +211,13 @@ defmodule Engram.Notes.CrdtTransport do
   # tolerance of CrdtDeliver.room_apply/3 but, unlike that fire-and-forget path,
   # REPORTS failures instead of swallowing them — this is a write contract, not
   # best-effort delivery.
-  @spec apply_in_room(pid(), {String.t(), String.t()}, String.t(), binary()) ::
+  @spec apply_in_room(
+          pid(),
+          {String.t(), String.t()},
+          String.t(),
+          binary(),
+          {DateTime.t() | nil, DateTime.t() | nil}
+        ) ::
           {:ok, String.t()}
           | {:error,
              :not_found
@@ -213,7 +226,7 @@ defmodule Engram.Notes.CrdtTransport do
              | :missing_dependencies
              | :room_unavailable
              | :append_failed}
-  defp apply_in_room(room, owner, note_id, update) do
+  defp apply_in_room(room, owner, note_id, update, times) do
     parent = self()
     ref = make_ref()
 
@@ -224,7 +237,7 @@ defmodule Engram.Notes.CrdtTransport do
     try do
       # A raise in the room returns `{:error, {:room_raised, _}}` (already
       # logged) before any reply was sent, so drain_reply/1 below answers it.
-      _ = apply_in_room_call(room, parent, ref, owner, update)
+      _ = apply_in_room_call(room, parent, ref, owner, update, times)
 
       # Acknowledge only once the room's tail append committed: a success here
       # lets the client drop its queued copy.
@@ -254,7 +267,7 @@ defmodule Engram.Notes.CrdtTransport do
     end
   end
 
-  defp apply_in_room_call(room, parent, ref, {user_id, vault_id}, update) do
+  defp apply_in_room_call(room, parent, ref, {user_id, vault_id}, update, {m, c}) do
     # SharedDoc.update_doc is a synchronous GenServer.call: the fun runs to
     # completion inside the room before this returns, so the {ref, result}
     # message is already in our mailbox when we receive it.
@@ -299,9 +312,23 @@ defmodule Engram.Notes.CrdtTransport do
           true -> apply_checked(doc, update)
         end
 
+      _ = with {:ok, _} <- result, do: CrdtPersistence.put_file_times(m, c)
+
       send(parent, {ref, result})
       :ok
     end)
+  end
+
+  @doc """
+  Hands the room the file times a frame carried (validated `DateTime`s or nil),
+  for its next checkpoint to write. One in-room call, no DB.
+  """
+  @spec put_file_times(pid(), DateTime.t() | nil, DateTime.t() | nil) :: :ok
+  def put_file_times(room, m, c) do
+    _ = CrdtRoom.update_doc(room, fn _doc -> CrdtPersistence.put_file_times(m, c) end)
+    :ok
+  catch
+    :exit, _ -> :ok
   end
 
   # A delivery diffed against a state vector the doc no longer has (a stored

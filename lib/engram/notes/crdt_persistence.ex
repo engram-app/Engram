@@ -471,6 +471,26 @@ defmodule Engram.Notes.CrdtPersistence do
   def append_failures, do: Process.get(:crdt_append_failures, 0)
 
   @doc false
+  # The file times the plugin attached to this room's frames, kept in memory
+  # until the next checkpoint writes them (no per-frame DB write): the latest
+  # mtime wins, the first ctime stays. `m` / `c` are already-validated
+  # DateTimes or nil. Runs in the room.
+  @spec put_file_times(DateTime.t() | nil, DateTime.t() | nil) :: :ok
+  def put_file_times(m, c) do
+    {om, oc} = file_times()
+    Process.put(:crdt_file_times, {later(om, m), oc || c})
+    :ok
+  end
+
+  defp later(nil, b), do: b
+  defp later(a, nil), do: a
+  defp later(a, b), do: if(DateTime.compare(b, a) == :gt, do: b, else: a)
+
+  @doc false
+  @spec file_times() :: {DateTime.t() | nil, DateTime.t() | nil}
+  def file_times, do: Process.get(:crdt_file_times, {nil, nil})
+
+  @doc false
   # A checkpoint of a snapshot taken when `append_failures/0` was `seen`
   # committed: those failed updates are durable now, and its pruned rows are
   # gone. A failure after the snapshot keeps the count. Runs in the room.
@@ -520,7 +540,8 @@ defmodule Engram.Notes.CrdtPersistence do
             # Prunes exactly the rows this doc holds (known_tail_ids/0). Rows
             # it never folded (another writer's, or undecryptable at bind) stay.
             CrdtCheckpoint.checkpoint(user_id, vault_id, note_id, doc,
-              prune_ids: known_tail_ids()
+              prune_ids: known_tail_ids(),
+              file_times: file_times()
             )
           after
             CheckpointGate.release()

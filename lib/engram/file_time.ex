@@ -173,6 +173,44 @@ defmodule Engram.FileTime do
   @spec ctime(map()) :: number() | nil
   def ctime(row), do: epoch(Map.get(row, :ctime_at), Map.get(row, :ctime))
 
+  @doc """
+  A time a socket frame carried, as a usable `*_at`, or nil: anything but a
+  positive in-range number (0 is the client's "unknown"), and anything past
+  `now` plus one day (a clock gone wrong must not pin a note's mtime in the
+  future, since mtime only ever moves forward).
+  """
+  @spec from_frame(term(), DateTime.t()) :: DateTime.t() | nil
+  def from_frame(t, %DateTime{} = now) when is_number(t) and t > 0 do
+    with {:ok, %DateTime{} = at} <- to_at(t),
+         :lt <- DateTime.compare(at, DateTime.add(now, 86_400)) do
+      at
+    else
+      _ -> nil
+    end
+  end
+
+  def from_frame(_t, _now), do: nil
+
+  @doc """
+  The `%{mtime:, ctime:}` attrs (epoch seconds, for `put_at/3`) that carry the
+  pending frame times `{mtime_at, ctime_at}` onto `row`: mtime only when newer
+  than the row's (never backwards), ctime only when the row has none (the
+  first one wins). `%{}` when neither applies. The one rule for a checkpoint.
+  """
+  @spec advance(map(), {DateTime.t() | nil, DateTime.t() | nil}) :: map()
+  def advance(row, {m, c}) do
+    %{}
+    |> put_if(:mtime, m, newer?(m, Map.get(row, :mtime_at)))
+    |> put_if(:ctime, c, is_nil(Map.get(row, :ctime_at)))
+  end
+
+  defp newer?(%DateTime{} = m, %DateTime{} = old), do: DateTime.compare(m, old) == :gt
+  defp newer?(%DateTime{}, _old), do: true
+  defp newer?(_m, _old), do: false
+
+  defp put_if(map, key, %DateTime{} = at, true), do: Map.put(map, key, seconds(at))
+  defp put_if(map, _key, _at, _go), do: map
+
   @doc "`to_at/1` for a time the server made or already validated; raises out of range."
   @spec to_at!(number() | nil) :: DateTime.t() | nil
   def to_at!(t) do
