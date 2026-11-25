@@ -1,7 +1,8 @@
 defmodule Engram.Workers.PostHogErasure do
   @moduledoc """
   Deletes PostHog persons (and their events) by distinct id. Enqueued only by
-  `Engram.Analytics.forget/1`; see there for when and why it runs twice.
+  `Engram.Analytics.erase/1` (directly, or through `forget/1`); see there for
+  when and why it runs twice.
 
   A failed delete returns an error, so Oban retries it. Args carry keyed
   analytics ids and the legacy Clerk id, never an email.

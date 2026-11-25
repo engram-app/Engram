@@ -15,10 +15,14 @@ defmodule Engram.Auth.Clerk.Webhook do
     appears (drives the §A.3 EmbedNote pre-flight gate). Email and phone sync are
     independent.
 
+  - `user.deleted`: runs `Lifecycle.delete_account/2`. Returns `{:error, _}`
+    on a transient failure so the controller answers non-2xx and Svix retries.
+
   All other event types no-op.
   """
 
   alias Engram.Accounts
+  alias Engram.Accounts.Lifecycle
   alias Engram.Auth.EmailNormalizer
   alias Engram.Logger.Metadata
   alias Engram.Repo
@@ -27,7 +31,7 @@ defmodule Engram.Auth.Clerk.Webhook do
 
   @type event :: map()
 
-  @spec handle(event()) :: :ok
+  @spec handle(event()) :: :ok | {:error, term()}
   def handle(%{"type" => "user.created", "data" => data}), do: handle_user_created(data)
   def handle(%{"type" => "user.updated", "data" => data}), do: handle_user_updated(data)
   def handle(%{"type" => "user.deleted", "data" => data}), do: handle_user_deleted(data)
@@ -41,49 +45,71 @@ defmodule Engram.Auth.Clerk.Webhook do
   # `hard_delete` kicks live sockets, so the JWT cached in
   # `socket.assigns.current_user` cannot keep streaming data.
   #
-  # Clerk is authoritative on identity, but `Lifecycle.hard_delete` carries
-  # a last-admin guard (so user-flow, inactivity sweeps, and this webhook
-  # can never strand the instance admin-less). If the deleted user IS the
-  # last admin, we can't reject the webhook — Clerk has already torn down
-  # the upstream identity, and a non-2xx response would just be retried
-  # forever. Log + emit telemetry + leave them soft-deleted; ops promotes
-  # another admin and re-runs the purge manually.
+  # Every failure logs `clerk_user_deleted_purge_failed` at error (the alert
+  # keys on it; `reason` tells them apart). A transient failure (an
+  # `{:error, _}`, a raise or an exit) returns `{:error, _}`, so the controller answers
+  # 500 and leaves the svix-id unprocessed: Svix's retry finds the account
+  # (already marked deleted, which `find_by_external_id/1` does not filter) and
+  # `delete_account/2`, idempotent, finishes it.
+  #
+  # The last-admin guard is NOT transient: nothing changes between retries
+  # unless ops promotes another admin and re-runs the purge by hand. Svix
+  # retries one message 8 times over about 27 hours, so a non-2xx would only
+  # help if ops acted inside that window, and the error line is what tells ops
+  # to act either way. It acks, logs, and leaves the user soft-deleted.
   defp handle_user_deleted(%{"id" => clerk_id}) when is_binary(clerk_id) do
     case Accounts.find_by_external_id(clerk_id) do
-      {:ok, user} ->
-        case Engram.Accounts.Lifecycle.delete_account(user, :clerk) do
-          :ok ->
-            :ok
-
-          {:error, :last_admin} ->
-            :telemetry.execute(
-              [:engram, :auth, :clerk_user_deleted_last_admin_protected],
-              %{count: 1},
-              %{user_id: user.id}
-            )
-
-            Logger.warning(
-              "Clerk user.deleted blocked by last-admin guard; user stays soft-deleted",
-              Metadata.with_category(:warning, :lifecycle,
-                user_id: user.id,
-                clerk_user_id: clerk_id
-              )
-            )
-
-            :ok
-
-          {:error, _other} ->
-            # PG cascade failed; the delete mark already landed, retry will be
-            # driven by the next inactivity sweep or an operator.
-            :ok
-        end
-
-      {:error, :user_not_found} ->
-        :ok
+      {:ok, user} -> purge_deleted_user(user)
+      {:error, :user_not_found} -> :ok
     end
   end
 
   defp handle_user_deleted(_), do: :ok
+
+  defp purge_deleted_user(user) do
+    case Lifecycle.delete_account(user, :clerk) do
+      :ok ->
+        :ok
+
+      {:error, :last_admin} ->
+        :telemetry.execute(
+          [:engram, :auth, :clerk_user_deleted_last_admin_protected],
+          %{count: 1},
+          %{user_id: user.id}
+        )
+
+        log_purge_failed(user, Metadata.safe_reason(:last_admin))
+        :ok
+
+      {:error, reason} = err ->
+        log_purge_failed(user, Metadata.safe_reason(reason))
+        err
+    end
+  rescue
+    e ->
+      stacktrace = __STACKTRACE__
+      _ = Sentry.capture_exception(e, stacktrace: stacktrace)
+
+      log_purge_failed(
+        user,
+        "#{Metadata.safe_reason(e)} at=#{Metadata.format_location(stacktrace)}"
+      )
+
+      {:error, :exception}
+  catch
+    :exit, reason ->
+      safe = "exit " <> Metadata.safe_reason(reason)
+      _ = Sentry.capture_message("clerk_user_deleted_purge_failed", extra: %{reason: safe})
+      log_purge_failed(user, safe)
+      {:error, :exit}
+  end
+
+  defp log_purge_failed(user, reason) do
+    Logger.error(
+      "clerk_user_deleted_purge_failed",
+      Metadata.with_category(:error, :lifecycle, user_id: user.id, reason: reason)
+    )
+  end
 
   # Same path as JIT, so the webhook and a racing first request converge on
   # one row; the unique indexes decide atomically. No verified primary email:

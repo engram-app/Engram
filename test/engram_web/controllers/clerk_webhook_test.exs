@@ -6,6 +6,7 @@ defmodule EngramWeb.ClerkWebhookTest do
 
   alias Engram.Accounts
   alias Engram.Repo
+  alias Engram.Test.LogCapture
 
   setup :verify_on_exit!
 
@@ -263,6 +264,126 @@ defmodule EngramWeb.ClerkWebhookTest do
     end
   end
 
+  # Svix retries only a non-2xx, and only an event not yet marked processed. A
+  # purge that failed for a transient reason must answer non-2xx so the retry
+  # finishes it; the last-admin refusal cannot succeed on retry, so it acks.
+  # Both log `clerk_user_deleted_purge_failed` at error for the alert.
+  describe "POST /webhooks/clerk — user.deleted" do
+    test "success: 200 and the local row is gone", %{conn: conn} do
+      user = insert(:user, external_id: "user_del_ok")
+      expect(Engram.Auth.Clerk.ApiMock, :delete_user, fn "user_del_ok" -> :ok end)
+
+      conn = post_clerk(conn, "evt_del_ok", clerk_user_deleted_payload("user_del_ok"))
+
+      assert json_response(conn, 200)["status"] == "ok"
+      refute Repo.get(Accounts.User, user.id, skip_tenant_check: true)
+    end
+
+    test "raised purge: 500, error log, and the user is left for the retry", %{conn: conn} do
+      user = insert(:user, external_id: "user_del_fail")
+      block_purge(user)
+
+      {conn, events} =
+        LogCapture.with_events(fn ->
+          post_clerk(conn, "evt_del_fail", clerk_user_deleted_payload("user_del_fail"))
+        end)
+
+      assert json_response(conn, 500)["status"] == "error"
+      assert purge_failed_logged?(events, user.id, &(&1 != ":last_admin"))
+      assert %DateTime{} = Repo.get(Accounts.User, user.id, skip_tenant_check: true).deleted_at
+    end
+
+    test "exited purge: 500, error log, and the user is left for the retry", %{conn: conn} do
+      user = insert(:user, external_id: "user_del_exit")
+      prev = Application.get_env(:engram, :storage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      Application.put_env(:engram, :storage, __MODULE__.ExitingStorage)
+
+      {conn, events} =
+        LogCapture.with_events(fn ->
+          post_clerk(conn, "evt_del_exit", clerk_user_deleted_payload("user_del_exit"))
+        end)
+
+      assert json_response(conn, 500)["status"] == "error"
+      assert purge_failed_logged?(events, user.id, &String.starts_with?(&1, "exit "))
+      assert Repo.get(Accounts.User, user.id, skip_tenant_check: true)
+    end
+
+    # The analytics erasure used to be queued AFTER the Postgres commit: a
+    # failed insert there answered 500 for an account already gone, and the
+    # retry found no user and acked, so the erasure was never owed again. It
+    # now commits with the delete, so a failure rolls the delete back and the
+    # retry finishes both.
+    test "an erasure that cannot be queued rolls the delete back; the retry queues it", %{
+      conn: conn
+    } do
+      enable_erasure()
+      user = insert(:user, external_id: "user_del_erase")
+      payload = clerk_user_deleted_payload("user_del_erase")
+
+      Repo.query!("""
+      CREATE FUNCTION fail_erasure_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'erasure insert refused'; END $$
+      """)
+
+      Repo.query!("""
+      CREATE TRIGGER fail_erasure_insert BEFORE INSERT ON oban_jobs FOR EACH ROW
+      WHEN (NEW.worker = 'Engram.Workers.PostHogErasure') EXECUTE FUNCTION fail_erasure_insert()
+      """)
+
+      {first, _} = LogCapture.with_events(fn -> post_clerk(conn, "evt_del_erase", payload) end)
+      assert first.status == 500
+      assert Repo.get(Accounts.User, user.id, skip_tenant_check: true)
+
+      Repo.query!("DROP TRIGGER fail_erasure_insert ON oban_jobs")
+      expect(Engram.Auth.Clerk.ApiMock, :delete_user, fn "user_del_erase" -> :ok end)
+
+      retry = post_clerk(build_conn(), "evt_del_erase", payload)
+
+      assert json_response(retry, 200)["status"] == "ok"
+      refute Repo.get(Accounts.User, user.id, skip_tenant_check: true)
+      assert [_, _] = all_enqueued(worker: Engram.Workers.PostHogErasure)
+    end
+
+    test "a retry of the same svix-id after a failed purge completes it", %{conn: conn} do
+      user = insert(:user, external_id: "user_del_retry")
+      blocker = block_purge(user)
+      payload = clerk_user_deleted_payload("user_del_retry")
+
+      {first, _} = LogCapture.with_events(fn -> post_clerk(conn, "evt_del_retry", payload) end)
+      assert first.status == 500
+
+      # The transient cause clears; Svix redelivers with the same svix-id.
+      Repo.delete!(blocker, skip_tenant_check: true)
+      expect(Engram.Auth.Clerk.ApiMock, :delete_user, fn "user_del_retry" -> :ok end)
+
+      retry = post_clerk(build_conn(), "evt_del_retry", payload)
+
+      assert json_response(retry, 200)["status"] == "ok"
+      refute Repo.get(Accounts.User, user.id, skip_tenant_check: true)
+    end
+
+    test "last admin: 200 (no retry storm) but an error log with reason :last_admin", %{
+      conn: conn
+    } do
+      admin = insert(:user, role: "admin", external_id: "user_del_admin")
+
+      {conn, events} =
+        LogCapture.with_events(fn ->
+          post_clerk(conn, "evt_del_admin", clerk_user_deleted_payload("user_del_admin"))
+        end)
+
+      assert json_response(conn, 200)["status"] == "ok"
+      assert purge_failed_logged?(events, admin.id, &(&1 == ":last_admin"))
+      assert %DateTime{} = Repo.get(Accounts.User, admin.id, skip_tenant_check: true).deleted_at
+    end
+
+    test "unknown user: 200 no-op", %{conn: conn} do
+      conn = post_clerk(conn, "evt_del_unknown", clerk_user_deleted_payload("user_never_here"))
+      assert json_response(conn, 200)["status"] == "ok"
+    end
+  end
+
   describe "POST /webhooks/clerk — other events" do
     test "returns 200 and no-ops for unknown event type", %{conn: conn} do
       payload = Jason.encode!(%{"type" => "session.created", "data" => %{}})
@@ -290,6 +411,24 @@ defmodule EngramWeb.ClerkWebhookTest do
         "phone_numbers" => []
       }
     })
+  end
+
+  defp clerk_user_deleted_payload(clerk_id),
+    do: Jason.encode!(%{"type" => "user.deleted", "data" => %{"id" => clerk_id}})
+
+  # A note owned by `user` inside ANOTHER user's vault: the purge's vault delete
+  # does not reach it, so the user-row delete fails on `notes_user_id_fkey`,
+  # rolling back the Postgres commit point after the account was marked deleted.
+  defp block_purge(user) do
+    other_vault = insert(:vault, user: insert(:user))
+    insert(:note, user: user, vault: other_vault)
+  end
+
+  defp purge_failed_logged?(events, user_id, reason?) do
+    Enum.any?(events, fn e ->
+      e.level == :error and e.msg == {:string, "clerk_user_deleted_purge_failed"} and
+        e.meta[:user_id] == user_id and reason?.(e.meta[:reason])
+    end)
   end
 
   defp clerk_user_updated_payload(clerk_id, opts) do
@@ -353,4 +492,10 @@ defmodule EngramWeb.ClerkWebhookTest do
     mac = :crypto.mac(:hmac, :sha256, secret, body) |> Base.encode64()
     "v1,#{mac}"
   end
+end
+
+defmodule EngramWeb.ClerkWebhookTest.ExitingStorage do
+  @moduledoc false
+  # A storage call that exits (a timed-out GenServer.call) mid-purge.
+  def delete_prefix(_prefix), do: exit({:timeout, {GenServer, :call, [:storage, :delete]}})
 end
