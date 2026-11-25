@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.94.0](https://github.com/engram-app/Engram/compare/0.93.0...0.94.0) (2026-11-25)
+
+
+### Features
+
+* **crdt:** name the note behind the bloat alert ([#2676](https://github.com/engram-app/Engram/issues/2676)) ([15dedb5](https://github.com/engram-app/Engram/commit/15dedb5d39e30ffa3e3062ee5fb0701ba6d03571))
+
+
+### Performance Improvements
+
+* **notes:** stop repeating work on every note change ([#2691](https://github.com/engram-app/Engram/issues/2691)) ([aa4e427](https://github.com/engram-app/Engram/commit/aa4e427ead47481aec1409d049b680fb14c73ae6))
+
 ## [0.93.0](https://github.com/engram-app/Engram/compare/0.92.0...0.93.0) (2026-11-22)
 
 
