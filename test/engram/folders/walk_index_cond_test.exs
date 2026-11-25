@@ -224,7 +224,7 @@ defmodule Engram.Folders.WalkIndexCondTest do
           assert {:ok, %{^path => id}} = Rows.ensure_all(u, v.id, [path])
           assert id == orphan.()
         end,
-        ~r/^SELECT f0\."id"(, f0\."full_path_hmac", f0\."explicit")? FROM "folders" AS f0 WHERE (?!.*f0\."id" = ).*"name_hmac" = .*"parent_id" = /
+        ~r/^SELECT f0\."id"(, f0\."explicit")? FROM "folders" AS f0 WHERE (?!.*f0\."id" = ).*"name_hmac" = .*"parent_id" = /
       )
     end
 

@@ -9,12 +9,12 @@ defmodule Engram.ServiceConfig.Overrides do
   row, so there is no split brain between old and new tasks. The keys left
   are the v5 rebuild kill switch (`index_rebuild`) and the v5 step not
   taken yet (`tenant_idf`), plus the data migrations' kill switches
-  (`file_times_backfill`, `note_folder_hash_null`): every data migration
-  added since 2026-11-06 has one (`docs/context/data-migrations-ledger.md`),
-  and the folder hash null batch's per-pass cap
-  (`note_folder_hash_null_max_fixed`). The retired null batch's
-  keys (`note_body_columns_null`, `note_body_columns_null_max_fixed`) are
-  gone: a row left under either is ignored with the warning below.
+  (`file_times_backfill`, `attachment_name_key`): every data migration
+  added since 2026-11-06 has one (`docs/context/data-migrations-ledger.md`).
+  Retired ledgers' keys are gone (`note_body_columns_null*`, and in release J
+  `note_folder_hash_null*`, `explicit_folder_reconcile`,
+  `folder_marker_delete*`): a row left under one is ignored with the warning
+  below.
 
   ## Reads
 
@@ -79,17 +79,9 @@ defmodule Engram.ServiceConfig.Overrides do
     plugin_floor_enabled: :boolean,
     file_times_backfill: :boolean,
     folder_table_backfill: :boolean,
-    # S6 step 4 reconcile of `folders.explicit` against the markers
-    # (`Engram.DataMigrations.ExplicitFolderReconcile`) kill switch.
-    explicit_folder_reconcile: :boolean,
     # S6 step 4 phase 2 kill switch: off, folder creates insert marker rows
     # again (`Engram.Folders.MarkerStop`).
     folder_marker_stop: :boolean,
-    # S6 step 4 marker delete (`Engram.DataMigrations.FolderMarkerDelete`),
-    # ships OFF: switched on after release E is verified.
-    folder_marker_delete: :boolean,
-    # Its pace: markers deleted a pass.
-    folder_marker_delete_max_fixed: {:integer, 1..100_000},
     # Every paced backfill chain's pressure gate (`Engram.Backfill.Throttle`).
     backfill_max_queue_ms: {:integer, 1..60_000},
     backfill_max_xact_s: {:integer, 1..86_400},
@@ -129,9 +121,6 @@ defmodule Engram.ServiceConfig.Overrides do
     # `Engram.Workers.OrphanSweep.enabled?/0`, default on: off, the daily
     # sweep returns before any pass (no Qdrant, S3 or DB deletes).
     orphan_sweep: :boolean,
-    # R9 release E: the note folder hash null batch, kill switch and pace.
-    note_folder_hash_null: :boolean,
-    note_folder_hash_null_max_fixed: {:integer, 1..1_000_000},
     # S6 step 6: the attachment name key fill ledger, kill switch and pace.
     attachment_name_key: :boolean,
     attachment_name_key_max_fixed: {:integer, 1..1_000_000},

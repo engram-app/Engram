@@ -48,10 +48,11 @@ defmodule Engram.Release.FloorTest do
     assert Floor.at_least?(Engram.Folders.Rows.root_reads_release())
   end
 
-  # S6 step 4 (Engram#2523): the marker delete switches on with the floor at
-  # the marker write stop release (release E), and the tag must contain 2649
-  # (`priv/release_floor_contains`).
+  # S6 step 4 (Engram#2523): release E stopped marker writes, and the tag must
+  # contain 2649 (`priv/release_floor_contains`). Release J retires the folder
+  # marker delete and the hash writes on the guarantee that no rollback target
+  # inserts a marker again.
   test "the floor covers the S6 marker write stop" do
-    assert Floor.at_least?(Engram.DataMigrations.FolderMarkerDelete.stop_release())
+    assert Floor.at_least?("release-v0.91.0")
   end
 end
