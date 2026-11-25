@@ -279,7 +279,7 @@ defmodule EngramWeb.ClerkWebhookTest do
       refute Repo.get(Accounts.User, user.id, skip_tenant_check: true)
     end
 
-    test "failed purge: 500, error log, and the user is left for the retry", %{conn: conn} do
+    test "raised purge: 500, error log, and the user is left for the retry", %{conn: conn} do
       user = insert(:user, external_id: "user_del_fail")
       block_purge(user)
 
@@ -291,6 +291,58 @@ defmodule EngramWeb.ClerkWebhookTest do
       assert json_response(conn, 500)["status"] == "error"
       assert purge_failed_logged?(events, user.id, &(&1 != ":last_admin"))
       assert %DateTime{} = Repo.get(Accounts.User, user.id, skip_tenant_check: true).deleted_at
+    end
+
+    test "exited purge: 500, error log, and the user is left for the retry", %{conn: conn} do
+      user = insert(:user, external_id: "user_del_exit")
+      prev = Application.get_env(:engram, :storage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      Application.put_env(:engram, :storage, __MODULE__.ExitingStorage)
+
+      {conn, events} =
+        LogCapture.with_events(fn ->
+          post_clerk(conn, "evt_del_exit", clerk_user_deleted_payload("user_del_exit"))
+        end)
+
+      assert json_response(conn, 500)["status"] == "error"
+      assert purge_failed_logged?(events, user.id, &String.starts_with?(&1, "exit "))
+      assert Repo.get(Accounts.User, user.id, skip_tenant_check: true)
+    end
+
+    # The analytics erasure used to be queued AFTER the Postgres commit: a
+    # failed insert there answered 500 for an account already gone, and the
+    # retry found no user and acked, so the erasure was never owed again. It
+    # now commits with the delete, so a failure rolls the delete back and the
+    # retry finishes both.
+    test "an erasure that cannot be queued rolls the delete back; the retry queues it", %{
+      conn: conn
+    } do
+      enable_erasure()
+      user = insert(:user, external_id: "user_del_erase")
+      payload = clerk_user_deleted_payload("user_del_erase")
+
+      Repo.query!("""
+      CREATE FUNCTION fail_erasure_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'erasure insert refused'; END $$
+      """)
+
+      Repo.query!("""
+      CREATE TRIGGER fail_erasure_insert BEFORE INSERT ON oban_jobs FOR EACH ROW
+      WHEN (NEW.worker = 'Engram.Workers.PostHogErasure') EXECUTE FUNCTION fail_erasure_insert()
+      """)
+
+      {first, _} = LogCapture.with_events(fn -> post_clerk(conn, "evt_del_erase", payload) end)
+      assert first.status == 500
+      assert Repo.get(Accounts.User, user.id, skip_tenant_check: true)
+
+      Repo.query!("DROP TRIGGER fail_erasure_insert ON oban_jobs")
+      expect(Engram.Auth.Clerk.ApiMock, :delete_user, fn "user_del_erase" -> :ok end)
+
+      retry = post_clerk(build_conn(), "evt_del_erase", payload)
+
+      assert json_response(retry, 200)["status"] == "ok"
+      refute Repo.get(Accounts.User, user.id, skip_tenant_check: true)
+      assert [_, _] = all_enqueued(worker: Engram.Workers.PostHogErasure)
     end
 
     test "a retry of the same svix-id after a failed purge completes it", %{conn: conn} do
@@ -440,4 +492,10 @@ defmodule EngramWeb.ClerkWebhookTest do
     mac = :crypto.mac(:hmac, :sha256, secret, body) |> Base.encode64()
     "v1,#{mac}"
   end
+end
+
+defmodule EngramWeb.ClerkWebhookTest.ExitingStorage do
+  @moduledoc false
+  # A storage call that exits (a timed-out GenServer.call) mid-purge.
+  def delete_prefix(_prefix), do: exit({:timeout, {GenServer, :call, [:storage, :delete]}})
 end

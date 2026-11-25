@@ -47,15 +47,16 @@ defmodule Engram.Auth.Clerk.Webhook do
   #
   # Every failure logs `clerk_user_deleted_purge_failed` at error (the alert
   # keys on it; `reason` tells them apart). A transient failure (an
-  # `{:error, _}` or a raise) returns `{:error, _}`, so the controller answers
+  # `{:error, _}`, a raise or an exit) returns `{:error, _}`, so the controller answers
   # 500 and leaves the svix-id unprocessed: Svix's retry finds the account
   # (already marked deleted, which `find_by_external_id/1` does not filter) and
   # `delete_account/2`, idempotent, finishes it.
   #
-  # The last-admin guard is NOT transient: every retry hits it until ops
-  # promotes another admin, so a non-2xx would only make Svix hammer us for
-  # days and then disable the endpoint. It acks, logs, and leaves the user
-  # soft-deleted; ops promotes another admin and re-runs the purge.
+  # The last-admin guard is NOT transient: nothing changes between retries
+  # unless ops promotes another admin and re-runs the purge by hand. Svix
+  # retries one message 8 times over about 27 hours, so a non-2xx would only
+  # help if ops acted inside that window, and the error line is what tells ops
+  # to act either way. It acks, logs, and leaves the user soft-deleted.
   defp handle_user_deleted(%{"id" => clerk_id}) when is_binary(clerk_id) do
     case Accounts.find_by_external_id(clerk_id) do
       {:ok, user} -> purge_deleted_user(user)
@@ -95,6 +96,10 @@ defmodule Engram.Auth.Clerk.Webhook do
       )
 
       {:error, :exception}
+  catch
+    :exit, reason ->
+      log_purge_failed(user, "exit " <> Metadata.safe_reason(reason))
+      {:error, :exit}
   end
 
   defp log_purge_failed(user, reason) do
