@@ -91,7 +91,7 @@ Live. Covers every var `config/runtime.exs` reads (`Engram.EnvVarDocsTest` fails
 | `DOC_EMBED_MODEL` | falls back to `EMBED_MODEL` | Asymmetric: doc-indexing model. |
 | `QUERY_EMBED_MODEL` | falls back to `EMBED_MODEL` | Asymmetric: query model. |
 | `DOC_EMBED_MODEL_FREE` / `DOC_EMBED_MODEL_STARTER` / `DOC_EMBED_MODEL_PRO` | `voyage-4-lite` / `voyage-4-large` / `voyage-4-large` | SaaS (billing on) only: doc model by the note owner's plan (`Engram.EmbedModels`). Unset or blank reads the default. Self-host ignores them. |
-| `QUERY_EMBED_MODEL_FREE` / `QUERY_EMBED_MODEL_STARTER` / `QUERY_EMBED_MODEL_PRO` | `voyage-4-lite` / `voyage-4-large` / `voyage-4-large` | SaaS (billing on) only: query model by the searching user's plan. A `search_query_model` override wins. |
+| `QUERY_EMBED_MODEL_FREE` / `QUERY_EMBED_MODEL_STARTER` / `QUERY_EMBED_MODEL_PRO` | `voyage-4-large` on every plan (roadmap D15) | SaaS (billing on) only: query model by the searching user's plan. A `search_query_model` override wins. |
 | `EMBED_429_SNOOZE_SECONDS` | `60` | Voyage-429 snooze (worker reschedules without burning an attempt). |
 | `EMBED_SETTLE_SECONDS` | `30` | Settle debounce — a note must sit unedited this long before it embeds, collapsing a burst of saves into one Voyage call. Higher = cheaper, staler index. |
 | `EMBED_AGENT_SETTLE_SECONDS` | `2` | Settle for a write made over MCP by an AI agent, which writes a whole note at once and searches for it seconds later. Capped at `EMBED_SETTLE_SECONDS`; blank reads the default. |

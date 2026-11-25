@@ -19,7 +19,7 @@ The why behind the backend's shape, and what was rejected. Versions live in
 | Rate limiting | Hammer: ETS, distributed ETS + PubSub when clustered; Postgres token bucket (`usage_buckets`) for the durable daily search cap | No Redis. See `rate-limiter-architecture.md`. |
 | Job queue | Oban on the same Postgres | Durable jobs, no new infra. No Oban Pro. See `async-indexing-pipeline.md`. |
 | Auth | Clerk JWTs via Joken + `joken_jwks`; API keys as SHA256 hashes, looked up directly by indexed `key_hash` | No key cache. |
-| Embeddings | Voyage, asymmetric: `voyage-4-large` (1024d) for documents, `voyage-4-lite` for queries | Shared Voyage 4 space. Self-host uses Ollama (`lib/engram/embedders/ollama.ex`). |
+| Embeddings | Voyage, per plan: documents `voyage-4-large` (paid) or `voyage-4-lite` (Free), 1024d; queries `voyage-4-large` on every plan (SaaS; the global `QUERY_EMBED_MODEL` only applies off per-plan) | Shared Voyage 4 space. Self-host uses Ollama (`lib/engram/embedders/ollama.ex`). |
 | Vector DB | Qdrant, thin Req HTTP wrapper | No official Elixir SDK; the REST API is small. |
 | Search | Hybrid dense + BM25 sparse with server-side RRF; reranker pluggable (`RERANKER_BACKEND=jina|none`, default `none`, unset in prod) | See `chunk-boundary-stability.md`. |
 | Markdown | Line/regex section splitter (`lib/engram/parsers/markdown.ex`) for chunking; comrak in `native/engram_native` (`md_outline`) for MCP section boundaries (was `mdex_native` until #1877) | Earmark was removed (unused). Links, titles and tags parse in Rust (`native/engram_native`, see `native-nifs.md`). |
