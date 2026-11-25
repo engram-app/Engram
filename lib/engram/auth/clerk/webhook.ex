@@ -98,7 +98,9 @@ defmodule Engram.Auth.Clerk.Webhook do
       {:error, :exception}
   catch
     :exit, reason ->
-      log_purge_failed(user, "exit " <> Metadata.safe_reason(reason))
+      safe = "exit " <> Metadata.safe_reason(reason)
+      _ = Sentry.capture_message("clerk_user_deleted_purge_failed", extra: %{reason: safe})
+      log_purge_failed(user, safe)
       {:error, :exit}
   end
 

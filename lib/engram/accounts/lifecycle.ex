@@ -307,7 +307,7 @@ defmodule Engram.Accounts.Lifecycle do
           "Hard-delete PG cascade failed — half-state recoverable on retry",
           Metadata.with_category(:error, :lifecycle,
             user_id: user.id,
-            reason: inspect(txn_reason)
+            reason: Metadata.safe_reason(txn_reason)
           )
         )
 
