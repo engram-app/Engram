@@ -698,6 +698,47 @@ defmodule Engram.FoldersTest do
                      200
     end
 
+    # A caller's own tenant transaction (an MCP tool call is one) owns the
+    # commit: the buffered events must wait for IT, not for `Folders.atomic`.
+    test "inside an outer tenant transaction, no folders.batch when it rolls back", %{
+      user: user,
+      vault: vault
+    } do
+      explicit_with_note!(user, vault, "Docs")
+
+      assert {:error, :rolled_back} =
+               Engram.Repo.with_tenant(user.id, fn ->
+                 {:ok, _} = Folders.rename(user, vault, "Docs", "Archive")
+                 # Still inside the open transaction: nothing may have gone out.
+                 refute_received %Phoenix.Socket.Broadcast{}
+                 Engram.Repo.rollback(:rolled_back)
+               end)
+
+      refute_receive %Phoenix.Socket.Broadcast{}, 150
+    end
+
+    test "inside an outer tenant transaction, folders.batch goes out after it commits", %{
+      user: user,
+      vault: vault,
+      topic: topic
+    } do
+      explicit_with_note!(user, vault, "Docs")
+
+      assert {:ok, :done} =
+               Engram.Repo.with_tenant(user.id, fn ->
+                 {:ok, _} = Folders.rename(user, vault, "Docs", "Archive")
+                 refute_received %Phoenix.Socket.Broadcast{event: "folders.batch"}
+                 :done
+               end)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "folders.batch",
+                       payload: %{op: "rename", folder: "Archive"}
+                     },
+                     200
+    end
+
     test "renaming a folder that only exists through its notes broadcasts too", %{
       user: user,
       vault: vault,
