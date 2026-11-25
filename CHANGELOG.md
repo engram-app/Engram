@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.95.0](https://github.com/engram-app/Engram/compare/0.94.0...0.95.0) (2026-11-25)
+
+
+### Features
+
+* **flags:** read service flags from a reviewed file ([#2704](https://github.com/engram-app/Engram/issues/2704)) ([539d0ec](https://github.com/engram-app/Engram/commit/539d0ec2588ef3b631163c32e6ab861afc1c3b60))
+
+
+### Bug Fixes
+
+* **auth:** retry Clerk user.deleted on failed delete ([#2692](https://github.com/engram-app/Engram/issues/2692)) ([c1c3ea4](https://github.com/engram-app/Engram/commit/c1c3ea45b733288b78bf6a5e68fc65916240e919))
+* **folders:** broadcast folders.batch on rename ([#2693](https://github.com/engram-app/Engram/issues/2693)) ([2d2e72f](https://github.com/engram-app/Engram/commit/2d2e72fa074d4b819733a5530082a64770362e5c))
+
 ## [0.94.0](https://github.com/engram-app/Engram/compare/0.93.0...0.94.0) (2026-11-25)
 
 
