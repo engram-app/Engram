@@ -20,7 +20,8 @@ env value (app config / runtime.exs), then the caller's code default. Values are
 as a DB override (`Overrides.validate/2`).
 
 `paused_accounts` is flags-only: `[{"id": <uuid>, "until": <UTC ISO 8601, ends Z>}]`,
-at most 1000. `Engram.ClientGate.paused/1` (HTTP, socket join, the +61 s
+at most 1000, `until` at most 30 days ahead (`ClientLocks.max_expiry_s/0`;
+an entry past it is ignored and logged once per node). `Engram.ClientGate.paused/1` (HTTP, socket join, the +61 s
 `QuarantineDisconnect` job) treats a user as paused if the billing-override
 quarantine row says so OR the id has an unexpired entry. `until` is judged
 against the clock on every read, so an expired entry needs no revert PR.
@@ -79,7 +80,9 @@ its source (`:flags`, `:db`, `:env`).
 - A node that has never loaded (boot with the source down) serves an empty
   map: flag keys read env and defaults (not DB rows) until the first load;
   once one has loaded, the last good map stays.
-- An unknown key is dropped; a bad value keeps that key's previous value.
+- A body over 256 KB (file or AppConfig) is an invalid document.
+- An unknown key is dropped; a bad value keeps that key's previous value
+  (a `plugin_floor` expiring more than 30 days ahead counts as bad).
   One `service flag rejected key=...` error line each; the other keys apply.
 - The map lives in `:persistent_term` and is written only when it changes (a
   put is a global GC). Reads are one lookup and never query.
@@ -133,7 +136,9 @@ search the same stream for `service flags source unreachable`,
 `service flags document invalid` and `service flag rejected`.
 
 A newly paused or lifted id has its sockets dropped
-(`SessionInvalidator.disconnect_user/1`) by every node that sees the change;
+(`SessionInvalidator.disconnect_user/1`) by every node that sees the change.
+A node's first load (boot, or after a reader restart) drops every paused
+id's sockets and rechecks the floor, since sockets may have joined first;
 expiry alone is noticed on the client's next request or join, and logs
 `service flag paused_accounts entry expired, ignored user=<hash>` once per
 node.

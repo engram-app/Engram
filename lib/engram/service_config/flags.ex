@@ -29,12 +29,15 @@ defmodule Engram.ServiceConfig.Flags do
   ## paused_accounts
 
   Flags-only (`%{id => until}`): `paused?/1` judges `until` against the clock
-  on every read, so an expired entry is ignored with no redeploy.
-  `Engram.ClientGate.paused/1` ORs it with the billing-override quarantine.
-  A newly paused or lifted id has its sockets dropped
-  (`SessionInvalidator`), except on this node's first load (nothing is
-  connected yet). A `plugin_floor` change asks `user:` channels to recheck
-  (`Engram.Admin.ClientLocks.recheck/1`), as the rpc lock does.
+  on every read, so an expired entry is ignored with no redeploy. An entry
+  more than `ClientLocks.max_expiry_s/0` (30 days) ahead is ignored, as is a
+  `plugin_floor` expiring past it. `Engram.ClientGate.paused/1` ORs it with
+  the billing-override quarantine. A newly paused or lifted id has its
+  sockets dropped (`SessionInvalidator`), and a `plugin_floor` change asks
+  `user:` channels to recheck (`Engram.Admin.ClientLocks.recheck/1`), as the
+  rpc does. A first load (boot, or after a reader restart) does both for
+  EVERY paused id and floor: sockets may have joined before it. A body over
+  256 KB is an invalid document.
 
   Never touches the database.
   """
@@ -54,6 +57,8 @@ defmodule Engram.ServiceConfig.Flags do
   @paused_key {__MODULE__, :paused}
   @poll_ms 60_000
   @max_paused 1000
+  # Bytes; the reviewed file is a few KB.
+  @max_body 256 * 1024
   # Hashed ids named in one change line; the counts carry the rest.
   @max_listed 20
   @uuid ~r/\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z/
@@ -129,7 +134,7 @@ defmodule Engram.ServiceConfig.Flags do
       doc_status: :ok,
       status: :ok,
       loaded?: false,
-      expired_logged: MapSet.new()
+      ignored_logged: MapSet.new()
     }
 
     {:ok, state, {:continue, :poll}}
@@ -148,12 +153,16 @@ defmodule Engram.ServiceConfig.Flags do
       {:ok, body, version, state} -> state |> load(body, version) |> status(nil)
       {:error, reason, state} -> state |> status(:unreachable, reason)
     end
-    |> log_expired()
+    |> log_ignored()
   end
 
   # An empty AppConfig body, or the same file bytes: nothing changed, and a
   # document already found bad is not re-reported.
   defp load(state, body, _version) when body == "" or body == state.last_body, do: state
+
+  # A reviewed file is a few KB; anything this big is not one.
+  defp load(state, body, _version) when byte_size(body) > @max_body,
+    do: %{state | last_body: body, doc_status: :invalid}
 
   defp load(state, body, version) do
     state = %{state | last_body: body}
@@ -203,11 +212,11 @@ defmodule Engram.ServiceConfig.Flags do
     Enum.reduce(doc, %{}, fn {name, value}, acc ->
       case Overrides.flag_key(name) do
         {:ok, key} ->
-          case Overrides.validate(key, value) do
-            :ok ->
+          case {Overrides.validate(key, value), within_cap?(key, value)} do
+            {:ok, true} ->
               Map.put(acc, key, value)
 
-            {:error, _} ->
+            _ ->
               rejected(name, "invalid value, keeping the old one")
               if Map.has_key?(old, key), do: Map.put(acc, key, old[key]), else: acc
           end
@@ -218,6 +227,17 @@ defmodule Engram.ServiceConfig.Flags do
       end
     end)
   end
+
+  # `plugin_floor.expires_at` at most ClientLocks' 30 days ahead, as the rpc
+  # lock requires (`parse_lock/1` allows any date).
+  defp within_cap?(:plugin_floor, %{"expires_at" => exp}) do
+    case DateTime.from_iso8601(exp) do
+      {:ok, at, _} -> DateTime.diff(at, DateTime.utc_now()) <= ClientLocks.max_expiry_s()
+      _ -> false
+    end
+  end
+
+  defp within_cap?(_key, _value), do: true
 
   defp rejected(name, why) do
     Logger.error(
@@ -231,33 +251,46 @@ defmodule Engram.ServiceConfig.Flags do
     old = current()
 
     if flags != old do
-      now = DateTime.utc_now()
-      before = active_ids(old, now)
-      after_ = active_ids(flags, now)
       :ok = log_changes(old, flags, kind(state))
       :persistent_term.put(@flags_key, flags)
-      paused = paused_map(flags)
-
-      if paused != :persistent_term.get(@paused_key, %{}),
-        do: :persistent_term.put(@paused_key, paused),
-        else: :ok
-
-      if state.loaded? do
-        before
-        |> MapSet.symmetric_difference(after_)
-        |> Enum.each(&SessionInvalidator.disconnect_user/1)
-
-        recheck_floor(old, flags)
-      end
     end
 
+    paused = paused_map(flags)
+
+    if paused != :persistent_term.get(@paused_key, %{}),
+      do: :persistent_term.put(@paused_key, paused),
+      else: :ok
+
+    :ok = enforce(state.loaded?, old, flags)
     %{state | loaded?: true}
+  end
+
+  # Sockets: after a change, the ids that were paused or lifted are dropped
+  # and the floor is rechecked. A first load (boot, or the first after a
+  # reader restart) may face sockets that joined before any flag was read,
+  # so it drops EVERY paused id and rechecks every floor; with no matching
+  # socket that costs one broadcast each.
+  defp enforce(true, same, same), do: :ok
+
+  defp enforce(loaded?, old, new) do
+    now = DateTime.utc_now()
+    before = active_ids(old, now)
+    after_ = active_ids(new, now)
+
+    changed =
+      if loaded?,
+        do: MapSet.symmetric_difference(before, after_),
+        else: MapSet.union(before, after_)
+
+    Enum.each(changed, &SessionInvalidator.disconnect_user/1)
+
+    recheck_floor(loaded?, old, new)
   end
 
   # As `ClientLocks` does on a lock or a lift: sockets below the old or the
   # new min rejoin against the floor now in force.
-  defp recheck_floor(old, new) do
-    if old[:plugin_floor] != new[:plugin_floor] or
+  defp recheck_floor(loaded?, old, new) do
+    if not loaded? or old[:plugin_floor] != new[:plugin_floor] or
          old[:plugin_floor_enabled] != new[:plugin_floor_enabled] do
       [old[:plugin_floor], new[:plugin_floor]]
       |> Enum.uniq()
@@ -270,12 +303,21 @@ defmodule Engram.ServiceConfig.Flags do
     :ok
   end
 
-  defp paused_map(flags) do
+  # What the file says (validated), whatever the clock.
+  defp raw_paused(flags) do
     case parse_paused(Map.get(flags, :paused_accounts, [])) do
       {:ok, paused} -> paused
       :error -> %{}
     end
   end
+
+  # What pauses: entries `until` at most 30 days ahead (the ClientLocks cap).
+  defp paused_map(flags) do
+    now = DateTime.utc_now()
+    raw_paused(flags) |> Map.reject(fn {_id, until} -> beyond_cap?(until, now) end)
+  end
+
+  defp beyond_cap?(until, now), do: DateTime.diff(until, now) > ClientLocks.max_expiry_s()
 
   defp active_ids(flags, now) do
     for {id, until} <- paused_map(flags), active?(until, now), into: MapSet.new(), do: id
@@ -295,8 +337,8 @@ defmodule Engram.ServiceConfig.Flags do
 
   # paused_accounts: counts and hashed ids, never a raw id.
   defp shown(:paused_accounts, old, new) do
-    before = paused_map(old)
-    after_ = paused_map(new)
+    before = raw_paused(old)
+    after_ = raw_paused(new)
     added = Map.keys(after_) -- Map.keys(before)
     removed = Map.keys(before) -- Map.keys(after_)
 
@@ -314,20 +356,34 @@ defmodule Engram.ServiceConfig.Flags do
     "[#{listed}]" <> if(more > 0, do: "+#{more}", else: "")
   end
 
-  # One line per entry the first time this node sees it expired.
-  defp log_expired(state) do
+  # One line per entry the first time this node sees it ignored: expired, or
+  # `until` beyond the 30-day cap.
+  defp log_ignored(state) do
     now = DateTime.utc_now()
-    paused = :persistent_term.get(@paused_key, %{})
-    expired = for {id, until} <- paused, not active?(until, now), into: MapSet.new(), do: id
 
-    for id <- MapSet.difference(expired, state.expired_logged) do
+    ignored =
+      for {id, until} <- raw_paused(current()),
+          why = ignored_why(until, now),
+          why != nil,
+          into: MapSet.new(),
+          do: {id, why}
+
+    for {id, why} <- MapSet.difference(ignored, state.ignored_logged) do
       Logger.warning(
-        "service flag paused_accounts entry expired, ignored user=#{HMAC.hash_user_id(id)}",
+        "service flag paused_accounts entry #{why}, ignored user=#{HMAC.hash_user_id(id)}",
         Metadata.with_category(:warning, :data)
       )
     end
 
-    %{state | expired_logged: expired}
+    %{state | ignored_logged: ignored}
+  end
+
+  defp ignored_why(until, now) do
+    cond do
+      not active?(until, now) -> "expired"
+      beyond_cap?(until, now) -> "beyond the 30-day cap"
+      true -> nil
+    end
   end
 
   defp kind(%{source: {kind, _}}), do: kind

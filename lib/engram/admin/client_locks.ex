@@ -67,6 +67,14 @@ defmodule Engram.Admin.ClientLocks do
   # One more than the 60 s `:billing_override` TTL (the review's H2 bound).
   @second_disconnect_s 61
 
+  @doc """
+  The longest a lock or a quarantine may last (30 days). Also the cap on a
+  `paused_accounts` entry's `until` and `plugin_floor`'s `expires_at` in the
+  flags file (`Engram.ServiceConfig.Flags`).
+  """
+  # No @spec: dialyzer's :underspecs flags `pos_integer()` against the literal.
+  def max_expiry_s, do: @max_expiry_s
+
   @doc "PubSub topic every `user:` channel listens on for floor changes."
   def topic, do: @topic
 

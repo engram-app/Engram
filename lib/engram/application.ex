@@ -424,8 +424,8 @@ defmodule Engram.Application do
       # is unset (dev, test, self-host), and Enum.reject below filters it out.
       pyroscope_child(),
       # The reviewed flags file (Engram.ServiceConfig.Flags); only where a
-      # source is configured. Its first load is async: until it lands, DB
-      # overrides and env apply.
+      # source is configured. Its first load is async: until it lands, flag
+      # keys read env (their DB rows are ignored); other keys are unaffected.
       service_flags_child(),
       EngramWeb.Endpoint
     ]

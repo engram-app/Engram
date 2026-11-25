@@ -6,6 +6,7 @@ defmodule Engram.ServiceConfig.FlagsTest do
   import Engram.ServiceFlagsHelpers
   import ExUnit.CaptureLog
 
+  alias Engram.Admin.ClientLocks
   alias Engram.Cache
   alias Engram.ServiceConfig
   alias Engram.ServiceConfig.Flags
@@ -219,13 +220,16 @@ defmodule Engram.ServiceConfig.FlagsTest do
       refute Flags.paused?(Ecto.UUID.generate())
     end
 
-    test "a newly paused id drops its sockets; a lifted one too; a boot load does not" do
+    test "a newly paused id drops its sockets; a lifted one too; the first load drops every paused id" do
       boot = Ecto.UUID.generate()
       id = Ecto.UUID.generate()
       EngramWeb.Endpoint.subscribe("user_socket:#{boot}")
       EngramWeb.Endpoint.subscribe("user_socket:#{id}")
 
       path = start_flags(%{"paused_accounts" => [paused(boot, 3600)]})
+      boot_topic = "user_socket:#{boot}"
+      # A socket that connected before the first load is dropped by it.
+      assert_received %Phoenix.Socket.Broadcast{topic: ^boot_topic, event: "disconnect"}
       refute_received %Phoenix.Socket.Broadcast{topic: "user_socket:" <> _}
 
       capture_log(fn ->
@@ -238,6 +242,37 @@ defmodule Engram.ServiceConfig.FlagsTest do
 
       capture_log(fn -> write_flags(path, %{"paused_accounts" => [paused(boot, 3600)]}) end)
       assert_received %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}
+    end
+
+    test "after a reader restart the next load drops a paused user's socket again" do
+      id = Ecto.UUID.generate()
+      path = start_flags(%{"paused_accounts" => [paused(id, 3600)]})
+      stop_supervised!(Flags)
+      # The term survives the restart: the map the new reader loads is unchanged.
+      assert Flags.paused?(id)
+
+      topic = "user_socket:#{id}"
+      EngramWeb.Endpoint.subscribe(topic)
+      start_supervised!({Flags, {:file, path}})
+      :sys.get_state(Flags)
+      assert_received %Phoenix.Socket.Broadcast{topic: ^topic, event: "disconnect"}
+    end
+
+    test "an entry more than 30 days ahead is dropped and logged once; the rest apply" do
+      far = Ecto.UUID.generate()
+      near = Ecto.UUID.generate()
+      cap = ClientLocks.max_expiry_s()
+
+      log =
+        capture_log(fn ->
+          path = start_flags(%{"paused_accounts" => [paused(far, cap + 3600), paused(near, 60)]})
+          poll()
+          write_flags(path, %{"paused_accounts" => [paused(far, cap + 3600), paused(near, 120)]})
+        end)
+
+      refute Flags.paused?(far)
+      assert Flags.paused?(near)
+      assert count(log, "paused_accounts entry beyond the 30-day cap, ignored") == 1
     end
 
     test "bad entries reject the key: not a uuid, a non-UTC until, a duplicate id, extra fields" do
@@ -288,13 +323,14 @@ defmodule Engram.ServiceConfig.FlagsTest do
   end
 
   describe "plugin_floor" do
-    test "a floor change asks user channels to recheck, like the rpc lock; boot does not" do
-      Phoenix.PubSub.subscribe(Engram.PubSub, Engram.Admin.ClientLocks.topic())
+    test "a floor change asks user channels to recheck, like the rpc lock, first load included" do
+      Phoenix.PubSub.subscribe(Engram.PubSub, ClientLocks.topic())
       lock = %{"min" => "1.99.0", "update_to" => "1.99.0", "reason" => "r"}
       exp = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601()
 
       path = start_flags(%{"plugin_floor" => Map.put(lock, "expires_at", exp)})
-      refute_received {:client_gate_recheck, _}
+      # The first load rechecks too: sockets may predate it.
+      assert_received {:client_gate_recheck, "1.99.0"}
 
       capture_log(fn -> write_flags(path, %{}) end)
       assert_received {:client_gate_recheck, "1.99.0"}
@@ -307,6 +343,69 @@ defmodule Engram.ServiceConfig.FlagsTest do
 
       assert_received {:client_gate_recheck, "1.98.0"}
       assert Engram.PluginVersion.minimum() == "1.98.0"
+    end
+
+    test "an expires_at more than 30 days ahead is rejected; the old value is kept" do
+      cap = ClientLocks.max_expiry_s()
+      lock = %{"min" => "1.99.0", "update_to" => "1.99.0", "reason" => "r"}
+      ok = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601()
+      far = DateTime.utc_now() |> DateTime.add(cap + 3600) |> DateTime.to_iso8601()
+
+      {path, _} =
+        with_log(fn -> start_flags(%{"plugin_floor" => Map.put(lock, "expires_at", ok)}) end)
+
+      log =
+        capture_log(fn ->
+          write_flags(path, %{
+            "plugin_floor" => %{lock | "min" => "1.98.0"} |> Map.put("expires_at", far)
+          })
+        end)
+
+      assert log =~ ~s(service flag rejected key="plugin_floor")
+      assert Flags.current().plugin_floor["min"] == "1.99.0"
+    end
+  end
+
+  describe "body cap" do
+    test "a body over 256 KB is invalid: last good kept, one warning" do
+      path = start_flags(%{"folder_ops" => true})
+      big = Jason.encode!(%{"folder_ops" => false, "pad" => String.duplicate("x", 300_000)})
+
+      log =
+        capture_log(fn ->
+          write_flags(path, big)
+          poll()
+        end)
+
+      assert Flags.current() == %{folder_ops: true}
+      assert count(log, "service flags document invalid") == 1
+    end
+  end
+
+  describe "aws_credentials/1" do
+    test "signs as appconfig in the region and passes a session token through" do
+      keys = [:access_key_id, :secret_access_key, :security_token]
+      prev = Map.new(keys, &{&1, Application.get_env(:ex_aws, &1)})
+
+      on_exit(fn ->
+        Enum.each(prev, fn
+          {k, nil} -> Application.delete_env(:ex_aws, k)
+          {k, v} -> Application.put_env(:ex_aws, k, v)
+        end)
+      end)
+
+      Application.put_env(:ex_aws, :access_key_id, "AKTEST")
+      Application.put_env(:ex_aws, :secret_access_key, "secret")
+      Application.put_env(:ex_aws, :security_token, "session")
+
+      creds = Flags.aws_credentials("eu-west-1")
+      assert creds[:service] == :appconfig
+      assert creds[:region] == "eu-west-1"
+      assert creds[:access_key_id] == "AKTEST"
+      assert creds[:token] == "session"
+
+      Application.delete_env(:ex_aws, :security_token)
+      assert Flags.aws_credentials("eu-west-1")[:token] == nil
     end
   end
 
