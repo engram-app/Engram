@@ -27,10 +27,18 @@ defmodule EngramWeb.WebhookController do
           json(conn, %{status: "ok"})
 
         :proceed ->
-          _ = ClerkWebhook.handle(event)
-          _ = PostHogForwarder.forward_clerk_event(event)
-          _ = WebhookIdempotency.mark_processed(:clerk, id)
-          json(conn, %{status: "ok"})
+          case ClerkWebhook.handle(event) do
+            :ok ->
+              _ = PostHogForwarder.forward_clerk_event(event)
+              _ = WebhookIdempotency.mark_processed(:clerk, id)
+              json(conn, %{status: "ok"})
+
+            # Transient (the handler already logged it). Svix retries only a
+            # non-2xx, and not marking the id processed lets the retry run the
+            # handler again.
+            {:error, _reason} ->
+              conn |> put_status(500) |> json(%{status: "error"})
+          end
       end
     else
       {:error, reason} ->
