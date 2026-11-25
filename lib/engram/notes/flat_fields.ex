@@ -99,17 +99,29 @@ defmodule Engram.Notes.FlatFields do
 
   @doc "Fields from a note's plaintext content (nil content gives `empty/0`)."
   @spec extract(String.t() | nil, binary()) :: t()
-  def extract(content, filter_key) when is_binary(content) do
-    case Frontmatter.split(content) do
-      {block, _body} when is_binary(block) ->
-        block |> Frontmatter.parse() |> OkfFields.values() |> from_values(filter_key)
+  def extract(content, filter_key), do: content |> frontmatter() |> from_frontmatter(filter_key)
 
-      _ ->
-        @empty
+  @doc """
+  The note's frontmatter as `{block, Frontmatter.parse(block)}`, or nil when
+  it has none. One split and parse serves `from_frontmatter/2` and any other
+  reader in the same pass (the OKF timestamp heal in `Engram.Indexing`).
+  """
+  @spec frontmatter(String.t() | nil) :: {String.t(), term()} | nil
+  def frontmatter(content) when is_binary(content) do
+    case Frontmatter.split(content) do
+      {block, _body} when is_binary(block) -> {block, Frontmatter.parse(block)}
+      _ -> nil
     end
   end
 
-  def extract(nil, _filter_key), do: @empty
+  def frontmatter(nil), do: nil
+
+  @doc "`extract/2` from the result of `frontmatter/1`."
+  @spec from_frontmatter({String.t(), term()} | nil, binary()) :: t()
+  def from_frontmatter(nil, _filter_key), do: @empty
+
+  def from_frontmatter({_block, parsed}, filter_key),
+    do: parsed |> OkfFields.values() |> from_values(filter_key)
 
   defp from_values(values, _filter_key) when values == %{}, do: @empty
 

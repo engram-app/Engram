@@ -247,7 +247,9 @@ defmodule Engram.Notes.CrdtCheckpoint do
                 {:skip, :note_deleted}
 
               raw_note ->
-                {:ok, note} = Crypto.maybe_decrypt_note_fields(raw_note, user)
+                # Every field but the body: nothing here reads the old text
+                # unless history is recording (`had_text?/3`).
+                {:ok, note} = Crypto.maybe_decrypt_note_meta(raw_note, user)
 
                 # Test-only seam, mirroring the one Notes calls at
                 # :after_note_read. Parks here, between the row read and the
@@ -273,17 +275,12 @@ defmodule Engram.Notes.CrdtCheckpoint do
                 # so a first sync's whole flood is ranked here or nowhere — and
                 # reading `note` again after the commit would both cost a query
                 # and see the wrong (post-write) row.
-                #
-                # #1710: the finalize decision rides out the same way. A
-                # CRDT-created row holds the hash of empty text, not nil, so its
-                # first checkpoint is the create and has no old text to finalize.
-                carry_out(result, note, recording, shown)
+                carry_out(result, note, shown)
             end
           end)
 
         case outcome do
-          {prev_hash, new_hash, {path, moved_row}, _embed_priority, _finalize?, renamed_title,
-           pruned, fanout} ->
+          {prev_hash, new_hash, {path, moved_row}, _embed_priority, renamed_title, pruned, fanout} ->
             :ok =
               post_commit(note_id, fn ->
                 interleave_hook(:post_commit)
@@ -429,28 +426,26 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # degrade to a snapshot-compaction write. Returns the same {prev, new, path}
   # outcome tuple the caller's `case outcome` matches on.
   # What a written checkpoint carries out of the transaction: the hashes and
-  # path, the PRE-write embed priority, the finalize decision, and the title
+  # path, the PRE-write embed priority, and the title
   # the checkpoint re-derived when it differs from the stored one (for the
   # post-commit name-index announce). Anything else passes through.
   # `path` out is `{shown, moved_row}`: the path the note is shown at (read
   # before the lock), and the pre-write row when the vault holds a moved
   # folder (nil otherwise), for `reresolve/4`.
-  defp carry_out({prev_hash, new_hash, path, title, pruned}, note, recording, shown),
-    do: carry_out({prev_hash, new_hash, path, title, pruned, nil}, note, recording, shown)
+  defp carry_out({prev_hash, new_hash, path, title, pruned}, note, shown),
+    do: carry_out({prev_hash, new_hash, path, title, pruned, nil}, note, shown)
 
   # `fanout` is `{state, head, seq}` of a content-changing write, else nil.
   defp carry_out(
          {prev_hash, new_hash, path, title, pruned, fanout},
          note,
-         recording,
          {shown, moved?}
        ) do
     {prev_hash, new_hash, {shown || path, if(moved?, do: note)}, EmbedNote.priority_for(note),
-     finalize?(note, recording, prev_hash, new_hash), if(title && title != note.title, do: title),
-     pruned, fanout}
+     if(title && title != note.title, do: title), pruned, fanout}
   end
 
-  defp carry_out(other, _note, _recording, _shown), do: other
+  defp carry_out(other, _note, _shown), do: other
 
   # The path the post-commit announces carry: the one the note is SHOWN at.
   # Under a folder moved without a cascade (S5) the stored path is the old
@@ -498,8 +493,41 @@ defmodule Engram.Notes.CrdtCheckpoint do
     path
   end
 
-  defp finalize?(note, recording, prev_hash, new_hash),
-    do: note.content not in [nil, ""] and Revisions.finalize?(recording, prev_hash, new_hash)
+  # #1710: finalize only an update of a note that HAD text (a create, or the
+  # first checkpoint of a CRDT-created row, has none to copy). Asked last, so
+  # with recording off (the prod default) or no content change the old body
+  # is never read. The row's body was not decrypted (`maybe_decrypt_note_meta/2`).
+  defp finalize?(note, recording, prev_hash, new_hash, m),
+    do: Revisions.finalize?(recording, prev_hash, new_hash) and had_text?(note, prev_hash, m)
+
+  defp had_text?(%Note{content_ciphertext: nil}, _prev_hash, _m), do: false
+
+  # The hash of empty text answers without a decrypt. Any other hash cannot:
+  # a DEK rotation leaves `content_hash` on the old key (UserDekRotation), so
+  # an empty note may hold a hash that is not this one. The body decides then.
+  defp had_text?(note, prev_hash, %{user: user, content_key: key}) do
+    if prev_hash == Crypto.hmac_content_hash(key, "") do
+      false
+    else
+      case Crypto.maybe_decrypt_note_body(note, user) do
+        {:ok, %Note{content: text}} -> text not in [nil, ""]
+        {:error, reason} -> old_body_unreadable!(note.id, reason)
+      end
+    end
+  end
+
+  # The finalize decision cannot be made without the old text, so the
+  # checkpoint raises (and is skipped) as it always has; this names it.
+  @spec old_body_unreadable!(Ecto.UUID.t(), term()) :: no_return()
+  defp old_body_unreadable!(note_id, reason) do
+    Logger.warning(
+      "crdt checkpoint old body unreadable, finalize undecidable " <>
+        "note_id=#{note_id} reason=#{Metadata.safe_reason(reason)}",
+      Metadata.with_category(:warning, :sync, note_id: note_id)
+    )
+
+    raise ArgumentError, "crdt checkpoint old body unreadable note_id=#{note_id}"
+  end
 
   defp do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user) do
     with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
@@ -517,6 +545,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
         ct: ct,
         nonce: nonce,
         user: user,
+        content_key: key,
         fanout: {raw_state, CrdtTransport.head_marker(union_doc)}
       })
     else
@@ -692,7 +721,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
         job =
           NoteCommitted.insert!(note_id, user.id,
             embed_priority: EmbedNote.priority_for(note),
-            finalize?: finalize?(note, Keyword.fetch!(opts, :recording), prev, content_hash)
+            finalize?: finalize?(note, Keyword.fetch!(opts, :recording), prev, content_hash, m)
           )
 
         changeset =

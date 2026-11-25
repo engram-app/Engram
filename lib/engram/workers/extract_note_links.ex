@@ -123,31 +123,30 @@ defmodule Engram.Workers.ExtractNoteLinks do
     with {:ok, note} <- Engram.Notes.fetch_note_for_worker_job(args), do: {:ok, note, nil}
   end
 
-  defp authoritative(user, decrypted, nil),
-    do: Engram.Notes.authoritative_content(user, decrypted)
+  # notes.content is the REST/search FACADE: since #1141 it is only
+  # materialized from the CRDT doc at checkpoint, so it lags a live doc write
+  # (#1159, `Engram.Notes.authoritative_content/2`). A rewrite's
+  # `Rewriter.finish/4` writes its edges from the doc's text and leaves the
+  # facade alone; re-deriving them from the facade would clobber its repair
+  # (#1280). So the text comes from the authority, decrypting one copy of the
+  # note (`Engram.Notes.current_text/3`; a 1.4 MB note used to pay a body
+  # decrypt plus a state decrypt and doc rebuild on every edit). A legacy job
+  # read no tail, so it resolves as before.
+  defp current_text(user, note, nil) do
+    with {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user),
+         do: Engram.Notes.authoritative_content(user, decrypted)
+  end
 
-  defp authoritative(user, decrypted, tail),
-    do: Engram.Notes.authoritative_content(user, decrypted, tail)
+  defp current_text(user, note, tail), do: Engram.Notes.current_text(user, note, tail)
 
   defp extract(note, tail, user, vault) do
-    # notes.content is the REST/search FACADE — since #1141 it's only
-    # materialized from the CRDT doc at checkpoint, so it lags a live doc
-    # write (same staleness class as #1159, see
-    # `Engram.Notes.authoritative_content/2` moduledoc and
-    # `NotesController.append/2`). A rewrite's `Rewriter.finish/4` writes
-    # the correct edges immediately via the CRDT-projected content but
-    # (deliberately) does not materialize the facade — reading it here
-    # would re-derive stale edges on the very next extraction and clobber
-    # what the rewrite just fixed. Decrypt first (still needed to recover
-    # a legacy/no-crdt-state row's plaintext as the fallback base), then
-    # resolve through the authority.
-    with {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user),
-         {:ok, content} <- authoritative(user, decrypted, tail) do
-      parsed = Parser.extract(content)
-      basenames = Links.replace_links_basenames(user, vault, note.id, parsed)
-      :ok = repair_rename_danglers(user, vault, parsed, basenames)
-      :ok
-    else
+    case current_text(user, note, tail) do
+      {:ok, content} ->
+        parsed = Parser.extract(content)
+        basenames = Links.replace_links_basenames(user, vault, note.id, parsed)
+        :ok = repair_rename_danglers(user, vault, parsed, basenames)
+        :ok
+
       {:error, reason} ->
         DecryptFailure.log("extract_links_decrypt_failed", reason,
           user_id: note.user_id,

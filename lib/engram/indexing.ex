@@ -24,7 +24,6 @@ defmodule Engram.Indexing do
   alias Engram.Notes.ChunkPoint
   alias Engram.Notes.FieldCatalog
   alias Engram.Notes.FlatFields
-  alias Engram.Notes.Frontmatter
   alias Engram.Notes.FrontmatterKeys
   alias Engram.Notes.Note
   alias Engram.Notes.NoteAttr
@@ -274,7 +273,6 @@ defmodule Engram.Indexing do
   """
   def prepare_index(note, %Engram.Vaults.Vault{} = _vault, user \\ nil, opts \\ []) do
     chunks = Markdown.parse(note.content || "", note.path)
-    {note, okf_healed?} = heal_okf_timestamp(note)
 
     # An empty note needs no identity at all, so that branch stays ahead of the
     # fetch. Everything past it does: the embed below wants the `%User{}`,
@@ -284,6 +282,11 @@ defmodule Engram.Indexing do
       {:ok, :no_chunks}
     else
       user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
+      # The frontmatter is split and parsed ONCE for the timestamp heal and
+      # the filter fields (`build_prepared/6`); each used to parse it again.
+      frontmatter = FlatFields.frontmatter(note.content)
+      {note, okf_healed?} = heal_okf_timestamp(note, frontmatter)
+      opts = Keyword.put(opts, :frontmatter, frontmatter)
 
       # The resolved user rides along for the commit's name-terms write.
       with {:ok, %{} = prepared} <- prepare_chunks(note, user, chunks, opts, okf_healed?),
@@ -348,7 +351,7 @@ defmodule Engram.Indexing do
          :ok = collect_garbage(n),
          avgdl = avgdl(note.user_id, note.vault_id),
          {:ok, prepared} <-
-           build_prepared(note, plan, vectors, dek, avgdl) do
+           build_prepared(note, plan, vectors, dek, avgdl, frontmatter(note, opts)) do
       # What the embedder was actually sent (#1618): reused chunks and
       # sparse-only passes cost nothing, so the meter must not bill them.
       # Retained vectors were paid for by the attempt that kept them.
@@ -395,20 +398,22 @@ defmodule Engram.Indexing do
   # on write, so a note saved before then holds nil until edited. Re-derived
   # here, so its next index (the v5 rebuild reaches every note) heals the
   # payload (the payload hash moves, so reused points are refreshed) and the
-  # row (`stamp_okf_timestamp/1`). Only a nil timestamp next to a `generated`
-  # key pays the YAML parse; every other note costs a substring check.
-  defp heal_okf_timestamp(%{fm_timestamp: nil, content: content} = note)
-       when is_binary(content) do
-    with {block, _body} when is_binary(block) <- Frontmatter.split(content),
-         true <- String.contains?(block, "generated"),
-         %{fm_timestamp: %DateTime{} = ts} <- OkfFields.from_parse(Frontmatter.parse(block)) do
+  # row (`stamp_okf_timestamp/1`). Reads the pass's one frontmatter parse.
+  # Only a block naming `generated` heals, as before the parse was shared.
+  defp heal_okf_timestamp(%{fm_timestamp: nil} = note, {block, parsed}) do
+    with true <- String.contains?(block, "generated"),
+         %{fm_timestamp: %DateTime{} = ts} <- OkfFields.from_parse(parsed) do
       {%{note | fm_timestamp: ts}, true}
     else
       _ -> {note, false}
     end
   end
 
-  defp heal_okf_timestamp(note), do: {note, false}
+  defp heal_okf_timestamp(note, _frontmatter), do: {note, false}
+
+  # `prepare_index/4` parsed it already; other passes (a refloor) parse here.
+  defp frontmatter(note, opts),
+    do: Keyword.get_lazy(opts, :frontmatter, fn -> FlatFields.frontmatter(note.content) end)
 
   # Inside the chunk-row transaction; guarded on the content it was derived
   # from and on the column still being nil, so an edit in between wins.
@@ -3662,7 +3667,7 @@ defmodule Engram.Indexing do
   defp vector_model({:embed, _chunk}), do: pass_model()
 
   # Builds every row, point and payload in memory BEFORE any mutation.
-  defp build_prepared(note, plan, vectors, dek, avgdl) do
+  defp build_prepared(note, plan, vectors, dek, avgdl, frontmatter) do
     filter_key = Crypto.dek_filter_key_from_bytes(dek)
 
     # Language is a property of the NOTE, not of each chunk. Detecting per chunk
@@ -3703,7 +3708,7 @@ defmodule Engram.Indexing do
     # an id for a key whose pass then fails is harmless). Every point of the
     # note carries the same immutable identity payload.
     rebuild? = Map.get(plan, :rebuild?, false)
-    flat = note.content |> FlatFields.extract(filter_key) |> with_key_ids(note, dek)
+    flat = frontmatter |> FlatFields.from_frontmatter(filter_key) |> with_key_ids(note, dek)
     note_payload = identity_payload(note)
     ctx = {note, note_payload}
     point_ids = v5_point_ids(note, plan)

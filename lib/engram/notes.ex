@@ -4052,12 +4052,20 @@ defmodule Engram.Notes do
   # get_notes, the base_hash check and a 409 body all go through it, so a
   # hash a reader is given is a base a write accepts until the note's text
   # moves (`confirm_stale/5` keeps a checkpoint of that text from refusing it).
-  defp current_note(_user, note, []), do: note
-
   # A structural doc (`.canvas`) never projects to `content`.
   defp current_note(user, note, tail) do
-    if CrdtBridge.markdown_path?(note.path), do: rebuilt_note(user, note, tail), else: note
+    if stored_current?(note, tail) or not CrdtBridge.markdown_path?(note.path),
+      do: note,
+      else: rebuilt_note(user, note, tail)
   end
+
+  # THE empty-tail rule, shared by `current_note/3` and `current_text/3`: with
+  # no tail, a markdown row's stored body IS its doc's text. Every write that
+  # changes the doc's text writes the body projected from it in the same
+  # UPDATE (checkpoint, upsert); the one exception, the `BackfillCrdtState`
+  # seed, writes the state only, and its body differs from the projection
+  # only in line endings and frontmatter rendering.
+  defp stored_current?(note, tail), do: tail == [] and CrdtBridge.markdown_path?(note.path)
 
   defp rebuilt_note(user, note, tail) do
     :telemetry.execute([:engram, :notes, :read_rebuild], %{count: 1}, %{})
@@ -4551,6 +4559,33 @@ defmodule Engram.Notes do
   @spec authoritative_content(map(), Note.t(), [map()]) :: {:ok, String.t()} | {:error, term()}
   def authoritative_content(user, %Note{} = note, tail) when is_list(tail) do
     with {:ok, text, _doc} <- authority(user, note, tail), do: {:ok, text}
+  end
+
+  @doc """
+  The current text of a RAW (undecrypted) row whose tail rows were read in the
+  same statement (`fetch_note_with_tail_for_worker/2`), decrypting ONE copy of
+  it: the same text `authoritative_content/3` gives.
+
+    * A tail and a CRDT state: the doc (state + tail). The body is not
+      decrypted.
+    * An empty tail on a markdown row: the stored body (`stored_current?/2`,
+      the rule `get_note/3` serves). The state is not decrypted or rebuilt.
+    * Anything else (no state, a canvas): decrypted, then resolved through
+      the authority. A row with no state always has its body decrypted, so
+      its text is never read as "".
+  """
+  @spec current_text(map(), Note.t(), [map()]) :: {:ok, String.t()} | {:error, term()}
+  def current_text(user, %Note{crdt_state_ciphertext: state} = note, [_ | _] = tail)
+      when is_binary(state) do
+    with {:ok, text, _doc} <- authority(user, note, tail), do: {:ok, text}
+  end
+
+  def current_text(user, %Note{} = note, tail) when is_list(tail) do
+    with {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user) do
+      if stored_current?(decrypted, tail),
+        do: {:ok, decrypted.content || ""},
+        else: authoritative_content(user, decrypted, tail)
+    end
   end
 
   @doc """
