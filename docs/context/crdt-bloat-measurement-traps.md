@@ -51,6 +51,50 @@ Alert on the save rate for that, and on the byte-floored count for real bloat.
 The save-loop rule is engram-infra#1578; it merges only after #2175 (merged to
 main 2026-10-24) reaches prod, or it alerts on a gauge that does not exist yet.
 
+## Trap 0b: an unchanged re-push still bumped `version` (2026-11-18/19)
+
+A REST re-push of the exact same body (`POST /api/notes`) must be a no-op. It
+was not, whenever the server had normalised the stored content, because the
+"unchanged" check compared the pushed body's hash with the stored hash and the
+two never matched:
+
+- **Line endings.** The server stores LF; the plugin hashed (and sent) the raw
+  CRLF body. Every Windows note missed.
+- **Frontmatter re-rendering.** The CRDT doc keeps frontmatter as keys and
+  re-renders it (list style, spacing), so a body that does not round-trip
+  byte-identical never matched either.
+
+So every replay was a full rewrite and a `version` bump. Plugin 1.39.3 had an
+offline-queue key mismatch that replayed the same POSTs forever (fixed in
+plugin 1.40.0, Engram-obsidian PR 712). Result: ~900 version bumps/hour on 12
+notes, which tripped the `CrdtBloatSweep` save-loop warning
+(`engram-prod-crdt-save-loop`). The save-loop alert was right: it was a real
+loop, just one that cost writes, not bytes.
+
+Fix (Engram PR 2672, release 0.90.0), in `lib/engram/notes.ex`:
+`pushed_hashes/4` names the push by both its raw and LF hashes;
+`same_as_stored?/5` checks those first and, only on a miss for a markdown body
+with frontmatter, runs `rendered_hash/3` (one fresh-doc parse of this note,
+only on the path that would otherwise do the full rewrite). A match replies
+with the stored hash, so the client's base converges and it stops re-pushing.
+
+**Still open:** the 60 s delete-wins guard (#970,
+`recent_same_path_tombstone?/3`) does not check the re-rendered hash, so a
+re-rendered body pushed inside that window is not recognised as unchanged.
+
+**Rule for any server-side normalisation:** if the server stores a different
+byte form than the client sent, every "is this unchanged?" compare must accept
+both forms, or an idempotent client becomes a save loop.
+
+### Finding the client behind the loop
+
+Tempo and PostHog `client.address` is truncated to /24 (IPv6 /48) by
+`lib/engram/observability/span_scrubber.ex`. A Cloudflare block on that
+truncated address matched nothing. Get the real client IP from Cloudflare
+GraphQL analytics (`httpRequestsAdaptiveGroups` filtered on host + path +
+time window; recipe in the workspace `docs/context/cloudflare-early-hints-504-noise.md`)
+and block that.
+
 ## What This Is
 
 `crdt_state_ciphertext` is the largest column in the database and it grows with
