@@ -6,19 +6,19 @@ _Last verified: 2026-11-24_
 Measured snapshot of prod (`engram-saas-prod-v3`, collection `engram_notes`, 1 shard, 23 segments, ~1.59M points). Numbers age; the method does not.
 
 ## What This Is
-Where the 10.94 GB of Qdrant disk goes, why `/telemetry` cannot explain it, what Postgres holds for comparison, and a projection table for sizing chunker or embedding changes.
+Where Qdrant disk goes (10.94 GB of file lengths, 9.82 GB actually used), why `/telemetry` cannot explain it, what Postgres holds for comparison, and a projection table for sizing chunker or embedding changes.
 
 ## How to measure (the one call that adds up)
 
-`GET /collections/engram_notes/memory` returns per-component `disk_bytes` that **sum to the disk gauge exactly** (10,936,428,339 B vs `engram_prom_ex_qdrant_disk_bytes` 10,936,420,956 B).
+`GET /collections/engram_notes/memory` returns per-component `disk_bytes` that **sum to the disk gauge exactly** (10,936,428,339 B vs `engram_prom_ex_qdrant_disk_bytes` 10,936,420,956 B). Use it for the split between components.
+
+Those are **file lengths, not allocated blocks**: Qdrant 1.19.2 `memory_stats.rs` reports `fs_err::metadata(path)?.len()`. Real usage is the volume fill from `/sys_metrics` (`kubelet_volume_stats_used_bytes`): **9.82 GB used of 16.7 GB, including WAL, about 6.15 KB per point**. Used / file-length = 0.897, so scale any `/memory` figure by ~0.9 for real disk.
 
 Do NOT size from `GET /telemetry?details_level=3`. Its `vectors_size_bytes` (4.81 GB) + `payloads_size_bytes` (0.64 GB) leave ~5.5 GB "missing" because telemetry omits: the sparse inverted index, on-disk payload overhead, payload indexes, the quantized copy, and the id tracker.
 
-Volume fill comes from `/sys_metrics` (`kubelet_volume_stats_used_bytes`): 9.81 of 16.7 GB used (includes WAL). `/memory` reports apparent file bytes, which exceed filesystem-used; likely sparse or preallocated files (not verified).
-
 Grafana: `engram_prom_ex_qdrant_*` gauges are scraped once per ECS task. Use `max by`, never `sum` (see `grafana-qdrant-metrics-per-task.md`).
 
-## Breakdown of 10.94 GB
+## Breakdown of 10.94 GB (file lengths; shares are shares of file length)
 
 | Component | Bytes | Share | Notes |
 |---|---|---|---|
@@ -55,20 +55,34 @@ DB is 12.35 GB (`pg_database_size`), so "Qdrant is almost as big as Postgres" is
 
 ## Projection table (derived arithmetic, not measured)
 
-Each row changes one thing against today's 10.94 GB, except the last.
+File-length GB against today's 10.94. Single-lever rows change one thing each.
 
-| Change | Est. disk |
+| Change | Est. file length |
 |---|---|
-| Dense 512 dims (`output_dimension`) | ~9.1 GB |
-| Dense int8 (`output_dtype`) | ~9.2 GB |
+| Dense 512 dims | ~9.1 GB |
 | Chunks 2x larger | ~7.9 GB |
 | Chunks 4x larger | ~5.8 GB |
 | Drop sparse keyword leg entirely | ~4.4 GB |
 | Vacuum / compact deleted + empty slots | ~10.5 GB |
-| Compaction + strip retired payload keys | ~9.8 GB |
-| Combined (512d int8, 4x chunks, compaction, payload strip) | ~2.0 GB |
+| A: compaction + strip retired payload keys | ~9.8 GB |
+| A+B+C+D (compaction + payload strip, int8, 512d, 4,096 B chunks) | 5.0 to 6.4 GB, depending on how much sparse shrinks with bigger chunks (x0.75 to x1.0, assumed; points x0.547 measured 10-19) |
 
-Takeaway: dense-side tricks (dims, dtype) move little because keyword search is half the disk. Chunk size moves both legs. Dropping sparse is the biggest single lever but costs keyword search or its encryption property.
+**Floor:** with the keyword leg left as is, the floor is ~5.45 GB (3.8x the 1.43 GB of compressed note content). Any projection below that is wrong. An earlier draft listed "combined ~2.0 GB"; it was below the floor and has been removed.
+
+Lever constraints (measured, do not re-litigate without new evidence):
+- **int8 dense is not workable.** Qdrant stores Voyage int8 as uint8 0..255, and binary quantization on top then sets every bit to 1 (measured 2026-10-19). The B step in the combined row is therefore not available as-is.
+- **512d needs no re-embed.** Truncating the stored 1024d vectors to 512 gives cosine 0.9999993 against a fresh 512d embed (measured 2026-10-19).
+- **Only chunk size needs a re-embed** (one full prod re-embed costs about $58).
+- **Sparse uint8 index exists but was rejected.** `SparseCompressedMmapU8` exists, but short posting lists pad to 8 bytes; measured 2026-10-19 at about -101 B per point, not worth it. There is no setting to avoid storing both sparse vectors and the inverted index: `SparseVectorParams` has no storage field in 1.19.2.
+
+Takeaway: dense-side tricks move little because keyword search is half the disk. Chunk size moves both legs but costs a re-embed. Dropping sparse is the biggest single lever but costs keyword search or its encryption property.
+
+## Growth and cost
+
+- v3 cluster went from 308k points (2026-10-26) to 1.596M (2026-11-25). A 612k figure seen in older notes is the old v2 cluster, not v3.
+- Organic growth: +16.4k points/day (7-day slope, ~52 MB/day used) or +26.7k/day (14-day slope, ~110 MB/day).
+- The disk alert fires about 2027-01-15 (14-day slope) to early March 2027 (7-day slope).
+- Cost: mx1 (4 GiB RAM, 16 GiB disk) is $34.08/mo. Disk-only expansion is about $0.445/GiB/mo and **can never be shrunk back**. One full re-embed is about $58.
 
 ## Industry context
 - Qdrant capacity planning guide: memory ~ points x dims x 4 B x 1.5 (float32 plus overhead).
@@ -81,6 +95,7 @@ Takeaway: dense-side tricks (dims, dtype) move little because keyword search is 
 - Summing the Grafana Qdrant gauges across tasks (reads ~3x).
 
 ## References
+- Prior decisions: `reports/2026-10-19-rechunk-once/` in the engram-workspace repo (untracked, local only) and `chunker-v5-rebuild.md` on workspace branch `docs/chunker-v5-findings`. Read these before proposing a chunker, dims, dtype or sparse change.
 - `docs/context/grafana-qdrant-metrics-per-task.md`
 - `docs/context/qdrant-payload-rewrite-churn.md` (why retired payload keys linger)
 - `docs/context/index-version-self-heal.md` (changing chunker / keyword encoding safely)
