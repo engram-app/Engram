@@ -23,6 +23,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Reading `TenancyGuard`'s boot line / re-verifying RLS enforcement on a deploy, or touching the probe (`:savepoint` outermost, sandbox can't test it, `reltuples`, `$1::regclass`) → `docs/context/rls-tenancy-probe-boot-log.md`
 - Widening a column type without rewriting the table (`varchar[]` → `text[]` DOES rewrite; how to measure with relfilenode; when `# squawk-ignore-file` is justified) → `docs/context/migration-column-type-rewrites.md`
 - All env vars by category → `docs/context/environment-variables.md`
+- Flipping a kill switch, the plugin floor or a paused account on SaaS/staging (a PR to the reviewed engram-infra flags file, not an rpc; `{:error, :managed_by_flags}`), flag vs DB precedence, verifying a flip in Loki, the folder marker delete runbook → `docs/context/service-flags.md`
 - Undoing a delete, `delete_op_id`/`restore_deleted`, trash retention (`trash_retention_days`), or writing `deleted_at: nil` on an attachment (the GC revive race, #2195) → `docs/context/safer-delete-trash-ops.md`
 - ALB 5xx with `dropped from queue` on unrelated requests, one tenant's burst starving the web pool, `next_seq!` vault-lock convoy, or proposing pool_size / PgBouncer / RDS Proxy as the fix (also: why staging can't reproduce it) → `docs/context/vault-write-pool-starvation-2026-10-31.md`
 - Rate limiter + `ai_searches_per_day` budget: BEAM-only (Hammer ETS + PubSub), zero Redis; why NOT Mnesia → `docs/context/rate-limiter-architecture.md`

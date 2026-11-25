@@ -22,12 +22,12 @@ writes in that release would leave no period with both copies.
   (`ci/compose.yml`), so the e2e log oracle (`GET /api/logs`) keeps its rows.
   Tests: `logs_persist_policy_test.exs` (describe `client_logs_stop_writes`),
   `runtime_config_test.exs`.
-- Setting it needs `bin/engram rpc` in the running task, i.e. ECS exec, which
-  only the breakglass profile has. So the override is the **emergency and
-  rollback lever** (and what a self-hoster or staging uses), not the planned
-  way to turn the move on:
-  `bin/engram rpc 'Engram.ServiceConfig.override(:client_logs_stop_writes, true, by: "<operator>")'`;
-  `ServiceConfig.clear(:client_logs_stop_writes)` restores the default.
+- On SaaS prod and staging `client_logs_stop_writes` is a reviewed flag:
+  flip it with a PR to engram-infra `main/envs/<env>/service_flags.json`
+  (`docs/context/service-flags.md`); removing the key restores the default.
+  The rpc there returns `{:error, :managed_by_flags}`. Self-host keeps the
+  rpc: `bin/engram rpc 'Engram.ServiceConfig.override(:client_logs_stop_writes, true, by: "<operator>")'`,
+  and `ServiceConfig.clear(:client_logs_stop_writes)` restores the default.
 
 ## Post-release plan
 
