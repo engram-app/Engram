@@ -254,7 +254,7 @@ defmodule Engram.Folders.Rows do
   defp normalize(folder), do: folder |> String.split("/", trim: true) |> Enum.join("/")
 
   # Both entry points below are `ensure/4` for a set: one code path, set-based.
-  defp ensure_set(user, vault_id, targets) do
+  defp ensure_set(user, vault_id, targets, stamp? \\ true) do
     targets = Map.delete(targets, "")
 
     if map_size(targets) == 0 do
@@ -267,7 +267,10 @@ defmodule Engram.Folders.Rows do
         # A marker's row, stamped like FolderMarkerDelete stamped every
         # marker-era row: since release J writes no folder path hash, release
         # I's reconcile (a rollback target) would clear it unstamped.
-        _ = stamp_unseq(for {folder, marker} <- targets, marker, id <- [ids[folder]], id, do: id)
+        if stamp?,
+          do:
+            stamp_unseq(for {folder, marker} <- targets, marker, id <- [ids[folder]], id, do: id)
+
         {:ok, ids}
       end
     end
@@ -304,7 +307,11 @@ defmodule Engram.Folders.Rows do
   `ensure_all/3` is.
   """
   @spec ensure_markers(map(), Ecto.UUID.t(), [{String.t(), Ecto.UUID.t()}]) :: :ok
-  def ensure_markers(user, vault_id, markers) do
+  def ensure_markers(user, vault_id, markers), do: ensure_markers(user, vault_id, markers, true)
+
+  # `stamp?` false: the caller stamps the rows itself (`make_explicit/3`, with
+  # the vault seq), so they are written once.
+  defp ensure_markers(user, vault_id, markers, stamp?) do
     targets =
       markers
       |> Enum.uniq()
@@ -312,7 +319,7 @@ defmodule Engram.Folders.Rows do
       |> Enum.reverse()
       |> Map.new(fn {folder, marker_id} -> {normalize(folder), marker_id} end)
 
-    {:ok, _} = ensure_set(user, vault_id, targets)
+    {:ok, _} = ensure_set(user, vault_id, targets, stamp?)
     :ok
   end
 
@@ -1798,6 +1805,15 @@ defmodule Engram.Folders.Rows do
             deleted_at: nil,
             delete_op_id: nil,
             parent_id: field(v, :parent_id),
+            # Stamped in the same write (see `stamp_unseq/1`): the marker leg
+            # of a restore runs later and may fail.
+            explicit_seq:
+              fragment(
+                "CASE WHEN ? THEN COALESCE(?, 0) ELSE ? END",
+                f.explicit,
+                f.explicit_seq,
+                f.explicit_seq
+              ),
             updated_at: ^now()
           ]
         ]
@@ -1883,7 +1899,7 @@ defmodule Engram.Folders.Rows do
         seq = Engram.Vaults.next_seq!(vault_id)
         # Again under the lock: a concurrent create may have done some.
         todo = not_explicit(user, vault_id, folders)
-        :ok = ensure_markers(user, vault_id, Enum.map(todo, &{&1, mint_id()}))
+        :ok = ensure_markers(user, vault_id, Enum.map(todo, &{&1, mint_id()}), false)
         ids = ids_by_path(user, vault_id, todo)
 
         from(f in Folder, where: f.vault_id == ^vault_id and f.id in ^Map.values(ids))

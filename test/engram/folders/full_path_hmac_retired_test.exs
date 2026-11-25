@@ -214,6 +214,28 @@ defmodule Engram.Folders.FullPathHmacRetiredTest do
     assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
   end
 
+  # Delta review L3: a restore with markers written revives the row in one
+  # leg and re-creates its marker (which stamps) in another; the revive
+  # itself stamps, so a failed marker leg leaves no unstamped row.
+  test "a revived explicit row is stamped by the revive itself", %{user: user, vault: vault} do
+    {:ok, %{folders: [%{id: id}]}} = Notes.create_folder_markers(user, vault, ["Rev"])
+    op = Ecto.UUID.generate()
+    assert {:ok, _} = Folders.delete(user, vault, "Rev", recursive: true, op_id: op)
+
+    # A trashed pre-J row that kept its flag (a rows-leg-only delete), and no
+    # marker left for the restore's marker leg to bring back.
+    Repo.query!("UPDATE folders SET explicit = true, explicit_seq = NULL WHERE id = $1", [
+      Ecto.UUID.dump!(id)
+    ])
+
+    Repo.query!("DELETE FROM notes WHERE vault_id = $1 AND kind = 'folder'", [
+      Ecto.UUID.dump!(vault.id)
+    ])
+
+    assert {:ok, _} = Folders.restore_op(user, vault, op)
+    assert explicit_seqs(user.id) == [0]
+  end
+
   # Review of #2707, MEDIUM 1: a self-host keeps its markers
   # (`folder_marker_delete` ships off) and their explicit rows carry no
   # `explicit_seq`. Under J a root-only rename leaves the descendants' hashes

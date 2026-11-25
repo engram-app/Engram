@@ -54,6 +54,33 @@ defmodule Engram.Folders.MarkerStopTest do
     assert seq(u, v) == now
   end
 
+  # Delta review of #2707, L2: a create stamps each new row once (its seq),
+  # not 0 first and the seq after.
+  test "a create writes explicit_seq once", %{user: u, vault: v} do
+    me = self()
+    id = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      id,
+      [:engram, :repo, :query],
+      fn _, _, meta, _ ->
+        if self() == me and meta[:source] == "folders" and
+             meta[:query] =~ ~r/^UPDATE .*explicit_seq/s,
+           do: send(me, {:stamp, meta[:query]})
+      end,
+      nil
+    )
+
+    try do
+      {:ok, _} = Folders.create_markers(u, v, ["Once/A", "Once/B"])
+    after
+      :telemetry.detach(id)
+    end
+
+    assert_received {:stamp, _}
+    refute_received {:stamp, _}
+  end
+
   test "the single create returns the row's id", %{user: u, vault: v} do
     assert {:ok, %{id: id, folder: "S"}} = Notes.create_folder_marker(u, v, "S")
     assert FolderRows.tree(u)["S"].id == id
