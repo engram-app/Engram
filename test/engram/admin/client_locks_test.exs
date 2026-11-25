@@ -398,4 +398,27 @@ defmodule Engram.Admin.ClientLocksTest do
       assert ctx.conn |> get_folders("1.50.0") |> json_response(403)
     end
   end
+
+  describe "paused_accounts flag" do
+    import Engram.ServiceFlagsHelpers
+
+    test "an unexpired entry refuses HTTP with account_paused; expired admits", ctx do
+      path = start_flags(%{"paused_accounts" => [paused(ctx.user.id, 3600)]})
+      body = ctx.conn |> get(~p"/api/folders") |> json_response(403)
+      assert body["error"] == "account_paused"
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        write_flags(path, %{"paused_accounts" => [paused(ctx.user.id, -5)]})
+      end)
+
+      assert ctx.conn |> get(~p"/api/folders") |> json_response(200)
+    end
+
+    test "the +61 s job still drops a flag-paused user's sockets", ctx do
+      start_flags(%{"paused_accounts" => [paused(ctx.user.id, 3600)]})
+      EngramWeb.Endpoint.subscribe("user_socket:#{ctx.user.id}")
+      assert :ok = perform_job(Engram.Workers.QuarantineDisconnect, %{user_id: ctx.user.id})
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+    end
+  end
 end
