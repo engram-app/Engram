@@ -7,8 +7,9 @@ defmodule Engram.ClientGate do
 
   Two refusals, one body shape (`reason` plus the recovery fields):
 
-    * `account_paused` — the user is quarantined (an `account_paused` row in
-      `user_limit_overrides`, see `Engram.Admin.ClientLocks`). HTTP 403.
+    * `account_paused`: the user is quarantined, by an `account_paused` row in
+      `user_limit_overrides` (`Engram.Admin.ClientLocks`) OR an unexpired
+      `paused_accounts` flag entry (`Engram.ServiceConfig.Flags`). HTTP 403.
     * `plugin_upgrade_required` — below `Engram.PluginVersion.floor/0`
       (compile-time floor, raised by an optional runtime lock). HTTP 426.
 
@@ -25,6 +26,7 @@ defmodule Engram.ClientGate do
   alias Engram.Billing
   alias Engram.Billing.LimitKeys
   alias Engram.PluginVersion
+  alias Engram.ServiceConfig.Flags
 
   @type refusal :: %{required(:reason) => String.t(), optional(atom()) => term()}
 
@@ -39,9 +41,10 @@ defmodule Engram.ClientGate do
   # is narrower than any spec worth writing (dialyzer :underspecs), the same
   # reason `Overrides.list/0` carries none.
   def paused(user) do
-    if Billing.control_override(user, LimitKeys.account_paused()) == true,
-      do: {:error, %{reason: "account_paused"}},
-      else: :ok
+    if Flags.paused?(user.id) or
+         Billing.control_override(user, LimitKeys.account_paused()) == true,
+       do: {:error, %{reason: "account_paused"}},
+       else: :ok
   end
 
   @spec plugin_version(term(), boolean()) :: :ok | {:error, refusal()}

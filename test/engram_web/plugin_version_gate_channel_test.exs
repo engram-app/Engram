@@ -253,4 +253,21 @@ defmodule EngramWeb.PluginVersionGateChannelTest do
       assert {:ok, _, _} = join_crdt(ctx.user, ctx.vault.id, "1.99.0")
     end
   end
+
+  describe "paused_accounts flag on join" do
+    import Engram.ServiceFlagsHelpers
+
+    test "a flag-paused user is refused at join; an expired entry admits", ctx do
+      path = start_flags(%{"paused_accounts" => [paused(ctx.user.id, 3600)]})
+
+      assert {:error, %{reason: "account_paused"}} =
+               join_crdt(ctx.user, ctx.vault.id, "1.99.0")
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        write_flags(path, %{"paused_accounts" => [paused(ctx.user.id, -5)]})
+      end)
+
+      assert {:ok, _, _} = join_crdt(ctx.user, ctx.vault.id, "1.99.0")
+    end
+  end
 end

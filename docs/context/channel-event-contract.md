@@ -33,7 +33,8 @@ channel never crashes on unknown frames, same posture as #862's stub).
 
 `folder_op {op: "move"|"create", op_id, folder_id, parent_id, name}` on
 `crdt:` (#2523 S4) exists only while the `folder_ops` runtime switch is on
-(`ServiceConfig.override(:folder_ops, true)`, default off); the join replies
+(a reviewed flag on SaaS and staging, `docs/context/service-flags.md`;
+`ServiceConfig.override(:folder_ops, true)` on self-host; default off); the join replies
 advertise it as `features.folder_ops`. Off, it gets the catch-all `bad_frame`
 reply like any unknown frame. Both ops ack `{folder_id, seq}`; refusals are
 `conflict`, `cycle`, `not_found`, `invalid_name` (plus `bad_frame`,

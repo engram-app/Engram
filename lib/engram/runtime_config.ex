@@ -96,6 +96,43 @@ defmodule Engram.RuntimeConfig do
   defp blank?(v), do: String.trim(v) == ""
 
   @doc """
+  The flags source (`Engram.ServiceConfig.Flags`, `docs/context/service-flags.md`):
+  prod sets the AppConfig ids (`SERVICE_FLAGS_APPCONFIG_*` plus `AWS_REGION`),
+  staging `SERVICE_FLAGS_FILE`, self-host neither (nil: no reader, DB overrides
+  for every key). With the application id set, a missing id or region raises:
+  booting without the flags would quietly put DB rows in charge.
+  """
+  @spec service_flags((String.t() -> String.t() | nil)) ::
+          {:appconfig, %{atom() => String.t()}} | {:file, String.t()} | nil
+  def service_flags(getenv) do
+    app = getenv.("SERVICE_FLAGS_APPCONFIG_APPLICATION")
+    file = getenv.("SERVICE_FLAGS_FILE")
+
+    cond do
+      not blank?(app) ->
+        {:appconfig,
+         %{
+           application: app,
+           environment: required!(getenv, "SERVICE_FLAGS_APPCONFIG_ENVIRONMENT"),
+           profile: required!(getenv, "SERVICE_FLAGS_APPCONFIG_PROFILE"),
+           region: required!(getenv, "AWS_REGION")
+         }}
+
+      not blank?(file) ->
+        {:file, file}
+
+      true ->
+        nil
+    end
+  end
+
+  defp required!(getenv, var) do
+    value = getenv.(var)
+    if blank?(value), do: raise("SERVICE_FLAGS_APPCONFIG_APPLICATION is set; #{var} is required")
+    value
+  end
+
+  @doc """
   `ENVELOPE_COMPRESSION` -> `{:ok, boolean}` or `:unset` (#1872).
 
   The emergency kill switch for compress-then-encrypt: `false`/`0` returns new

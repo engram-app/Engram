@@ -71,6 +71,18 @@ with literal suffixes. The one dynamic case (`release/preflight.ex`) derives
 filenames from `File.ls!` filtered by an anchored `^\d{14}_.+\.exs$` regex.
 `spa_controller.ex` is HTTP-reachable but `index/2` discards params entirely.
 
+### `Traversal.FileModule` in `service_config/flags/file_source.ex` x1
+
+`Engram.ServiceConfig.Flags.FileSource.read/1`, the staging flags file. The
+path comes only from the operator env `SERVICE_FLAGS_FILE`, set by Terraform
+(engram-infra `engram-saas.tf`), read once into app config in `runtime.exs`;
+never from a request. The file is opened read-only and at most 256 KB + 1
+bytes are read (`max_bytes/0`). Kept in its own small module so the pin does
+not move with `flags.ex`. Pinned 2026-11-25 as the ONLY new line: a fresh
+`--mark-skip-all` also re-pins `bookkeeping/drain.ex` and
+`webhooks/idempotency.ex`, which are already covered by inline
+`# sobelow_skip ["SQL.Query"]` comments, so those two were left out.
+
 ### `SQL.Query` x3
 
 `attachments/bulk_update.ex`, `notes/bulk_rename.ex`.

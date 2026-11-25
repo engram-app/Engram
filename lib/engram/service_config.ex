@@ -38,8 +38,15 @@ defmodule Engram.ServiceConfig do
   `list/0`. An override beats env; with none set the env value is returned
   unchanged. See `Engram.ServiceConfig.Overrides` for the cache, the
   invalidation and the DB-outage fallback.
+
+  A short allowlist of those keys is owned by the reviewed flags file
+  (`Engram.ServiceConfig.Flags`): a flag beats a DB override, and where a
+  flags source is configured `override/3` and `clear/2` refuse those keys
+  with `{:error, :managed_by_flags}`. `effective/0` shows every key's value
+  and where it came from.
   """
 
+  alias Engram.ServiceConfig.Flags
   alias Engram.ServiceConfig.Overrides
 
   @override_keys Overrides.keys()
@@ -49,16 +56,39 @@ defmodule Engram.ServiceConfig do
   operator for the log. Release-safe: `bin/engram rpc` can call it.
   """
   @spec override(atom() | String.t(), term(), keyword()) ::
-          :ok | {:error, {:unknown_key, term()} | {:invalid_value, term(), term()}}
+          :ok
+          | {:error,
+             {:unknown_key, term()} | {:invalid_value, atom(), term()} | :managed_by_flags}
   def override(key, value, opts \\ []), do: Overrides.put(key, value, opts)
 
   @doc "Removes a runtime override; the key reads its env value again."
-  @spec clear(atom() | String.t(), keyword()) :: :ok | {:error, {:unknown_key, term()}}
+  @spec clear(atom() | String.t(), keyword()) ::
+          :ok | {:error, {:unknown_key, term()} | :managed_by_flags}
   def clear(key, opts \\ []), do: Overrides.delete(key, opts)
 
   @doc "Every runtime override set now, read from the DB (not the cache)."
   # No @spec, same reason as `Overrides.list/0` (dialyzer :underspecs).
   def list, do: Overrides.list()
+
+  @doc """
+  Every runtime-overridable key's value in force on this node and its
+  source: `:flags`, `:db` (read from the table, not the cache) or `:env`
+  (the env value; nil when unset, the caller's default then applies).
+  """
+  # No @spec, same reason as `list/0`.
+  def effective do
+    flags = Flags.current()
+    db = Map.new(Overrides.list(), &{&1.key, &1.value})
+
+    Map.new(Overrides.keys(), fn key ->
+      cond do
+        Map.has_key?(flags, key) -> {key, %{value: flags[key], source: :flags}}
+        Overrides.managed?(key) -> {key, %{value: env(key), source: :env}}
+        Map.has_key?(db, key) -> {key, %{value: db[key], source: :db}}
+        true -> {key, %{value: env(key), source: :env}}
+      end
+    end)
+  end
 
   # The allowlisted keys check the override first; every other key never
   # touches it. `:service_overrides_enabled` is off only in the test suite.
