@@ -42,6 +42,15 @@ defmodule Engram.ServiceConfig.Overrides do
   against its type, log key, old and new value and the operator, then evict
   cluster-wide. Values are booleans, short enums and bounded integers, so nothing logged is a
   secret.
+
+  ## Flags
+
+  The keys in `flag_keys/0` are also read from the reviewed flags file
+  (`Engram.ServiceConfig.Flags`, `docs/context/service-flags.md`). `fetch/1`
+  is the one place precedence lives: flag, then DB row, then env. Where a
+  flags source is configured (prod, staging), `put/3` and `delete/2` refuse
+  those keys with `{:error, :managed_by_flags}`; self-host keeps the DB path
+  for every key. `paused_accounts` is flags-only everywhere.
   """
 
   import Ecto.Query
@@ -49,6 +58,7 @@ defmodule Engram.ServiceConfig.Overrides do
   alias Engram.Cache
   alias Engram.Logger.Metadata
   alias Engram.Repo
+  alias Engram.ServiceConfig.Flags
 
   require Logger
 
@@ -131,8 +141,17 @@ defmodule Engram.ServiceConfig.Overrides do
     # SaaS only (`Engram.Logs`): true, `POST /api/logs` writes no `client_logs`
     # rows; lines still ship to Loki. Default off. CI and self-host always
     # write, whatever this says.
-    client_logs_stop_writes: :boolean
+    client_logs_stop_writes: :boolean,
+    # Flags-only (`Engram.ServiceConfig.Flags.paused?/1`, `Engram.ClientGate`):
+    # `[%{"id" => uuid, "until" => UTC ISO 8601}]`. Never a DB row.
+    paused_accounts: :paused_accounts
   }
+
+  # The keys the reviewed flags file owns: exactly the `properties` of
+  # engram-infra `service_flags/schema.json`. Change both together.
+  @flag_keys ~w(folder_marker_delete folder_marker_delete_max_fixed folder_ops
+                client_logs_stop_writes plugin_floor_enabled plugin_floor paused_accounts)a
+  @flags_only [:paused_accounts]
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})
 
@@ -142,13 +161,32 @@ defmodule Engram.ServiceConfig.Overrides do
   # No @spec: dialyzer's :underspecs flags `[atom()]` against the literal list.
   def keys, do: Map.keys(@types)
 
-  @doc "`{:ok, value}` when `key` is overridden, else `:error`."
+  @doc "The keys the reviewed flags file owns (`Engram.ServiceConfig.Flags`)."
+  def flag_keys, do: @flag_keys
+
+  @doc "`{:ok, key}` when the flags-file `name` is a flag key, else `:error`."
+  # No @spec: dialyzer's :underspecs flags `atom()` against the literal keys.
+  def flag_key(name) do
+    case resolve(name) do
+      {:ok, key} when key in @flag_keys -> {:ok, key}
+      _ -> :error
+    end
+  end
+
+  @doc """
+  `{:ok, value}` when `key` is set by a flag or a DB override (a flag wins),
+  else `:error` (the caller's env/default applies).
+  """
   @spec fetch(atom()) :: {:ok, term()} | :error
-  def fetch(key), do: Map.fetch(Cache.fetch(:service_overrides, :all, &load/0), key)
+  def fetch(key) do
+    with :error <- Flags.fetch(key),
+         do: Map.fetch(Cache.fetch(:service_overrides, :all, &load/0), key)
+  end
 
   @spec put(atom() | String.t(), term(), keyword()) :: :ok | {:error, term()}
   def put(key, value, opts \\ []) do
     with {:ok, key} <- resolve(key),
+         :ok <- writable(key),
          :ok <- validate(key, value) do
       change(key, {:set, value}, opts)
     end
@@ -156,7 +194,15 @@ defmodule Engram.ServiceConfig.Overrides do
 
   @spec delete(atom() | String.t(), keyword()) :: :ok | {:error, term()}
   def delete(key, opts \\ []) do
-    with {:ok, key} <- resolve(key), do: change(key, :clear, opts)
+    with {:ok, key} <- resolve(key), :ok <- writable(key), do: change(key, :clear, opts)
+  end
+
+  # A DB write to a key the flags file owns would be shadowed by it (or, on a
+  # failed flags read, surface as a value nobody reviewed).
+  defp writable(key) do
+    if key in @flags_only or (key in @flag_keys and Flags.configured?()),
+      do: {:error, :managed_by_flags},
+      else: :ok
   end
 
   # No @spec: the inferred row map is narrower than any spec worth writing.
@@ -358,13 +404,19 @@ defmodule Engram.ServiceConfig.Overrides do
 
   defp resolve(key), do: {:error, {:unknown_key, key}}
 
-  defp validate(key, value) do
+  @doc """
+  Checks `value` against `key`'s type. The one validator for DB writes, DB
+  reads and the flags file (`Engram.ServiceConfig.Flags`).
+  """
+  @spec validate(atom(), term()) :: :ok | {:error, {:invalid_value, atom(), term()}}
+  def validate(key, value) do
     ok? =
       case Map.fetch!(@types, key) do
         :boolean -> is_boolean(value)
         {:enum, allowed} -> value in allowed
         {:integer, range} -> is_integer(value) and value in range
         :plugin_lock -> match?({:ok, _}, Engram.PluginVersion.parse_lock(value))
+        :paused_accounts -> match?({:ok, _}, Flags.parse_paused(value))
       end
 
     if ok?, do: :ok, else: {:error, {:invalid_value, key, value}}

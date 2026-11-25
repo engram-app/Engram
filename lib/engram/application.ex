@@ -423,6 +423,10 @@ defmodule Engram.Application do
       # Pyroscope continuous CPU profiler. Returns nil when GRAFANA_PYROSCOPE_URL
       # is unset (dev, test, self-host), and Enum.reject below filters it out.
       pyroscope_child(),
+      # The reviewed flags file (Engram.ServiceConfig.Flags); only where a
+      # source is configured. Its first load is async: until it lands, DB
+      # overrides and env apply.
+      service_flags_child(),
       EngramWeb.Endpoint
     ]
     |> Enum.reject(&is_nil/1)
@@ -447,6 +451,11 @@ defmodule Engram.Application do
              Engram.DataMigrations.IndexVersions.name()
            )
          end}
+  end
+
+  defp service_flags_child do
+    if source = Application.get_env(:engram, :service_flags),
+      do: {Engram.ServiceConfig.Flags, source}
   end
 
   defp clerk_strategy_child do

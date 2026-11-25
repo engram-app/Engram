@@ -5,6 +5,39 @@ defmodule Engram.RuntimeConfigTest do
 
   defp getenv(map), do: fn key -> Map.get(map, key) end
 
+  describe "service_flags/1" do
+    @appconfig %{
+      "SERVICE_FLAGS_APPCONFIG_APPLICATION" => "a1",
+      "SERVICE_FLAGS_APPCONFIG_ENVIRONMENT" => "e1",
+      "SERVICE_FLAGS_APPCONFIG_PROFILE" => "p1",
+      "AWS_REGION" => "us-east-1"
+    }
+
+    test "prod: the AppConfig ids and region" do
+      assert RuntimeConfig.service_flags(getenv(@appconfig)) ==
+               {:appconfig,
+                %{application: "a1", environment: "e1", profile: "p1", region: "us-east-1"}}
+    end
+
+    test "prod with a missing id or region refuses to boot" do
+      for var <- Map.keys(@appconfig) -- ["SERVICE_FLAGS_APPCONFIG_APPLICATION"] do
+        assert_raise RuntimeError, ~r/#{var}/, fn ->
+          RuntimeConfig.service_flags(getenv(Map.put(@appconfig, var, " ")))
+        end
+      end
+    end
+
+    test "staging: the file" do
+      assert RuntimeConfig.service_flags(getenv(%{"SERVICE_FLAGS_FILE" => "/etc/f.json"})) ==
+               {:file, "/etc/f.json"}
+    end
+
+    test "self-host: no source (blank counts as unset)" do
+      assert RuntimeConfig.service_flags(getenv(%{})) == nil
+      assert RuntimeConfig.service_flags(getenv(%{"SERVICE_FLAGS_FILE" => ""})) == nil
+    end
+  end
+
   describe "billing_enabled/2" do
     # SaaS prod sets ENGRAM_SAAS_ONLY=true (engram-infra prod ecs.tf). A missing
     # or blank PADDLE_API_KEY there used to derive billing_enabled=false and

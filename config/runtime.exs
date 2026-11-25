@@ -126,6 +126,10 @@ config :engram, :plan_doc_embed_models, plan_models.("DOC_EMBED_MODEL")
 config :engram, :plan_query_embed_models, plan_models.("QUERY_EMBED_MODEL")
 
 if config_env() != :test do
+  # Reviewed flags source (docs/context/service-flags.md): AppConfig in prod,
+  # a file on staging, nil on self-host. The test env has none.
+  config :engram, :service_flags, Engram.RuntimeConfig.service_flags(&System.get_env/1)
+
   # Storage backend. Default "s3" is the SaaS/prod path (AWS S3) and the
   # standard self-host path (MinIO). "database" is a self-host-only convenience
   # (#297) that stores attachment bytes in Postgres `bytea` so a minified stack

@@ -1,7 +1,11 @@
 defmodule Engram.Admin.ClientLocks do
   @moduledoc """
   Operator commands to lock down a bad plugin version or quarantine one user,
-  and to REVERSE both. Callable from a release shell:
+  and to REVERSE both. Where a flags source is configured (SaaS prod and
+  staging) the floor is NOT set here: `plugin_floor` and `paused_accounts`
+  are flipped by a PR to the reviewed flags file
+  (`docs/context/service-flags.md`), and the floor commands return
+  `{:error, :managed_by_flags}`. Self-host, from a release shell:
 
       bin/engram rpc 'Engram.Admin.ClientLocks.lock_plugin_version("1.41.0", "1.41.0", 86_400, "1.40.x floods /api/logs", by: "todd")'
       bin/engram rpc 'Engram.Admin.ClientLocks.lift_plugin_lock(by: "todd")'
@@ -102,10 +106,13 @@ defmodule Engram.Admin.ClientLocks do
   @spec lift_plugin_lock(keyword()) :: :ok | {:error, term()}
   def lift_plugin_lock(opts \\ []) do
     previous = PluginVersion.lock_state()
-    :ok = ServiceConfig.clear(:plugin_floor, by: opts[:by])
-    audit("lift_plugin_lock", was_set: previous.set?, min: previous[:min], by: opts[:by])
-    # Drop the clients that were refused so they rejoin and are admitted now.
-    if previous[:min], do: recheck(previous.min), else: :ok
+
+    # `{:error, :managed_by_flags}` where the flags file owns the floor.
+    with :ok <- ServiceConfig.clear(:plugin_floor, by: opts[:by]) do
+      audit("lift_plugin_lock", was_set: previous.set?, min: previous[:min], by: opts[:by])
+      # Drop the clients that were refused so they rejoin and are admitted now.
+      if previous[:min], do: recheck(previous.min), else: :ok
+    end
   end
 
   @doc """
@@ -275,7 +282,13 @@ defmodule Engram.Admin.ClientLocks do
     e -> {:error, {:manifest_unavailable, Metadata.safe_reason(e)}}
   end
 
-  defp recheck(min) do
+  @doc """
+  Asks every `user:` channel to drop its socket if the client is below `min`,
+  so it rejoins against the floor now in force. Sent on every floor change:
+  these commands and a `plugin_floor` flag change (`Engram.ServiceConfig.Flags`).
+  """
+  @spec recheck(String.t()) :: :ok | {:error, term()}
+  def recheck(min) do
     Phoenix.PubSub.broadcast(Engram.PubSub, @topic, {:client_gate_recheck, min})
   end
 
