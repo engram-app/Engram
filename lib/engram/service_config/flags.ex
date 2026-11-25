@@ -49,6 +49,7 @@ defmodule Engram.ServiceConfig.Flags do
   alias Engram.Crypto.HMAC
   alias Engram.Logger.Metadata
   alias Engram.PluginVersion
+  alias Engram.ServiceConfig.Flags.FileSource
   alias Engram.ServiceConfig.Overrides
 
   require Logger
@@ -57,8 +58,7 @@ defmodule Engram.ServiceConfig.Flags do
   @paused_key {__MODULE__, :paused}
   @poll_ms 60_000
   @max_paused 1000
-  # Bytes; the reviewed file is a few KB.
-  @max_body 256 * 1024
+  @max_body FileSource.max_bytes()
   # Hashed ids named in one change line; the counts carry the rest.
   @max_listed 20
   @uuid ~r/\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z/
@@ -392,10 +392,8 @@ defmodule Engram.ServiceConfig.Flags do
 
   # The file's version is its mtime (unix seconds).
   defp read(%{source: {:file, path}} = state) do
-    with {:ok, %{mtime: mtime}} <- File.stat(path, time: :posix),
-         {:ok, body} <- File.read(path) do
-      {:ok, body, mtime, state}
-    else
+    case FileSource.read(path) do
+      {:ok, body, mtime} -> {:ok, body, mtime, state}
       {:error, reason} -> {:error, inspect(reason), state}
     end
   end
