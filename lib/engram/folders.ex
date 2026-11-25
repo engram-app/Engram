@@ -243,11 +243,23 @@ defmodule Engram.Folders do
         names = Enum.map(created, & &1.name)
         payload = %{op: "create", folders: names, markers: created}
         payload = if match?([_], names), do: Map.put(payload, :folder, hd(names)), else: payload
-        Broadcast.emit("sync:#{user.id}:#{vault.id}", "folders.batch", payload)
+        broadcast_batch(user, vault, payload)
         _ = Wire.changed(user, vault, names, device_id)
         :ok
     end
   end
+
+  @doc """
+  Emits `folders.batch` on the vault's sync topic: the one event that tells
+  every client to re-read the explicit-folder list (the plugin ignores the
+  payload; the web app patches its tree from a create's `markers`, else
+  re-fetches it). Through `Sync.Broadcast.emit/3`, so inside `atomic/2` or a
+  tenant transaction it fires only after commit, and never on rollback.
+  `payload` carries `op` plus that op's fields.
+  """
+  @spec broadcast_batch(map(), map(), map()) :: :ok
+  def broadcast_batch(user, vault, payload),
+    do: Broadcast.emit("sync:#{user.id}:#{vault.id}", "folders.batch", payload)
 
   @doc """
   Renames or moves `old_folder` to `new_folder`, notes and attachments in one

@@ -670,10 +670,7 @@ defmodule Engram.MCP.Handlers do
           # Same event as DELETE /folders/*path, on every success (0/0 included,
           # see FoldersController.delete_recursive/4): a cleared empty-folder
           # marker reports no counts, and peers only re-poll /folders/explicit.
-          EngramWeb.BatchOps.broadcast_batch(user, vault, "folders.batch", %{
-            op: "delete",
-            folder: folder
-          })
+          Engram.Folders.broadcast_batch(user, vault, %{op: "delete", folder: folder})
 
           counts =
             if n == 0 and a == 0, do: "", else: " (#{n} notes, #{a} attachments removed)"

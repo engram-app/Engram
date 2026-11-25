@@ -294,7 +294,7 @@ defmodule EngramWeb.FoldersController do
       # `syncExplicitFolders` in plugin/src/sync.ts). A phantom event is one
       # extra GET, not a lost local folder.
       {:ok, _counts} ->
-        BatchOps.broadcast_batch(user, vault, "folders.batch", %{op: "delete", folder: folder})
+        Folders.broadcast_batch(user, vault, %{op: "delete", folder: folder})
         send_resp(conn, 204, "")
 
       {:error, :no_dek} ->
@@ -323,7 +323,7 @@ defmodule EngramWeb.FoldersController do
         # waiting for their next pull. Only on a REAL delete — broadcasting on a
         # no-op (:not_found) would fan out a phantom "delete folder" that triggers
         # spurious client resyncs (and, plugin-side, a folder-delete echo).
-        BatchOps.broadcast_batch(user, vault, "folders.batch", %{op: "delete", folder: folder})
+        Folders.broadcast_batch(user, vault, %{op: "delete", folder: folder})
 
         send_resp(conn, 204, "")
 
@@ -430,7 +430,7 @@ defmodule EngramWeb.FoldersController do
 
           EngramWeb.Plugs.IdempotencyKey.remember(conn, %{status: 200, body: body})
 
-          BatchOps.broadcast_batch(user, vault, "folders.batch", %{op: "delete", ids: ids})
+          Folders.broadcast_batch(user, vault, %{op: "delete", ids: ids})
           json(conn, body)
         end
     end
@@ -508,12 +508,7 @@ defmodule EngramWeb.FoldersController do
           body: body
         })
 
-        BatchOps.broadcast_batch(
-          user,
-          vault,
-          "folders.batch",
-          Map.merge(%{op: "move", ids: ids}, broadcast_extra)
-        )
+        Folders.broadcast_batch(user, vault, Map.merge(%{op: "move", ids: ids}, broadcast_extra))
 
         json(conn, body)
 
