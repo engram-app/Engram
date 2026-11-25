@@ -47,10 +47,11 @@ defmodule Engram.ServiceConfig.FlagsTest do
 
     test "with a source and {} loaded, a flag key reads its env/app-config value" do
       # The per-process override is the test stand-in for app env.
-      ServiceConfig.put_override(:folder_marker_delete_max_fixed, 777)
-      :ok = ServiceConfig.override(:folder_marker_delete_max_fixed, 5, by: "t")
+      # (`folder_marker_delete_max_fixed` was this key until release J retired it.)
+      ServiceConfig.put_override(:client_logs_stop_writes, true)
+      :ok = ServiceConfig.override(:client_logs_stop_writes, false, by: "t")
       capture_log(fn -> start_flags(%{}) end)
-      assert ServiceConfig.get(:folder_marker_delete_max_fixed, 2_000) == 777
+      assert ServiceConfig.get(:client_logs_stop_writes, :default) == true
     end
 
     test "with flags loaded, a non-flag key keeps its DB row; the file cannot set it" do
