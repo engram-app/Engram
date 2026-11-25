@@ -97,8 +97,7 @@ defmodule EngramWeb.HealthControllerTest do
     end
 
     test "the probe reconnects within 5 s of the database coming back" do
-      %{start: {_pool, :start_link, [{Postgrex.Protocol, opts}]}} =
-        Engram.HealthProbe.child_spec([])
+      opts = Engram.HealthProbe.connection_opts()
 
       assert opts[:backoff_max] == 5_000
       assert opts[:pool_size] == 1
