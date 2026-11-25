@@ -16,7 +16,12 @@ defmodule Engram.HealthProbe do
 
   @name __MODULE__
 
-  def child_spec(_opts) do
+  def child_spec(_opts), do: Postgrex.child_spec(connection_opts())
+
+  @doc false
+  # Public so tests can assert the pool settings without reading
+  # db_connection's child spec, which wraps them in a private struct.
+  def connection_opts do
     Engram.Application.repo_connection_opts()
     |> Keyword.merge(
       name: @name,
@@ -30,7 +35,6 @@ defmodule Engram.HealthProbe do
       # pool has already recovered from.
       backoff_max: 5_000
     )
-    |> Postgrex.child_spec()
   end
 
   @doc "`:ok` when the database answers on the probe connection within 2 s."

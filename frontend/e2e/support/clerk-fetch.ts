@@ -37,7 +37,7 @@ export async function clerkFetch(
 	const deadline = Date.now() + budgetMs;
 	let backoff = 500;
 
-	for (;;) {
+	while (true) {
 		const resp = await fetchImpl(url, init);
 		if (resp.status !== 429) {
 			return resp;
