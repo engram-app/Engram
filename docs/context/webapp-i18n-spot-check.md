@@ -383,7 +383,7 @@ Each table: English key, current choice, why doubtful. Ordered by consequence (b
 
 **Clerk and Paddle**
 
-- `@clerk/localizations` is pinned to 4.17.0 (the repo's `@clerk/shared` override holds 4.33); strings Clerk added later show in English. Clerk marks localization experimental.
+- `@clerk/localizations` is pinned to 4.25.0 (the repo's `@clerk/shared` override is `^4.49.0`; see `webapp-i18n.md`, Clerk pin); strings Clerk added later show in English. Clerk marks localization experimental.
 - Not covered: the hosted Clerk Account Portal, and everything Paddle hosts (customer portal, receipts, invoices, emails).
 - The Paddle locale is set per `Checkout.open(...)`; verify in the sandbox, not by unit test.
 
