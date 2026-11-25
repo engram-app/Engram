@@ -37,7 +37,8 @@ defmodule EngramWeb.BatchOps do
 
   @doc """
   Fans a committed batch op out to the user's sync channel. `event` is the
-  per-resource name (`"notes.batch"` / `"folders.batch"`).
+  per-resource name (`"notes.batch"`); `"folders.batch"` goes through
+  `Engram.Folders.broadcast_batch/3`.
   """
   def broadcast_batch(user, vault, event, payload) do
     EngramWeb.Endpoint.broadcast!(

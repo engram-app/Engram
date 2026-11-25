@@ -243,11 +243,23 @@ defmodule Engram.Folders do
         names = Enum.map(created, & &1.name)
         payload = %{op: "create", folders: names, markers: created}
         payload = if match?([_], names), do: Map.put(payload, :folder, hd(names)), else: payload
-        Broadcast.emit("sync:#{user.id}:#{vault.id}", "folders.batch", payload)
+        broadcast_batch(user, vault, payload)
         _ = Wire.changed(user, vault, names, device_id)
         :ok
     end
   end
+
+  @doc """
+  Emits `folders.batch` on the vault's sync topic: the one event that tells
+  every client to re-read the explicit-folder list (the plugin ignores the
+  payload; the web app patches its tree from a create's `markers`, else
+  re-fetches it). Through `Sync.Broadcast.emit/3`, so inside `atomic/2` or a
+  tenant transaction it fires only after commit, and never on rollback.
+  `payload` carries `op` plus that op's fields.
+  """
+  @spec broadcast_batch(map(), map(), map()) :: :ok
+  def broadcast_batch(user, vault, payload),
+    do: Broadcast.emit("sync:#{user.id}:#{vault.id}", "folders.batch", payload)
 
   @doc """
   Renames or moves `old_folder` to `new_folder`, notes and attachments in one
@@ -321,6 +333,8 @@ defmodule Engram.Folders do
                    move_bare_row(user, vault, old_folder, new_folder, notes, how, expect),
                  {:ok, atts} <- attachments_leg(user, vault, att_pairs, how, att_stop?) do
               seq = Wire.changed(user, vault, [new_folder], opts[:origin_device_id])
+              if is_nil(seq), do: broadcast_rename_batch(user, vault, old_folder, new_folder)
+
               {:ok, %{notes: notes, attachments: atts, folders: folders, seq: seq}}
             end
           end)
@@ -333,6 +347,25 @@ defmodule Engram.Folders do
         Process.delete(@cascade_key)
       end
     end
+  end
+
+  # The wire is silent (`folder_ops` off), so `folders.batch` is the only
+  # folder-level signal: without it a device keeps the emptied old folder
+  # pinned as explicit. Not sent with the wire on: `folder_changed` carries the
+  # rename, and a released plugin's re-read runs outside its serial
+  # folder-follow lane, so it could pre-create the target and break the
+  # one-step on-disk rename. Queued with `Repo.after_commit/1`, after the notes
+  # leg's own post-commit broadcasts, so clients get it last (with no outer
+  # transaction, which holds for every caller today).
+  defp broadcast_rename_batch(user, vault, old_folder, new_folder) do
+    Repo.after_commit(fn ->
+      broadcast_batch(user, vault, %{
+        op: "rename",
+        folders: [new_folder],
+        folder: new_folder,
+        from: old_folder
+      })
+    end)
   end
 
   # The cascade reason of the attempt in flight, carried in the process
