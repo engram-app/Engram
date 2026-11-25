@@ -177,9 +177,9 @@ separates them.
 - Right after a deploy the `folders` table is not all-visible. The planner
   estimates ~1 row for any `(vault_id, parent_id)` lookup, so every index with
   that prefix ties. It picked `folders_parent` (the FK index), later the new
-  `folders_parent_all_ids` (PR 2609), with `name_hmac` only as a Filter (84
-  rows discarded per level at 500 siblings). Staging: 48 vs 27 buffers at
-  depth 9.
+  `folders_parent_all_ids` (PR 2609), with `name_hmac` only as a Filter (the
+  failing unit test on main: 84 rows discarded per level at 500 siblings).
+  Staging: 48 vs 27 buffers at depth 9.
 - Fix (PR 2635): one index `folders_parent_name_ids` `(vault_id, parent_id,
   name_hmac, id) INCLUDE (user_id, deleted_at)`, built CONCURRENTLY, then
   `folders_parent` and `folders_parent_all_ids` dropped in a later migration.
@@ -189,6 +189,3 @@ separates them.
   (no VACUUM, no all-visible setup), as `engram_app`, custom + generic. Any
   index sharing a keyed lookup's leading columns must also carry the key
   column, or it ties.
-- Staging re-run at 11a02295b: Index Only Scan on `folders_parent_name_ids`
-  with `name_hmac` in the Index Cond at every level, 27/25 buffers at depth
-  9/8.
