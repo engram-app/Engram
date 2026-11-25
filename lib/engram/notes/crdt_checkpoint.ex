@@ -518,6 +518,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
   # The finalize decision cannot be made without the old text, so the
   # checkpoint raises (and is skipped) as it always has; this names it.
+  @spec old_body_unreadable!(Ecto.UUID.t(), term()) :: no_return()
   defp old_body_unreadable!(note_id, reason) do
     Logger.warning(
       "crdt checkpoint old body unreadable, finalize undecidable " <>
