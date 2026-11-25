@@ -16,7 +16,7 @@ Exactly the schema's properties (`Overrides.flag_keys/0`; change both
 together): `folder_marker_delete`, `folder_marker_delete_max_fixed`,
 `folder_ops`, `client_logs_stop_writes`, `plugin_floor_enabled`,
 `plugin_floor`, `paused_accounts`. Every key is optional; absent means the
-DB override or the code default. Values are checked with the same validator
+env value (app config / runtime.exs), then the caller's code default. Values are checked with the same validator
 as a DB override (`Overrides.validate/2`).
 
 `paused_accounts` is flags-only: `[{"id": <uuid>, "until": <UTC ISO 8601, ends Z>}]`,
@@ -43,25 +43,32 @@ same task role S3 and KMS use.
 
 ## Precedence
 
-`flag > DB override (service_overrides) > env/default`, in one place:
-`Overrides.fetch/1`, which every `ServiceConfig.get/2` of an allowlisted key
-goes through (`PluginVersion.effective_minimum/0` included, which still
-judges `plugin_floor`'s `expires_at` on every read).
+One place, `Overrides.fetch/1`, which every `ServiceConfig.get/2` of an
+allowlisted key goes through (`PluginVersion.effective_minimum/0` included,
+which still judges `plugin_floor`'s `expires_at` on every read):
+
+| | flag key | any other key |
+|---|---|---|
+| source configured (prod, staging) | flag > env > default; **DB rows ignored** | DB override > env > default |
+| no source (self-host) | DB override > env > default | DB override > env > default |
+
+"env" is the existing non-DB path (`ServiceConfig.env/2`: app config, then
+the caller's default); a key absent from the file never skips it. The file
+cannot set a key outside the allowlist: it is dropped as unknown and that
+key's DB row still applies.
 
 Where a source is configured, `ServiceConfig.override/3` and `clear/2` (and
 so `ClientLocks.lock_plugin_version` and `lift_plugin_lock`) return
-`{:error, :managed_by_flags}` for a flag key. Every other key keeps its DB
-path. Self-host keeps the DB path for every key except `paused_accounts`.
+`{:error, :managed_by_flags}` for a flag key. Self-host keeps the DB path for
+every key except `paused_accounts`.
+
+**Stale DB rows.** A row left under a flag key from before flags shipped is
+ignored, never deleted (no manual command needed). Each node logs it once per
+key when it reads the table: `db override ignored, managed by flags key=<key>`
+(`:data`, warning). To act on one, put the value you want in the file.
 
 `ServiceConfig.effective/0` lists every key's value in force on that node and
 its source (`:flags`, `:db`, `:env`).
-
-**Stale DB rows still apply when the flag is absent.** A row written for a
-flag key before flags shipped is read whenever the file does not set that
-key, and it can no longer be cleared through `ServiceConfig.clear/2` on prod
-or staging. Before the first prod flip, check `ServiceConfig.list()` for rows
-under the keys above and either set the key in the file (the flag wins) or
-delete the row by hand.
 
 ## Fail-safe
 
@@ -70,7 +77,8 @@ delete the row by hand.
   state change (`service flags source unreachable` / `service flags document
   invalid`, then `service flags source healthy again`), not one per poll.
 - A node that has never loaded (boot with the source down) serves an empty
-  map: DB overrides and defaults apply.
+  map: flag keys read env and defaults (not DB rows) until the first load;
+  once one has loaded, the last good map stays.
 - An unknown key is dropped; a bad value keeps that key's previous value.
   One `service flag rejected key=...` error line each; the other keys apply.
 - The map lives in `:persistent_term` and is written only when it changes (a
@@ -89,6 +97,23 @@ other. There is no cache to evict: `fetch/1` reads the term directly.
    staging: the `engram-saas` container is recreated). Merge rules and
    rollback are in engram-infra `docs/context/service-flags-as-code.md`.
 3. Revert = a revert PR, applied the same way.
+
+## First prod check after a release
+
+Every successful load (the node's first, and each change) logs one line,
+`:lifecycle` category at info level. `:lifecycle` is one of the info
+categories shipped to Loki (`Engram.Logger.Category` `@info_to_loki` and the
+Fluent Bit route), so it is visible in prod without being a warning:
+
+```logql
+{service_name="engram", env="prod"} |= "service_flags_loaded"
+```
+
+`service_flags_loaded source=appconfig keys=<n> version=<label> first=true`,
+one per task within a minute of boot. `version` is the AppConfig version
+label (`unlabelled` if the hosted version has none) or, on staging, the
+file's mtime in unix seconds. No line: look for `service flags source
+unreachable` / `service flags document invalid`.
 
 ## Verify a flip
 

@@ -29,6 +29,7 @@ defmodule Engram.ServiceFlagsHelpers do
       Application.delete_env(:engram, :service_flags)
       :persistent_term.erase({Flags, :flags})
       :persistent_term.erase({Flags, :paused})
+      :persistent_term.erase({Engram.ServiceConfig.Overrides, :managed})
     end)
   end
 

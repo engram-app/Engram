@@ -10,15 +10,17 @@ defmodule Engram.ServiceConfig.Flags do
   ## Reads
 
   The current map lives in `:persistent_term` (one lookup, no copy, no
-  query). `Overrides.fetch/1` puts it first: flag, then DB override, then
-  env. A flag change is visible on this node the moment its poll installs it,
+  query). `Overrides.fetch/1` reads a flag key from it alone (a DB row for
+  the key is ignored), then env. A flag change is visible on this node the moment its poll installs it,
   so there is no cache to evict; each node polls on its own (60 s).
 
   ## Fail-safe
 
   An unreachable source or a bad document keeps the last good map, with one
   warning per state change (not per poll). A reader that has never loaded
-  serves an empty map, so DB and env apply. Per key: an unknown key is
+  serves an empty map, so flag keys read env. Every successful load (the
+  first and each change) logs one `service_flags_loaded` line, `:lifecycle`
+  info, which ships to Loki: the first prod check after a release. Per key: an unknown key is
   dropped and a value that fails `Overrides.validate/2` keeps that key's old
   value, each with one error line; the other keys still apply. Duplicate
   JSON keys reject the whole document (a reviewer reads the first, a parser
@@ -143,7 +145,7 @@ defmodule Engram.ServiceConfig.Flags do
     Process.send_after(self(), :poll, @poll_ms)
 
     case read(state) do
-      {:ok, body, state} -> state |> load(body) |> status(nil)
+      {:ok, body, version, state} -> state |> load(body, version) |> status(nil)
       {:error, reason, state} -> state |> status(:unreachable, reason)
     end
     |> log_expired()
@@ -151,14 +153,26 @@ defmodule Engram.ServiceConfig.Flags do
 
   # An empty AppConfig body, or the same file bytes: nothing changed, and a
   # document already found bad is not re-reported.
-  defp load(state, body) when body == "" or body == state.last_body, do: state
+  defp load(state, body, _version) when body == "" or body == state.last_body, do: state
 
-  defp load(state, body) do
+  defp load(state, body, version) do
     state = %{state | last_body: body}
 
     case decode(body) do
-      {:ok, doc} when is_map(doc) -> %{install(state, build(doc, current())) | doc_status: :ok}
-      _ -> %{state | doc_status: :invalid}
+      {:ok, doc} when is_map(doc) ->
+        first? = not state.loaded?
+        state = install(state, build(doc, current()))
+
+        Logger.info(
+          "service_flags_loaded source=#{kind(state)} keys=#{map_size(current())} " <>
+            "version=#{version} first=#{first?}",
+          Metadata.with_category(:info, :lifecycle)
+        )
+
+        %{state | doc_status: :ok}
+
+      _ ->
+        %{state | doc_status: :invalid}
     end
   end
 
@@ -320,9 +334,12 @@ defmodule Engram.ServiceConfig.Flags do
 
   # -- sources ----------------------------------------------------------------
 
+  # The file's version is its mtime (unix seconds).
   defp read(%{source: {:file, path}} = state) do
-    case File.read(path) do
-      {:ok, body} -> {:ok, body, state}
+    with {:ok, %{mtime: mtime}} <- File.stat(path, time: :posix),
+         {:ok, body} <- File.read(path) do
+      {:ok, body, mtime, state}
+    else
       {:error, reason} -> {:error, inspect(reason), state}
     end
   end
@@ -332,8 +349,8 @@ defmodule Engram.ServiceConfig.Flags do
   # `last_body` check makes that a no-op). Covers the 24 h token expiry.
   defp read(%{source: {:appconfig, cfg}} = state) do
     with {:ok, token} <- session(state.token, cfg),
-         {:ok, body, next} <- latest(token, cfg) do
-      {:ok, body, %{state | token: next}}
+         {:ok, body, next, version} <- latest(token, cfg) do
+      {:ok, body, version, %{state | token: next}}
     else
       {:error, reason} -> {:error, reason, %{state | token: nil}}
     end
@@ -363,9 +380,17 @@ defmodule Engram.ServiceConfig.Flags do
     with {:ok, resp} <-
            http(cfg, method: :get, url: "/configuration", params: [configuration_token: token]) do
       case Req.Response.get_header(resp, "next-poll-configuration-token") do
-        [next | _] -> {:ok, resp.body, next}
+        [next | _] -> {:ok, resp.body, next, version_label(resp)}
         [] -> {:error, "no next poll token"}
       end
+    end
+  end
+
+  # AppConfig's `Version-Label` (set on the hosted version), else unlabelled.
+  defp version_label(resp) do
+    case Req.Response.get_header(resp, "version-label") do
+      [label | _] -> String.slice(label, 0, 64)
+      [] -> "unlabelled"
     end
   end
 

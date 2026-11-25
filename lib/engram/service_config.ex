@@ -83,6 +83,7 @@ defmodule Engram.ServiceConfig do
     Map.new(Overrides.keys(), fn key ->
       cond do
         Map.has_key?(flags, key) -> {key, %{value: flags[key], source: :flags}}
+        Overrides.managed?(key) -> {key, %{value: env(key), source: :env}}
         Map.has_key?(db, key) -> {key, %{value: db[key], source: :db}}
         true -> {key, %{value: env(key), source: :env}}
       end

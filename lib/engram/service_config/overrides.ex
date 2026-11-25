@@ -47,10 +47,11 @@ defmodule Engram.ServiceConfig.Overrides do
 
   The keys in `flag_keys/0` are also read from the reviewed flags file
   (`Engram.ServiceConfig.Flags`, `docs/context/service-flags.md`). `fetch/1`
-  is the one place precedence lives: flag, then DB row, then env. Where a
-  flags source is configured (prod, staging), `put/3` and `delete/2` refuse
-  those keys with `{:error, :managed_by_flags}`; self-host keeps the DB path
-  for every key. `paused_accounts` is flags-only everywhere.
+  is the one place precedence lives. Where a flags source is configured
+  (prod, staging) a flag key reads flag, then env: a DB row for it is ignored
+  (one warning per key per node) and `put/3` and `delete/2` refuse it with
+  `{:error, :managed_by_flags}`. Every other key, and every key on self-host,
+  reads DB row, then env. `paused_accounts` is flags-only everywhere.
   """
 
   import Ecto.Query
@@ -174,14 +175,21 @@ defmodule Engram.ServiceConfig.Overrides do
   end
 
   @doc """
-  `{:ok, value}` when `key` is set by a flag or a DB override (a flag wins),
-  else `:error` (the caller's env/default applies).
+  `{:ok, value}` when `key` is overridden, else `:error` (the caller's env,
+  then its default, applies). Where a flags source is configured a flag key
+  reads ONLY the flags (a DB row for it is ignored, `managed/1`); every other
+  key, and every key on self-host, reads the DB override.
   """
   @spec fetch(atom()) :: {:ok, term()} | :error
   def fetch(key) do
-    with :error <- Flags.fetch(key),
-         do: Map.fetch(Cache.fetch(:service_overrides, :all, &load/0), key)
+    if managed?(key),
+      do: Flags.fetch(key),
+      else: Map.fetch(Cache.fetch(:service_overrides, :all, &load/0), key)
   end
+
+  @doc "Whether `key` is read from the flags file only (a source is configured)."
+  @spec managed?(atom()) :: boolean()
+  def managed?(key), do: key in @flag_keys and Flags.configured?()
 
   @spec put(atom() | String.t(), term(), keyword()) :: :ok | {:error, term()}
   def put(key, value, opts \\ []) do
@@ -200,7 +208,7 @@ defmodule Engram.ServiceConfig.Overrides do
   # A DB write to a key the flags file owns would be shadowed by it (or, on a
   # failed flags read, surface as a value nobody reviewed).
   defp writable(key) do
-    if key in @flags_only or (key in @flag_keys and Flags.configured?()),
+    if key in @flags_only or managed?(key),
       do: {:error, :managed_by_flags},
       else: :ok
   end
@@ -288,7 +296,37 @@ defmodule Engram.ServiceConfig.Overrides do
       end)
 
     :ok = warn_ignored(Enum.map(ignored, &elem(&1, 0)))
-    Map.new(known, fn {name, value} -> {@by_name[name], value} end)
+
+    {managed, read} =
+      known
+      |> Enum.map(fn {name, value} -> {@by_name[name], value} end)
+      |> Enum.split_with(fn {key, _} -> managed?(key) end)
+
+    :ok = warn_managed(Enum.map(managed, &elem(&1, 0)))
+    Map.new(read)
+  end
+
+  @managed_key {__MODULE__, :managed}
+
+  # A row left under a flag key from before flags shipped: ignored, and
+  # visible once per key per node (persistent_term, written only on change).
+  defp warn_managed(keys) do
+    seen = :persistent_term.get(@managed_key, [])
+
+    case Enum.sort(keys) -- seen do
+      [] ->
+        :ok
+
+      new ->
+        :persistent_term.put(@managed_key, Enum.sort(seen ++ new))
+
+        Enum.each(new, fn key ->
+          Logger.warning(
+            "db override ignored, managed by flags key=#{key}",
+            Metadata.with_category(:warning, :data)
+          )
+        end)
+    end
   end
 
   @ignored_key {__MODULE__, :ignored}

@@ -10,6 +10,8 @@ defmodule Engram.ServiceConfig.FlagsTest do
   alias Engram.ServiceConfig
   alias Engram.ServiceConfig.Flags
 
+  require Logger
+
   setup do
     ServiceConfig.put_override(:service_overrides_enabled, true)
     Cache.clear_local(:service_overrides)
@@ -21,14 +23,65 @@ defmodule Engram.ServiceConfig.FlagsTest do
   defp count(log, needle), do: log |> String.split(needle) |> length() |> Kernel.-(1)
 
   describe "precedence" do
-    test "flag beats DB beats default" do
+    test "no source (self-host): DB beats default" do
       assert ServiceConfig.get(:folder_ops, :default) == :default
-
       :ok = ServiceConfig.override(:folder_ops, false, by: "t")
       assert ServiceConfig.get(:folder_ops, :default) == false
+    end
 
-      start_flags(%{"folder_ops" => true})
+    test "with a source: flag beats default and a DB row for a flag key is ignored" do
+      :ok = ServiceConfig.override(:folder_ops, false, by: "t")
+      :ok = ServiceConfig.override(:client_logs_stop_writes, true, by: "t")
+      :ok = ServiceConfig.override(:tenant_idf, true, by: "t")
+
+      capture_log(fn -> start_flags(%{"folder_ops" => true}) end)
+
       assert ServiceConfig.get(:folder_ops, :default) == true
+      # Flag key absent from the file: the default, not the DB row.
+      assert ServiceConfig.get(:client_logs_stop_writes, :default) == :default
+      # A key the file does not own keeps its DB row.
+      assert ServiceConfig.get(:tenant_idf, false) == true
+      assert ServiceConfig.effective().client_logs_stop_writes.source == :env
+    end
+
+    test "with a source and {} loaded, a flag key reads its env/app-config value" do
+      # The per-process override is the test stand-in for app env.
+      ServiceConfig.put_override(:folder_marker_delete_max_fixed, 777)
+      :ok = ServiceConfig.override(:folder_marker_delete_max_fixed, 5, by: "t")
+      capture_log(fn -> start_flags(%{}) end)
+      assert ServiceConfig.get(:folder_marker_delete_max_fixed, 2_000) == 777
+    end
+
+    test "with flags loaded, a non-flag key keeps its DB row; the file cannot set it" do
+      :ok = ServiceConfig.override(:index_rebuild, "dry_run", by: "t")
+
+      log =
+        capture_log(fn ->
+          start_flags(%{"folder_ops" => true, "index_rebuild" => "on"})
+        end)
+
+      assert Flags.current() == %{folder_ops: true}
+      assert ServiceConfig.get(:index_rebuild, "off") == "dry_run"
+      assert log =~ ~s(service flag rejected key="index_rebuild" (unknown key\))
+    end
+
+    test "a DB row under a flag key logs one warning per key while a source is configured" do
+      :ok = ServiceConfig.override(:folder_ops, false, by: "t")
+      :ok = ServiceConfig.override(:client_logs_stop_writes, true, by: "t")
+      :ok = ServiceConfig.override(:tenant_idf, true, by: "t")
+
+      log =
+        capture_log(fn ->
+          start_flags(%{})
+          ServiceConfig.get(:folder_ops, :default)
+          Cache.clear_local(:service_overrides)
+          ServiceConfig.get(:tenant_idf, false)
+        end)
+
+      assert count(log, "db override ignored, managed by flags") == 2
+      assert log =~ "key=folder_ops"
+      assert log =~ "key=client_logs_stop_writes"
+      refute log =~ "key=tenant_idf"
     end
 
     test "effective/0 names the source of every key" do
@@ -57,17 +110,19 @@ defmodule Engram.ServiceConfig.FlagsTest do
       assert count(log, "service flags source unreachable") == 1
     end
 
-    test "boot with an unreachable source uses DB and defaults" do
+    test "boot with an unreachable source: defaults for flag keys, DB for the rest" do
       :ok = ServiceConfig.override(:folder_ops, false, by: "t")
+      :ok = ServiceConfig.override(:tenant_idf, true, by: "t")
 
       capture_log(fn ->
         use_source({:file, "/nonexistent/service_flags.json"})
         start_supervised!({Flags, {:file, "/nonexistent/service_flags.json"}})
         :sys.get_state(Flags)
+        assert Flags.current() == %{}
+        assert ServiceConfig.get(:folder_ops, :default) == :default
       end)
 
-      assert Flags.current() == %{}
-      assert ServiceConfig.get(:folder_ops, :default) == false
+      assert ServiceConfig.get(:tenant_idf, false) == true
       assert ServiceConfig.get(:client_logs_stop_writes, :default) == :default
     end
 
@@ -200,6 +255,35 @@ defmodule Engram.ServiceConfig.FlagsTest do
       end
 
       assert :ok = Engram.ServiceConfig.Overrides.validate(:paused_accounts, [good])
+    end
+  end
+
+  describe "service_flags_loaded" do
+    test "one lifecycle info line per successful load: source, keys, version, first" do
+      # The suite logs at :warning; this file is async: false, so a global
+      # level change is safe (as in lifecycle_test).
+      prev = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: prev) end)
+
+      {path, log} =
+        with_log([level: :info, metadata: [:category]], fn ->
+          start_flags(%{"folder_ops" => true})
+        end)
+
+      assert count(log, "service_flags_loaded") == 1
+      assert log =~ ~r/service_flags_loaded source=file keys=1 version=\S+ first=true/
+      assert log =~ "category=lifecycle"
+
+      log =
+        capture_log([level: :info], fn ->
+          poll()
+          write_flags(path, %{"folder_ops" => true, "client_logs_stop_writes" => true})
+        end)
+
+      assert count(log, "service_flags_loaded") == 1
+      assert log =~ "service_flags_loaded source=file keys=2"
+      assert log =~ "first=false"
     end
   end
 
