@@ -297,6 +297,8 @@ defmodule Engram.Folders.ExplicitReadsTest do
     {:ok, _} = Notes.create_folder_markers(u, v, ["D"])
     Repo.query!("DELETE FROM notes WHERE vault_id = $1 AND kind = 'folder'", [dump(v.id)])
     id = row_id(u, "D")
+    # D-era: no stamp (J's marker writes stamp 0).
+    Repo.query!("UPDATE folders SET explicit_seq = NULL WHERE id = $1", [dump(id)])
 
     assert 1 =
              Repo.with_tenant!(u.id, fn ->

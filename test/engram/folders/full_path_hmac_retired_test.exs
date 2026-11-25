@@ -141,30 +141,96 @@ defmodule Engram.Folders.FullPathHmacRetiredTest do
     assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
   end
 
+  defp close_reconcile_ledger!,
+    do: Engram.DataMigrations.mark_done("explicit_folder_reconcile", 1)
+
+  defp explicit_folders(user, vault),
+    do: elem(Notes.list_explicit_folders(user, vault), 1) |> Enum.sort()
+
+  defp explicit_seqs(user_id) do
+    Repo.query!(
+      "SELECT explicit_seq FROM folders WHERE user_id = $1 AND explicit ORDER BY explicit_seq",
+      [Ecto.UUID.dump!(user_id)]
+    ).rows
+    |> List.flatten()
+  end
+
   # Prod's path: the reconcile ledger closed (release D on), so the boot run
-  # takes no lock and touches nothing, even a row the rule would clear.
-  test "the boot reconcile skips an install whose ledger closed", %{user: user, vault: vault} do
+  # clears nothing, even a row the rule would clear; it only stamps it, so
+  # release I's walk then leaves it too.
+  test "the boot reconcile clears nothing on a closed ledger, and stamps", %{
+    user: user,
+    vault: vault
+  } do
     {:ok, %{folders: [%{id: marker}]}} = Notes.create_folder_markers(user, vault, ["Ghost"])
     Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(marker)])
+    Repo.query!("UPDATE folders SET explicit_seq = NULL WHERE id = $1", [Ecto.UUID.dump!(marker)])
     assert [_] = Engram.ReleaseIReconcile.cleared_ids(user.id)
 
-    now = DateTime.utc_now()
+    close_reconcile_ledger!()
+    Engram.ReleaseIReconcile.run!()
 
-    Repo.insert_all("data_migrations", [
-      %{
-        name: "explicit_folder_reconcile",
-        version: 1,
-        completed_at: now,
-        inserted_at: now,
-        updated_at: now
-      }
+    assert explicit_folders(user, vault) == ["Ghost"]
+    assert explicit_seqs(user.id) == [0]
+    assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
+  end
+
+  # Review of #2707, MEDIUM 1: a self-host keeps its markers
+  # (`folder_marker_delete` ships off) and their explicit rows carry no
+  # `explicit_seq`. Under J a root-only rename leaves the descendants' hashes
+  # at the old path (their markers move), and a DEK rotation re-keys the
+  # markers but not the hashes: release I's walk, after a rollback, would
+  # unlist both folders. The boot step's stamp keeps them.
+  test "a self-host's marker-era rows survive a J rename and DEK rotation, rolled back to I",
+       %{user: user, vault: vault} do
+    {:ok, _} = Notes.create_folder_markers(user, vault, ["P", "P/Q"])
+
+    # As release I left them: no stamp, each hash the one its marker carries.
+    Repo.query!(
+      """
+      UPDATE folders AS f SET explicit_seq = NULL, full_path_hmac = n.folder_hmac
+      FROM notes AS n WHERE n.id = f.id AND n.kind = 'folder' AND f.user_id = $1
+      """,
+      [Ecto.UUID.dump!(user.id)]
+    )
+
+    assert explicit_seqs(user.id) == [nil, nil]
+    assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
+
+    close_reconcile_ledger!()
+    Engram.ReleaseIReconcile.run!()
+
+    assert {:ok, _} = Folders.rename(user, vault, "P", "R")
+    assert :ok = UserDekRotation.rotate_user(user.id)
+
+    assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
+    assert explicit_folders(user, vault) == ["R", "R/Q"]
+  end
+
+  # Review of #2707, MEDIUM 1 and 2: the markers J still writes (a skipping
+  # self-host whose `folder_table` ledger is open, so `MarkerStop` is off) and
+  # the rows `FolderTable` makes explicit from markers are stamped as written:
+  # the boot stamp ran before them.
+  test "rows J makes explicit from a marker are stamped", %{user: user, vault: vault} do
+    Engram.ServiceConfig.put_override(:folder_marker_stop, true)
+    Engram.ServiceConfig.put_override(:explicit_folders_ledger, :read)
+    Engram.DataCase.clear_request_caches()
+    refute Engram.Folders.MarkerStop.on?()
+
+    {:ok, %{id: single}} = Notes.create_folder_marker(user, vault, "Open/One")
+    {:ok, _} = Notes.create_folder_markers(user, vault, ["Open/Two"])
+    assert explicit_seqs(user.id) == [0, 0]
+
+    # FolderTable's present-row path: a marker whose row lost the flag.
+    Repo.query!("UPDATE folders SET explicit = false, explicit_seq = NULL WHERE id = $1", [
+      Ecto.UUID.dump!(single)
     ])
 
-    Engram.ReleaseIReconcile.run!()
-    assert [_] = Engram.ReleaseIReconcile.cleared_ids(user.id)
+    FolderTable.run_pass(user_ids: [user.id])
+    assert explicit_seqs(user.id) == [0, 0]
 
-    Repo.query!("DELETE FROM data_migrations WHERE name = 'explicit_folder_reconcile'")
-    Engram.ReleaseIReconcile.run!()
+    assert {:ok, _} = Folders.rename(user, vault, "Open", "Shut")
+    assert :ok = UserDekRotation.rotate_user(user.id)
     assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
   end
 end

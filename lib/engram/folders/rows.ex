@@ -263,7 +263,12 @@ defmodule Engram.Folders.Rows do
       with {:ok, dek} <- Crypto.get_dek(user),
            {:ok, fk} <- Crypto.dek_filter_key(user) do
         ctx = %{user_id: user.id, vault_id: vault_id, dek: dek, fk: fk}
-        {:ok, resolve_all(ctx, targets)}
+        ids = resolve_all(ctx, targets)
+        # A marker's row, stamped like FolderMarkerDelete stamped every
+        # marker-era row: since release J writes no folder path hash, release
+        # I's reconcile (a rollback target) would clear it unstamped.
+        _ = stamp_unseq(for {folder, marker} <- targets, marker, id <- [ids[folder]], id, do: id)
+        {:ok, ids}
       end
     end
   end
@@ -1457,9 +1462,7 @@ defmodule Engram.Folders.Rows do
 
     # Stamped like a merge restore's (`mark_explicit_stamped/1`): the keeper
     # may have no marker, so the reconcile must never clear it.
-
-    from(f in Folder, where: f.id == ^keeper and f.explicit and is_nil(f.explicit_seq))
-    |> Repo.update_all(set: [explicit_seq: 0])
+    _ = stamp_unseq([keeper])
 
     # And, once markers stop, with this op's seq, like every row a move places.
     :ok = stamp_placed(row.vault_id, [keeper])
@@ -1725,8 +1728,19 @@ defmodule Engram.Folders.Rows do
       from(f in Folder, where: f.id in ^ids and not f.explicit)
       |> Repo.update_all(set: [explicit: true, updated_at: now()])
 
-    from(f in Folder, where: f.id in ^ids and is_nil(f.explicit_seq))
-    |> Repo.update_all(set: [explicit_seq: 0])
+    _ = stamp_unseq(ids)
+    n
+  end
+
+  # `explicit_seq` 0 on the explicit rows of `ids` that have none, so release
+  # I's `ExplicitFolderReconcile` never clears them; 0 never passes
+  # `soft_delete/5`'s guard, so to J it is the same as no stamp.
+  defp stamp_unseq([]), do: 0
+
+  defp stamp_unseq(ids) do
+    {n, _} =
+      from(f in Folder, where: f.id in ^ids and f.explicit and is_nil(f.explicit_seq))
+      |> Repo.update_all(set: [explicit_seq: 0])
 
     n
   end

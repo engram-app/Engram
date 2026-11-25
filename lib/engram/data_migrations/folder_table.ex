@@ -44,6 +44,10 @@ defmodule Engram.DataMigrations.FolderTable do
   `Crypto.aad_for_row(:folders, :name, id)`: the key scheme `folder_ciphertext`
   already uses. Root notes keep a NULL `folder_ref_id` (the root has no row).
 
+  A row this makes explicit gets `explicit_seq` 0 when it has none: release J
+  writes no folder path hash, and release I's reconcile (a rollback
+  target) clears an unstamped explicit row no marker hash names.
+
   Known edges, none blocking: an emptied derived folder row is not pruned
   here (writers own that); a marker created after a derived row of the same
   name exists makes that row `explicit` and keeps ITS id.
@@ -354,7 +358,8 @@ defmodule Engram.DataMigrations.FolderTable do
         # row really changed (the daily pass must find none).
         %{num_rows: n} =
           repo.query!(
-            "UPDATE folders SET explicit = true, updated_at = now() " <>
+            "UPDATE folders SET explicit = true, explicit_seq = COALESCE(explicit_seq, 0), " <>
+              "updated_at = now() " <>
               "WHERE id = $1 AND $2 AND NOT explicit",
             [id, explicit?]
           )
@@ -388,8 +393,9 @@ defmodule Engram.DataMigrations.FolderTable do
       repo.query!(
         """
         INSERT INTO folders (id, vault_id, user_id, parent_id, name_ciphertext, name_nonce,
-                             name_hmac, dek_version, explicit, name_ci_hmac, name_stamp)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                             name_hmac, dek_version, explicit, name_ci_hmac, name_stamp,
+                             explicit_seq)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CASE WHEN $9 THEN 0 END)
         ON CONFLICT DO NOTHING
         """,
         [
@@ -419,6 +425,7 @@ defmodule Engram.DataMigrations.FolderTable do
       """
       UPDATE folders SET parent_id = $2, name_ciphertext = $3, name_nonce = $4, name_hmac = $5,
              dek_version = $6, explicit = explicit OR $7, updated_at = now(),
+             explicit_seq = CASE WHEN explicit OR $7 THEN COALESCE(explicit_seq, 0) ELSE explicit_seq END,
              deleted_at = NULL, delete_op_id = NULL, name_ci_hmac = $10, name_stamp = $11,
              seq = COALESCE($12, seq), notes_cascaded = notes_cascaded AND $12::bigint IS NULL
       WHERE id = $1 AND vault_id = $8 AND user_id = $9

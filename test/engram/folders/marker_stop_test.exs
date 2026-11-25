@@ -233,9 +233,9 @@ defmodule Engram.Folders.MarkerStopTest do
     assert delete_since(u, v, "F", since) == ["F", "F/X", "F/Y"]
     assert markers(v) == 3
 
-    # No stamp while markers are written: the reconcile keeps its say over
-    # these rows across a rollback.
-    assert %{rows: [[nil, nil]]} =
+    # Stamped though markers are written: release J writes no hash, so
+    # release I's reconcile must not judge these rows after a rollback.
+    assert %{rows: [[0, 0]]} =
              Repo.query!(
                "SELECT max(explicit_seq), min(explicit_seq) FROM folders WHERE vault_id = $1",
                [Ecto.UUID.dump!(v.id)]
