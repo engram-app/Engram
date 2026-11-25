@@ -62,12 +62,12 @@ File-length GB against today's 10.94. Single-lever rows change one thing each.
 | Dense 512 dims | ~9.1 GB |
 | Chunks 2x larger | ~7.9 GB |
 | Chunks 4x larger | ~5.8 GB |
-| Drop sparse keyword leg entirely | ~4.4 GB |
+| Drop sparse keyword leg entirely | ~4.6 GB: 10.94 - 5.67 keyword - ~0.47 dense slots of the 228,916 keyword-only points (x 2,048 B) - ~0.2 their payload + payload-index share (those points disappear) |
 | Vacuum / compact deleted + empty slots | ~10.5 GB |
-| A: compaction + strip retired payload keys | ~9.8 GB |
-| A+B+C+D (compaction + payload strip, int8, 512d, 4,096 B chunks) | 5.0 to 6.4 GB, depending on how much sparse shrinks with bigger chunks (x0.75 to x1.0, assumed; points x0.547 measured 10-19) |
+| A: compaction + strip retired payload keys | ~9.8 GB: 10.94 - ~0.44 compaction (row above) - ~0.7 payload strip (66% of points carry retired keys; u/v/n-only JSON is 118 B vs 364 B avg) |
+| A+B+C+D (compaction + payload strip, int8, 512d, 4,096 B chunks) | 5.0 to 6.4 GB. The low end assumes keyword shrinks to x0.75 with bigger chunks (assumed, not measured); only the x1.0 end leaves keyword as is. Points x0.547 measured 10-19 |
 
-**Floor:** with the keyword leg left as is, the floor is ~5.45 GB (3.8x the 1.43 GB of compressed note content). Any projection below that is wrong. An earlier draft listed "combined ~2.0 GB"; it was below the floor and has been removed.
+**Floor:** keyword search alone is 5.67 GB, so with the keyword leg left exactly as is nothing can go below ~5.7 GB plus the payload indexes and id tracker (~6 GB, about 4.2x the 1.43 GB of compressed note content). Going lower requires shrinking keyword itself (bigger chunks, fewer keyword units) or moving it out of Qdrant. An earlier draft listed "combined ~2.0 GB"; it was below the floor and has been removed.
 
 Lever constraints (measured, do not re-litigate without new evidence):
 - **int8 dense is not workable.** Qdrant stores Voyage int8 as uint8 0..255, and binary quantization on top then sets every bit to 1 (measured 2026-10-19). The B step in the combined row is therefore not available as-is.
@@ -80,7 +80,7 @@ Takeaway: dense-side tricks move little because keyword search is half the disk.
 ## Growth and cost
 
 - v3 cluster went from 308k points (2026-10-26) to 1.596M (2026-11-25). A 612k figure seen in older notes is the old v2 cluster, not v3.
-- Organic growth: +16.4k points/day (7-day slope, ~52 MB/day used) or +26.7k/day (14-day slope, ~110 MB/day).
+- Organic growth: +16.4k points/day (7-day slope) or +26.7k/day (14-day slope). Measured volume-fill slopes (`kubelet_volume_stats_used_bytes`) are ~52 MB/day and ~110 MB/day; those drive the alert dates. They imply ~3.2 to 4.1 KB per new point, below the 6.15 KB average, because compaction reclaims space while points arrive. Points x 6.15 KB (~101 / ~164 MB/day) is an upper bound, not the fill rate.
 - The disk alert fires about 2027-01-15 (14-day slope) to early March 2027 (7-day slope).
 - Cost: mx1 (4 GiB RAM, 16 GiB disk) is $34.08/mo. Disk-only expansion is about $0.445/GiB/mo and **can never be shrunk back**. One full re-embed is about $58.
 
@@ -95,7 +95,7 @@ Takeaway: dense-side tricks move little because keyword search is half the disk.
 - Summing the Grafana Qdrant gauges across tasks (reads ~3x).
 
 ## References
-- Prior decisions: `reports/2026-10-19-rechunk-once/` in the engram-workspace repo (untracked, local only) and `chunker-v5-rebuild.md` on workspace branch `docs/chunker-v5-findings`. Read these before proposing a chunker, dims, dtype or sparse change.
+- Prior decisions: engram-workspace `docs/context/chunker-v5-rebuild.md` and `reports/2026-10-18-qdrant-eval/` + `reports/2026-10-19-rechunk-once/` (both merged to workspace main via engram-workspace PR 244). Read these before proposing a chunker, dims, dtype or sparse change.
 - `docs/context/grafana-qdrant-metrics-per-task.md`
 - `docs/context/qdrant-payload-rewrite-churn.md` (why retired payload keys linger)
 - `docs/context/index-version-self-heal.md` (changing chunker / keyword encoding safely)
