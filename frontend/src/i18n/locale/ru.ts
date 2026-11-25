@@ -643,8 +643,6 @@ export default {
 		"Непредвиденная ошибка привела к сбою этой страницы. Попробуйте обновить. Если проблема повторяется, свяжитесь с {support}.",
 	"Copied to clipboard": "Скопировано в буфер обмена",
 	"Could not copy": "Не удалось скопировать",
-	"Administration is only available on self-hosted instances.":
-		"Управление доступно только в самохостируемых экземплярах.",
 	"Loading…": "Загрузка…",
 	"You don't have administrator access on this instance.":
 		"У вас нет прав администратора в этом экземпляре.",

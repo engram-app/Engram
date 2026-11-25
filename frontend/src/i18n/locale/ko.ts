@@ -566,8 +566,6 @@ export default {
 		"예기치 않은 오류로 인해 이 페이지가 작동하지 않습니다. 다시 로드해 보세요. 계속 발생하면 {support}에 문의하세요.",
 	"Copied to clipboard": "클립보드에 복사됨",
 	"Could not copy": "복사 실패",
-	"Administration is only available on self-hosted instances.":
-		"관리 기능은 자체 호스팅 환경에서만 사용 가능합니다.",
 	"Loading…": "로딩 중…",
 	"You don't have administrator access on this instance.": "이 환경에서 관리자 권한이 없습니다.",
 	Administration: "관리",

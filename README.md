@@ -4,7 +4,7 @@
 
 ![Engram — your notes are your AI's memory, synced everywhere and read by your AI](assets/vault-banner.gif)
 
-MCP-native · semantic + keyword search · real-time sync · self-hostable · source-available · Elixir/Phoenix
+MCP-native · semantic + keyword search · real-time sync · source-available · Elixir/Phoenix
 
 [![MCP](https://img.shields.io/badge/MCP-native-8A2BE2)](https://modelcontextprotocol.io)
 [![Last commit](https://img.shields.io/github/last-commit/engram-app/Engram)](https://github.com/engram-app/Engram/commits/main)
@@ -13,7 +13,7 @@ MCP-native · semantic + keyword search · real-time sync · self-hostable · so
 [![Sponsor](https://img.shields.io/github/sponsors/engram-app?label=Sponsor&logo=GitHub&color=ea4aaa)](https://github.com/sponsors/engram-app)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Buy_a_coffee-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/engrams_sync)
 
-[Connect](#connect) · [Quickstart](#self-host-docker-compose) · [Self-host](https://engram.page/docs/self-host/) · [MCP](https://engram.page/docs/mcp/) · [API](https://engram.page/docs/api/) · [Architecture](https://engram.page/docs/self-host/architecture/) · [Plugin](https://github.com/engram-app/Engram-obsidian) · [Discord](https://discord.gg/NG9Vn9VcPS)
+[Connect](#connect) · [MCP](https://engram.page/docs/mcp/) · [API](https://engram.page/docs/api/) · [Plugin](https://github.com/engram-app/Engram-obsidian) · [Discord](https://discord.gg/NG9Vn9VcPS)
 
 </div>
 
@@ -38,43 +38,10 @@ https://mcp.engram.page
 
 More clients: [MCP docs](https://engram.page/docs/mcp/).
 
-## Self-Host (Docker Compose)
-
-**Don't want to run the commands yourself?** Open the
-[Quickstart docs](https://engram.page/docs/self-host/quickstart/), select
-the whole page, and paste it into your AI assistant — it's written
-top-to-bottom as imperatives the AI can execute in order.
-
-Otherwise:
-
-```bash
-git clone https://github.com/engram-app/Engram.git
-cd Engram
-cp .env.example .env       # then fill in the three secrets at the top
-docker compose up -d
-```
-
-App at <http://localhost:4000>. Migrations run on boot. Only port 4000 is
-host-exposed; everything else stays on the private Docker network.
-
-**Large vaults?** Enable MinIO for S3-style attachments:
-`docker compose --profile s3 up -d` — see
-[storage docs](https://engram.page/docs/self-host/environment-variables/#storage).
-
-**Better embeddings?** Switch to Voyage AI in `.env` — see
-[embeddings docs](https://engram.page/docs/self-host/environment-variables/#embeddings).
-
-### Full self-host documentation
+## Docs
 
 | Topic | Link |
 |---|---|
-| Quickstart           | <https://engram.page/docs/self-host/quickstart/> |
-| Environment vars     | <https://engram.page/docs/self-host/environment-variables/> |
-| Encryption & keys    | <https://engram.page/docs/self-host/encryption/> |
-| Backup & restore     | <https://engram.page/docs/self-host/backup-restore/> |
-| Upgrades             | <https://engram.page/docs/self-host/upgrade/> |
-| Troubleshooting      | <https://engram.page/docs/self-host/troubleshooting/> |
-| Architecture         | <https://engram.page/docs/self-host/architecture/> |
 | MCP setup            | <https://engram.page/docs/mcp/> |
 | HTTP API             | <https://engram.page/docs/api/> |
 
@@ -100,8 +67,6 @@ External contributions sign the [Engram CLA](./.github/CLA.md). See
 
 ## Security
 
-See [SECURITY.md](./SECURITY.md) for vulnerability disclosure. Self-host LAN
-deployments are out of scope of our published SLA — security depends on the
-operator's network and infra.
+See [SECURITY.md](./SECURITY.md) for vulnerability disclosure.
 
 Copyright (c) 2026 Rasbandit Software Solutions LLC d/b/a Engram.

@@ -438,7 +438,7 @@ defmodule EngramWeb.AttachmentsController do
       not_found: {"An item was not found", "application/json", Schemas.BatchItemError},
       conflict: {"An item conflicts at target", "application/json", Schemas.BatchItemError},
       unsupported_media_type:
-        {"An item has an executable extension (stored while the self-host bypass was on)",
+        {"An item has an executable extension (stored while the executable gate was bypassed)",
          "application/json", Schemas.MimeRejected},
       unprocessable_entity: {"Target path cleans to nothing", "application/json", Schemas.Error}
     ]

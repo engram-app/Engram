@@ -28,7 +28,7 @@ defmodule EngramWeb.Schemas do
           nullable: true,
           example: "e998801f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d",
           description:
-            "Commit the running image was built from, baked in at build time. null on local/self-host builds where it was not supplied."
+            "Commit the running image was built from, baked in at build time. null on builds where it was not supplied."
         },
         checks: %Schema{
           type: :object,

@@ -40,6 +40,9 @@ services:
       JWT_SECRET: ci-test-secret-not-for-production
       # Prod build: keep CI out of the self-host install census.
       ENGRAM_TELEMETRY: "false"
+      # Self-host is gated off in prod releases (Engram.RuntimeConfig.selfhost_gate!/2);
+      # the local-auth CI stacks unlock it.
+      ENGRAM_SELFHOST_UNLOCK: "true"
       PHX_SERVER: "true"
       KEY_PROVIDER: ${KEY_PROVIDER:-local}
       ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:?ENCRYPTION_MASTER_KEY must be set (CI workflow injects from secret)}
