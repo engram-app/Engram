@@ -168,3 +168,24 @@ separates them.
 - The bigger lever is the index count on `notes` (planning tracks indexes x
   parts). Dropping the HMAC index set after `note_split` is a schema change
   and needs Todd.
+
+## Fifth instance: the folder walk picks a parent-only index on an unvacuumed table (2026-11-17)
+
+- The 0.87.0 fix (PR 2616) added `folders_live_name_ids` and won the planner
+  tie only via an Index Only Scan. Its test (`WalkIndexCondTest`) marked pages
+  all-visible, so it hid the problem.
+- Right after a deploy the `folders` table is not all-visible. The planner
+  estimates ~1 row for any `(vault_id, parent_id)` lookup, so every index with
+  that prefix ties. It picked `folders_parent` (the FK index), later the new
+  `folders_parent_all_ids` (PR 2609), with `name_hmac` only as a Filter (the
+  failing unit test on main: 84 rows discarded per level at 500 siblings).
+  Staging: 48 vs 27 buffers at depth 9.
+- Fix (PR 2635): one index `folders_parent_name_ids` `(vault_id, parent_id,
+  name_hmac, id) INCLUDE (user_id, deleted_at)`, built CONCURRENTLY, then
+  `folders_parent` and `folders_parent_all_ids` dropped in a later migration.
+  The FK `(vault_id, parent_id)` is composite, so the new prefix serves the RI
+  check (pinned by a `pg_constraint` test).
+- Rule: plan tests for keyed lookups must also run on a NOT all-visible table
+  (no VACUUM, no all-visible setup), as `engram_app`, custom + generic. Any
+  index sharing a keyed lookup's leading columns must also carry the key
+  column, or it ties.
