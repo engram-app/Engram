@@ -620,6 +620,126 @@ defmodule Engram.FoldersTest do
     end
   end
 
+  # A rename must tell every device to re-read the explicit-folder list, or an
+  # Obsidian device keeps the emptied old folder pinned as explicit forever.
+  # `folder_changed` only goes out when `folder_ops` is on (off in prod), so
+  # `folders.batch` carries it whatever the switch says.
+  describe "rename/5 broadcasts folders.batch" do
+    setup %{user: user, vault: vault} do
+      topic = "sync:#{user.id}:#{vault.id}"
+      EngramWeb.Endpoint.subscribe(topic)
+      %{topic: topic}
+    end
+
+    defp explicit_with_note!(user, vault, folder) do
+      {:ok, _} = Folders.create_markers(user, vault, [folder])
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "#{folder}/n.md", "content" => "hi"},
+          actor: "api"
+        )
+
+      drain_broadcasts()
+    end
+
+    defp drain_broadcasts do
+      receive do
+        %Phoenix.Socket.Broadcast{} -> drain_broadcasts()
+      after
+        50 -> :ok
+      end
+    end
+
+    test "rename of an explicit folder broadcasts folders.batch rename with folder_ops off", %{
+      user: user,
+      vault: vault,
+      topic: topic
+    } do
+      Engram.ServiceConfig.put_override(:folder_ops, false)
+      explicit_with_note!(user, vault, "Docs")
+
+      assert {:ok, _} = Folders.rename(user, vault, "Docs", "Archive")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "folders.batch",
+                       payload: %{op: "rename", folder: "Archive", from: "Docs"} = payload
+                     },
+                     200
+
+      assert payload.folders == ["Archive"]
+      # Exactly one per rename.
+      refute_receive %Phoenix.Socket.Broadcast{event: "folders.batch"}, 100
+    end
+
+    test "with folder_ops on, rename still emits folder_changed and also folders.batch", %{
+      user: user,
+      vault: vault,
+      topic: topic
+    } do
+      Engram.ServiceConfig.put_override(:folder_ops, true)
+      explicit_with_note!(user, vault, "Docs")
+
+      assert {:ok, %{seq: seq}} = Folders.rename(user, vault, "Docs", "Archive")
+      assert is_integer(seq)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "folder_changed",
+                       payload: %{name: "Archive"}
+                     },
+                     200
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "folders.batch",
+                       payload: %{op: "rename", folder: "Archive"}
+                     },
+                     200
+    end
+
+    test "renaming a folder that only exists through its notes broadcasts too", %{
+      user: user,
+      vault: vault,
+      topic: topic
+    } do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"}, actor: "api")
+
+      drain_broadcasts()
+
+      assert {:ok, %{notes: 1}} = Folders.rename(user, vault, "Docs", "Archive")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "folders.batch",
+                       payload: %{op: "rename", folder: "Archive"}
+                     },
+                     200
+    end
+
+    test "no folders.batch when the transaction rolls back", %{user: user, vault: vault} do
+      explicit_with_note!(user, vault, "Docs")
+      put_att(user, vault, "Docs/a.png")
+      put_att(user, vault, "Archive/a.png")
+      drain_broadcasts()
+
+      # The notes leg (and the emit) ran inside the transaction; the attachment
+      # conflict rolls it back, so the buffered emit must be discarded.
+      assert {:error, :conflict} = Folders.rename(user, vault, "Docs", "Archive")
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "folders.batch"}, 150
+    end
+
+    test "no folders.batch when the rename is refused", %{user: user, vault: vault} do
+      explicit_with_note!(user, vault, "Docs")
+
+      assert {:error, :invalid_path} = Folders.rename(user, vault, "Docs", "Docs/Sub")
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "folders.batch"}, 150
+    end
+  end
+
   test "batch_delete/3 with empty ids returns zero counts", %{user: user, vault: vault} do
     assert {:ok, %{notes: 0, attachments: 0}} = Folders.batch_delete(user, vault, [])
   end

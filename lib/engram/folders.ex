@@ -333,6 +333,17 @@ defmodule Engram.Folders do
                    move_bare_row(user, vault, old_folder, new_folder, notes, how, expect),
                  {:ok, atts} <- attachments_leg(user, vault, att_pairs, how, att_stop?) do
               seq = Wire.changed(user, vault, [new_folder], opts[:origin_device_id])
+              # Whatever `folder_ops` says: with it off, `folder_changed` is
+              # silent and this is the only folder-level signal, so a device
+              # would keep the emptied old folder pinned as explicit. With it
+              # on, it costs each client one extra explicit-list re-read.
+              broadcast_batch(user, vault, %{
+                op: "rename",
+                folders: [new_folder],
+                folder: new_folder,
+                from: old_folder
+              })
+
               {:ok, %{notes: notes, attachments: atts, folders: folders, seq: seq}}
             end
           end)
