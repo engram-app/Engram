@@ -333,16 +333,7 @@ defmodule Engram.Folders do
                    move_bare_row(user, vault, old_folder, new_folder, notes, how, expect),
                  {:ok, atts} <- attachments_leg(user, vault, att_pairs, how, att_stop?) do
               seq = Wire.changed(user, vault, [new_folder], opts[:origin_device_id])
-              # Whatever `folder_ops` says: with it off, `folder_changed` is
-              # silent and this is the only folder-level signal, so a device
-              # would keep the emptied old folder pinned as explicit. With it
-              # on, it costs each client one extra explicit-list re-read.
-              broadcast_batch(user, vault, %{
-                op: "rename",
-                folders: [new_folder],
-                folder: new_folder,
-                from: old_folder
-              })
+              if is_nil(seq), do: broadcast_rename_batch(user, vault, old_folder, new_folder)
 
               {:ok, %{notes: notes, attachments: atts, folders: folders, seq: seq}}
             end
@@ -356,6 +347,24 @@ defmodule Engram.Folders do
         Process.delete(@cascade_key)
       end
     end
+  end
+
+  # The wire is silent (`folder_ops` off), so `folders.batch` is the only
+  # folder-level signal: without it a device keeps the emptied old folder
+  # pinned as explicit. Not sent with the wire on: `folder_changed` carries the
+  # rename, and a released plugin's re-read runs outside its serial
+  # folder-follow lane, so it could pre-create the target and break the
+  # one-step on-disk rename. Queued with `Repo.after_commit/1`, after the notes
+  # leg's own post-commit broadcasts, so clients get it last.
+  defp broadcast_rename_batch(user, vault, old_folder, new_folder) do
+    Repo.after_commit(fn ->
+      broadcast_batch(user, vault, %{
+        op: "rename",
+        folders: [new_folder],
+        folder: new_folder,
+        from: old_folder
+      })
+    end)
   end
 
   # The cascade reason of the attempt in flight, carried in the process

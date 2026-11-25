@@ -642,6 +642,14 @@ defmodule Engram.FoldersTest do
       drain_broadcasts()
     end
 
+    defp collect_events(acc \\ []) do
+      receive do
+        %Phoenix.Socket.Broadcast{event: e} -> collect_events([e | acc])
+      after
+        100 -> Enum.reverse(acc)
+      end
+    end
+
     defp drain_broadcasts do
       receive do
         %Phoenix.Socket.Broadcast{} -> drain_broadcasts()
@@ -672,7 +680,11 @@ defmodule Engram.FoldersTest do
       refute_receive %Phoenix.Socket.Broadcast{event: "folders.batch"}, 100
     end
 
-    test "with folder_ops on, rename still emits folder_changed and also folders.batch", %{
+    # With the switch on, `folder_changed` already carries the rename, and a
+    # released plugin's `folders.batch` re-read runs outside its serial
+    # folder-follow lane: it could pre-create the target and break the one-step
+    # on-disk rename. So the wire's event goes out alone.
+    test "with folder_ops on, rename emits folder_changed and no folders.batch", %{
       user: user,
       vault: vault,
       topic: topic
@@ -690,12 +702,21 @@ defmodule Engram.FoldersTest do
                      },
                      200
 
-      assert_receive %Phoenix.Socket.Broadcast{
-                       topic: ^topic,
-                       event: "folders.batch",
-                       payload: %{op: "rename", folder: "Archive"}
-                     },
-                     200
+      refute_receive %Phoenix.Socket.Broadcast{event: "folders.batch"}, 150
+    end
+
+    test "folders.batch comes after the rename's per-note events", %{user: user, vault: vault} do
+      explicit_with_note!(user, vault, "Docs")
+
+      assert {:ok, _} = Folders.rename(user, vault, "Docs", "Archive")
+
+      events = collect_events()
+
+      {before, ["folders.batch" | after_batch]} =
+        Enum.split_while(events, &(&1 != "folders.batch"))
+
+      assert "note_changed" in before
+      refute "note_changed" in after_batch
     end
 
     # A caller's own tenant transaction (an MCP tool call is one) owns the
