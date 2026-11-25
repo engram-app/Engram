@@ -193,7 +193,7 @@ defmodule Engram.Accounts.Lifecycle do
     _ = SessionInvalidator.disconnect_user(user.id)
 
     # Step 1: Paddle cancel (best-effort). A failure here does NOT enqueue
-    # the async retry yet — see the `{:ok, _}` transaction branch below.
+    # the async retry yet: it is queued inside the Step 4 transaction.
     # Enqueueing here would let the retry job outlive a rolled-back Step 4:
     # `{:error, :pg_failed}` means the user is still live, and a queued
     # retry would later cancel a paying, non-deleted user's subscription.
@@ -259,7 +259,8 @@ defmodule Engram.Accounts.Lifecycle do
                     skip_tenant_check: true
                   ) do
                {1, _} ->
-                 enqueue_vector_purge!(user.id)
+                 _ = enqueue_vector_purge!(user.id)
+                 enqueue_owed_jobs!(user, paddle_retry)
 
                {0, _} ->
                  Repo.rollback(:already_deleted)
@@ -288,10 +289,6 @@ defmodule Engram.Accounts.Lifecycle do
           Metadata.with_category(:info, :lifecycle, user_id: user.id, reason: reason)
         )
 
-        # The commit landed, so the account really is gone — safe to enqueue
-        # the Paddle retry now (see the Step 1 comment above).
-        _ = maybe_enqueue_paddle_retry(user.id, paddle_retry)
-
         # Step 5: Clerk delete (saas only). Best-effort; Clerk row may
         # outlive ours. Future Clerk webhooks find_by_external_id →
         # :user_not_found → :ok.
@@ -302,12 +299,6 @@ defmodule Engram.Accounts.Lifecycle do
         _ =
           unless Analytics.opted_out?(user),
             do: Analytics.track_anonymous("account_deleted", summary)
-
-        # Analytics erasure, only once the delete has committed: queued before
-        # Step 4, a rolled-back delete would still wipe a live user's analytics
-        # (the Step 1 Paddle-retry rule). Covers the analytics-id person and the
-        # legacy Clerk-id one, now and again 10 minutes later; the jobs retry.
-        :ok = Analytics.forget(user)
 
         :ok
 
@@ -325,8 +316,8 @@ defmodule Engram.Accounts.Lifecycle do
   end
 
   # Returns `:ok` (nothing to cancel, or Paddle confirmed it) or
-  # `{:retry, sub_id}` — the caller enqueues the async retry only once the
-  # hard-delete transaction actually commits.
+  # `{:retry, sub_id}` — the caller enqueues the async retry inside the
+  # hard-delete transaction, so it exists only if the delete commits.
   # Coarse buckets only: an anonymous event must not single anyone out.
   defp deletion_summary(user, sub, reason) do
     tenure_days = DateTime.diff(DateTime.utc_now(), user.created_at, :day)
@@ -404,7 +395,24 @@ defmodule Engram.Accounts.Lifecycle do
       {:retry, sub_id}
   end
 
-  defp maybe_enqueue_paddle_retry(_user_id, :ok), do: :ok
+  # Jobs owed once the account is gone commit WITH its delete, like the vector
+  # purge: a rolled-back delete queues nothing (no erasure of a live user's
+  # analytics, no cancel of a paying user's subscription). Queued after the
+  # commit instead, a failed insert answered an error for an account already
+  # gone, and the caller's retry then found no user and acked, so the job was
+  # never queued. A failure here rolls the delete back and the retry redoes it.
+  # The erasure covers the analytics-id person and the legacy Clerk-id one, now
+  # and again 10 minutes later; the jobs retry.
+  defp enqueue_owed_jobs!(user, paddle_retry) do
+    with {:ok, _} <- maybe_enqueue_paddle_retry(user.id, paddle_retry),
+         :ok <- Analytics.erase(user) do
+      :ok
+    else
+      {:error, reason} -> Repo.rollback({:owed_job_enqueue, reason})
+    end
+  end
+
+  defp maybe_enqueue_paddle_retry(_user_id, :ok), do: {:ok, nil}
 
   defp maybe_enqueue_paddle_retry(user_id, {:retry, sub_id}),
     do: PaddleCancelSubscription.enqueue(user_id, sub_id)
