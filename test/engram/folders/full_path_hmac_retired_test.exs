@@ -175,6 +175,45 @@ defmodule Engram.Folders.FullPathHmacRetiredTest do
     assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
   end
 
+  defp folders_exclusive_locks do
+    Repo.query!("""
+    SELECT count(*) FROM pg_locks
+    WHERE pid = pg_backend_pid() AND relation = 'folders'::regclass
+      AND mode = 'AccessExclusiveLock'
+    """).rows
+    |> hd()
+    |> hd()
+  end
+
+  # Delta review of #2707, M1: prod (both ledgers done) takes no lock at
+  # boot. The sandbox transaction keeps every lock the step took until the
+  # test ends, so pg_locks shows it.
+  test "with the marker delete done, the boot step takes no lock and stamps nothing", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, %{folders: [%{id: id}]}} = Notes.create_folder_markers(user, vault, ["Kept"])
+    Repo.query!("UPDATE folders SET explicit_seq = NULL WHERE id = $1", [Ecto.UUID.dump!(id)])
+    close_reconcile_ledger!()
+    Engram.DataMigrations.mark_done("folder_marker_delete", 1)
+
+    Engram.ReleaseIReconcile.run!()
+
+    assert folders_exclusive_locks() == 0
+    assert explicit_seqs(user.id) == [nil]
+  end
+
+  test "with the marker delete open, the boot step stamps", %{user: user, vault: vault} do
+    {:ok, %{folders: [%{id: id}]}} = Notes.create_folder_markers(user, vault, ["Kept"])
+    Repo.query!("UPDATE folders SET explicit_seq = NULL WHERE id = $1", [Ecto.UUID.dump!(id)])
+    close_reconcile_ledger!()
+
+    Engram.ReleaseIReconcile.run!()
+
+    assert explicit_seqs(user.id) == [0]
+    assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
+  end
+
   # Review of #2707, MEDIUM 1: a self-host keeps its markers
   # (`folder_marker_delete` ships off) and their explicit rows carry no
   # `explicit_seq`. Under J a root-only rename leaves the descendants' hashes

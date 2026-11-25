@@ -17,24 +17,26 @@ defmodule Engram.Repo.Migrations.ExplicitFolderReconcileMigrate do
   (prod since release D) skips the clear: the ledger's own daily re-verify
   already ran the rule against the same rows.
 
-  Then, on every install (ledger closed or not), every live explicit row
-  with no `explicit_seq` gets `explicit_seq = 0`, FolderMarkerDelete's own
-  pre-delete stamp. Release I's rule skips a stamped row, and J can leave the
+  Then, on an install whose `folder_marker_delete` ledger is not done (a
+  self-host: it ships off), every live explicit row with no `explicit_seq`
+  gets `explicit_seq = 0`, FolderMarkerDelete's own pre-delete stamp. Release I's rule skips a stamped row, and J can leave the
   hash of an unstamped one stale: a root-only rename rewrites the
   descendants' markers but not their rows' hashes, and a DEK rotation re-keys
   the markers but no longer the hashes. A self-host keeps its markers
   (`folder_marker_delete` ships off), so after a rollback to I its daily
   walk would unlist those folders and the plugin trash them. Every J writer
   that makes a row explicit stamps it too, so none is left unstamped after
-  boot. Prod: expected 0 rows (the marker delete stamped them all), read on
-  `folders_explicit_vault_live` (live explicit rows, far fewer than the ~47k
-  folder rows).
+  boot. An install whose marker delete is done (prod) has no such row: that
+  ledger stamped every marker-era row, and since then every writer stamps.
+  With both ledgers done the statement returns before any lock (two
+  `data_migrations` probes; that table has no RLS), so prod's boot never
+  queues an ACCESS EXCLUSIVE on `folders` behind the release it replaces.
 
   One statement (a DO block, atomic), so the FORCE ROW LEVEL SECURITY
   toggle cannot be left off: the tables are unforced for the owner, the
   rows cleared, the rule re-checked (raises if any row is left), the rows
-  stamped, the tables forced again. ACCESS EXCLUSIVE on `folders` (and, on
-  an open ledger, `notes`) for that statement, under `LockTimeoutRetry`
+  stamped, the tables forced again. Where it runs, ACCESS EXCLUSIVE on
+  `folders` (and, on an open reconcile ledger, `notes`) for that statement, under `LockTimeoutRetry`
   (5 s `lock_timeout`, two retries). Rerun-safe. `down` restores nothing
   (the cleared flags named no folder; a stamp only keeps a folder listed).
   """
@@ -58,13 +60,23 @@ defmodule Engram.Repo.Migrations.ExplicitFolderReconcileMigrate do
   DO $$
   DECLARE
     left_over bigint;
+    reconciled boolean;
+    markers_deleted boolean;
   BEGIN
+    reconciled := EXISTS (
+      SELECT 1 FROM data_migrations
+      WHERE name = 'explicit_folder_reconcile' AND completed_at IS NOT NULL);
+    markers_deleted := EXISTS (
+      SELECT 1 FROM data_migrations
+      WHERE name = 'folder_marker_delete' AND completed_at IS NOT NULL);
+
+    IF reconciled AND markers_deleted THEN
+      RETURN;
+    END IF;
+
     ALTER TABLE folders NO FORCE ROW LEVEL SECURITY;
 
-    IF NOT EXISTS (
-      SELECT 1 FROM data_migrations
-      WHERE name = 'explicit_folder_reconcile' AND completed_at IS NOT NULL
-    ) THEN
+    IF NOT reconciled THEN
       ALTER TABLE notes NO FORCE ROW LEVEL SECURITY;
 
       UPDATE folders AS f SET explicit = false, updated_at = now() WHERE #{@stale};
@@ -77,8 +89,10 @@ defmodule Engram.Repo.Migrations.ExplicitFolderReconcileMigrate do
       ALTER TABLE notes FORCE ROW LEVEL SECURITY;
     END IF;
 
-    UPDATE folders SET explicit_seq = 0
-    WHERE explicit AND explicit_seq IS NULL AND deleted_at IS NULL;
+    IF NOT markers_deleted THEN
+      UPDATE folders SET explicit_seq = 0
+      WHERE explicit AND explicit_seq IS NULL AND deleted_at IS NULL;
+    END IF;
 
     ALTER TABLE folders FORCE ROW LEVEL SECURITY;
   END
