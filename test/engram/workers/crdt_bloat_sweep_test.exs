@@ -346,6 +346,33 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
       assert m.notes_over_threshold == 1
     end
 
+    # The alert reads only the count; this line is what pins it to a note and
+    # an account. Same definition as the count: the under-floor note is silent.
+    test "each note over the bloat threshold logs one line naming it by hashed ids", ctx do
+      %{user: user, vault: vault} = ctx
+      floor = CrdtBloat.alert_min_state_bytes()
+
+      small = seeded_note(user, vault, "small.md", noisy(150))
+      sized!(user, small, 19_000, 3_400)
+
+      big = seeded_note(user, vault, "big.md", noisy(150))
+      sized!(user, big, floor, 3_400)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          assert :ok = perform_job(CrdtBloatSweep, %{})
+        end)
+
+      assert [line] = log |> String.split("\n") |> Enum.filter(&(&1 =~ "crdt_bloat_note"))
+
+      assert line =~
+               "crdt_bloat_note note=#{HMAC.hash_id(big.id)} user=#{HMAC.hash_user_id(user.id)} " <>
+                 "state_bytes=#{floor} content_bytes=3400 ratio=#{Float.round(floor / 3400, 1)}"
+
+      refute log =~ HMAC.hash_id(small.id)
+      for id <- [user.id, big.id, small.id], do: refute(log =~ id)
+    end
+
     test "per-note write rate is a delta against the previous sweep", ctx do
       %{user: user, vault: vault} = ctx
       looping = seeded_note(user, vault, "loop.md", noisy(150))
@@ -462,6 +489,85 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
 
       assert [line] = loop_lines([{id, 400}], %{})
       assert line =~ "note=#{HMAC.hash_id(id)} user=unknown rate_per_hour=400 threshold="
+    end
+  end
+
+  defmodule MfaHandler do
+    @moduledoc false
+    # An `:logger` handler that forwards each event's `mfa` and message.
+    def log(%{meta: meta, msg: msg}, %{config: %{pid: pid}}),
+      do: send(pid, {:logged, meta[:mfa], msg})
+  end
+
+  # Prod alerts select these lines by `metadata_mfa` (engram-infra
+  # `crdt_save_loop_mfa`), so the call site that logs is part of the contract.
+  describe "per-note warning call sites" do
+    setup do
+      id = :crdt_bloat_sweep_mfa_test
+      :ok = :logger.add_handler(id, MfaHandler, %{config: %{pid: self()}})
+      on_exit(fn -> :logger.remove_handler(id) end)
+    end
+
+    defp logged_mfa(marker) do
+      receive do
+        {:logged, mfa, {:string, msg}} ->
+          if IO.chardata_to_string(msg) =~ marker, do: mfa, else: logged_mfa(marker)
+      after
+        1_000 -> flunk("no #{marker} line logged")
+      end
+    end
+
+    test "crdt_save_loop_note logs from log_save_loops/2" do
+      CrdtBloatSweep.log_save_loops([{Ecto.UUID.generate(), 400}], %{})
+      assert logged_mfa("crdt_save_loop_note") == {CrdtBloatSweep, :log_save_loops, 2}
+    end
+
+    test "crdt_bloat_note logs from log_bloated_notes/2" do
+      CrdtBloatSweep.log_bloated_notes([{Ecto.UUID.generate(), 70_000, 10_000, 7.0}], %{})
+      assert logged_mfa("crdt_bloat_note") == {CrdtBloatSweep, :log_bloated_notes, 2}
+    end
+  end
+
+  describe "log_bloated_notes/2" do
+    # Shares the save-loop caps: one account bloated on many notes cannot hide
+    # a second, and the total stays bounded.
+    test "caps per account and in total, worst ratio first" do
+      cap = CrdtBloatSweep.save_loop_log_cap()
+      accounts = CrdtBloatSweep.save_loop_log_accounts()
+      owners = for i <- 1..(accounts + 2), do: {i, Ecto.UUID.generate()}
+
+      {rows, owner_map} =
+        for {i, owner} <- owners, j <- 1..(cap + 3), reduce: {[], %{}} do
+          {rows, map} ->
+            id = Ecto.UUID.generate()
+            {[{id, 70_000, 1_000, i * 10.0 + j} | rows], Map.put(map, id, owner)}
+        end
+
+      lines =
+        [level: :warning]
+        |> ExUnit.CaptureLog.capture_log(fn ->
+          CrdtBloatSweep.log_bloated_notes(rows, owner_map)
+        end)
+        |> String.split("\n")
+        |> Enum.filter(&(&1 =~ "crdt_bloat_note"))
+
+      assert length(lines) == cap * accounts
+      {_, worst} = List.last(owners)
+      assert hd(lines) =~ "user=#{HMAC.hash_user_id(worst)}"
+      assert hd(lines) =~ "ratio=#{Float.round((accounts + 2) * 10.0 + cap + 3, 1)}"
+    end
+
+    test "a note with no owner logs as user=unknown" do
+      id = Ecto.UUID.generate()
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          CrdtBloatSweep.log_bloated_notes([{id, 70_000, 10_000, 7.0}], %{})
+        end)
+
+      assert log =~
+               "crdt_bloat_note note=#{HMAC.hash_id(id)} user=unknown state_bytes=70000 " <>
+                 "content_bytes=10000 ratio=7.0"
     end
   end
 end
