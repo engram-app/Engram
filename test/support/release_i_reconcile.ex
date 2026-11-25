@@ -9,7 +9,7 @@ defmodule Engram.ReleaseIReconcile do
   @path "priv/repo/migrations/20261125100100_explicit_folder_reconcile_migrate.exs"
 
   defp mod do
-    m = Module.concat(Engram.Repo.Migrations, ExplicitFolderReconcileMigrate)
+    m = :"Elixir.Engram.Repo.Migrations.ExplicitFolderReconcileMigrate"
     unless Code.ensure_loaded?(m), do: Code.require_file(@path)
     m
   end

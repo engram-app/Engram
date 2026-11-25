@@ -140,4 +140,31 @@ defmodule Engram.Folders.FullPathHmacRetiredTest do
     assert hashed(user.id) == 0
     assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
   end
+
+  # Prod's path: the reconcile ledger closed (release D on), so the boot run
+  # takes no lock and touches nothing, even a row the rule would clear.
+  test "the boot reconcile skips an install whose ledger closed", %{user: user, vault: vault} do
+    {:ok, %{folders: [%{id: marker}]}} = Notes.create_folder_markers(user, vault, ["Ghost"])
+    Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(marker)])
+    assert [_] = Engram.ReleaseIReconcile.cleared_ids(user.id)
+
+    now = DateTime.utc_now()
+
+    Repo.insert_all("data_migrations", [
+      %{
+        name: "explicit_folder_reconcile",
+        version: 1,
+        completed_at: now,
+        inserted_at: now,
+        updated_at: now
+      }
+    ])
+
+    Engram.ReleaseIReconcile.run!()
+    assert [_] = Engram.ReleaseIReconcile.cleared_ids(user.id)
+
+    Repo.query!("DELETE FROM data_migrations WHERE name = 'explicit_folder_reconcile'")
+    Engram.ReleaseIReconcile.run!()
+    assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
+  end
 end
