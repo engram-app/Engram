@@ -98,8 +98,8 @@ defmodule Engram.Sync.Broadcast do
   # Flush on commit ({:ok, _}); discard on rollback (anything else, incl
   # {:error, _}). Events were prepended, so reverse to restore emission order.
   # `{:ok, _}` only means `fun`'s own transaction committed: when the caller
-  # holds an outer tenant transaction (an MCP tool call is one), that is a
-  # savepoint, so each event waits for the outermost commit through
+  # holds an outer transaction (no production caller does today; the test
+  # sandbox does), it is nested, so each event waits for the outermost commit through
   # `Repo.after_commit/1` (dropped if it rolls back). With no outer
   # transaction it fires at once, as before.
   defp flush_or_discard(result) do

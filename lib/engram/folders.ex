@@ -355,7 +355,8 @@ defmodule Engram.Folders do
   # rename, and a released plugin's re-read runs outside its serial
   # folder-follow lane, so it could pre-create the target and break the
   # one-step on-disk rename. Queued with `Repo.after_commit/1`, after the notes
-  # leg's own post-commit broadcasts, so clients get it last.
+  # leg's own post-commit broadcasts, so clients get it last (with no outer
+  # transaction, which holds for every caller today).
   defp broadcast_rename_batch(user, vault, old_folder, new_folder) do
     Repo.after_commit(fn ->
       broadcast_batch(user, vault, %{
