@@ -79,10 +79,13 @@ defmodule Engram.EmbedModelsTest do
   describe "SaaS: the plan picks the model" do
     setup do: saas!()
 
-    test "Free embeds and searches with lite, Starter and Pro with large" do
+    # D15 (search-storage roadmap): queries are large on every plan; docs
+    # stay per plan. The voyage-4 family shares one space, so a large query
+    # searches lite-embedded Free notes with no re-embed.
+    test "Free embeds with lite, Starter and Pro with large; every plan searches with large" do
       free = free_user()
       assert EmbedModels.doc_model(free) == @lite
-      assert EmbedModels.query_model(free) == @lite
+      assert EmbedModels.query_model(free) == @large
 
       for tier <- ["starter", "pro"] do
         paid = paid_user(tier)
@@ -92,7 +95,7 @@ defmodule Engram.EmbedModelsTest do
     end
 
     test "the search profile follows the searching user's plan" do
-      assert SearchProfile.resolve(free_user()).query_model == @lite
+      assert SearchProfile.resolve(free_user()).query_model == @large
       assert SearchProfile.resolve(paid_user()).query_model == @large
     end
 
