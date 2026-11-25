@@ -270,7 +270,7 @@ defmodule Engram.Notes.ContentCommitTest do
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          assert :skipped = CrdtCheckpoint.checkpoint(u.id, v.id, note.id, doc)
+          assert :skipped = CrdtCheckpoint.checkpoint_pruning(u.id, v.id, note.id, doc)
         end)
 
       assert log =~ "crdt checkpoint old body unreadable"
