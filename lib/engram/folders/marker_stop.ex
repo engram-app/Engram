@@ -10,10 +10,12 @@ defmodule Engram.Folders.MarkerStop do
   On only while all of these hold, read per op, so an upgrade needs no
   operator step:
 
-    * the `folder_marker_stop` service override is not false (a kill switch,
-      default on, no deploy). Off, creates insert markers again; the folders
-      made explicit meanwhile stay listed (every reader since phase 1 reads
-      the flag);
+    * no runtime switch: release J dropped the `folder_marker_stop` service
+      override (a row left under it is ignored), because a marker J writes
+      lives forever (its delete ledger is retired) and keeps release I's
+      hash-matching reconcile alive for the vault across a rollback. The
+      `:folder_marker_stop` app env stays as the suites' lever (tests only,
+      default on) for the marker path below;
     * listings read the flag (`Rows.explicit_reads?/0`: the `folder_table`
       ledger is done), so a self-host that skipped releases keeps writing
       markers until its ledger closes;
@@ -38,7 +40,7 @@ defmodule Engram.Folders.MarkerStop do
   @doc "Whether folder creates skip the marker row (see the moduledoc)."
   @spec on?() :: boolean()
   def on? do
-    Engram.ServiceConfig.get(:folder_marker_stop, true) != false and floors?() and
+    Engram.ServiceConfig.env(:folder_marker_stop, true) != false and floors?() and
       Rows.explicit_reads?()
   end
 

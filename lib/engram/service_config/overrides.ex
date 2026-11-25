@@ -13,8 +13,8 @@ defmodule Engram.ServiceConfig.Overrides do
   added since 2026-11-06 has one (`docs/context/data-migrations-ledger.md`).
   Retired ledgers' keys are gone (`note_body_columns_null*`, and in release J
   `note_folder_hash_null*`, `explicit_folder_reconcile`,
-  `folder_marker_delete*`): a row left under one is ignored with the warning
-  below.
+  `folder_marker_delete*`, and the marker stop's `folder_marker_stop`): a row
+  left under one is ignored with the warning below.
 
   ## Reads
 
@@ -79,9 +79,6 @@ defmodule Engram.ServiceConfig.Overrides do
     plugin_floor_enabled: :boolean,
     file_times_backfill: :boolean,
     folder_table_backfill: :boolean,
-    # S6 step 4 phase 2 kill switch: off, folder creates insert marker rows
-    # again (`Engram.Folders.MarkerStop`).
-    folder_marker_stop: :boolean,
     # Every paced backfill chain's pressure gate (`Engram.Backfill.Throttle`).
     backfill_max_queue_ms: {:integer, 1..60_000},
     backfill_max_xact_s: {:integer, 1..86_400},

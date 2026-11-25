@@ -291,11 +291,36 @@ defmodule Engram.Folders.MarkerStopTest do
     assert "G/New" in explicit(u, v)
   end
 
-  test "kill switch: folder_marker_stop off, creates insert markers again", %{user: u, vault: v} do
+  test "the test lever off: creates insert markers (an open ledger's path)", %{user: u, vault: v} do
     Engram.ServiceConfig.put_override(:folder_marker_stop, false)
     {:ok, _} = Folders.create_markers(u, v, ["K"])
     assert markers(v) == 1
     assert explicit(u, v) == ["K"]
+  end
+
+  # Review of #2707, MEDIUM 2: release J has no runtime switch back to
+  # markers. A `folder_marker_stop` override row (left from release I, or
+  # written by hand) is ignored: a marker J wrote would live forever.
+  test "a folder_marker_stop override row cannot bring markers back", %{user: u, vault: v} do
+    Engram.ServiceConfig.put_override(:service_overrides_enabled, true)
+    Engram.Cache.clear_local(:service_overrides)
+    on_exit(fn -> Engram.Cache.clear_local(:service_overrides) end)
+
+    Repo.query!(
+      "INSERT INTO service_overrides (key, value, updated_by) VALUES ('folder_marker_stop', 'false', 't')"
+    )
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      assert MarkerStop.on?()
+      {:ok, _} = Folders.create_markers(u, v, ["Off"])
+      {:ok, _} = Notes.create_folder_marker(u, v, "Off/One")
+    end)
+
+    assert markers(v) == 0
+    assert explicit(u, v) == ["Off", "Off/One"]
+
+    assert {:error, {:unknown_key, :folder_marker_stop}} =
+             Engram.ServiceConfig.override(:folder_marker_stop, false, by: "t")
   end
 
   test "an undo announces the explicit folders it brings back", %{user: u, vault: v} do
@@ -368,7 +393,7 @@ defmodule Engram.Folders.MarkerStopTest do
     refute "C" in explicit(u, v)
   end
 
-  test "control: with the kill switch off, creates still insert markers", %{user: u, vault: v} do
+  test "control: with the test lever off, creates still insert markers", %{user: u, vault: v} do
     Engram.ServiceConfig.put_override(:folder_marker_stop, false)
     {:ok, _} = Folders.create_markers(u, v, ["M"])
     assert markers(v) == 1
