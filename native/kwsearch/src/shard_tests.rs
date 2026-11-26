@@ -361,6 +361,66 @@ fn an_unreadable_payload_fails_the_open() {
     assert!(Shard::open(dir.path()).is_err());
 }
 
+// Review N2: a malformed row (ragged terms, a note op without its note) is
+// skipped and counted; the rows around it still apply and apply returns Ok.
+#[test]
+fn a_malformed_row_is_skipped_not_fatal() {
+    let dir = tmp();
+    let s = Shard::open(dir.path()).unwrap();
+    let (user, vault) = (u(1), u(2));
+    let mut r = Rows::new();
+    r.push(
+        1,
+        2,
+        user,
+        kwfeed::UPSERT,
+        Some(vault),
+        Some(u(3)),
+        Some(u(10)),
+        1,
+        None,
+    );
+    r.push(
+        1,
+        2,
+        user,
+        kwfeed::UPSERT,
+        Some(vault),
+        Some(u(4)),
+        Some(u(11)),
+        1,
+        None,
+    );
+    r.out[1].terms = Some(vec![1, 2, 3]); // not a multiple of 8
+    r.push(
+        1,
+        2,
+        user,
+        kwfeed::DELETE_NOTE,
+        Some(vault),
+        None,
+        None,
+        1,
+        None,
+    );
+    r.push(
+        1,
+        2,
+        user,
+        kwfeed::UPSERT,
+        Some(vault),
+        Some(u(5)),
+        Some(u(12)),
+        1,
+        None,
+    );
+    let refs: Vec<&Row> = r.out.iter().collect();
+    let a = s.apply(&refs, MB, NOW).unwrap();
+    assert_eq!(a.skipped_malformed, 2);
+    s.commit((1, 4), 0, NOW, TTL).unwrap();
+    assert_eq!(points(&s), HashSet::from([u(10), u(12)]));
+}
+
 // Task 4c: two users whose 32-bit dims collide in one shard. Each user's
 // document frequency, and so each score, is unchanged by the other.
 #[test]

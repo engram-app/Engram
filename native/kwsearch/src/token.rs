@@ -143,6 +143,26 @@ mod tests {
         assert!(Keys::parse(&format!("{A}\n{B}\n{A}")).is_err());
     }
 
+    // Review N4: a token the Elixir signer made (Engram.KeywordStore.Tantivy.Token,
+    // pinned by the same constant in test/engram/keyword_store/tantivy/token_test.exs)
+    // verifies here; a tampered or expired copy does not.
+    #[test]
+    fn a_token_signed_by_the_elixir_side_verifies() {
+        const ELIXIR: &str = "eyJleHAiOjE4MDAwMDAwNjAsInMiOiJzZWFyY2giLCJ1IjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwidiI6WyIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiXX0.CIlleZ0S7lBZSmf774fVt7M7gssJLegZa-yQL7hgPi4";
+        let k = Keys::parse("0123456789abcdef0123456789abcdef-crosslang").unwrap();
+        match k.verify(ELIXIR, 1_800_000_000) {
+            Some(Claims::Search { u, v, exp }) => {
+                assert_eq!(u.to_string(), "00000000-0000-4000-8000-000000000001");
+                assert_eq!(v.len(), 1);
+                assert_eq!(exp, 1_800_000_060);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(k.verify(ELIXIR, 1_800_000_060).is_none(), "expired");
+        let tampered = ELIXIR.replacen("eyJleHAiOjE4MDAwMDAwNjA", "eyJleHAiOjE4MDAwMDAwNjE", 1);
+        assert!(k.verify(&tampered, 1_800_000_000).is_none(), "tampered");
+    }
+
     // Property: flipping any single byte of a valid token, or of its
     // payload before signing it with another key, never verifies.
     #[test]
