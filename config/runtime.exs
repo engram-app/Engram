@@ -178,31 +178,11 @@ if config_env() != :test do
       """
   end
 
-  # Keyword store (search storage roadmap P2). Unset keeps the default,
-  # Engram.KeywordStore.QdrantSparse, everywhere; self-host never sets it.
-  # KEYWORD_STORE=tantivy selects the kwsearch service, which needs
-  # KWSEARCH_URL (https), KWSEARCH_CA_FILE and KWSEARCH_TOKEN_KEYS
-  # ("current" or "current,next" during a key rotation, security F14).
-  if System.get_env("KEYWORD_STORE") == "tantivy" do
-    config :engram, :keyword_store, Engram.KeywordStore.Tantivy
-
-    keys =
-      "KWSEARCH_TOKEN_KEYS"
-      |> System.get_env("")
-      |> String.split(",", trim: true)
-
-    if keys == [], do: raise("KEYWORD_STORE=tantivy needs KWSEARCH_TOKEN_KEYS")
-
-    config :engram, :kwsearch,
-      url: System.fetch_env!("KWSEARCH_URL"),
-      ca_file: System.get_env("KWSEARCH_CA_FILE"),
-      token_keys: keys,
-      timeout_ms: String.to_integer(System.get_env("KWSEARCH_TIMEOUT_MS", "1000")),
-      # Hard maximum age of a keyword_feed row (security F2). 48 h is the
-      # recommended design, not yet confirmed by the owner: change it here.
-      feed_max_age_h: String.to_integer(System.get_env("KWSEARCH_FEED_MAX_AGE_H", "48")),
-      snapshot_retention_days:
-        String.to_integer(System.get_env("KWSEARCH_SNAPSHOT_RETENTION_DAYS", "30"))
+  # Keyword store write set and read store (search storage roadmap P2 task
+  # 8). Unset everywhere but a SaaS rollout: the sparse store only. See
+  # `Engram.RuntimeConfig.keyword_store/1` for the variables and what it refuses.
+  for {key, value} <- Engram.RuntimeConfig.keyword_store(&System.get_env/1) do
+    config :engram, key, value
   end
 
   # Embedder — select adapter from EMBED_BACKEND env var (voyage or ollama)

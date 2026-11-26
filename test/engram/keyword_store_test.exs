@@ -24,14 +24,14 @@ defmodule Engram.KeywordStoreTest do
     sparse = %{indices: <<1::little-32>>, values: <<1.0::little-float-64>>}
     scope = %{user_id: "u", vault_id: "v", note_id: "n"}
 
-    assert KeywordStore.index(scope, [%{id: "p1", sparse: sparse}]) ==
+    assert KeywordStore.index(scope, [%{id: "p1", sparse: sparse}], nil) ==
              {:ok, %{"p1" => %{"keyword" => sparse}}, nil}
   end
 
   test "empty deletes and upserts never reach the backend" do
     Engram.KeywordStoreRecorder.install()
     assert :ok = KeywordStore.delete_points("u", [])
-    assert :ok = KeywordStore.upsert(%{user_id: "u", vault_id: "v", note_id: "n"}, [])
+    assert :ok = KeywordStore.upsert(%{user_id: "u", vault_id: "v", note_id: "n"}, [], nil)
     refute_received {:keyword_store, _, _}
   end
 

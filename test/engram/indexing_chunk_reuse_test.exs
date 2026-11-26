@@ -411,7 +411,7 @@ defmodule Engram.IndexingChunkReuseTest do
       old_hmac = Base.encode64(note.path_hmac)
       assert :ok = Indexing.delete_points_by_path_hmac(note, old_hmac)
       note_id = note.id
-      assert_received {:keyword_store, :delete_note, [_user, _vault, ^note_id, []]}
+      assert_received {:keyword_store, :delete_note, [_user, _vault, ^note_id, [], :rebuild]}
       # Rebuilt means sent: no vector cache to answer from.
       clear_vector_cache()
 
@@ -422,7 +422,9 @@ defmodule Engram.IndexingChunkReuseTest do
       assert length(embedded_texts()) == count - 1, "every chunk must be rebuilt"
       assert length(upserts(ctx.recorder)) == count
       # The rebuild's write-first delete of the note's other points hits the seam.
-      assert_received {:keyword_store, :delete_note, [_user, _vault, ^note_id, [_ | _]]}
+      assert_received {:keyword_store, :delete_note,
+                       [_user, _vault, ^note_id, [_ | _], :replaced]}
+
       # The main write goes through the store, scoped to the note.
       assert_received {:keyword_store, :index, [%{note_id: ^note_id}, [_ | _]]}
       assert set_payloads(ctx.recorder) == []

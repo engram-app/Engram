@@ -61,6 +61,8 @@ defmodule Engram.Repo.Migrations.CreateKeywordFeedExpand do
 
     create index(:keyword_deletions, [:xid, :seq])
     create index(:keyword_deletions, [:inserted_at])
+    # `Feed.delete_user/1` writes a user's tombstone once.
+    create index(:keyword_deletions, [:user_id])
 
     create table(:keyword_feed_horizon, primary_key: false) do
       add :id, :smallint, primary_key: true
@@ -105,9 +107,24 @@ defmodule Engram.Repo.Migrations.CreateKeywordFeedExpand do
       )
     end
 
+    # The horizon is the trim's alone (engram_maintenance, by default
+    # privileges): the app role reads it and cannot move it. A stray app-role
+    # DELETE would switch gap detection off; an UPDATE could wedge kwsearch.
     execute(
-      "GRANT SELECT, INSERT, UPDATE, DELETE ON keyword_feed_horizon TO engram_app",
-      "REVOKE ALL ON keyword_feed_horizon FROM engram_app"
+      "REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON keyword_feed_horizon FROM engram_app",
+      "SELECT 1"
+    )
+
+    execute(
+      "GRANT SELECT ON keyword_feed_horizon TO engram_app",
+      "REVOKE SELECT ON keyword_feed_horizon FROM engram_app"
+    )
+
+    # Seeded: kwsearch treats a missing row as not ready, so it always
+    # exists, and the trim only ever raises it.
+    execute(
+      "INSERT INTO keyword_feed_horizon (id, xid, seq) VALUES (1, '0', 0)",
+      "DELETE FROM keyword_feed_horizon WHERE id = 1"
     )
   end
 end

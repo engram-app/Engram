@@ -99,7 +99,7 @@ defmodule Engram.IndexingDeleteByPointIdTest do
     user_id = to_string(user.id)
     vault_id = to_string(vault.id)
     assert_received {:keyword_store, :delete_points, [^user_id, [^point_a, ^point_b]]}
-    assert_received {:keyword_store, :delete_note, [^user_id, ^vault_id, ^note_id, []]}
+    assert_received {:keyword_store, :delete_note, [^user_id, ^vault_id, ^note_id, [], :deleted]}
 
     assert Repo.all(from(c in Chunk, where: c.note_id == ^note_id), skip_tenant_check: true) == []
   end

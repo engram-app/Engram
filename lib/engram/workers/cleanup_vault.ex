@@ -371,6 +371,10 @@ defmodule Engram.Workers.CleanupVault do
     from(akv in "api_key_vaults", where: akv.vault_id == type(^vault_id, Ecto.UUID))
     |> Repo.delete_all(skip_tenant_check: true)
 
+    # The irreversible keyword delete (the kwsearch feed's vault tombstone),
+    # committed with the vault row's delete. A no-op while the feed is off.
+    :ok = Engram.KeywordStore.delete_vault(vault.user_id, vault_id, :purge)
+
     Repo.delete!(vault)
     {revoked, revoked_grants}
   end
@@ -527,7 +531,10 @@ defmodule Engram.Workers.CleanupVault do
   end
 
   defp delete_qdrant_points(vault) do
-    case Engram.Indexing.delete_vault_points(vault.user_id, vault.id) do
+    # `:soft`: this runs before `purge_started_at`, while a restore can still
+    # win, so it leaves no keyword vault tombstone; `purge_rows/2` writes the
+    # purge in the final transaction.
+    case Engram.Indexing.delete_vault_points(vault.user_id, vault.id, :soft) do
       :ok ->
         Logger.debug(
           "CleanupVault: deleted Qdrant points",

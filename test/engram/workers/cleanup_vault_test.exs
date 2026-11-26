@@ -539,7 +539,10 @@ defmodule Engram.Workers.CleanupVaultTest do
       refute Repo.get(Chunk, chunk.id, skip_tenant_check: true)
       # Vault delete reaches the keyword seam.
       {user_id, vault_id} = {to_string(user.id), to_string(vault.id)}
-      assert_received {:keyword_store, :delete_vault, [^user_id, ^vault_id]}
+      # Before purge_started_at: reversible (no tombstone). The purge itself
+      # is written in the final transaction, with the vault row's delete.
+      assert_received {:keyword_store, :delete_vault, [^user_id, ^vault_id, :soft]}
+      assert_received {:keyword_store, :delete_vault, [^user_id, ^vault_id, :purge]}
     end
 
     test "Qdrant failure does not prevent DB cleanup", %{

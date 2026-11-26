@@ -36,13 +36,13 @@ defmodule Engram.KeywordStore.QdrantSparse do
   def delete_points(_user_id, _ids), do: :ok
 
   @impl true
-  def delete_note(_user_id, _vault_id, _note_id, _keep), do: :ok
+  def delete_note(_user_id, _vault_id, _note_id, _keep, _reason), do: :ok
 
   @impl true
-  def delete_vault(_user_id, _vault_id), do: :ok
+  def delete_vault(_user_id, _vault_id, _kind), do: :ok
 
   @impl true
-  def delete_user(_user_id), do: :ok
+  def delete_user(_user_id, _kind), do: :ok
 
   @impl true
   def search(sparse, search_opts),

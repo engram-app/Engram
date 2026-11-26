@@ -50,14 +50,31 @@ defmodule Engram.KeywordStore.Tantivy.Feed do
 
   @doc """
   One note-scoped op set: `delete_note_except(keep)` then an upsert per
-  `{point_id, terms}`. Joins the caller's transaction for the same tenant
-  (the index pass calls it inside its chunk-row transaction).
+  `{point_id, terms}`, all at one stamp. Joins the caller's transaction for
+  the same tenant.
+
+  `{:given, keep}`: the index pass, inside its chunk-row transaction, whose
+  keep set is the rows it is committing. `:current`: any other caller. The
+  keep set is then read here, AFTER the note lock and the stamp, so no pass
+  can commit between the read and the stamp, and an upsert for a point that
+  is not in it (a pass since dropped it) is left out.
   """
-  @spec note_pass(map(), [String.t()], [{String.t(), binary()}]) :: :ok
-  def note_pass(scope, keep, upserts) do
+  @spec note_pass(map(), {:given, [String.t()]} | :current, [{String.t(), binary()}]) :: :ok
+  def note_pass(scope, keep_spec, upserts) do
     in_tenant(scope.user_id, fn ->
       stamp = lock_and_stamp(scope.note_id)
       base = note_row(scope, stamp)
+
+      {keep, upserts} =
+        case keep_spec do
+          {:given, keep} ->
+            {keep, upserts}
+
+          :current ->
+            keep = note_points(scope.user_id, scope.note_id)
+            kept = MapSet.new(keep)
+            {keep, Enum.filter(upserts, fn {id, _} -> MapSet.member?(kept, to_string(id)) end)}
+        end
 
       rows = [
         Map.merge(base, %{op: @delete_note_except, keep: Enum.map(keep, &uuid/1)})
@@ -112,11 +129,25 @@ defmodule Engram.KeywordStore.Tantivy.Feed do
     end)
   end
 
+  @doc """
+  The user's tombstone, once: a user is purged once, so a deletion-log row
+  for them means a sweep or a retry already wrote it (the log outlives the
+  feed's maximum age, and a repeat after it is harmless).
+  """
   @spec delete_user(String.t()) :: :ok
   def delete_user(user_id) do
     in_tenant(user_id, fn ->
-      insert_feed([%{user_id: uuid(user_id), index_set: @index_set, op: @delete_user}])
-      log_deletion(user_id, @delete_user, nil, nil)
+      logged? =
+        Repo.exists?(
+          from(d in DeletionRow, where: d.user_id == ^uuid(user_id) and d.op == @delete_user)
+        )
+
+      if logged? do
+        :ok
+      else
+        insert_feed([%{user_id: uuid(user_id), index_set: @index_set, op: @delete_user}])
+        log_deletion(user_id, @delete_user, nil, nil)
+      end
     end)
   end
 
