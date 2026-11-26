@@ -7,17 +7,11 @@ defmodule Engram.Folders.ExplicitReadsTest do
   # by a raw write: the reverse is what the write stop (phase 2) leaves.
   use Engram.DataCase, async: false
 
-  alias Engram.Backfill.IdWindows
   alias Engram.{DataMigrations, FolderRows, Notes, QueryPlan, QueryRecorder, Repo}
-  alias Engram.DataMigrations.{ExplicitFolderReconcile, FolderTable}
+  alias Engram.DataMigrations.FolderTable
   alias Engram.Folders.Rows
 
   setup do
-    # Markers are written here, so the vault keeps release D's path hashes:
-    # #2645's write stop is on only once a vault has no marker
-    # (`PathHashStop.markers_gone?/2`), and the test env assumes it on.
-    Application.put_env(:engram, :path_hash_stop_markers_gone, false)
-    on_exit(fn -> Application.put_env(:engram, :path_hash_stop_markers_gone, true) end)
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     %{user: user, vault: insert(:vault, user: user)}
   end
@@ -30,7 +24,7 @@ defmodule Engram.Folders.ExplicitReadsTest do
   end
 
   # An explicit folder row with no live marker: what a cascade before #2639
-  # left on a row it kept (stale, `ExplicitFolderReconcile` clears it), and
+  # left on a row it kept (stale, the explicit-flag reconcile clears it), and
   # what a writer leaves once markers stop (phase 2). The marker create makes
   # the explicit row; the marker goes.
   defp explicit_without_marker!(user, vault, folder) do
@@ -218,32 +212,9 @@ defmodule Engram.Folders.ExplicitReadsTest do
           )
   end
 
-  defp reconcile! do
-    IdWindows.reset_walk(ExplicitFolderReconcile.name())
-
-    Enum.reduce_while(1..5, nil, fn _, _ ->
-      case ExplicitFolderReconcile.run_pass() do
-        :done -> {:halt, :done}
-        more -> {:cont, more}
-      end
-    end)
-  end
-
   # The #2639 review, H1: a row a pre-#2639 cascade left explicit with its
   # marker gone must not be listed, and a path delete must clear it.
   describe "stale explicit rows" do
-    test "the reconcile clears a row no live marker names, and keeps a marked one", ctx do
-      %{user: u, vault: v} = ctx
-      explicit_without_marker!(u, v, "Stale")
-      {:ok, _} = Notes.create_folder_markers(u, v, ["Kept"])
-
-      assert reconcile!() == :done
-      refute FolderRows.tree(u)["Stale"].explicit
-      assert {:ok, ["Kept"]} = Notes.list_explicit_folders(u, v)
-      # A second walk finds nothing.
-      assert reconcile!() == :done
-    end
-
     test "a path delete (DELETE /folders/<path>) clears a stale row", %{user: u, vault: v} do
       explicit_without_marker!(u, v, "Stale")
 
@@ -252,28 +223,17 @@ defmodule Engram.Folders.ExplicitReadsTest do
       assert {:ok, :not_found} = Notes.delete_folder_marker(u, v, "Stale")
     end
 
-    # With the rollback floor at the marker stop's release (D, #2674), the
-    # reconcile no longer gates: its daily re-verify may reopen it, and
-    # folders the stop made have no marker to fall back to.
-    test "the gate waits for the FolderTable ledger, not the reconcile, at D", %{user: _u} do
+    # With the rollback floor at the marker stop's release (D, #2674), only
+    # the FolderTable ledger gates (the reconcile is retired in release J).
+    test "the gate waits for the FolderTable ledger", %{user: _u} do
       Engram.ServiceConfig.put_override(:explicit_folders_ledger, :read)
       assert Engram.Folders.MarkerStop.floors?(:enforce)
       Engram.DataCase.clear_request_caches()
       refute Rows.explicit_reads?()
 
-      DataMigrations.mark_done(ExplicitFolderReconcile.name(), ExplicitFolderReconcile.version())
-      Engram.DataCase.clear_request_caches()
-      refute Rows.explicit_reads?(), "the reconcile alone opened the gate"
-      DataMigrations.reopen(ExplicitFolderReconcile.name(), ExplicitFolderReconcile.version())
-
       DataMigrations.mark_done(FolderTable.name(), FolderTable.version())
       Engram.DataCase.clear_request_caches()
       assert Rows.explicit_reads?()
-    end
-
-    test "kill switch: off, the reconcile is disabled" do
-      Engram.ServiceConfig.put_override(:explicit_folder_reconcile, false)
-      refute ExplicitFolderReconcile.enabled?()
     end
   end
 
@@ -337,6 +297,8 @@ defmodule Engram.Folders.ExplicitReadsTest do
     {:ok, _} = Notes.create_folder_markers(u, v, ["D"])
     Repo.query!("DELETE FROM notes WHERE vault_id = $1 AND kind = 'folder'", [dump(v.id)])
     id = row_id(u, "D")
+    # D-era: no stamp (J's marker writes stamp 0).
+    Repo.query!("UPDATE folders SET explicit_seq = NULL WHERE id = $1", [dump(id)])
 
     assert 1 =
              Repo.with_tenant!(u.id, fn ->
@@ -467,83 +429,6 @@ defmodule Engram.Folders.ExplicitReadsTest do
     end
   end
 
-  # The folder marker delete (S6 step 4) matches a marker to its row by path
-  # hash, and #2645's write stop leaves rows without one: a marker written on
-  # an existing row must give it the marker's hash (missing or stale).
-  test "a marker on an existing row writes the row's missing or stale path hash", ctx do
-    %{user: u, vault: v} = ctx
-    put_note(u, v, "H/n.md")
-    put_note(u, v, "S/n.md")
-    tree = FolderRows.tree(u)
-
-    Repo.query!("UPDATE folders SET full_path_hmac = NULL WHERE id = $1", [
-      Ecto.UUID.dump!(tree["H"].id)
-    ])
-
-    Repo.query!("UPDATE folders SET full_path_hmac = '\\x00' WHERE id = $1", [
-      Ecto.UUID.dump!(tree["S"].id)
-    ])
-
-    {:ok, _} = Notes.create_folder_markers(u, v, ["H", "S"])
-
-    for folder <- ["H", "S"] do
-      %{rows: [[row_hash, marker_hash]]} =
-        Repo.query!(
-          "SELECT f.full_path_hmac, n.folder_hmac FROM folders f JOIN notes n " <>
-            "ON n.vault_id = f.vault_id AND n.kind = 'folder' AND n.deleted_at IS NULL " <>
-            "AND n.folder_hmac = f.full_path_hmac WHERE f.id = $1",
-          [Ecto.UUID.dump!(tree[folder].id)]
-        )
-
-      assert is_binary(marker_hash) and row_hash == marker_hash, folder
-    end
-  end
-
-  # The marker-hash write is ONE statement per ensure call, whatever the
-  # number of markers: `PathHmacs.put/3`, which compares each named row's
-  # stored hash and writes only a mismatch (its plan, primary-key and
-  # `folders_full_path` probes: `PathHmacsPlanTest`).
-  test "the marker hash write is one statement per ensure call", %{user: u, vault: v} do
-    for f <- ~w(H1 H2 H3), do: put_note(u, v, "#{f}/n.md")
-    me = self()
-
-    {_, queries} =
-      QueryRecorder.record(fn -> {:ok, _} = Notes.create_folder_markers(u, v, ~w(H1 H2 H3)) end)
-
-    puts = for %{sql: s, pid: ^me} <- queries, s =~ "IS DISTINCT FROM t.fh", do: s
-    assert length(puts) == 1
-  end
-
-  # A stale stored hash replaced by the marker's: `PathHmacs.put/3` releases
-  # the marker's hash from any other live row first (a mixed-window leftover
-  # holding it), so exactly one live row holds it after, the marker's.
-  test "a marker's hash taken from another live holder leaves exactly one", ctx do
-    %{user: u, vault: v} = ctx
-    put_note(u, v, "H/n.md")
-    put_note(u, v, "X/n.md")
-    tree = FolderRows.tree(u)
-    [h, x] = Enum.map(["H", "X"], &Ecto.UUID.dump!(tree[&1].id))
-
-    Repo.query!(
-      "UPDATE folders SET full_path_hmac = (SELECT full_path_hmac FROM folders WHERE id = $1) " <>
-        "WHERE id = $2",
-      [h, x]
-    )
-
-    Repo.query!("UPDATE folders SET full_path_hmac = NULL WHERE id = $1", [h])
-    {:ok, _} = Notes.create_folder_markers(u, v, ["H"])
-
-    %{rows: holders} =
-      Repo.query!(
-        "SELECT f.id FROM folders f JOIN notes n ON n.vault_id = f.vault_id " <>
-          "AND n.kind = 'folder' AND n.deleted_at IS NULL AND n.folder_hmac = f.full_path_hmac " <>
-          "WHERE f.vault_id = $1 AND f.deleted_at IS NULL",
-        [Ecto.UUID.dump!(v.id)]
-      )
-
-    assert holders == [[h]]
-  end
-
   # A batch move whose target is a folder ROW id (what the listings hand out
   # since the flag reads) with no marker behind it.
   test "batch_move_notes into an explicit folder given by its row id", %{user: u, vault: v} do
@@ -634,199 +519,6 @@ defmodule Engram.Folders.ExplicitReadsTest do
 
       assert {:ok, %{notes: 1, folders: 0}} = Engram.Folders.rename(u, v, "Late", "Moved")
       assert {:ok, _} = Notes.get_note(u, v, "Moved/n.md")
-    end
-  end
-
-  # The 2639 audit: release C (0.89.0) still serves during the rollout to D,
-  # or after a rollback and re-roll, and writes after the reconcile closed.
-  # Each read switch, given 0.89.0's own write (raw SQL where its code
-  # differs from D's), must read right. D's writers are unchanged except the
-  # cascade's marker leg and the path delete, so creates, renames and undos
-  # are 0.89.0's own code here.
-  describe "0.89.0 writes, D reads" do
-    # 0.89.0's recursive delete of an empty explicit folder: the marker leg
-    # tombstones the marker WITHOUT clearing the flag (D's leg clears it),
-    # then the rows leg soft-deletes the row with explicit false.
-    defp c_delete!(user, folder, opts) do
-      %{id: row} = FolderRows.tree(user)[folder]
-
-      Repo.query!(
-        "UPDATE notes SET deleted_at = now() WHERE kind = 'folder' AND user_id = $1 " <>
-          "AND deleted_at IS NULL AND folder_hmac = (SELECT full_path_hmac FROM folders WHERE id = $2)",
-        [Ecto.UUID.dump!(user.id), Ecto.UUID.dump!(row)]
-      )
-
-      if opts[:rows_leg],
-        do:
-          Repo.query!(
-            "UPDATE folders SET deleted_at = now(), explicit = false WHERE id = $1",
-            [Ecto.UUID.dump!(row)]
-          )
-    end
-
-    test "create: a 0.89.0 folder create is listed", %{user: u, vault: v} do
-      {:ok, _} = Notes.create_folder_markers(u, v, ["C"])
-      assert {:ok, ["C"]} = Notes.list_explicit_folders(u, v)
-      assert %{"C" => _} = payload_ids(u, v)
-    end
-
-    test "rename: a 0.89.0 folder rename is listed at the new path", %{user: u, vault: v} do
-      {:ok, _} = Notes.create_folder_markers(u, v, ["Old"])
-      {:ok, _} = Notes.rename_folder(u, v, "Old", "New")
-      assert {:ok, ["New"]} = Notes.list_explicit_folders(u, v)
-    end
-
-    test "delete: a whole 0.89.0 delete is not listed", %{user: u, vault: v} do
-      {:ok, _} = Notes.create_folder_markers(u, v, ["Gone"])
-      c_delete!(u, "Gone", rows_leg: true)
-      assert {:ok, []} = Notes.list_explicit_folders(u, v)
-    end
-
-    # The audit's ghost: the marker leg ran, the rows leg did not (or kept
-    # the row). The closed ledger's daily re-verify walk clears it.
-    test "delete: a 0.89.0 delete that kept the row is cleared by the re-verify", ctx do
-      %{user: u, vault: v} = ctx
-      {:ok, _} = Notes.create_folder_markers(u, v, ["Ghost"])
-      c_delete!(u, "Ghost", rows_leg: false)
-      assert {:ok, ["Ghost"]} = Notes.list_explicit_folders(u, v)
-
-      assert ExplicitFolderReconcile.reverify?()
-      assert reconcile!() == :done
-      assert {:ok, []} = Notes.list_explicit_folders(u, v)
-    end
-
-    test "undo: a 0.89.0 undo of an empty folder delete is listed again", %{user: u, vault: v} do
-      {:ok, _} = Notes.create_folder_markers(u, v, ["U"])
-      op = Ecto.UUID.generate()
-      {:ok, _} = Engram.Folders.delete(u, v, "U", recursive: true, op_id: op)
-      assert {:ok, []} = Notes.list_explicit_folders(u, v)
-      {:ok, _} = Engram.Folders.restore_op(u, v, op)
-      assert {:ok, ["U"]} = Notes.list_explicit_folders(u, v)
-    end
-  end
-
-  # The 2639 / 2649 re-review: after a rollback E -> D, D's daily walk must
-  # not clear a folder E made explicit with no marker (`explicit_seq` set),
-  # or the plugin trashes it.
-  test "rollback E -> D: the walk keeps an E-style folder (explicit_seq, no marker)", ctx do
-    %{user: u, vault: v} = ctx
-    {:ok, %{folders: [%{id: m}]}} = Notes.create_folder_markers(u, v, ["FromE"])
-    %{id: row} = FolderRows.tree(u)["FromE"]
-    Repo.query!("UPDATE folders SET explicit_seq = 7 WHERE id = $1", [Ecto.UUID.dump!(row)])
-    Repo.query!("DELETE FROM notes WHERE id = $1", [Ecto.UUID.dump!(m)])
-
-    assert reconcile!() == :done
-    assert FolderRows.tree(u)["FromE"].explicit
-    assert {:ok, ["FromE"]} = Notes.list_explicit_folders(u, v)
-  end
-
-  # The re-review: a closed ledger's walk repairs a ghost in place and stays
-  # closed, so listings never flap back to the markers.
-  test "a closed ledger's walk repairs a ghost and stays closed", %{user: u, vault: v} do
-    explicit_without_marker!(u, v, "Ghost2")
-    DataMigrations.mark_done(ExplicitFolderReconcile.name(), ExplicitFolderReconcile.version())
-
-    on_exit(fn ->
-      DataMigrations.forget(ExplicitFolderReconcile.name(), ExplicitFolderReconcile.version())
-    end)
-
-    IdWindows.reset_walk(ExplicitFolderReconcile.name())
-
-    assert ExplicitFolderReconcile.run_pass() == :done
-    refute FolderRows.tree(u)["Ghost2"].explicit
-
-    assert DataMigrations.completed_at(
-             ExplicitFolderReconcile.name(),
-             ExplicitFolderReconcile.version()
-           )
-  end
-
-  # The walk's statements as the fleet role (#2678 review H1, M1). Pinned so
-  # the partition's leftovers cannot decide it: first a 20-folder vault with
-  # `folders` rewritten and analyzed alone (`QueryPlan.fresh!/1`), then a
-  # 2,000-folder vault among 40 other tenants, as analyzed and at the 2639
-  # n_distinct shapes. Every read keyed: the window's folder rows by primary
-  # key (an owner or vault bound on that scan lets the planner read
-  # `folders_user`, every folder of the tenant, per window), the vaults by
-  # primary key, one marker probe a row.
-  test "plans: the reconcile's statements as engram_maintenance", %{user: u, vault: v} do
-    {:ok, _} = Notes.create_folder_markers(u, v, Enum.map(1..20, &"M#{&1}"))
-    Repo.query!("ANALYZE notes")
-    QueryPlan.fresh!("folders")
-    assert_reconcile_plans!(u, v, "20 folders, pinned")
-
-    for chunk <- Enum.chunk_every(21..2000, 500),
-        do: {:ok, _} = Notes.create_folder_markers(u, v, Enum.map(chunk, &"M#{&1}"))
-
-    for _ <- 1..40 do
-      {:ok, other} = Engram.Fixtures.user_with_dek_fixture()
-      {:ok, _} = Notes.create_folder_markers(other, insert(:vault, user: other), ["X", "Y", "Z"])
-    end
-
-    Repo.query!("ANALYZE notes")
-    QueryPlan.fresh!("folders")
-    assert_reconcile_plans!(u, v, "2,000 folders, pinned")
-
-    for {users, vaults} <- [{40, 40}, {-1, 40}] do
-      QueryPlan.folders_tenant_shape!(users, vaults)
-      assert_reconcile_plans!(u, v, "2,000 folders, n_distinct #{users}/#{vaults}")
-    end
-  end
-
-  defp reconcile_plans(user, sql, params, nestloop) do
-    Repo.query!("SET LOCAL enable_nestloop = #{nestloop}")
-
-    %{custom: custom, generic: generic} =
-      QueryPlan.rls_plans(user.id, sql, params, role: "engram_maintenance", analyze: false)
-
-    Repo.query!("SET LOCAL enable_nestloop = on")
-    [custom: custom, generic: generic]
-  end
-
-  defp assert_reconcile_plans!(user, vault, label) do
-    ids =
-      Repo.query!("SELECT id FROM folders WHERE vault_id = $1 ORDER BY id LIMIT 200", [
-        Ecto.UUID.dump!(vault.id)
-      ]).rows
-      |> List.flatten()
-
-    vaults = [Ecto.UUID.dump!(vault.id)]
-
-    for {name, sql, params} <- [
-          {"window vaults", ExplicitFolderReconcile.window_vaults_sql(), [ids]},
-          {"vault lock", Engram.DataMigrations.VaultLock.sql(), [vaults]},
-          {"stale", ExplicitFolderReconcile.stale_sql(), [ids, vaults]},
-          {"clear", ExplicitFolderReconcile.clear_sql(), [ids]},
-          {"left", ExplicitFolderReconcile.left_sql(), [ids]}
-        ] do
-      # Nested loops off too: a planner that would rather hash must have no
-      # unkeyed side to hash (an anti join's notes side, a whole folders read).
-      for nestloop <- ["on", "off"],
-          {kind, plan} <- reconcile_plans(user, sql, params, nestloop) do
-        msg = "#{label}, #{name}, #{kind} plan, enable_nestloop #{nestloop}"
-        refute plan =~ ~r/Seq Scan on (notes|folders|vaults)/, msg <> "\n" <> plan
-        QueryPlan.assert_notes_reads_bound!(plan, msg)
-
-        for [index, next] <-
-              Regex.scan(
-                ~r/(?:Index (?:Only )?Scan using|Bitmap Index Scan on) ((?:folders|vaults)\w*)[^\n]*\n([^\n]*)/,
-                plan,
-                capture: :all_but_first
-              ) do
-          # At the pinned 20-folder shape the planner is told the table is
-          # one vault, so a skip scan of `folders_vault_id_id_key` by `id`
-          # ties the primary key (a CI-stats artifact; the 2,000-folder
-          # shapes require the primary key).
-          allowed =
-            if String.starts_with?(label, "20 folders"),
-              do: ["folders_pkey", "folders_vault_id_id_key", "vaults_pkey"],
-              else: ["folders_pkey", "vaults_pkey"]
-
-          assert index in allowed and
-                   next =~ ~r/^\s*Index Cond: \(\(?(?:\w+\.)?id = /,
-                 "#{msg}: #{index} read, not a primary-key probe: #{next}\n#{plan}"
-        end
-      end
     end
   end
 end

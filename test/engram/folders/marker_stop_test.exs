@@ -5,8 +5,6 @@ defmodule Engram.Folders.MarkerStopTest do
   # moves on each change as the marker write moved it.
   use Engram.DataCase, async: false
 
-  alias Engram.Backfill.IdWindows
-  alias Engram.DataMigrations.ExplicitFolderReconcile
   alias Engram.{FolderRows, Folders, Notes, Repo, Vaults}
   alias Engram.Folders.{MarkerStop, Rows}
 
@@ -54,6 +52,33 @@ defmodule Engram.Folders.MarkerStopTest do
     now = seq(u, v)
     assert {:ok, %{folders: [%{created: false}]}} = Folders.create_markers(u, v, ["A/B"])
     assert seq(u, v) == now
+  end
+
+  # Delta review of #2707, L2: a create stamps each new row once (its seq),
+  # not 0 first and the seq after.
+  test "a create writes explicit_seq once", %{user: u, vault: v} do
+    me = self()
+    id = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      id,
+      [:engram, :repo, :query],
+      fn _, _, meta, _ ->
+        if self() == me and meta[:source] == "folders" and
+             meta[:query] =~ ~r/^UPDATE .*explicit_seq/s,
+           do: send(me, {:stamp, meta[:query]})
+      end,
+      nil
+    )
+
+    try do
+      {:ok, _} = Folders.create_markers(u, v, ["Once/A", "Once/B"])
+    after
+      :telemetry.detach(id)
+    end
+
+    assert_received {:stamp, _}
+    refute_received {:stamp, _}
   end
 
   test "the single create returns the row's id", %{user: u, vault: v} do
@@ -123,7 +148,7 @@ defmodule Engram.Folders.MarkerStopTest do
     assert delete_since(u, v, "F", since) == ["F", "F/X", "F/X/Deep"]
   end
 
-  # Both stops on (#2645's path-hash stop with the S5 write stop): a rename
+  # Both stops on (no path hash since release J, with the S5 write stop): a rename
   # of a folder that holds a note is uncascaded and reads only the moved
   # root, so only the root is stamped, never the explicit empty folder
   # nested under it.
@@ -131,7 +156,6 @@ defmodule Engram.Folders.MarkerStopTest do
     %{user: u, vault: v} = ctx
     Engram.ServiceConfig.put_override(:folder_ops, true)
     assert Engram.Folders.WriteStop.on?()
-    assert Engram.Folders.PathHashStop.on?(u.id, v.id)
     assert MarkerStop.on?()
 
     {:ok, %{folders: made}} = Folders.create_markers(u, v, ["B", "A", "A/x"])
@@ -161,7 +185,6 @@ defmodule Engram.Folders.MarkerStopTest do
   test "both stops: a nested explicit folder moved in before the seq read is deleted", ctx do
     %{user: u, vault: v} = ctx
     Engram.ServiceConfig.put_override(:folder_ops, true)
-    assert Engram.Folders.PathHashStop.on?(u.id, v.id)
 
     {:ok, _} = Folders.create_markers(u, v, ["B", "A", "A/x"])
     {:ok, _} = Notes.upsert_note(u, v, %{"path" => "A/n.md", "content" => "x"}, actor: "api")
@@ -237,9 +260,9 @@ defmodule Engram.Folders.MarkerStopTest do
     assert delete_since(u, v, "F", since) == ["F", "F/X", "F/Y"]
     assert markers(v) == 3
 
-    # No stamp while markers are written: the reconcile keeps its say over
-    # these rows across a rollback.
-    assert %{rows: [[nil, nil]]} =
+    # Stamped though markers are written: release J writes no hash, so
+    # release I's reconcile must not judge these rows after a rollback.
+    assert %{rows: [[0, 0]]} =
              Repo.query!(
                "SELECT max(explicit_seq), min(explicit_seq) FROM folders WHERE vault_id = $1",
                [Ecto.UUID.dump!(v.id)]
@@ -295,11 +318,36 @@ defmodule Engram.Folders.MarkerStopTest do
     assert "G/New" in explicit(u, v)
   end
 
-  test "kill switch: folder_marker_stop off, creates insert markers again", %{user: u, vault: v} do
+  test "the test lever off: creates insert markers (an open ledger's path)", %{user: u, vault: v} do
     Engram.ServiceConfig.put_override(:folder_marker_stop, false)
     {:ok, _} = Folders.create_markers(u, v, ["K"])
     assert markers(v) == 1
     assert explicit(u, v) == ["K"]
+  end
+
+  # Review of #2707, MEDIUM 2: release J has no runtime switch back to
+  # markers. A `folder_marker_stop` override row (left from release I, or
+  # written by hand) is ignored: a marker J wrote would live forever.
+  test "a folder_marker_stop override row cannot bring markers back", %{user: u, vault: v} do
+    Engram.ServiceConfig.put_override(:service_overrides_enabled, true)
+    Engram.Cache.clear_local(:service_overrides)
+    on_exit(fn -> Engram.Cache.clear_local(:service_overrides) end)
+
+    Repo.query!(
+      "INSERT INTO service_overrides (key, value, updated_by) VALUES ('folder_marker_stop', 'false', 't')"
+    )
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      assert MarkerStop.on?()
+      {:ok, _} = Folders.create_markers(u, v, ["Off"])
+      {:ok, _} = Notes.create_folder_marker(u, v, "Off/One")
+    end)
+
+    assert markers(v) == 0
+    assert explicit(u, v) == ["Off", "Off/One"]
+
+    assert {:error, {:unknown_key, :folder_marker_stop}} =
+             Engram.ServiceConfig.override(:folder_marker_stop, false, by: "t")
   end
 
   test "an undo announces the explicit folders it brings back", %{user: u, vault: v} do
@@ -317,7 +365,8 @@ defmodule Engram.Folders.MarkerStopTest do
   end
 
   # The retire keeper of a rename merge and an undo's merge target are made
-  # explicit with no marker, so a reconcile walk must leave them explicit.
+  # explicit with no marker, so release I's reconcile (a rollback target that
+  # runs it daily) must leave them explicit.
   test "a rename merge's keeper survives a reconcile", %{user: u, vault: v} do
     {:ok, _} = Folders.create_markers(u, v, ["A"])
     # B: a live row with nothing under it (its only note gone), so a rename
@@ -329,8 +378,7 @@ defmodule Engram.Folders.MarkerStopTest do
     assert {:ok, _} = Folders.rename(u, v, "A", "B")
     assert "B" in explicit(u, v)
 
-    assert reconcile!() == :done
-    assert "B" in explicit(u, v)
+    assert Engram.ReleaseIReconcile.cleared_ids(u.id) == []
   end
 
   test "an undo's merge target survives a reconcile", %{user: u, vault: v} do
@@ -341,8 +389,7 @@ defmodule Engram.Folders.MarkerStopTest do
     {:ok, _} = Folders.restore_op(u, v, op)
     assert "M" in explicit(u, v)
 
-    assert reconcile!() == :done
-    assert "M" in explicit(u, v)
+    assert Engram.ReleaseIReconcile.cleared_ids(u.id) == []
   end
 
   test "Materialization counts a marker-less explicit folder as existing", %{user: u, vault: v} do
@@ -356,8 +403,9 @@ defmodule Engram.Folders.MarkerStopTest do
   end
 
   # A cleared folder whose flag a stale writer sets again (a pre-#2639
-  # cascade's leftover) has no marker: the reconcile must still clear it,
-  # which it does only when the clear dropped the create's `explicit_seq`.
+  # cascade's leftover) has no marker: the boot reconcile (20261125100100)
+  # must still clear it, which it does only when the clear dropped the
+  # create's `explicit_seq`.
   test "a cleared flag set again without a marker is reconciled away", %{user: u, vault: v} do
     {:ok, _} = Folders.create_markers(u, v, ["C"])
     assert {:ok, :deleted} = Notes.delete_folder_marker(u, v, "C")
@@ -368,22 +416,11 @@ defmodule Engram.Folders.MarkerStopTest do
     ])
 
     assert "C" in explicit(u, v)
-    assert reconcile!() == :done
+    Engram.ReleaseIReconcile.run!()
     refute "C" in explicit(u, v)
   end
 
-  defp reconcile! do
-    IdWindows.reset_walk(ExplicitFolderReconcile.name())
-
-    Enum.reduce_while(1..5, nil, fn _, _ ->
-      case ExplicitFolderReconcile.run_pass() do
-        :done -> {:halt, :done}
-        more -> {:cont, more}
-      end
-    end)
-  end
-
-  test "control: with the kill switch off, creates still insert markers", %{user: u, vault: v} do
+  test "control: with the test lever off, creates still insert markers", %{user: u, vault: v} do
     Engram.ServiceConfig.put_override(:folder_marker_stop, false)
     {:ok, _} = Folders.create_markers(u, v, ["M"])
     assert markers(v) == 1
@@ -392,22 +429,14 @@ defmodule Engram.Folders.MarkerStopTest do
 
   test "the reconcile never clears a folder the stop made explicit", %{user: u, vault: v} do
     {:ok, _} = Folders.create_markers(u, v, ["Z"])
-    IdWindows.reset_walk(ExplicitFolderReconcile.name())
-
-    assert Enum.reduce_while(1..5, nil, fn _, _ ->
-             case ExplicitFolderReconcile.run_pass() do
-               :done -> {:halt, :done}
-               more -> {:cont, more}
-             end
-           end) == :done
-
+    assert Engram.ReleaseIReconcile.cleared_ids(u.id) == []
+    Engram.ReleaseIReconcile.run!()
     assert explicit(u, v) == ["Z"]
   end
 
-  # The reconcile is re-verified daily (#2639 audit); once the stop's floor is
-  # reached a reopen must not send listings back to markers the stop no
-  # longer writes.
-  test "with the floor reached, a reopened reconcile does not move listings off the flag" do
+  # Once the stop's floor is reached, only the FolderTable ledger gates the
+  # flag reads: listings never go back to markers the stop no longer writes.
+  test "with the floor reached, listings read the flag once FolderTable is done" do
     Engram.ServiceConfig.put_override(:explicit_folders_ledger, :read)
 
     Engram.DataMigrations.mark_done(

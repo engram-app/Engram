@@ -56,8 +56,6 @@ defmodule Engram.Crypto.UserDekRotation do
   require Logger
 
   @batch_size 200
-  # Folder nesting deeper than this is a corrupt (looping) parent chain.
-  @max_folder_depth 512
 
   @type rotate_result :: :ok | {:error, term()}
 
@@ -189,11 +187,7 @@ defmodule Engram.Crypto.UserDekRotation do
          {:ok, new_wrapped, new_dek} <-
            provider.rotate_dek(user.encrypted_dek, %{user_id: user_id}),
          new_filter_key = Crypto.dek_filter_key_from_bytes(new_dek),
-         # Folders before notes: a pre-D node's `notes_set_folder_ref` trigger
-         # re-resolved `folder_ref_id` from `folders.full_path_hmac` when the
-         # notes sweep rewrote `folder_hmac`, so the rows had to carry the new
-         # key first. Release D dropped the trigger: the notes sweep no longer
-         # touches a reference, and the order stays for a rollback.
+         # Folders before notes: the order a pre-D trigger needed, kept.
          :ok <- sweep_folders(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_notes(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- enqueue_crdt_head_rewarm(user),
@@ -315,26 +309,21 @@ defmodule Engram.Crypto.UserDekRotation do
   # Folders sweep
   # ---------------------------------------------------------------------------
 
-  # Two steps. First each name is re-encrypted and its `name_hmac` re-keyed (a
-  # folder is a segment, so the plaintext is all that is needed). Then every
-  # `full_path_hmac` (the HMAC of the whole path, equal to `notes.folder_hmac`)
-  # is rebuilt from the parent chain: the second step reads names under the NEW
-  # DEK, which also covers rows a crashed earlier run already rotated.
+  # Each name is re-encrypted and its `name_hmac` re-keyed (a folder is a
+  # segment, so the plaintext is all that is needed). The whole-path hash is not
+  # rewritten (S6 step 3, release J: nothing reads it).
   defp sweep_folders(%User{id: user_id}, old_dek, new_dek, new_filter_key, new_dek_version) do
-    with :ok <-
-           IdWindows.each_batch(user_id, Folder, fn batch_ids ->
-             Repo.transaction(fn ->
-               from(f in Folder, where: f.id in ^batch_ids, lock: "FOR UPDATE")
-               |> Repo.all(skip_tenant_check: true)
-               |> Enum.each(&rewrap_folder(&1, old_dek, new_dek, new_filter_key, new_dek_version))
-             end)
-             |> case do
-               {:ok, _} -> :ok
-               {:error, reason} -> {:error, reason}
-             end
-           end) do
-      rekey_folder_paths(user_id, new_dek, new_filter_key)
-    end
+    IdWindows.each_batch(user_id, Folder, fn batch_ids ->
+      Repo.transaction(fn ->
+        from(f in Folder, where: f.id in ^batch_ids, lock: "FOR UPDATE")
+        |> Repo.all(skip_tenant_check: true)
+        |> Enum.each(&rewrap_folder(&1, old_dek, new_dek, new_filter_key, new_dek_version))
+      end)
+      |> case do
+        {:ok, _} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end)
   end
 
   defp rewrap_folder(%Folder{} = folder, old_dek, new_dek, new_filter_key, new_dek_version) do
@@ -377,83 +366,6 @@ defmodule Engram.Crypto.UserDekRotation do
 
       :already_rotated ->
         :ok
-    end
-  end
-
-  defp rekey_folder_paths(user_id, new_dek, new_filter_key) do
-    {:ok, rows} =
-      Repo.with_tenant(user_id, fn ->
-        from(f in Folder,
-          where: f.user_id == ^user_id,
-          select:
-            {f.id, f.parent_id, f.name_ciphertext, f.name_nonce, not is_nil(f.full_path_hmac)}
-        )
-        |> Repo.all(skip_tenant_check: true)
-      end)
-
-    names =
-      Map.new(rows, fn {id, parent, ct, nonce, _has_path} ->
-        {:ok, segment} =
-          Envelope.decrypt(ct, nonce, new_dek, Crypto.aad_for_row(:folders, :name, id))
-
-        {id, {parent, segment}}
-      end)
-
-    {paths, _memo} =
-      rows
-      |> Enum.filter(fn {_, _, _, _, has_path} -> has_path end)
-      |> Enum.flat_map_reduce(%{}, fn {id, _, _, _, _}, memo ->
-        case folder_path(names, id, memo, 0) do
-          {:ok, path, memo} ->
-            {[{Ecto.UUID.dump!(id), Crypto.hmac_field(new_filter_key, path)}], memo}
-
-          {:cycle, memo} ->
-            # Corrupt parent chain. Raising would strand the user (earlier
-            # sweeps committed under the new DEK), so the row keeps its hmac.
-            Logger.error(
-              "T3.7 sweep_folders: parent chain loops or is too deep",
-              Metadata.with_category(:error, :crypto,
-                user_id: user_id,
-                table: :folders,
-                row_id: id,
-                phase: :sweep_folders
-              )
-            )
-
-            {[], memo}
-        end
-      end)
-
-    paths
-    |> Enum.chunk_every(1_000)
-    |> Enum.each(fn chunk ->
-      # Through the hash's one writer (`PathHmacs`), in the user's tenant.
-      {:ok, {:ok, _}} =
-        Repo.with_tenant(user_id, fn -> Engram.Folders.PathHmacs.put(user_id, chunk) end)
-    end)
-  end
-
-  # The path of a folder from its parent chain, memoised so a deep tree is
-  # walked once, not once per descendant. A chain longer than
-  # `@max_folder_depth` is a cycle (or corrupt): `{:cycle, memo}`.
-  defp folder_path(_names, _id, memo, depth) when depth > @max_folder_depth, do: {:cycle, memo}
-
-  defp folder_path(names, id, memo, depth) do
-    case memo do
-      %{^id => path} ->
-        {:ok, path, memo}
-
-      _ ->
-        case Map.fetch!(names, id) do
-          {nil, segment} ->
-            {:ok, segment, Map.put(memo, id, segment)}
-
-          {parent, segment} ->
-            with {:ok, parent_path, memo} <- folder_path(names, parent, memo, depth + 1) do
-              path = parent_path <> "/" <> segment
-              {:ok, path, Map.put(memo, id, path)}
-            end
-        end
     end
   end
 

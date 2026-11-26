@@ -8,8 +8,8 @@ defmodule Engram.Folders.Folder do
 
   The name is one path SEGMENT, encrypted under the owning account's DEK like
   `notes.folder_ciphertext` (AAD `Crypto.aad_for_row(:folders, :name, id)`).
-  `full_path_hmac` is the HMAC of the whole path, equal to a marker's
-  `folder_hmac` (and a note's, while note writes still set it).
+  The whole-path hash column is not mapped: no release from J on reads or
+  writes it, and the next release drops it.
 
   Filled by the `DataMigrations.FolderTable` backfill; no reader or writer
   uses it yet.
@@ -67,11 +67,10 @@ defmodule Engram.Folders.Folder do
     # does). Written from S5 on; nothing reads them yet.
     field :seq, :integer
     field :notes_cascaded, :boolean, default: true
-    field :full_path_hmac, :binary
     field :dek_version, :integer
     field :explicit, :boolean, default: false
     # The vault seq a create made it explicit at with no marker (phase 2,
-    # `Engram.Folders.MarkerStop`); `ExplicitFolderReconcile` never clears such a row.
+    # `Engram.Folders.MarkerStop`); the explicit-flag reconcile never clears such a row.
     field :explicit_seq, :integer
     field :deleted_at, :utc_datetime_usec
     field :delete_op_id, Ecto.UUID

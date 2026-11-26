@@ -124,9 +124,8 @@ defmodule Engram.Crypto.UserDekRotationFoldersTest do
     assert ref_id(note.id) == Ecto.UUID.dump!(by_name["Alpha"].id)
     assert ref_id(deep.id) == deep_before
     assert ref_id(root_note.id) == root_ref
-    # The root row's empty name is re-keyed like any other (decrypted above);
-    # it has no path hash to re-key.
-    assert by_name[""].id == vault.id and by_name[""].full_path_hmac == nil
+    # The root row's empty name is re-keyed like any other (decrypted above).
+    assert by_name[""].id == vault.id
 
     # A trashed note in a soft-deleted folder loses its ref: the
     # `notes_set_folder_ref` trigger resolves live folders only, and it fires

@@ -286,8 +286,6 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
     Engram.Rebuild.set_budget(1_000_000)
     # NoteMeta ships off until staging validates it.
     Engram.ServiceConfig.put_override(:note_meta_backfill, true)
-    # FolderMarkerDelete ships off until release E is verified.
-    Engram.ServiceConfig.put_override(:folder_marker_delete, true)
     # PersonOriginBackfill is disabled (no ledger row) without PostHog reads.
     posthog = [:posthog_key, :posthog_erasure_api_key, :posthog_project_id]
     prior = Map.new(posthog, &{&1, Application.fetch_env(:engram, &1)})
@@ -370,7 +368,7 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
 
   # Rule (2026-11-11): these ship OFF and are switched on by their override
   # after the deploy is validated on staging. Every other one ships on.
-  @ships_off [Engram.DataMigrations.NoteMeta, Engram.DataMigrations.FolderMarkerDelete]
+  @ships_off [Engram.DataMigrations.NoteMeta]
 
   test "every data migration newer than the kill-switch rule has a working kill switch" do
     alias Engram.ServiceConfig.Overrides

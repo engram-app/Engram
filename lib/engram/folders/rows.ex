@@ -14,10 +14,9 @@ defmodule Engram.Folders.Rows do
   Names are one path SEGMENT, encrypted under the account's per-user DEK with
   AAD `Crypto.aad_for_row(:folders, :name, id)` (the key scheme of
   `notes.folder_ciphertext`). `name_hmac` lives in its own domain so a segment
-  hash never equals a `path_hmac`. `full_path_hmac` is the HMAC of the whole
-  path and equals a marker's `folder_hmac` (and a note's, while note writes
-  still set it); it is rewritten for a renamed subtree until S6 step 3's
-  write stop (`Engram.Folders.PathHashStop`) turns on, then not written.
+  hash never equals a `path_hmac`. No writer sets the whole-path hash column (S6 step 3,
+  release J): every reader finds a row by its parent chain. The column stays
+  for the rollback target, release I, until the next release drops it.
 
   The stored paths (`notes.path_*` / `folder_*`, attachment `path_*`) stay
   authoritative and are still written everywhere; a folder row is a second,
@@ -29,8 +28,8 @@ defmodule Engram.Folders.Rows do
 
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
-  alias Engram.DataMigrations.{ExplicitFolderReconcile, FolderTable}
-  alias Engram.Folders.{Folder, PathHashStop, PathHmacs, WalkSql}
+  alias Engram.DataMigrations.FolderTable
+  alias Engram.Folders.{Folder, WalkSql}
   alias Engram.Logger.Metadata
   alias Engram.Repo
   alias Engram.Search.NameTerms
@@ -44,7 +43,7 @@ defmodule Engram.Folders.Rows do
   @spec name_hmac(binary(), String.t()) :: binary()
   defdelegate name_hmac(filter_key, segment), to: Folder
 
-  @doc "HMAC of a whole folder path: a folder row's `full_path_hmac`, a marker's `folder_hmac`."
+  @doc "HMAC of a whole folder path: a marker's `folder_hmac`."
   @spec path_hmac(binary(), String.t()) :: binary()
   def path_hmac(filter_key, path), do: Crypto.hmac_field(filter_key, path)
 
@@ -244,10 +243,7 @@ defmodule Engram.Folders.Rows do
       ctx = %{user_id: user.id, vault_id: vault_id, dek: dek, fk: fk}
       id = root_id(vault_id)
 
-      # No `full_path_hmac`: nothing finds the root by path hash, and a root
-      # note's `folder_hmac` must not look redundant to `NoteFolderHashNull`
-      # (it keeps a root's hash). A DEK rotation re-keys only rows with one.
-      if insert(ctx, id, nil, "", nil, false) == 1, do: put_names(ctx, [{id, ""}], :new)
+      if insert(ctx, id, nil, "", false) == 1, do: put_names(ctx, [{id, ""}], :new)
 
       {:ok, id}
     end
@@ -258,7 +254,7 @@ defmodule Engram.Folders.Rows do
   defp normalize(folder), do: folder |> String.split("/", trim: true) |> Enum.join("/")
 
   # Both entry points below are `ensure/4` for a set: one code path, set-based.
-  defp ensure_set(user, vault_id, targets) do
+  defp ensure_set(user, vault_id, targets, stamp? \\ true) do
     targets = Map.delete(targets, "")
 
     if map_size(targets) == 0 do
@@ -266,15 +262,16 @@ defmodule Engram.Folders.Rows do
     else
       with {:ok, dek} <- Crypto.get_dek(user),
            {:ok, fk} <- Crypto.dek_filter_key(user) do
-        ctx = %{
-          user_id: user.id,
-          vault_id: vault_id,
-          dek: dek,
-          fk: fk,
-          hash?: PathHashStop.write?(user.id, vault_id)
-        }
+        ctx = %{user_id: user.id, vault_id: vault_id, dek: dek, fk: fk}
+        ids = resolve_all(ctx, targets)
+        # A marker's row, stamped like FolderMarkerDelete stamped every
+        # marker-era row: since release J writes no folder path hash, release
+        # I's reconcile (a rollback target) would clear it unstamped.
+        if stamp?,
+          do:
+            stamp_unseq(for {folder, marker} <- targets, marker, id <- [ids[folder]], id, do: id)
 
-        {:ok, resolve_all(ctx, targets)}
+        {:ok, ids}
       end
     end
   end
@@ -310,7 +307,11 @@ defmodule Engram.Folders.Rows do
   `ensure_all/3` is.
   """
   @spec ensure_markers(map(), Ecto.UUID.t(), [{String.t(), Ecto.UUID.t()}]) :: :ok
-  def ensure_markers(user, vault_id, markers) do
+  def ensure_markers(user, vault_id, markers), do: ensure_markers(user, vault_id, markers, true)
+
+  # `stamp?` false: the caller stamps the rows itself (`make_explicit/3`, with
+  # the vault seq), so they are written once.
+  defp ensure_markers(user, vault_id, markers, stamp?) do
     targets =
       markers
       |> Enum.uniq()
@@ -318,7 +319,7 @@ defmodule Engram.Folders.Rows do
       |> Enum.reverse()
       |> Map.new(fn {folder, marker_id} -> {normalize(folder), marker_id} end)
 
-    {:ok, _} = ensure_set(user, vault_id, targets)
+    {:ok, _} = ensure_set(user, vault_id, targets, stamp?)
     :ok
   end
 
@@ -328,7 +329,6 @@ defmodule Engram.Folders.Rows do
   # then one insert per depth level (parents first).
   defp resolve_all(ctx, targets) do
     paths = targets |> Map.keys() |> Enum.flat_map(&prefixes/1) |> Enum.uniq()
-    hmacs = Map.new(paths, &{&1, full_h(ctx, &1)})
     known = walk_ids(ctx.user_id, ctx.fk, ctx.vault_id, paths)
 
     ids =
@@ -337,37 +337,19 @@ defmodule Engram.Folders.Rows do
       |> Enum.group_by(&length(String.split(&1, "/")))
       |> Enum.sort()
       |> Enum.reduce(known, fn {_depth, level}, ids ->
-        create_level(ctx, Enum.sort(level), ids, targets, hmacs)
+        create_level(ctx, Enum.sort(level), ids, targets)
       end)
 
-    # A row that was already there becomes explicit when a marker names it,
-    # and takes the marker's path hash when it lacks it or holds a stale one.
-    marked = for {folder, marker} <- targets, marker, id <- [known[folder]], id, do: {id, folder}
-
-    mark_explicit(Enum.map(marked, &elem(&1, 0)))
-    :ok = put_marker_hashes(ctx, marked, hmacs)
+    # A row that was already there becomes explicit when a marker names it.
+    mark_explicit(for {folder, marker} <- targets, marker, id <- [known[folder]], id, do: id)
 
     Map.new(targets, fn {folder, _} -> {folder, ids[folder]} end)
-  end
-
-  # The folder marker delete (S6 step 4) finds a marker's row by its path
-  # hash, and #2645's write stop leaves rows without one. A row found by the
-  # walk never reaches `repair/4` (only `step/5` does), so a marker written on
-  # it (a release that still writes markers, after a rollback) would sit on a
-  # hashless row the delete never matches. One `PathHmacs.put/3` statement
-  # (the single writer): it compares each row's stored hash and writes only
-  # where it differs, after releasing the hash from any other live holder.
-  defp put_marker_hashes(_ctx, [], _hmacs), do: :ok
-
-  defp put_marker_hashes(ctx, marked, hmacs) do
-    {:ok, _} = PathHmacs.put(ctx.user_id, for({id, folder} <- marked, do: {id, hmacs[folder]}))
-    :ok
   end
 
   # Inserts the missing rows of one depth in one statement per chunk. A row the
   # insert did not write (a racing creator, a marker id that names a row
   # elsewhere) goes through `step/5`, which reads, repairs or moves it.
-  defp create_level(ctx, level, ids, targets, hmacs) do
+  defp create_level(ctx, level, ids, targets) do
     rows =
       Enum.map(level, fn path ->
         parent = ids[parent_path(path)]
@@ -375,8 +357,7 @@ defmodule Engram.Folders.Rows do
         segment = segment(path)
         id = marker || mint_id()
 
-        {path, parent, marker, id,
-         build_row(ctx, id, parent, segment, hmacs[path], marker != nil)}
+        {path, parent, marker, id, build_row(ctx, id, parent, segment, marker != nil)}
       end)
 
     written =
@@ -399,14 +380,6 @@ defmodule Engram.Folders.Rows do
       :new
     )
 
-    # The rows carry their hash (`PathHmacs.with_hash/2`); release it from
-    # any stale holder, one statement.
-    {:ok, _} =
-      PathHmacs.release(
-        ctx.user_id,
-        for({path, _, _, id, _} <- rows, MapSet.member?(written, id), do: {id, hmacs[path]})
-      )
-
     Enum.reduce(rows, ids, fn {path, parent, marker, id, _row}, ids ->
       if MapSet.member?(written, id),
         do: Map.put(ids, path, id),
@@ -421,28 +394,26 @@ defmodule Engram.Folders.Rows do
   defp step(ctx, parent_id, path, explicit, attempts, insert? \\ true) do
     segment = segment(path)
     name_h = name_hmac(ctx.fk, segment)
-    full_h = full_h(ctx, path)
     id = explicit || mint_id()
 
     case if(insert?,
-           do: insert(ctx, id, parent_id, segment, full_h, explicit != nil),
+           do: insert(ctx, id, parent_id, segment, explicit != nil),
            else: 0
          ) do
       1 ->
         put_names(ctx, [{id, segment}], :new)
-        {:ok, _} = PathHmacs.release(ctx.user_id, [{id, full_h}])
         id
 
       0 ->
         case live_child(ctx.vault_id, parent_id, name_h) do
           %{id: found} = row ->
-            repair(ctx, row, full_h, explicit)
+            repair(row, explicit)
             found
 
           # No live row, yet the insert wrote nothing: `explicit` names a row
           # that exists elsewhere (tombstoned, or moved). Move it here, retry.
           nil when attempts > 0 ->
-            revive_or_retry(ctx, explicit, parent_id, segment, name_h, full_h)
+            revive_or_retry(ctx, explicit, parent_id, segment, name_h)
             step(ctx, parent_id, path, explicit, attempts - 1)
 
           nil ->
@@ -478,23 +449,18 @@ defmodule Engram.Folders.Rows do
         Repo.one(
           from(f in probe,
             where: f.id == ^id,
-            select: %{id: f.id, full: f.full_path_hmac, explicit: f.explicit}
+            select: %{id: f.id, explicit: f.explicit}
           )
         )
     end
   end
 
-  # A row another writer made may lack `full_path_hmac` (the previous release's
-  # backfill gap) or the explicit flag: set what this caller knows. With the
-  # write stop on (`full_h` nil) only the flag: `PathHmacs.put/3` skips nil.
-  defp repair(ctx, %{id: id, full: full, explicit: explicit?}, full_h, marker) do
+  # A row another writer made may lack the explicit flag a marker gives it.
+  defp repair(%{id: id, explicit: explicit?}, marker) do
     if marker && !explicit? do
       from(f in Folder, where: f.id == ^id)
       |> Repo.update_all(set: [explicit: true, updated_at: now()])
     end
-
-    {:ok, _} =
-      if full != full_h, do: PathHmacs.put(ctx.user_id, [{id, full_h}]), else: {:ok, 0}
 
     :ok
   end
@@ -508,9 +474,7 @@ defmodule Engram.Folders.Rows do
     :ok
   end
 
-  # The hash rides the INSERT (`PathHmacs.with_hash/2`, written once); the
-  # caller then releases it (`PathHmacs.release/3`).
-  defp build_row(ctx, id, parent_id, segment, full_h, explicit?) do
+  defp build_row(ctx, id, parent_id, segment, explicit?) do
     {ct, nonce} = encrypt_name(ctx.dek, id, segment)
     now = now()
 
@@ -529,12 +493,11 @@ defmodule Engram.Folders.Rows do
       updated_at: now
     }
     |> Map.merge(Map.new(Folder.name_keys(ctx.fk, segment, nonce)))
-    |> PathHmacs.with_hash(full_h)
   end
 
-  defp insert(ctx, id, parent_id, segment, full_h, explicit?) do
+  defp insert(ctx, id, parent_id, segment, explicit?) do
     {n, _} =
-      Repo.insert_all(Folder, [build_row(ctx, id, parent_id, segment, full_h, explicit?)],
+      Repo.insert_all(Folder, [build_row(ctx, id, parent_id, segment, explicit?)],
         on_conflict: :nothing
       )
 
@@ -544,14 +507,14 @@ defmodule Engram.Folders.Rows do
   # An insert that wrote nothing hit the live-name index (the next `step` read
   # finds that row) or the primary key: a marker's UUID already names a row,
   # tombstoned or at another place. Move it here.
-  defp revive_or_retry(_ctx, nil, _parent_id, _segment, _name_h, _full_h), do: :ok
+  defp revive_or_retry(_ctx, nil, _parent_id, _segment, _name_h), do: :ok
 
-  defp revive_or_retry(ctx, id, parent_id, segment, name_h, full_h) do
+  defp revive_or_retry(ctx, id, parent_id, segment, name_h) do
     {ct, nonce} = encrypt_name(ctx.dek, id, segment)
 
     free = siblings(ctx.vault_id, parent_id, name_h) |> where([f], f.id != ^id)
 
-    {moved, _} =
+    {_moved, _} =
       from(f in Folder,
         where: f.id == ^id and f.vault_id == ^ctx.vault_id and not exists(subquery(free))
       )
@@ -568,11 +531,6 @@ defmodule Engram.Folders.Rows do
             updated_at: now()
           ] ++ Folder.name_keys(ctx.fk, segment, nonce)
       )
-
-    # Only a row that moved here takes this path's hash (a 0-row update must
-    # not release a live sibling's).
-    {:ok, _} =
-      if moved == 1, do: PathHmacs.put(ctx.user_id, [{id, full_h}]), else: {:ok, 0}
 
     put_names(ctx, [{id, segment}])
   end
@@ -602,11 +560,10 @@ defmodule Engram.Folders.Rows do
   # ---- subtree -------------------------------------------------------------
   #
   # Every reader below finds a folder by walking its path's segments down the
-  # parent chain (`ids_by_path/3`), never by `full_path_hmac`: from S5 a folder
+  # parent chain (`ids_by_path/3`), never by a stored path hash: from S5 a folder
   # rename rewrites one row, so a descendant's stored path hash goes stale
   # (O(1) folder rename plan, Gap A, Engram#2523). Writers find rows the same
-  # way (S6 step 3); they still write the hash for the previous release,
-  # which reads it, until the write stop (`PathHashStop`) turns on.
+  # way (S6 step 3) and write no hash.
 
   @doc """
   The live folder rows at `folders` and every live descendant, shallowest
@@ -686,7 +643,7 @@ defmodule Engram.Folders.Rows do
   without the create): a path with no live row maps to nil, as does the root.
 
   A path is found by walking its segments down from the root, never by
-  `full_path_hmac`, so a row under a dead or missing ancestor has no path.
+  a stored path hash, so a row under a dead or missing ancestor has no path.
   ONE statement (`WalkSql.walk_many/0`) for all of `paths`: one probe of
   `folders_live_name_ids` per distinct prefix (O(sum of depths), shared
   prefixes once), never a scan of a vault's or a tenant's folders. Sent
@@ -1001,10 +958,10 @@ defmodule Engram.Folders.Rows do
   instead of the `kind = 'folder'` marker rows (S6 step 4, Engram#2523):
   once the flag equals the markers. `FolderTable`'s marker step SETS it for
   every live marker (every marker writer has set it since the folders table
-  shipped), and `ExplicitFolderReconcile` CLEARS it on every row no live
-  marker names, so both ledgers done means the two agree. Until then (a
-  self-host that skipped releases, or the reconcile's first walk) the
-  markers are read.
+  shipped), and the reconcile (the `ExplicitFolderReconcile` ledger until
+  release I, then boot migration 20261125100100) CLEARS it on every row no
+  live marker names. Until `FolderTable` is done (a self-host that skipped
+  releases) the markers are read.
 
   Read from the ledger rows, cached a minute per node (`:explicit_folders`),
   so an open ledger costs one read a minute, not one a call, and a reopened
@@ -1021,15 +978,10 @@ defmodule Engram.Folders.Rows do
       end)
   end
 
-  # Once the marker stop's floor is reached (no rollback target writes
-  # markers without the flag reads) the reconcile's daily re-verify may
-  # reopen it without moving listings off the flag: folders the stop created
-  # have no marker to fall back to.
-  defp gate_ledgers do
-    if Engram.Folders.MarkerStop.floors?(),
-      do: [FolderTable],
-      else: [FolderTable, ExplicitFolderReconcile]
-  end
+  # The marker stop's floor is reached (no rollback target writes markers
+  # without the flag reads): folders the stop created have no marker to fall
+  # back to, so only `FolderTable` gates.
+  defp gate_ledgers, do: [FolderTable]
 
   @doc """
   The live explicit folder rows of `vault_id` (all of them, or only those
@@ -1223,15 +1175,13 @@ defmodule Engram.Folders.Rows do
 
   @doc """
   Renames the folder row at `old_folder` to `new_folder` (a rename or a move:
-  any new parent) and, while S6 step 3's write stop is inert
-  (`Engram.Folders.PathHashStop`), rewrites `full_path_hmac` for the whole
-  subtree. Once it is on, writes ONE folder row (plus `recascade/2`'s moved
-  ones), and an S5 move (`uncascaded:`) reads only that row.
+  any new parent). Writes ONE folder row (plus `recascade/2`'s moved ones),
+  and an S5 move (`uncascaded:`) reads only that row.
 
   Costs the DESCENDANT FOLDERS, never notes: a note joins its folder by id, so
   the notes under it need no change (their stored paths are rewritten by the
   caller exactly as before, for the previous release). Only the renamed folder
-  re-encrypts its name; descendants keep theirs and get a new path hash.
+  re-encrypts its name; descendants are not written (found by their chain).
 
   When a live folder already sits at `new_folder` (a merge), the source rows are
   folded into the target's: a source row whose new place is taken is retired,
@@ -1314,8 +1264,7 @@ defmodule Engram.Folders.Rows do
         vault_id: vault_id,
         dek: dek,
         fk: fk,
-        uncascaded: opts[:uncascaded],
-        hash?: PathHashStop.write?(user.id, vault_id)
+        uncascaded: opts[:uncascaded]
       }
 
       case rename_rows(user, ctx, old_folder) do
@@ -1325,12 +1274,11 @@ defmodule Engram.Folders.Rows do
     end
   end
 
-  # The rows a rename reads. An S5 move (`uncascaded:`) with the write stop
-  # on needs only the moved row: a merge is refused, `recascade/2` is a
-  # no-op and no descendant is written, so it reads one row by the walk, O(1)
-  # in the subtree. Otherwise the subtree (a merge folds it; the inert stop
-  # rewrites its hashes; a cascade clears its moved flags).
-  defp rename_rows(user, %{hash?: false, uncascaded: seq} = ctx, old_folder)
+  # The rows a rename reads. An S5 move (`uncascaded:`) needs only the moved
+  # row: a merge is refused, `recascade/2` is a no-op and no descendant is
+  # written, so it reads one row by the walk, O(1) in the subtree. Otherwise
+  # the subtree (a merge folds it; a cascade clears its moved flags).
+  defp rename_rows(user, %{uncascaded: seq} = ctx, old_folder)
        when is_integer(seq) do
     case ids_at(user, ctx.vault_id, [old_folder]) do
       [] -> []
@@ -1339,11 +1287,6 @@ defmodule Engram.Folders.Rows do
   end
 
   defp rename_rows(user, ctx, old_folder), do: subtree(user, ctx.vault_id, [old_folder])
-
-  # The `full_path_hmac` a writer sets: the path's hash while the write stop
-  # is inert (release D), nil once it is on.
-  defp full_h(%{hash?: true, fk: fk}, path), do: path_hmac(fk, path)
-  defp full_h(_ctx, _path), do: nil
 
   defp move_subtree(ctx, [root | _] = rows, new_folder) do
     new_segment = segment(new_folder)
@@ -1357,7 +1300,7 @@ defmodule Engram.Folders.Rows do
     # Each row's NEW full path, from the decrypted segment names. A name that
     # will not open drops that row and its descendants from the rewrite: the
     # daily FolderTable pass heals them, a corrupt row must not block a rename.
-    # Only what writes a hash or merges needs them.
+    # Only a merge needs them.
     paths = fn -> chain_names(ctx.dek, rows, %{root.id => new_folder}) end
 
     case live_child(ctx.vault_id, new_parent, new_name_h) do
@@ -1383,28 +1326,9 @@ defmodule Engram.Folders.Rows do
         )
 
         :ok = put_names(ctx, [{root.id, new_segment}])
-        # Inert write stop (release D's shape): the root's new path hash and
-        # every descendant's, one statement (`PathHmacs.put/3`, which first
-        # releases each from any stale holder), O(descendant folders). On:
-        # one folder row, nothing below (a descendant is found by its chain).
-        :ok =
-          if ctx.hash?, do: put_rename_hashes(ctx, rows, paths.(), root, new_folder), else: :ok
-
         :ok = recascade(ctx, rows)
         stamp_placed(ctx.vault_id, Enum.map(rows, & &1.id))
     end
-  end
-
-  defp put_rename_hashes(ctx, rows, paths, root, new_folder) do
-    rest = for r <- rows, r.id != root.id, Map.has_key?(paths, r.id), do: {r.id, paths[r.id]}
-
-    {:ok, _} =
-      PathHmacs.put(
-        ctx.user_id,
-        for({id, p} <- [{root.id, new_folder} | rest], do: {id, path_hmac(ctx.fk, p)})
-      )
-
-    :ok
   end
 
   # A cascade rewrote every stored path below (its scan reads the subtree by
@@ -1463,7 +1387,7 @@ defmodule Engram.Folders.Rows do
           {:ok, _path} when row.id == root_id ->
             {placed, [{row, occupant} | merged], moved}
 
-          {:ok, path} ->
+          {:ok, _path} ->
             parent = Map.get(placed, row.parent_id, new_parent)
 
             case live_child(ctx.vault_id, parent, row.name_hmac) do
@@ -1474,15 +1398,12 @@ defmodule Engram.Folders.Rows do
                 from(f in Folder, where: f.id == ^row.id)
                 |> Repo.update_all(set: [parent_id: parent, updated_at: now()])
 
-                {Map.put(placed, row.id, row.id), merged, [{row.id, path} | moved]}
+                {Map.put(placed, row.id, row.id), merged, [row.id | moved]}
             end
         end
       end)
 
-    # Every moved row's new path hash, one statement.
-    {:ok, _} = PathHmacs.put(ctx.user_id, for({id, path} <- moved, do: {id, full_h(ctx, path)}))
-
-    :ok = stamp_placed(ctx.vault_id, for({id, _} <- moved, do: id))
+    :ok = stamp_placed(ctx.vault_id, moved)
     retire_later(ctx.user_id, Enum.reverse(merged))
   end
 
@@ -1548,9 +1469,7 @@ defmodule Engram.Folders.Rows do
 
     # Stamped like a merge restore's (`mark_explicit_stamped/1`): the keeper
     # may have no marker, so the reconcile must never clear it.
-
-    from(f in Folder, where: f.id == ^keeper and f.explicit and is_nil(f.explicit_seq))
-    |> Repo.update_all(set: [explicit_seq: 0])
+    _ = stamp_unseq([keeper])
 
     # And, once markers stop, with this op's seq, like every row a move places.
     :ok = stamp_placed(row.vault_id, [keeper])
@@ -1749,7 +1668,7 @@ defmodule Engram.Folders.Rows do
   """
   @spec restore_op_explicit(map(), Ecto.UUID.t(), Ecto.UUID.t()) ::
           {non_neg_integer(), [Ecto.UUID.t()]}
-  def restore_op_explicit(user, vault_id, op_id) do
+  def restore_op_explicit(_user, vault_id, op_id) do
     _ = Engram.Vaults.lock_seq(vault_id)
 
     rows =
@@ -1777,7 +1696,7 @@ defmodule Engram.Folders.Rows do
     # flag a marker re-create gave it before markers stopped).
     targets = for {:merge, %{explicit: true}, into} <- merges, uniq: true, do: into
     marked = mark_explicit_stamped(targets)
-    n = write_revived(user, vault_id, revive)
+    n = write_revived(revive)
     if n > 0 or marked > 0, do: Engram.Vaults.next_seq!(vault_id)
     revived_explicit = for {id, _parent} <- revive, by_id[id].explicit, do: id
     explicit = Enum.uniq(targets ++ revived_explicit)
@@ -1816,8 +1735,19 @@ defmodule Engram.Folders.Rows do
       from(f in Folder, where: f.id in ^ids and not f.explicit)
       |> Repo.update_all(set: [explicit: true, updated_at: now()])
 
-    from(f in Folder, where: f.id in ^ids and is_nil(f.explicit_seq))
-    |> Repo.update_all(set: [explicit_seq: 0])
+    _ = stamp_unseq(ids)
+    n
+  end
+
+  # `explicit_seq` 0 on the explicit rows of `ids` that have none, so release
+  # I's `ExplicitFolderReconcile` never clears them; 0 never passes
+  # `soft_delete/5`'s guard, so to J it is the same as no stamp.
+  defp stamp_unseq([]), do: 0
+
+  defp stamp_unseq(ids) do
+    {n, _} =
+      from(f in Folder, where: f.id in ^ids and f.explicit and is_nil(f.explicit_seq))
+      |> Repo.update_all(set: [explicit_seq: 0])
 
     n
   end
@@ -1856,11 +1786,10 @@ defmodule Engram.Folders.Rows do
 
   defp live?(id), do: Repo.exists?(from(f in Folder, where: f.id == ^id and is_nil(f.deleted_at)))
 
-  defp write_revived(_user, _vault_id, []), do: 0
+  defp write_revived([]), do: 0
 
-  defp write_revived(user, vault_id, revive) do
+  defp write_revived(revive) do
     {ids, parents} = Enum.unzip(revive)
-    hash? = PathHashStop.write?(user.id, vault_id)
 
     {n, _} =
       from(f in Folder,
@@ -1876,35 +1805,22 @@ defmodule Engram.Folders.Rows do
             deleted_at: nil,
             delete_op_id: nil,
             parent_id: field(v, :parent_id),
+            # Stamped in the same write (see `stamp_unseq/1`): the marker leg
+            # of a restore runs later and may fail.
+            explicit_seq:
+              fragment(
+                "CASE WHEN ? THEN COALESCE(?, 0) ELSE ? END",
+                f.explicit,
+                f.explicit_seq,
+                f.explicit_seq
+              ),
             updated_at: ^now()
           ]
         ]
       )
-      # Stop on: the hash it died with goes in the same UPDATE, so it can
-      # never duplicate a live row's if the vault falls back to D's writes.
-      |> then(&if(hash?, do: &1, else: update(&1, set: ^PathHmacs.cleared())))
       |> Repo.update_all([])
 
-    # A revived row's stored hash is the one it died with, which may be
-    # stale. It takes its CURRENT path's hash like any live writer (from a
-    # stale holder too). One whose path will not resolve (a name that will
-    # not decrypt) yields a hash a live row holds instead.
-    # With S6 step 3's write stop on in the vault, no hash is written.
-    :ok = if hash?, do: put_revived_hashes(user, vault_id, ids), else: :ok
-
     n
-  end
-
-  defp put_revived_hashes(user, vault_id, ids) do
-    dek = dek!(user)
-    fk = Crypto.dek_filter_key_from_bytes(dek)
-    paths = paths_by_ids(dek, vault_id, ids)
-
-    {:ok, _} =
-      PathHmacs.put(user.id, for({id, p} <- paths, is_binary(p), do: {id, path_hmac(fk, p)}))
-
-    {:ok, _} = PathHmacs.yield(vault_id, for(id <- ids, not is_binary(paths[id]), do: id))
-    :ok
   end
 
   @doc """
@@ -1983,7 +1899,7 @@ defmodule Engram.Folders.Rows do
         seq = Engram.Vaults.next_seq!(vault_id)
         # Again under the lock: a concurrent create may have done some.
         todo = not_explicit(user, vault_id, folders)
-        :ok = ensure_markers(user, vault_id, Enum.map(todo, &{&1, mint_id()}))
+        :ok = ensure_markers(user, vault_id, Enum.map(todo, &{&1, mint_id()}), false)
         ids = ids_by_path(user, vault_id, todo)
 
         from(f in Folder, where: f.vault_id == ^vault_id and f.id in ^Map.values(ids))

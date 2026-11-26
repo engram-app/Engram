@@ -33,8 +33,7 @@ defmodule Engram.DataMigrations.RootRefs do
        `folder_ref_id = vault_id`. The update names only `folder_ref_id`, so
        `seq` and `updated_at` stay (no feed or cache sees a change);
        `notes_set_name_key` re-derives the name key. At most #{2_000} rows a
-       pass (non-HOT updates: autovacuum's dead tuples, as
-       `NoteFolderHashNull`).
+       pass (non-HOT updates: autovacuum's dead tuples).
 
   Tombstones keep a NULL reference here (the restore trigger re-resolves a
   restored note). Step 9's `NOT NULL` must handle them first.
