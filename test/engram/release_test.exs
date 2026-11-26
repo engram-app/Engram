@@ -364,7 +364,7 @@ defmodule Engram.ReleaseTest do
     end
 
     test "configured: the role reads keyword_feed only, through a SCRAM password (F13)" do
-      Engram.ServiceConfig.put_override(:keyword_store, Engram.KeywordStore.Tantivy)
+      Engram.ServiceConfig.put_override(:keyword_feed, true)
       System.put_env("KWSEARCH_FEED_DB_PASSWORD", "kwsearch-plaintext-marker")
 
       assert :ok = Release.prepare_kwsearch_feed(Repo)
@@ -376,12 +376,28 @@ defmodule Engram.ReleaseTest do
       assert stored =~ "SCRAM-SHA-256$4096:"
       refute stored =~ "kwsearch-plaintext-marker"
 
-      # Idempotent: every boot re-runs it.
+      # Idempotent, and never a drop (review #4): every boot re-runs it, and
+      # the policy keeps its oid, so it was never dropped and re-created.
+      oids = fn ->
+        Repo.query!(
+          "SELECT p.oid FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid " <>
+            "WHERE p.polname = 'kwsearch_feed_read' ORDER BY c.relname"
+        ).rows
+      end
+
+      before = oids.()
+      assert length(before) == 2
       assert :ok = Release.prepare_kwsearch_feed(Repo)
+      assert :ok = Release.prepare_kwsearch_feed(Repo)
+      assert oids.() == before
 
       user = insert(:user)
 
       Repo.query!("INSERT INTO keyword_feed (user_id, op) VALUES ($1, 5)", [
+        Ecto.UUID.dump!(to_string(user.id))
+      ])
+
+      Repo.query!("INSERT INTO keyword_deletions (user_id, op) VALUES ($1, 5)", [
         Ecto.UUID.dump!(to_string(user.id))
       ])
 
@@ -395,7 +411,9 @@ defmodule Engram.ReleaseTest do
 
       # Every tenant's feed rows, no tenant set.
       assert {:ok, %{rows: [[1]]}} = as_feed.("SELECT count(*) FROM keyword_feed")
-      assert {:ok, %{rows: [[0]]}} = as_feed.("SELECT count(*) FROM keyword_deletions")
+      # A row exists, so 1 proves the policy (a missing one also reads 0).
+      assert {:ok, %{rows: [[1]]}} = as_feed.("SELECT count(*) FROM keyword_deletions")
+      assert {:ok, %{rows: [[1]]}} = as_feed.("SELECT count(*) FROM keyword_feed_horizon")
       # Nothing else, and no writes.
       assert {:error, %Postgrex.Error{postgres: %{code: :insufficient_privilege}}} =
                as_feed.("SELECT count(*) FROM notes")
