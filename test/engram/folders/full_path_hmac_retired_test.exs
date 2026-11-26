@@ -119,6 +119,7 @@ defmodule Engram.Folders.FullPathHmacRetiredTest do
       Repo.query!("SELECT count(*) FROM folders WHERE user_id = $1", [Ecto.UUID.dump!(user.id)])
 
     assert rows > 5
+    assert explicit_folders(user, vault) == ["E/F"]
   end
 
   defp close_reconcile_ledger!,

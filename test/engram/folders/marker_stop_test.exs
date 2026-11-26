@@ -364,6 +364,29 @@ defmodule Engram.Folders.MarkerStopTest do
     }
   end
 
+  # The retire keeper of a rename merge and an undo's merge target are made
+  # explicit with no marker, and must stay listed.
+  test "a rename merge's keeper stays explicit", %{user: u, vault: v} do
+    {:ok, _} = Folders.create_markers(u, v, ["A"])
+    # B: a live row with nothing under it (its only note gone), so a rename
+    # onto it merges A's row into B's.
+    {:ok, n} = Notes.upsert_note(u, v, %{"path" => "B/n.md", "content" => "x"}, actor: "api")
+    Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(n.id)])
+    refute "B" in explicit(u, v)
+
+    assert {:ok, _} = Folders.rename(u, v, "A", "B")
+    assert "B" in explicit(u, v)
+  end
+
+  test "an undo's merge target stays explicit", %{user: u, vault: v} do
+    {:ok, _} = Folders.create_markers(u, v, ["M"])
+    op = Ecto.UUID.generate()
+    {:ok, _} = Folders.delete(u, v, "M", recursive: true, op_id: op)
+    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "M/n.md", "content" => "x"}, actor: "api")
+    {:ok, _} = Folders.restore_op(u, v, op)
+    assert "M" in explicit(u, v)
+  end
+
   test "Materialization counts a marker-less explicit folder as existing", %{user: u, vault: v} do
     {:ok, _} = Folders.create_markers(u, v, ["Mat"])
     {:ok, _} = Notes.upsert_note(u, v, %{"path" => "Mat/n.md", "content" => "x"}, actor: "api")
