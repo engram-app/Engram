@@ -144,9 +144,9 @@ defmodule Engram.RuntimeConfig do
       `KWSEARCH_CA_FILE`, `KWSEARCH_TIMEOUT_MS`, `KWSEARCH_FEED_MAX_AGE_H`
       (default 48: the recommended F2 horizon, not yet confirmed by the owner),
       `KWSEARCH_SNAPSHOT_RETENTION_DAYS` (30));
-    * `KEYWORD_READ=tantivy` with the feed on: searches read kwsearch.
-      `KEYWORD_READ=sparse` (or unset) reads the sparse store, so rolling
-      reads back is this one variable.
+    * `KEYWORD_READ=tantivy`: refused until the backfill ships (P2 part 2);
+      then searches read kwsearch, and `KEYWORD_READ=sparse` (or unset)
+      rolls reads back.
 
   Raises on anything else, including the old `KEYWORD_STORE=tantivy` (it
   stopped sparse writes) and `KEYWORD_READ=tantivy` without the feed (an
@@ -169,10 +169,21 @@ defmodule Engram.RuntimeConfig do
 
     read =
       case getenv.("KEYWORD_READ") do
-        v when v in [nil, "", "sparse"] -> :sparse
-        "tantivy" when feed? -> :tantivy
-        "tantivy" -> raise "KEYWORD_READ=tantivy needs KEYWORD_FEED=on"
-        other -> raise "KEYWORD_READ must be sparse or tantivy, got: #{inspect(other)}"
+        v when v in [nil, "", "sparse"] ->
+          :sparse
+
+        # ponytail: refused outright until the P2 part 2 backfill exists. A
+        # feed holds only chunks indexed after it was turned on, so reading it
+        # would silently lose every reused chunk. Part 2 lifts this behind a
+        # completed-backfill check.
+        "tantivy" when feed? ->
+          raise "KEYWORD_READ=tantivy needs the keyword backfill (P2 part 2)"
+
+        "tantivy" ->
+          raise "KEYWORD_READ=tantivy needs KEYWORD_FEED=on"
+
+        other ->
+          raise "KEYWORD_READ must be sparse or tantivy, got: #{inspect(other)}"
       end
 
     if feed?,

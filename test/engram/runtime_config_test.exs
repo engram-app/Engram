@@ -19,12 +19,18 @@ defmodule Engram.RuntimeConfigTest do
       assert cfg[:kwsearch][:feed_max_age_h] == 48
     end
 
-    test "reads flip to kwsearch and back with KEYWORD_READ alone; writes never change" do
+    test "KEYWORD_READ=tantivy is refused until the backfill exists (P2 part 2)" do
+      # A fresh feed holds only chunks indexed after it was turned on, so
+      # reading it would silently lose every reused chunk (delta review).
       on = Map.put(@kw, "KEYWORD_FEED", "on")
-      tantivy = RuntimeConfig.keyword_store(getenv(Map.put(on, "KEYWORD_READ", "tantivy")))
-      sparse = RuntimeConfig.keyword_store(getenv(Map.put(on, "KEYWORD_READ", "sparse")))
-      assert tantivy[:keyword_read] == :tantivy and sparse[:keyword_read] == :sparse
-      assert Keyword.delete(tantivy, :keyword_read) == Keyword.delete(sparse, :keyword_read)
+
+      assert_raise RuntimeError, ~r/backfill/, fn ->
+        RuntimeConfig.keyword_store(getenv(Map.put(on, "KEYWORD_READ", "tantivy")))
+      end
+
+      assert RuntimeConfig.keyword_store(getenv(Map.put(on, "KEYWORD_READ", "sparse")))[
+               :keyword_read
+             ] == :sparse
     end
 
     test "refuses anything that would stop sparse writes or read an unwritten index" do
