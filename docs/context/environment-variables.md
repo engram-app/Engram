@@ -134,6 +134,16 @@ Live. Covers every var `config/runtime.exs` reads (`Engram.EnvVarDocsTest` fails
 |----------|---------|---------|
 | `RERANKER_BACKEND` | `none` | `jina` or `none`. |
 | `JINA_URL` |, (required when `RERANKER_BACKEND=jina`) | Reranker URL. |
+| `KEYWORD_FEED` | `off` | `on` also writes the kwsearch (Tantivy) keyword feed beside the sparse store (dual-write). Read by `Engram.RuntimeConfig.keyword_store/1`; anything but `on`/`off` refuses to boot. Self-host leaves it unset. |
+| `KEYWORD_READ` | `sparse` | `tantivy` serves keyword search from kwsearch; needs `KEYWORD_FEED=on`. Rolling back is setting it to `sparse` (sparse writes never stop). |
+| `KEYWORD_STORE` |, (removed) | Refuses to boot if set: it switched writes and reads at once. Use `KEYWORD_FEED` and `KEYWORD_READ`. |
+| `KWSEARCH_URL` |, (required with `KEYWORD_FEED=on`) | `https://` URL of the kwsearch service; plain HTTP is refused. |
+| `KWSEARCH_CA_FILE` | unset | CA bundle the kwsearch listener certificate must chain to (`verify_peer`). |
+| `KWSEARCH_TOKEN_KEYS` |, (required with `KEYWORD_FEED=on`) | HMAC keys for the per-request kwsearch tokens: `current` or `current,next` during a rotation. Secret. |
+| `KWSEARCH_TIMEOUT_MS` | `1000` | kwsearch search receive timeout; past it hybrid search goes dense-only. |
+| `KWSEARCH_FEED_MAX_AGE_H` | `48` | Hard maximum age of a `keyword_feed` row (`TrimKeywordFeed`). The recommended F2 horizon, not yet confirmed by the owner. |
+| `KWSEARCH_SNAPSHOT_RETENTION_DAYS` | `30` | kwsearch snapshot retention; `keyword_deletions` rows are kept this plus 7 days. |
+| `KWSEARCH_FEED_DB_PASSWORD` | unset | Password of the `kwsearch_feed` reader role, applied as a SCRAM verifier on boot when the feed is on. Secret. |
 
 ## Auth (local / Clerk)
 
