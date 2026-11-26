@@ -19,7 +19,11 @@ defmodule Engram.KeywordStoreRecorder do
     ServiceConfig.put_override(:keyword_store_recorder_fail, opts[:fail])
   end
 
-  for {name, arity} <- Engram.KeywordStore.behaviour_info(:callbacks) do
+  # Optional callbacks (`in_commit/3`) stay undefined, as on the backend it
+  # delegates to.
+  for {name, arity} <-
+        Engram.KeywordStore.behaviour_info(:callbacks) --
+          Engram.KeywordStore.behaviour_info(:optional_callbacks) do
     args = Macro.generate_arguments(arity, __MODULE__)
 
     @impl true

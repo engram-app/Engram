@@ -1243,6 +1243,15 @@ defmodule Engram.Indexing do
           :ok = ChunkRows.write!(note.id, chunk_rows, @insert_batch)
           _ = ChunkRows.recount!([note.id])
 
+          # The keyword store's outbox rows commit with the chunk rows (a
+          # no-op for a colocated store). `keep` is the note's full point set.
+          :ok =
+            KeywordStore.in_commit(
+              %{user_id: note.user_id, vault_id: note.vault_id, note_id: note.id},
+              for(%{qdrant_point_id: id} <- chunk_rows, id != nil, do: id),
+              Map.get(prepared, :keyword_pending)
+            )
+
           with {:ok, tier} <- Map.fetch(prepared, :index_tier),
                do: stamp_index_tier(note, tier, Map.get(prepared, :chunk_count))
 
@@ -3446,7 +3455,7 @@ defmodule Engram.Indexing do
 
           {points, lengths} =
             Enum.zip_with(matched, sparse, fn {chunk, point_id}, {vector, doc_len} ->
-              {%{id: point_id, sparse: vector},
+              {%{id: point_id, sparse: vector, text: chunk.context_text},
                {point_id, if(capped_length?(chunk), do: nil, else: doc_len)}}
             end)
             |> Enum.unzip()
@@ -3454,7 +3463,7 @@ defmodule Engram.Indexing do
           # A merged point's length stays NULL; only unmerged rows write theirs.
           lengths = Enum.reject(lengths, &is_nil(elem(&1, 1)))
 
-          with :ok <- update_vectors_batched(note, points),
+          with :ok <- update_vectors_batched(note, points, {filter_key, language}),
                :ok <- if(lengths == [], do: :ok, else: persist_token_counts(note, lengths)),
                do: {:ok, length(points), unmatched}
       end
@@ -3629,8 +3638,8 @@ defmodule Engram.Indexing do
     do: sum == text_sum(content_key, chunk.text)
 
   # Keyword-only rewrite of existing points, through the keyword store.
-  defp update_vectors_batched(note, entries) do
-    scope = %{user_id: note.user_id, vault_id: note.vault_id, note_id: note.id}
+  defp update_vectors_batched(note, entries, keyed) do
+    scope = keyword_scope(note, keyed)
 
     entries
     |> point_batches()
@@ -3768,21 +3777,36 @@ defmodule Engram.Indexing do
         fn {entry, point_id}, pending -> build_entry(entry, {ctx, point_id}, pending) end
       )
 
-    with {:ok, built} <- keyword_index(note, built),
-         do: prepared_map(note, plan, built, dek, note_payload, rebuild?, flat)
+    with {:ok, built, pending} <- keyword_index(note, built, {filter_key, language}),
+         {:ok, prepared} <- prepared_map(note, plan, built, dek, note_payload, rebuild?, flat),
+         do: {:ok, Map.put(prepared, :keyword_pending, pending)}
   end
 
   # The note's keyword docs go through the keyword store with their note's
   # user, vault and id. A colocated store (QdrantSparse) hands back the named
   # vectors to put on each dense point, so the one upsert writes both as before.
-  defp keyword_index(note, built) do
-    scope = %{user_id: note.user_id, vault_id: note.vault_id, note_id: note.id}
-    entries = for %{point: %{id: id}, sparse: s} <- built, do: %{id: id, sparse: s}
+  #
+  # `keyed` = {filter_key, language}: a store that keeps raw term counts
+  # re-tokenizes the text under the same key. In memory only, never logged.
+  defp keyword_index(note, built, keyed) do
+    scope = keyword_scope(note, keyed)
 
-    with {:ok, vectors} <- KeywordStore.index(scope, entries) do
-      {:ok, Enum.map(built, &merge_keyword_vectors(&1, vectors))}
+    entries =
+      for %{point: %{id: id}, sparse: s, text: t} <- built, do: %{id: id, sparse: s, text: t}
+
+    with {:ok, vectors, pending} <- KeywordStore.index(scope, entries) do
+      {:ok, Enum.map(built, &merge_keyword_vectors(&1, vectors)), pending}
     end
   end
+
+  defp keyword_scope(note, {filter_key, language}),
+    do: %{
+      user_id: note.user_id,
+      vault_id: note.vault_id,
+      note_id: note.id,
+      filter_key: filter_key,
+      language: language
+    }
 
   defp merge_keyword_vectors(%{point: %{id: id} = p} = built, vectors),
     do: %{built | point: %{p | vector: Map.merge(p.vector, Map.get(vectors, id, %{}))}}
@@ -3791,7 +3815,10 @@ defmodule Engram.Indexing do
 
   defp prepared_map(note, plan, built, dek, note_payload, rebuild?, flat) do
     mode = if display_ct?(note), do: :sealed, else: :sum
-    qdrant_points = for(%{point: p} <- built, p != nil, do: p)
+    # A point with no named vector left (no dense vector, keyword data held
+    # by a non-colocated store) has nothing to put in Qdrant. A colocated
+    # store always adds its keyword vector, so this drops nothing there.
+    qdrant_points = for(%{point: p} <- built, p != nil, p.vector != %{}, do: p)
 
     {:ok,
      %{
@@ -3936,7 +3963,8 @@ defmodule Engram.Indexing do
       point: %{id: point_id, vector: named_vectors, payload: note_payload},
       kind: metric_kind(note.path, chunk.kind),
       dense?: vector != nil,
-      sparse: sparse
+      sparse: sparse,
+      text: chunk.context_text
     }
 
     {built, rest}

@@ -46,6 +46,13 @@ defmodule Engram.Native do
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
+  `keyword_feed_terms_nif/3` (a dirty CPU NIF) with `language` normalized:
+  a stemmer code as an atom or string, or nil.
+  """
+  def keyword_feed_terms(texts, filter_key, language),
+    do: keyword_feed_terms_nif(texts, filter_key, Engram.KeywordIndex.Tokenizer.lang(language))
+
+  @doc """
   Per text, how many of `phrases` it holds as a run of consecutive words
   (stemmed per `language`), reading at most `max_bytes` of each text.
   """

@@ -50,20 +50,48 @@ defmodule Engram.KeywordStore do
   @type user_id :: String.t() | Ecto.UUID.t()
   @type point_id :: String.t()
 
-  @typedoc "One chunk's keyword vector, keyed by its point id."
-  @type entry :: %{id: point_id(), sparse: KeywordIndex.packed_sparse()}
+  @typedoc """
+  One chunk's keyword vector, keyed by its point id, and the text it was
+  encoded from (a backend that stores raw term counts re-counts that text).
+  """
+  @type entry :: %{
+          required(:id) => point_id(),
+          required(:sparse) => KeywordIndex.packed_sparse(),
+          optional(:text) => String.t()
+        }
 
   @typedoc "The note the entries of one `upsert/2` belong to."
-  @type scope :: %{user_id: user_id(), vault_id: term(), note_id: term()}
+  @type scope :: %{
+          required(:user_id) => user_id(),
+          required(:vault_id) => term(),
+          required(:note_id) => term(),
+          optional(:filter_key) => binary(),
+          optional(:language) => String.t() | nil
+        }
 
   @type result :: :ok | {:error, term()}
 
   @doc """
   Index a note's new keyword docs (the main index pass). Returns, per point
   id, the named vectors a colocated backend wants on that dense point; a
-  backend that stores keywords elsewhere writes them and returns `%{}`.
+  backend that stores keywords elsewhere returns `%{}` plus whatever it must
+  write inside the chunk-row transaction (`pending`, handed to `in_commit/3`).
+  Runs before that transaction, so CPU work (tokenizing) holds no row lock.
   """
-  @callback index(scope(), [entry()]) :: {:ok, %{point_id() => map()}} | {:error, term()}
+  @callback index(scope(), [entry()]) ::
+              {:ok, %{point_id() => map()}}
+              | {:ok, %{point_id() => map()}, term()}
+              | {:error, term()}
+
+  @doc """
+  Inside the index pass's chunk-row transaction (the note row is locked):
+  `keep` is the note's full point set after the pass, `pending` what
+  `index/2` returned. A transactional-outbox backend writes its feed rows
+  here, so they commit or roll back with the chunk rows.
+  """
+  @callback in_commit(scope(), keep :: [point_id()], pending :: term()) :: :ok
+
+  @optional_callbacks in_commit: 3
 
   @doc "Rewrite the keyword vectors of existing chunk points (resparse, DEK re-key)."
   @callback upsert(scope(), [entry()]) :: result()
@@ -95,9 +123,30 @@ defmodule Engram.KeywordStore do
   @spec impl() :: module()
   def impl, do: Engram.ServiceConfig.get(:keyword_store, Engram.KeywordStore.QdrantSparse)
 
-  @spec index(scope(), [entry()]) :: {:ok, %{point_id() => map()}} | {:error, term()}
-  def index(_scope, []), do: {:ok, %{}}
-  def index(scope, entries), do: impl().index(scope, entries)
+  @doc """
+  `index/2` of the configured backend, always as `{:ok, vectors, pending}`
+  (pending `nil` when the backend has nothing to write in the transaction).
+  Called with no entries too: a pass that only drops or reuses chunks still
+  changes the note's point set, which `in_commit/3` records.
+  """
+  @spec index(scope(), [entry()]) :: {:ok, %{point_id() => map()}, term()} | {:error, term()}
+  def index(scope, entries) do
+    case if(entries == [], do: {:ok, %{}}, else: impl().index(scope, entries)) do
+      {:ok, vectors} -> {:ok, vectors, nil}
+      {:ok, _vectors, _pending} = ok -> ok
+      error -> error
+    end
+  end
+
+  @doc "`in_commit/3` of the configured backend; a no-op where it has none."
+  @spec in_commit(scope(), [point_id()], term()) :: :ok
+  def in_commit(scope, keep, pending) do
+    mod = impl()
+
+    if Code.ensure_loaded?(mod) and function_exported?(mod, :in_commit, 3),
+      do: mod.in_commit(scope, keep, pending),
+      else: :ok
+  end
 
   @spec upsert(scope(), [entry()]) :: result()
   def upsert(_scope, []), do: :ok
