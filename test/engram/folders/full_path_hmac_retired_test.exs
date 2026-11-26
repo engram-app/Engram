@@ -1,20 +1,14 @@
 defmodule Engram.Folders.FullPathHmacRetiredTest do
   @moduledoc """
-  S6 step 3, release J (Engram#2523): nothing writes or reads
-  `folders.full_path_hmac`. The column and `folders_full_path` stay for the
-  rollback target (release I) and are dropped by the next release, whose
-  migration-gates reference check needs `lib/` free of the names.
+  S6 step 3 (Engram#2523): release J stopped every write and read of
+  `folders.full_path_hmac`; release K (20261126100000) drops the column and
+  `folders_full_path`, with the rollback floor at J. Red before J: the gated
+  writer (`PathHmacs`, `PathHashStop`), the `FolderTable` pass and the DEK
+  rotation all wrote the hash, and three ledgers read it. Red before K: the
+  column and the index exist.
 
-  Red before J: the gated writer (`PathHmacs`, `PathHashStop`), the
-  `FolderTable` pass and the DEK rotation all wrote the hash, and three
-  ledgers read it.
-
-  The last test is the rollback shape: release I's `ExplicitFolderReconcile`
-  re-verifies daily and clears `explicit` on a live row with no
-  `explicit_seq` and no live marker at the row's `full_path_hmac`. Every
-  explicit row a J writer leaves must carry `explicit_seq`, so that walk
-  (run here verbatim) never clears a folder J created, renamed or restored
-  with a NULL hash.
+  The test DB is K's schema and `lib/` is J's code, so every writer test here
+  is the rollback shape: J running against K's schema.
   """
   use Engram.DataCase, async: false
 
@@ -47,13 +41,24 @@ defmodule Engram.Folders.FullPathHmacRetiredTest do
     note
   end
 
-  defp hashed(user_id) do
-    Repo.query!(
-      "SELECT count(*) FROM folders WHERE user_id = $1 AND full_path_hmac IS NOT NULL",
-      [Ecto.UUID.dump!(user_id)]
-    ).rows
-    |> hd()
-    |> hd()
+  test "release K dropped the column and its index" do
+    %{rows: [[columns, indexes]]} =
+      Repo.query!("""
+      SELECT
+        (SELECT count(*)::int FROM pg_attribute
+         WHERE attrelid = 'public.folders'::regclass AND attname = 'full_path_hmac'
+           AND NOT attisdropped),
+        (SELECT count(*)::int FROM pg_class WHERE relname = 'folders_full_path')
+      """)
+
+    assert {columns, indexes} == {0, 0}
+
+    # No function body still names the column (a plpgsql body is only
+    # checked when it runs).
+    %{rows: rows} =
+      Repo.query!("SELECT proname FROM pg_proc WHERE prosrc LIKE '%full_path_hmac%'")
+
+    assert rows == []
   end
 
   test "lib/ never names the column, its index or the retired writer" do
@@ -95,7 +100,9 @@ defmodule Engram.Folders.FullPathHmacRetiredTest do
     end
   end
 
-  test "no writer sets the hash: create, rename, merge, restore, FolderTable, DEK rotation",
+  # Rollback to J after K: J's writers never name the column, so each runs
+  # on K's schema (an UPDATE or INSERT naming it would raise 42703).
+  test "J's writers run on K's schema: create, rename, merge, restore, FolderTable, DEK rotation",
        %{user: user, vault: vault} do
     write!(user, vault, "A/B/C/one.md")
     write!(user, vault, "M/two.md")
@@ -112,33 +119,6 @@ defmodule Engram.Folders.FullPathHmacRetiredTest do
       Repo.query!("SELECT count(*) FROM folders WHERE user_id = $1", [Ecto.UUID.dump!(user.id)])
 
     assert rows > 5
-    assert hashed(user.id) == 0
-  end
-
-  test "release I's explicit-flag reconcile clears no folder J made explicit",
-       %{user: user, vault: vault} do
-    # Markers stopped, as in prod from release E (`MarkerStop.on?/0`).
-    Engram.ServiceConfig.put_override(:folder_marker_stop, true)
-
-    {:ok, _} = Notes.create_folder_marker(user, vault, "Empty/Kept")
-    {:ok, _} = Notes.create_folder_markers(user, vault, ["Batch/One", "Batch/Two"])
-    write!(user, vault, "Full/n.md")
-    {:ok, _} = Notes.create_folder_marker(user, vault, "Full")
-    assert {:ok, _} = Folders.rename(user, vault, "Empty", "Moved")
-    assert {:ok, _} = Folders.rename(user, vault, "Batch/One", "Full/One")
-    op = Ecto.UUID.generate()
-    assert {:ok, _} = Folders.delete(user, vault, "Batch", recursive: true, op_id: op)
-    assert {:ok, _} = Folders.restore_op(user, vault, op)
-
-    explicit =
-      Repo.query!("SELECT count(*) FROM folders WHERE user_id = $1 AND explicit", [
-        Ecto.UUID.dump!(user.id)
-      ]).rows
-
-    assert [[n]] = explicit
-    assert n >= 4
-    assert hashed(user.id) == 0
-    assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
   end
 
   defp close_reconcile_ledger!,
@@ -155,9 +135,10 @@ defmodule Engram.Folders.FullPathHmacRetiredTest do
     |> List.flatten()
   end
 
-  # Prod's path: the reconcile ledger closed (release D on), so the boot run
-  # clears nothing, even a row the rule would clear; it only stamps it, so
-  # release I's walk then leaves it too.
+  # J's boot migration still runs for an install skipping to K (it sorts
+  # before K's drop). Prod's path: the reconcile ledger closed (release D
+  # on), so the boot run clears nothing, even a row the rule would clear; it
+  # only stamps it.
   test "the boot reconcile clears nothing on a closed ledger, and stamps", %{
     user: user,
     vault: vault
@@ -165,14 +146,12 @@ defmodule Engram.Folders.FullPathHmacRetiredTest do
     {:ok, %{folders: [%{id: marker}]}} = Notes.create_folder_markers(user, vault, ["Ghost"])
     Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(marker)])
     Repo.query!("UPDATE folders SET explicit_seq = NULL WHERE id = $1", [Ecto.UUID.dump!(marker)])
-    assert [_] = Engram.ReleaseIReconcile.cleared_ids(user.id)
 
     close_reconcile_ledger!()
     Engram.ReleaseIReconcile.run!()
 
     assert explicit_folders(user, vault) == ["Ghost"]
     assert explicit_seqs(user.id) == [0]
-    assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
   end
 
   defp folders_exclusive_locks do
@@ -211,7 +190,6 @@ defmodule Engram.Folders.FullPathHmacRetiredTest do
     Engram.ReleaseIReconcile.run!()
 
     assert explicit_seqs(user.id) == [0]
-    assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
   end
 
   # Delta review L3: a restore with markers written revives the row in one
@@ -234,38 +212,6 @@ defmodule Engram.Folders.FullPathHmacRetiredTest do
 
     assert {:ok, _} = Folders.restore_op(user, vault, op)
     assert explicit_seqs(user.id) == [0]
-  end
-
-  # Review of #2707, MEDIUM 1: a self-host keeps its markers
-  # (`folder_marker_delete` ships off) and their explicit rows carry no
-  # `explicit_seq`. Under J a root-only rename leaves the descendants' hashes
-  # at the old path (their markers move), and a DEK rotation re-keys the
-  # markers but not the hashes: release I's walk, after a rollback, would
-  # unlist both folders. The boot step's stamp keeps them.
-  test "a self-host's marker-era rows survive a J rename and DEK rotation, rolled back to I",
-       %{user: user, vault: vault} do
-    {:ok, _} = Notes.create_folder_markers(user, vault, ["P", "P/Q"])
-
-    # As release I left them: no stamp, each hash the one its marker carries.
-    Repo.query!(
-      """
-      UPDATE folders AS f SET explicit_seq = NULL, full_path_hmac = n.folder_hmac
-      FROM notes AS n WHERE n.id = f.id AND n.kind = 'folder' AND f.user_id = $1
-      """,
-      [Ecto.UUID.dump!(user.id)]
-    )
-
-    assert explicit_seqs(user.id) == [nil, nil]
-    assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
-
-    close_reconcile_ledger!()
-    Engram.ReleaseIReconcile.run!()
-
-    assert {:ok, _} = Folders.rename(user, vault, "P", "R")
-    assert :ok = UserDekRotation.rotate_user(user.id)
-
-    assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
-    assert explicit_folders(user, vault) == ["R", "R/Q"]
   end
 
   # Review of #2707, MEDIUM 1 and 2: the markers J still writes (a skipping
@@ -292,6 +238,6 @@ defmodule Engram.Folders.FullPathHmacRetiredTest do
 
     assert {:ok, _} = Folders.rename(user, vault, "Open", "Shut")
     assert :ok = UserDekRotation.rotate_user(user.id)
-    assert Engram.ReleaseIReconcile.cleared_ids(user.id) == []
+    assert explicit_seqs(user.id) == [0, 0]
   end
 end

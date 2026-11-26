@@ -3,6 +3,10 @@ defmodule Engram.Release.FloorTest do
 
   alias Engram.Release.Floor
 
+  # Release J, the release that stopped reading and writing
+  # `folders.full_path_hmac` (Engram#2707).
+  @release_j "release-v0.96.0"
+
   test "the floor is priv/release_floor, a release-vX.Y.Z tag" do
     assert Floor.tag() == "priv/release_floor" |> File.read!() |> String.trim()
     assert Floor.tag() =~ ~r/\Arelease-v\d+\.\d+\.\d+\z/
@@ -54,5 +58,12 @@ defmodule Engram.Release.FloorTest do
   # inserts a marker again.
   test "the floor covers the S6 marker write stop" do
     assert Floor.at_least?("release-v0.91.0")
+  end
+
+  # S6 step 3, release K (Engram#2523): K drops `folders.full_path_hmac` and
+  # `folders_full_path`. Release J stopped every read and write of both, so
+  # the floor must be J: release I still reads the column.
+  test "the floor covers release J's full_path_hmac retirement" do
+    assert Floor.at_least?(@release_j)
   end
 end
