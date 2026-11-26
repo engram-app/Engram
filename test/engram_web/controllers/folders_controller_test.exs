@@ -40,6 +40,30 @@ defmodule EngramWeb.FoldersControllerTest do
     end
   end
 
+  # The folder's only content is an explicit empty subfolder: no note or
+  # attachment moves, only folders. The rename commits (and broadcasts), so
+  # REST must not answer 404 (the MCP tool already counts folders).
+  describe "POST /api/folders/rename, only an explicit empty subfolder" do
+    test "returns 200 with the moved-folders count", %{conn: conn, user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      {:ok, %{folders: [%{id: m}]}} = Engram.Notes.create_folder_markers(user, vault, ["Old/sub"])
+
+      # Markers stopped: the explicit folder is a bare folder row, as POST
+      # /folders makes it in the e2e stack.
+      Engram.Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [
+        Ecto.UUID.dump!(m)
+      ])
+
+      body =
+        conn
+        |> post(~p"/api/folders/rename", %{"old_path" => "Old", "new_path" => "New"})
+        |> json_response(200)
+
+      assert body["folders"] > 0
+      assert {:ok, ["New/sub"]} = Engram.Notes.list_explicit_folders(user, vault)
+    end
+  end
+
   describe "GET /api/folders" do
     test "response includes id and parent_id per folder marker", %{
       conn: conn,
