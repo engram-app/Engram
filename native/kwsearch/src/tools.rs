@@ -214,6 +214,8 @@ fn gen() {
     let threads = env_n("KW_THREADS", 8);
     let secs = env_n("KW_SECS", 60) as u64;
     let seed = env_n("KW_SEED", 1) as u64;
+    // KW_OPS: stop after this many ops per thread (deterministic with one thread).
+    let max_ops = env_n("KW_OPS", 0) as u64;
     let mut c = db();
     for i in 0..tenants {
         let (u, vs) = tenant(i, seed);
@@ -237,7 +239,9 @@ fn gen() {
                 let mut rng = StdRng::seed_from_u64(seed * 1000 + th as u64);
                 let mut c = db();
                 let mut n = [0u64; 5];
-                while Instant::now() < end {
+                let mut done = 0u64;
+                while Instant::now() < end && (max_ops == 0 || done < max_ops) {
+                    done += 1;
                     let (u, vs) = tenant(rng.random_range(0..tenants), seed);
                     let v = vs[rng.random_range(0..2)];
                     let note = Uuid::from_u64_pair(fnv(v.as_bytes()), rng.random_range(0..40));
@@ -614,6 +618,8 @@ fn verify() {
         .collect();
     let missing = truth.keys().filter(|p| !seen.contains_key(p)).count();
     let extra = seen.keys().filter(|p| !truth.contains_key(p)).count();
+    eprintln!("missing sample: {:?}", truth.keys().filter(|p| !seen.contains_key(p)).take(3).collect::<Vec<_>>());
+    eprintln!("extra sample: {:?}", seen.keys().filter(|p| !truth.contains_key(p)).take(3).collect::<Vec<_>>());
     let stale = truth
         .iter()
         .filter(|(p, crc)| seen.get(p).is_some_and(|c| c != *crc))
