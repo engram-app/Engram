@@ -1,0 +1,9 @@
+[package]
+name = "kwfeed"
+version = "0.1.0"
+edition = "2021"
+
+# The keyword_feed row contract, shared by the writer (engram_native, which
+# hashes chunk text into term ids) and the reader (kwsearch, which never sees
+# text or keys). One codec, so the two sides cannot drift. No dependencies.
+[dependencies]

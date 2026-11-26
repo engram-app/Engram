@@ -17,6 +17,8 @@ test-hooks = []
 rustler = "0.38"
 # The envelope engine (pure Rust, shared with the wasm clients).
 engram_core = { path = "../engram_core" }
+# keyword_feed row codec, shared with kwsearch (the Tantivy keyword service).
+kwfeed = { path = "../kwfeed" }
 getrandom = "0.4"
 hmac = "0.13"
 sha2 = "0.11"

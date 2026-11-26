@@ -4,7 +4,7 @@
 # import check). Rustler builds engram_native as a member; its artifact lands
 # in native/target.
 [workspace]
-members = ["engram_core", "engram_native", "wasm_guard"]
+members = ["engram_core", "engram_native", "kwfeed", "wasm_guard"]
 resolver = "2"
 
 [profile.release]

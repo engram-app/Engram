@@ -293,6 +293,7 @@ dependencies = [
  "engram_core",
  "getrandom 0.4.3",
  "hmac",
+ "kwfeed",
  "nucleo-matcher",
  "pulldown-cmark",
  "rayon",
@@ -479,6 +480,10 @@ dependencies = [
  "cfg-if",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "kwfeed"
+version = "0.1.0"
 
 [[package]]
 name = "libc"
