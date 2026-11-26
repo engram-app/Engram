@@ -89,11 +89,16 @@ fn dim(keyed: &Hmac<Sha256>, token: &str) -> u32 {
 /// BM25 length options. `b` is the length weight (0.75 for every v3 point);
 /// `cap`, when set, scores a document as if it were at most `cap` x avgdl
 /// long (floor points and capped groups use 3.0).
+///
+/// `feed`: also return the document's `keyword_feed.terms` column (kwfeed
+/// codec) from the same counting pass, so a pass that writes both the sparse
+/// store and the kwsearch feed tokenizes once (review #13).
 #[derive(Clone, Copy)]
 struct Bm25 {
     avgdl: f64,
     b: f64,
     cap: Option<f64>,
+    feed: bool,
 }
 
 /// One chunk's tokens as `(dim, occurrences)`, one entry per distinct TOKEN in
@@ -177,8 +182,9 @@ fn encode(
     lang: Option<&str>,
     memo: &mut HashMap<String, u32>,
     buf: &mut String,
-) -> (Vec<u8>, Vec<u8>, usize) {
+) -> Encoded {
     let (counts, doc_len) = count_terms(text, keyed, lang, memo, buf);
+    let feed = bm25.feed.then(|| kwfeed::pack(counts.iter().copied()));
 
     // Uncapped, this is the exact expression the encoder always used, so a
     // b 0.75 uncapped vector is bit-identical to before the options existed.
@@ -212,7 +218,7 @@ fn encode(
             last = Some(d);
         }
     }
-    (idx, val, doc_len)
+    (idx, val, doc_len, feed)
 }
 
 /// Per text, its `keyword_feed.terms` column (kwfeed codec: raw counts per
@@ -243,8 +249,12 @@ fn to_binary<'a>(env: Env<'a>, bytes: &[u8]) -> Binary<'a> {
     b.into()
 }
 
-/// One document's packed sparse vector: (indices, values, doc_len).
-type Encoded = (Vec<u8>, Vec<u8>, usize);
+/// One document's packed sparse vector: (indices, values, doc_len), and its
+/// feed terms when asked for (`Bm25::feed`).
+type Encoded = (Vec<u8>, Vec<u8>, usize, Option<Vec<u8>>);
+
+/// `Encoded` as BEAM binaries.
+type EncodedTerm<'a> = (Binary<'a>, Binary<'a>, usize, Option<Binary<'a>>);
 
 /// Encodes `texts` in order with one memo and buffer, handing each result
 /// to `out` as soon as it is built.
@@ -386,14 +396,27 @@ fn encode_documents_nif<'a>(
     key: Binary<'a>,
     avgdl: f64,
     lang: Option<String>,
-    // `{b, cap, workers}`: BM25 length weight and cap, and worker threads.
-    (b, cap, workers): (f64, Option<f64>, usize),
-) -> (Vec<(Binary<'a>, Binary<'a>, usize)>, usize) {
-    let bm25 = Bm25 { avgdl, b, cap };
+    // `{b, cap, workers, feed}`: BM25 length weight and cap, worker threads,
+    // and whether to return each document's feed terms too.
+    (b, cap, workers, feed): (f64, Option<f64>, usize, bool),
+) -> (Vec<EncodedTerm<'a>>, usize) {
+    let bm25 = Bm25 {
+        avgdl,
+        b,
+        cap,
+        feed,
+    };
     let lang = lang.as_deref();
     let bytes: usize = texts.iter().map(|t| t.len()).sum();
     let parallel = batch_pool(&POOL, workers, texts.len(), bytes);
-    let packed = |(i, v, n): Encoded| (to_binary(env, &i), to_binary(env, &v), n);
+    let packed = |(i, v, n, f): Encoded| {
+        (
+            to_binary(env, &i),
+            to_binary(env, &v),
+            n,
+            f.map(|f| to_binary(env, &f)),
+        )
+    };
     let ((out, worker_peak), peak) = memory::measured(|| {
         let keyed = keyed(key.as_slice());
         if let Some((pool, runs)) = parallel {
@@ -1313,6 +1336,7 @@ mod tests {
                     avgdl: 50.0,
                     b: 0.75,
                     cap: None,
+                    feed: false,
                 },
             ),
             (
@@ -1321,6 +1345,7 @@ mod tests {
                     avgdl: 7.5,
                     b: 0.4,
                     cap: Some(3.0),
+                    feed: false,
                 },
             ),
         ]
@@ -1347,7 +1372,7 @@ mod tests {
             for (name, bm25) in configs() {
                 for (suffix, texts) in [("", corpus()), ("|edge", edge_cases())] {
                     let mut h = Sha256::new();
-                    for (i, v, n) in encode_batch(&texts, &KEY, bm25, lang) {
+                    for (i, v, n, _) in encode_batch(&texts, &KEY, bm25, lang) {
                         h.update((i.len() as u64).to_le_bytes());
                         h.update(&i);
                         h.update(&v);
@@ -1476,7 +1501,7 @@ mod tests {
                 let (got, peak) =
                     encode_parallel(&slices, &keyed(&KEY), bm25, lang, &pool, workers);
                 assert!(got == want, "{lang:?} x{workers}");
-                let bytes: usize = got.iter().map(|(i, v, _)| i.len() + v.len()).sum();
+                let bytes: usize = got.iter().map(|(i, v, _, _)| i.len() + v.len()).sum();
                 assert!(peak >= bytes, "{peak} < {bytes}");
             }
         }
@@ -1515,11 +1540,34 @@ mod tests {
             avgdl: 50.0,
             b: 0.75,
             cap: None,
+            feed: true,
         };
         for text in corpus() {
-            let (idx, _, doc_len) = encode(&text, &k, bm25, Some("en"), &mut memo, &mut buf);
+            let (idx, val, doc_len, one_pass) =
+                encode(&text, &k, bm25, Some("en"), &mut memo, &mut buf);
             let (counts, n) = count_terms(&text, &k, Some("en"), &mut memo, &mut buf);
             assert_eq!(n, doc_len);
+            // Review #13: the feed column from the sparse encode's own pass is
+            // the one the feed NIF makes, and asking for it moves no sparse byte.
+            assert_eq!(
+                one_pass.as_deref(),
+                Some(kwfeed::pack(counts.clone()).as_slice())
+            );
+            let plain = encode(
+                &text,
+                &k,
+                Bm25 {
+                    feed: false,
+                    ..bm25
+                },
+                Some("en"),
+                &mut memo,
+                &mut buf,
+            );
+            assert_eq!(
+                (&plain.0, &plain.1, plain.2, plain.3),
+                (&idx, &val, doc_len, None)
+            );
             let total: u32 = counts.iter().map(|c| c.1).sum();
             let feed = kwfeed::unpack(&kwfeed::pack(counts)).unwrap();
             let dims: Vec<u8> = feed.iter().flat_map(|p| p.0.to_le_bytes()).collect();

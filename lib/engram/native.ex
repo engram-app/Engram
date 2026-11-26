@@ -321,7 +321,11 @@ defmodule Engram.Native do
 
   @doc """
   Batch keyword encode: `[{indices_u32le, values_f64le, doc_len}]`, indices
-  ascending. Emits `[:engram, :nif, :call, :stop]`.
+  ascending. With `feed: true` each element also carries the document's
+  `keyword_feed.terms` column from the same tokenizing pass,
+  `{indices, values, doc_len, terms}` (review #13: a pass writing the sparse
+  store and the kwsearch feed tokenizes once).
+  Emits `[:engram, :nif, :call, :stop]`.
 
   Options: `:b` BM25 length weight (default 0.75), `:cap` score each
   document as if it were at most `cap` x `avgdl` long (default none). The
@@ -341,15 +345,19 @@ defmodule Engram.Native do
 
     b = b / 1
     cap = cap && cap / 1
+    feed = Keyword.get(opts, :feed, false) == true
 
     # Worker threads for the batch: the dirty CPU schedulers online, which
     # rel/env.sh.eex sizes from the real CPU quota (1 on prod's 0.5 vCPU
     # task: the sequential path). See lib.rs `POOL` for why not the OS count.
     workers = :erlang.system_info(:dirty_cpu_schedulers_online)
 
-    call(:keyword_encode, texts, %{dirty: true}, fn ->
-      encode_documents_nif(texts, filter_key, avgdl, language, {b, cap, workers})
-    end)
+    encoded =
+      call(:keyword_encode, texts, %{dirty: true}, fn ->
+        encode_documents_nif(texts, filter_key, avgdl, language, {b, cap, workers, feed})
+      end)
+
+    if feed, do: encoded, else: Enum.map(encoded, fn {i, v, n, nil} -> {i, v, n} end)
   end
 
   @doc """
