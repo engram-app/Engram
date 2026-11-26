@@ -229,14 +229,15 @@ defmodule Engram.MixProject do
       "ecto.setup": [
         "ecto.create",
         "engram.prepare_database",
-        "ecto.migrate",
+        # The migrations, then the owner-run boot drops (Engram.Release.migrate/0).
+        "engram.migrate",
         "run priv/repo/seeds.exs"
       ],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: [
         "ecto.create --quiet",
         "engram.prepare_database",
-        "ecto.migrate --quiet",
+        "engram.migrate",
         "test"
       ],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"],

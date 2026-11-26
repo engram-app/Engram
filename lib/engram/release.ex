@@ -219,9 +219,18 @@ defmodule Engram.Release do
 
       {:ok, _, _} =
         Ecto.Migrator.with_repo(repo, fn repo ->
-          with_migration_lock(repo.config(), fn -> Ecto.Migrator.run(repo, :up, all: true) end)
+          with_migration_lock(repo.config(), fn -> migrate_and_drop(repo) end)
         end)
     end
+  end
+
+  # The owner-run contract drops that must never fail boot run after the
+  # migrations, on the same connection and lock (`Engram.Release.FolderHashDrop`).
+  @doc false
+  def migrate_and_drop(repo) do
+    migrated = Ecto.Migrator.run(repo, :up, all: true)
+    _ = Engram.Release.FolderHashDrop.run(repo)
+    migrated
   end
 
   # Every web and worker task migrates on boot. Ecto's own migration lock

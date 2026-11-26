@@ -1,8 +1,10 @@
 defmodule Engram.Folders.FullPathHmacRetiredTest do
   @moduledoc """
   S6 step 3 (Engram#2523): release J stopped every write and read of
-  `folders.full_path_hmac`; release K (20261126100000) drops the column and
-  `folders_full_path`, with the rollback floor at J. Red before J: the gated
+  `folders.full_path_hmac`; release K drops the column and
+  `folders_full_path` (migration 20261126100000's statements, run after the
+  migrations by `Engram.Release.FolderHashDrop`), with the rollback floor
+  at J. Red before J: the gated
   writer (`PathHmacs`, `PathHashStop`), the `FolderTable` pass and the DEK
   rotation all wrote the hash, and three ledgers read it. Red before K: the
   column and the index exist.

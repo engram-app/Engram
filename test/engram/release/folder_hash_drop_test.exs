@@ -79,7 +79,9 @@ defmodule Engram.Release.FolderHashDropTest do
   defp run(opts \\ []), do: unboxed(fn -> FolderHashDrop.run(Repo, opts) end)
 
   defp flags_file!(doc) do
-    path = Path.join(System.tmp_dir!(), "hash_drop_flags_#{System.unique_integer([:positive])}.json")
+    path =
+      Path.join(System.tmp_dir!(), "hash_drop_flags_#{System.unique_integer([:positive])}.json")
+
     File.write!(path, Jason.encode!(doc))
     on_exit(fn -> File.rm(path) end)
     use_source({:file, path})
@@ -161,7 +163,8 @@ defmodule Engram.Release.FolderHashDropTest do
     end)
 
     use_source(
-      {:appconfig, %{application: "app", environment: "env", profile: "prof", region: "us-east-1"}}
+      {:appconfig,
+       %{application: "app", environment: "env", profile: "prof", region: "us-east-1"}}
     )
 
     log = capture_log(fn -> assert run(flags_timeout_ms: 100) == :done end)
