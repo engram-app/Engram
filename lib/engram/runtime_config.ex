@@ -191,9 +191,30 @@ defmodule Engram.RuntimeConfig do
       else: []
   end
 
+  # Same rules as kwsearch's `Keys::parse`: each key trimmed, one or two
+  # (current, next), each at least 32 bytes. A short key is a typo or a
+  # placeholder, and a third key cannot be told apart from a mistake.
+  defp token_keys(raw) do
+    keys =
+      (raw || "") |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+
+    cond do
+      keys == [] ->
+        raise "KEYWORD_FEED=on needs KWSEARCH_TOKEN_KEYS"
+
+      length(keys) > 2 ->
+        raise "KWSEARCH_TOKEN_KEYS takes at most two keys (current,next)"
+
+      Enum.any?(keys, &(byte_size(&1) < 32)) ->
+        raise "KWSEARCH_TOKEN_KEYS: every key needs 32+ bytes"
+
+      true ->
+        keys
+    end
+  end
+
   defp kwsearch(getenv) do
-    keys = String.split(getenv.("KWSEARCH_TOKEN_KEYS") || "", ",", trim: true)
-    if keys == [], do: raise("KEYWORD_FEED=on needs KWSEARCH_TOKEN_KEYS")
+    keys = token_keys(getenv.("KWSEARCH_TOKEN_KEYS"))
     url = getenv.("KWSEARCH_URL")
     if blank?(url), do: raise("KEYWORD_FEED=on needs KWSEARCH_URL")
     int = fn var, default -> String.to_integer(getenv.(var) || default) end
