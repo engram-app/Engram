@@ -40,6 +40,14 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # the @doc), so it DOES run under RLS tenant context — the raw SQL is needed
     # for the single-round-trip read-modify-write + row lock, not to bypass RLS.
     "engram/vaults.ex",
+    # TrimKeywordFeed: the keyword_feed / keyword_deletions retention trim
+    # (security F2). Cross-tenant by design and NOT on the app pool: it runs
+    # on `Repo.maintenance()` as engram_maintenance, which every row reaches
+    # through the `maintenance_all` policy (and refuses through
+    # `Repo.maintenance_only/3` where that pool is missing). Raw SQL because
+    # the trim compares and returns the `xid8` column, which Ecto has no type
+    # for, and needs `DELETE ... RETURNING` of the trimmed `(xid, seq)`.
+    "engram/workers/trim_keyword_feed.ex",
     # Attachments.BulkUpdate: the multi-row `UPDATE ... FROM (VALUES ...)`
     # statements where every row gets its OWN values (a distinct seq for a
     # batch soft delete or a seq bump after a blob restore; re-encrypted path
