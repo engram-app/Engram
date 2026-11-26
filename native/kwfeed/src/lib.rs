@@ -10,6 +10,11 @@ pub const DELETE_POINTS: i16 = 2;
 pub const DELETE_NOTE: i16 = 3;
 pub const DELETE_VAULT: i16 = 4;
 pub const DELETE_USER: i16 = 5;
+/// Note-scoped: the note now has exactly `keep` (point ids). Every index
+/// pass and every point delete of a note emits one, FIRST in its
+/// transaction: a pass applied out of order (lower xid, later commit) is
+/// only resolvable against the newer pass's full point set.
+pub const DELETE_NOTE_EXCEPT: i16 = 6;
 
 /// (term id, count) pairs, in any order and with repeats -> packed column.
 /// Repeated ids are summed (same-dim HMAC collisions count as one term).
