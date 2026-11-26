@@ -334,6 +334,10 @@ config :engram, Oban,
         # store is configured; there each run chains the next 5 min out and
         # this hourly entry restarts a lost chain.
         {"47 * * * *", Engram.Workers.TrimKeywordFeed},
+        # kwsearch bulk load, reload and drift repair (roadmap P2 tasks 3
+        # and 5): a no-op unless the feed is written; chains while a walk is
+        # open, this hourly entry restarts a lost chain.
+        {"37 * * * *", Engram.Workers.ReconcileKeywordIndex},
         # Paddle drift check. Daily: drift logs at :error to Sentry, and a
         # repair is manual, so more runs would only repeat the alert.
         {"0 2 * * *", Engram.Billing.Workers.PaddleReconcile},

@@ -68,6 +68,7 @@ defmodule Engram.PromEx.Search do
   @stop_event [:engram, :search, :request, :stop]
   @degraded_event [:engram, :search, :degraded]
   @keyword_fallback_event [:engram, :search, :keyword_fallback]
+  @keyword_shadow_event [:engram, :search, :keyword_shadow]
   @feed_trim_event [:engram, :keyword_feed, :trim]
   @hit_dropped_event [:engram, :search, :hit_dropped]
   @text_missing_event [:engram, :search, :text_missing]
@@ -177,6 +178,32 @@ defmodule Engram.PromEx.Search do
           event_name: @keyword_fallback_event,
           description: "Searches whose kwsearch keyword leg failed, by outcome and reason.",
           tags: [:outcome, :reason]
+        ),
+        # Shadow compare (roadmap P2 task 8, `KeywordStore.Shadow`): sampled
+        # searches whose keyword leg also ran on kwsearch, never served. The
+        # parity gate reads the overlap percent; outcome `error` counts a
+        # kwsearch that was down or rebuilding.
+        counter(
+          metric_prefix ++ [:keyword_shadow, :total],
+          event_name: @keyword_shadow_event,
+          description: "Shadow compares of the kwsearch keyword leg, by outcome.",
+          tags: [:outcome]
+        ),
+        distribution(
+          metric_prefix ++ [:keyword_shadow_overlap, :percent],
+          event_name: @keyword_shadow_event,
+          measurement: :overlap_pct,
+          description: "Share of the sparse top 10 kwsearch also returned, percent.",
+          reporter_options: Engram.PromEx.Buckets.opts(Engram.PromEx.Search.OverlapBuckets),
+          keep: &(&1[:outcome] == :ok)
+        ),
+        distribution(
+          metric_prefix ++ [:keyword_shadow_tantivy, :milliseconds],
+          event_name: @keyword_shadow_event,
+          measurement: :tantivy_ms,
+          description: "kwsearch keyword leg latency in shadow compares.",
+          reporter_options: Engram.PromEx.Buckets.opts(Engram.PromEx.Search.FilterResolveBuckets),
+          keep: &(&1[:outcome] == :ok)
         ),
         # keyword_feed trim (security F2): rows trimmed, those trimmed before
         # kwsearch applied them (a gap the index must rebuild past), and the
@@ -293,6 +320,11 @@ end
 defmodule Engram.PromEx.Search.GateWaitBuckets do
   @moduledoc false
   use Engram.PromEx.Buckets, [1, 10, 50, 100, 250, 500, 1_000, 2_500, 5_000]
+end
+
+defmodule Engram.PromEx.Search.OverlapBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [50, 80, 90, 95, 99, 100]
 end
 
 defmodule Engram.PromEx.Search.FilterResolveBuckets do

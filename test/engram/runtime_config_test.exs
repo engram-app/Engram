@@ -18,15 +18,28 @@ defmodule Engram.RuntimeConfigTest do
       cfg = RuntimeConfig.keyword_store(getenv(Map.put(@kw, "KEYWORD_FEED", "on")))
       assert cfg[:keyword_feed] == true and cfg[:keyword_read] == :sparse
       assert cfg[:kwsearch][:token_keys] == [@cur, @next], "keys are trimmed"
-      assert cfg[:kwsearch][:feed_max_age_h] == 48
+      assert cfg[:kwsearch][:feed_max_age_h] == 48, "the F2 horizon (Todd 2026-11-26)"
+      assert cfg[:keyword_shadow_rate] == 0.0, "the shadow compare is off by default"
     end
 
-    test "KEYWORD_READ=tantivy is refused until the backfill exists (P2 part 2)" do
-      # A fresh feed holds only chunks indexed after it was turned on, so
-      # reading it would silently lose every reused chunk (delta review).
+    test "KEYWORD_SHADOW_RATE: a share from 0 to 1, anything else refuses to boot" do
+      on = Map.put(@kw, "KEYWORD_FEED", "on")
+      cfg = RuntimeConfig.keyword_store(getenv(Map.put(on, "KEYWORD_SHADOW_RATE", "0.05")))
+      assert cfg[:keyword_shadow_rate] == 0.05
+
+      for bad <- ~w(1.5 -0.1 lots) do
+        assert_raise RuntimeError, ~r/KEYWORD_SHADOW_RATE/, fn ->
+          RuntimeConfig.keyword_store(getenv(Map.put(on, "KEYWORD_SHADOW_RATE", bad)))
+        end
+      end
+    end
+
+    test "KEYWORD_READ=tantivy stays refused until the shadow compare and coverage gate pass" do
+      # Todd 2026-11-26: the sparse store stays the live keyword path until
+      # then, backfill or not.
       on = Map.put(@kw, "KEYWORD_FEED", "on")
 
-      assert_raise RuntimeError, ~r/backfill/, fn ->
+      assert_raise RuntimeError, ~r/shadow compare and coverage gate/, fn ->
         RuntimeConfig.keyword_store(getenv(Map.put(on, "KEYWORD_READ", "tantivy")))
       end
 

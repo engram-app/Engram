@@ -4797,6 +4797,21 @@ defmodule Engram.Notes do
     do: Note |> where([n], n.id == ^note_id) |> NoteBody.select_note(@note_fields_without_crdt)
 
   @doc """
+  `fetch_note_for_worker/2` for many notes of one user: the live ones
+  (kind note, not trashed) with their content, still encrypted. Joins the
+  caller's tenant transaction (the kwsearch bulk read holds the note locks).
+  """
+  @spec live_notes_for_worker([String.t()], String.t()) :: [Note.t()]
+  def live_notes_for_worker(note_ids, user_id) when is_binary(user_id) do
+    Repo.with_tenant!(user_id, fn ->
+      Note
+      |> where([n], n.id in ^note_ids and n.kind == "note" and is_nil(n.deleted_at))
+      |> NoteBody.select_note(@note_fields_without_crdt)
+      |> Repo.all()
+    end)
+  end
+
+  @doc """
   `fetch_note_for_worker/2` plus the note's tail rows, from one statement (for
   `authoritative_content/3`).
   """

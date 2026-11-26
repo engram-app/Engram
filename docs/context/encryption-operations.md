@@ -447,6 +447,10 @@ Both must hold:
 
 If `dek_version` did not advance OR `dek_rotation_locked_at` is still set, rotation failed mid-flight. Inspect Logger.error output (category `:crypto`) for the failing phase, fix the underlying cause. Do NOT assume a re-run resumes: each run generates a fresh DEK, so rows a failed run already rewrapped are under a key that was never stored and the re-run raises on them (see "Folder rows" above). The decrypt-as-discriminator only tolerates rows rotated under the SAME new DEK; recovery from a crash after the first sweep is a restore from the pre-rotation snapshot.
 
+### Keyword copies under the old key (security F5)
+
+Rotation clears `keyword_version`, and the resparse rewrites every keyword doc under the new key. Where the kwsearch (Tantivy) keyword store is on, each rewrite replaces a doc whose point id is unchanged but whose terms differ; kwsearch records that re-key and, once no re-keyed upsert has arrived for 10 minutes (`REKEY_SETTLE_S`), force-merges the shard so the old-key docs leave the disk (`kwsearch_oldest_unpurged_delete_seconds` drops back). Old-key terms still live, for their own retention, in: `keyword_feed` rows (48 h at most), Postgres PITR and backups, and kwsearch EBS snapshots (30 days). A leaked key keeps decoding those copies until they expire; say so in the incident write-up.
+
 ### Rollback
 
 DEK rotation has NO clean rollback once `users.encrypted_dek` is flipped (final phase of the orchestrator). Pre-flip rollback: re-acquire the lock, manually clear `attachments.dek_version_pending` and revert any partially-rotated rows from a backup. Post-flip rollback: not supported. Restore from a database snapshot taken before the rotation if absolutely required.

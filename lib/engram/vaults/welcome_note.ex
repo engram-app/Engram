@@ -124,6 +124,29 @@ defmodule Engram.Vaults.WelcomeNote do
   end
 
   @doc """
+  True for the seeded note while its body is the seed's: its path, and the
+  text after its frontmatter (the store rewrites the frontmatter block, and
+  a ticked property is not the user's own words). The body is public (this
+  file), so its keyword fingerprints in every vault would line up per user
+  with known words (security F3); the keyword index leaves it out until the
+  user edits it.
+  """
+  @spec unedited?(%{path: String.t() | nil, content: String.t() | nil}) :: boolean()
+  def unedited?(%{path: @path, content: content}) when is_binary(content),
+    do: body(content) == body(@template)
+
+  def unedited?(_note), do: false
+
+  defp body("---\n" <> rest) do
+    case String.split(rest, "\n---\n", parts: 2) do
+      [_frontmatter, body] -> body
+      _ -> nil
+    end
+  end
+
+  defp body(_content), do: nil
+
+  @doc """
   Writes the welcome note into `vault`.
 
   Best-effort by design: a failure is logged and swallowed. The vault has

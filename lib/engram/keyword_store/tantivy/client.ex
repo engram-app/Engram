@@ -52,17 +52,116 @@ defmodule Engram.KeywordStore.Tantivy.Client do
   @doc "The highest `(xid, seq)` every shard has applied and committed."
   @spec cursor() :: {:ok, {non_neg_integer(), integer()}} | {:error, term()}
   def cursor do
-    with :ok <- configured(),
-         {:ok, req} <- req() do
-      req |> Req.get(url: "/cursor", auth: {:bearer, Token.ops(signing_key())}) |> cursor_of()
+    case state() do
+      {:ok, %{"xid" => xid, "seq" => seq}} when is_binary(xid) and is_integer(seq) ->
+        {:ok, {String.to_integer(xid), seq}}
+
+      {:ok, _} ->
+        {:error, :kwsearch_bad_body}
+
+      error ->
+        error
     end
   end
 
-  defp cursor_of(response) do
+  @doc """
+  The index epoch and whether it is still rebuilding (a new index, or one
+  after a feed gap): the reconcile's full-load target.
+  """
+  @spec epoch() :: {:ok, %{id: String.t(), rebuilding: boolean()}} | {:error, term()}
+  def epoch do
+    case state() do
+      {:ok, %{"epoch" => id, "rebuilding" => rebuilding}}
+      when is_binary(id) and is_boolean(rebuilding) ->
+        {:ok, %{id: id, rebuilding: rebuilding}}
+
+      {:ok, _} ->
+        {:error, :kwsearch_bad_body}
+
+      error ->
+        error
+    end
+  end
+
+  defp state do
+    with :ok <- configured(),
+         {:ok, req} <- req() do
+      req |> Req.get(url: "/cursor", auth: {:bearer, Token.ops(signing_key())}) |> body()
+    end
+  end
+
+  @doc """
+  One user's bulk batch (`Engram.KeywordStore.Tantivy.Bulk`): `read_at` is
+  the unix second the rows were read under their note locks; kwsearch refuses
+  a batch older than an hour (`{:error, {:kwsearch_status, 409}}`).
+  """
+  @spec bulk(String.t(), integer(), [map()]) :: {:ok, map()} | {:error, term()}
+  def bulk(user_id, read_at, notes) do
+    with :ok <- configured(),
+         {:ok, req} <- req() do
+      req
+      |> Req.post(
+        url: "/bulk",
+        json: %{gen: @gen, read_at: read_at, notes: notes},
+        auth: {:bearer, Token.bulk(user_id, signing_key())},
+        receive_timeout: 60_000
+      )
+      |> body()
+    end
+  end
+
+  @doc """
+  One page of the user's indexed notes: `[{note_id, vault_id, doc_count}]`
+  by note id, after `after` (nil: from the start).
+  """
+  @spec notes(String.t(), String.t() | nil, pos_integer()) ::
+          {:ok, [{String.t(), String.t(), non_neg_integer()}]} | {:error, term()}
+  def notes(user_id, after_id, limit) do
+    body =
+      if after_id,
+        do: %{gen: @gen, after: after_id, limit: limit},
+        else: %{gen: @gen, limit: limit}
+
+    with :ok <- configured(),
+         {:ok, req} <- req(),
+         {:ok, %{"notes" => notes}} <-
+           req
+           |> Req.post(
+             url: "/notes",
+             json: body,
+             auth: {:bearer, Token.bulk(user_id, signing_key())},
+             receive_timeout: 30_000
+           )
+           |> body() do
+      {:ok, for([n, v, c] <- notes, do: {n, v, c})}
+    else
+      {:ok, _} -> {:error, :kwsearch_bad_body}
+      error -> error
+    end
+  end
+
+  @doc "Tells kwsearch every user is loaded for `epoch` (it may then serve)."
+  @spec rebuilt(String.t()) :: :ok | {:error, term()}
+  def rebuilt(epoch) do
+    with :ok <- configured(),
+         {:ok, req} <- req(),
+         {:ok, _} <-
+           req
+           |> Req.post(
+             url: "/rebuilt",
+             json: %{epoch: epoch},
+             auth: {:bearer, Token.ops(signing_key())}
+           )
+           |> body(),
+         do: :ok
+  end
+
+  # A 200's decoded body; any other status or a transport error as a
+  # bounded reason (never the body, F15).
+  defp body(response) do
     case response do
-      {:ok, %Req.Response{status: 200, body: %{"xid" => xid, "seq" => seq}}}
-      when is_binary(xid) and is_integer(seq) ->
-        {:ok, {String.to_integer(xid), seq}}
+      {:ok, %Req.Response{status: 200, body: %{} = body}} ->
+        {:ok, body}
 
       {:ok, %Req.Response{status: status}} ->
         {:error, {:kwsearch_status, status}}

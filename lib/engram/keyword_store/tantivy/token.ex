@@ -6,7 +6,10 @@ defmodule Engram.KeywordStore.Tantivy.Token do
   unpadded. A search token names the user and the vaults the request may
   read, so kwsearch takes the tenant from the signature, never from the body:
   `%{"s" => "search", "u" => user_id, "v" => [vault_id], "exp" => unix_s}`.
-  An ops token (`%{"s" => "ops", "exp" => unix_s}`) reads the applied cursor.
+  A bulk token (`%{"s" => "bulk", "u" => user_id, "exp" => unix_s}`) writes
+  and lists ONE user's docs (backfill, reconcile), the user again taken from
+  the signature. An ops token (`%{"s" => "ops", "exp" => unix_s}`) reads the
+  applied cursor and reports a finished rebuild.
 
   Keys rotate by overlap: `sign/2` uses the first configured key, and a token
   verifies against ANY listed key, so the list is `[current, next]` during a
@@ -28,6 +31,11 @@ defmodule Engram.KeywordStore.Tantivy.Token do
   @spec search(String.t(), [String.t()], binary(), integer()) :: String.t()
   def search(user_id, vault_ids, key, now \\ System.system_time(:second)),
     do: sign(%{"s" => "search", "u" => user_id, "v" => vault_ids, "exp" => now + @ttl_s}, key)
+
+  @doc "A bulk token for `user_id` (backfill, reconcile), valid #{@ttl_s} s."
+  @spec bulk(String.t(), binary(), integer()) :: String.t()
+  def bulk(user_id, key, now \\ System.system_time(:second)),
+    do: sign(%{"s" => "bulk", "u" => user_id, "exp" => now + @ttl_s}, key)
 
   @doc "An ops token (the feed trim's cursor read), valid #{@ttl_s} s."
   @spec ops(binary(), integer()) :: String.t()
