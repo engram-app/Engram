@@ -215,16 +215,27 @@ defmodule Engram.KeywordStore.TantivyFeedTest do
       assert Enum.map(feed_rows(), & &1.op) == [@ops.delete_vault, @ops.delete_user]
     end
 
-    test "a legacy user id spelling writes one tombstone under the canonical id", %{a: a} do
+    # Review N1: OrphanSweep finds most departed users only under the vector
+    # store's undashed `u`. Only that spelling is sent here, so a canonical
+    # call cannot write the row this checks.
+    test "an undashed upper-case user id alone writes one tombstone under the canonical id",
+         %{a: a} do
       id = to_string(a.id)
-      undashed_upper = id |> String.replace("-", "") |> String.upcase()
-
-      :ok = KeywordStore.delete_user(undashed_upper, :purge)
-      :ok = KeywordStore.delete_user(id, :purge)
-      :ok = KeywordStore.delete_user("not-a-uuid", :purge)
+      :ok = KeywordStore.delete_user(id |> String.replace("-", "") |> String.upcase(), :purge)
 
       assert [%{op: 5, user: ^id}] = feed_rows()
       assert [[^id, 5, nil, nil]] = deletion_rows()
+    end
+
+    test "a second spelling of the same user writes no second tombstone; a non-uuid writes none",
+         %{a: a} do
+      id = to_string(a.id)
+      :ok = KeywordStore.delete_user(String.replace(id, "-", ""), :purge)
+      :ok = KeywordStore.delete_user(String.upcase(id), :purge)
+      :ok = KeywordStore.delete_user("not-a-uuid", :purge)
+
+      assert [%{op: 5, user: ^id}] = feed_rows()
+      assert length(deletion_rows()) == 1
     end
   end
 

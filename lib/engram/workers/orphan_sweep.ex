@@ -914,10 +914,8 @@ defmodule Engram.Workers.OrphanSweep do
     runaway?(departed, total) or (n >= 2 and n * 2 > total)
   end
 
-  # The one spelling every side of the diff is compared in: lowercase and
-  # dashed. Qdrant's `u` is undashed, a legacy `user_id` or an S3 prefix is
-  # whatever was written, `users.id` is Ecto's.
-  defp user_key(id), do: id |> String.downcase() |> FilterId.uuid() |> FilterId.dashed()
+  # The one spelling every side of the diff is compared in (`FilterId.canonical/1`).
+  defp user_key(id), do: FilterId.canonical(id)
 
   defp add_spelling(ids, uid),
     do: Map.update(ids, user_key(uid), [uid], &Enum.uniq(&1 ++ [uid]))
