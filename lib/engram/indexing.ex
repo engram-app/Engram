@@ -1632,10 +1632,24 @@ defmodule Engram.Indexing do
   # The keyword delete runs whatever the dense one returned: several callers
   # never retry (CleanupVault, the inactivity drop) and OrphanSweep finds its
   # targets by scanning Qdrant, so a keyword delete skipped after a dense
-  # failure would never be issued again. The first error wins.
+  # failure would never be issued again. The first error wins; when both
+  # fail, the keyword error is logged so it is not lost behind the dense one.
   defp both_legs(dense, keyword) do
-    keyword = keyword.()
-    if dense == :ok, do: keyword, else: dense
+    case {dense, keyword.()} do
+      {:ok, keyword} ->
+        keyword
+
+      {dense, :ok} ->
+        dense
+
+      {dense, keyword} ->
+        Logger.warning(
+          "keyword_store_delete_failed",
+          Metadata.with_category(:warning, :search, reason: Metadata.safe_reason(keyword))
+        )
+
+        dense
+    end
   end
 
   @doc """

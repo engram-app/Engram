@@ -43,4 +43,23 @@ defmodule Engram.Workers.PurgeUserVectorsTest do
     # The keyword delete does not wait on the dense one.
     assert_received {:keyword_store, :delete_user, [^user_id]}
   end
+
+  test "when both deletes fail, the dense error returns and the keyword error is logged", %{
+    bypass: bypass,
+    user_id: user_id
+  } do
+    Bypass.stub(bypass, "POST", "/collections/:col/points/delete", fn conn ->
+      Plug.Conn.send_resp(conn, 500, ~s({"status":{"error":"boom"}}))
+    end)
+
+    Engram.ServiceConfig.put_override(:keyword_store, Engram.KeywordStoreFailing)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, {500, _}} = perform_job(PurgeUserVectors, %{"user_id" => user_id})
+      end)
+
+    assert log =~ "keyword_store_delete_failed"
+    assert log =~ "keyword_down"
+  end
 end

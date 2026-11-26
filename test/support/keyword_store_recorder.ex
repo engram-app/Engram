@@ -32,3 +32,17 @@ defmodule Engram.KeywordStoreRecorder do
     end
   end
 end
+
+defmodule Engram.KeywordStoreFailing do
+  @moduledoc "Test `Engram.KeywordStore` backend whose every call fails with `:keyword_down`."
+  @behaviour Engram.KeywordStore
+
+  for {name, arity} <- Engram.KeywordStore.behaviour_info(:callbacks) do
+    args =
+      Macro.generate_arguments(arity, __MODULE__)
+      |> Enum.map(fn {n, m, c} -> {:"_#{n}", m, c} end)
+
+    @impl true
+    def unquote(name)(unquote_splicing(args)), do: {:error, :keyword_down}
+  end
+end
