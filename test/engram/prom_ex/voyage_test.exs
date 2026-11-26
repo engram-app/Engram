@@ -68,6 +68,17 @@ defmodule Engram.PromEx.VoyageTest do
       assert hist.event_name == [:engram, :voyage, :embed, :tokens_per_chunk]
     end
 
+    test "declares a retry counter tagged by purpose, model and reason" do
+      metrics = PromExMetrics.of(VoyagePlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
+      retry =
+        Enum.find(metrics, &(&1.name == [:engram, :prom_ex, :voyage, :embed, :retry, :total]))
+
+      assert %Telemetry.Metrics.Counter{} = retry
+      assert retry.event_name == [:engram, :voyage, :embed, :retry]
+      assert retry.tags == [:purpose, :model, :reason]
+    end
+
     test "never includes high-cardinality tags (user_id, vault_id)" do
       metrics =
         PromExMetrics.of(VoyagePlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)

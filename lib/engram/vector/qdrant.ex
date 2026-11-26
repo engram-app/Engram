@@ -143,7 +143,8 @@ defmodule Engram.Vector.Qdrant do
   # `/api/search` request path and must fail fast: with the indexing opts a
   # Qdrant brownout pins each request up to ~2min (30s x 4 attempts), holding
   # Bandit processes and cascading into pool pressure. Same split the Voyage
-  # embedder already has (`request_defaults(:query)` = 5s, no retry).
+  # embedder already has (`request_defaults(:query)` = 5s, one retry of a
+  # connection that failed before any response).
   @doc false
   def req_opts(purpose \\ :indexing)
 

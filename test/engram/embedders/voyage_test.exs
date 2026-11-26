@@ -78,7 +78,75 @@ defmodule Engram.Embedders.VoyageTest do
       # callers can still override per call.
       defaults = Voyage.request_defaults(:query)
       assert defaults[:receive_timeout] == 5_000
-      assert defaults[:retry] == false
+      assert defaults[:retry] == (&Voyage.retry_query?/2)
+      assert defaults[:max_retries] == 1
+    end
+
+    # A pooled keep-alive socket the far side closed while idle fails the next
+    # request instantly with `:closed` (prod: every failed query embed in a
+    # week, each degrading search to keyword-only). One immediate retry on a
+    # fresh connection recovers it.
+    test "query purpose retries a closed connection once, immediately" do
+      port = flaky_http_server(close_first: 1)
+      ServiceConfig.put_override(:voyage_url, "http://localhost:#{port}")
+      test_pid = self()
+      handler = "voyage-retry-#{inspect(test_pid)}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :voyage, :embed, :retry],
+        fn _event, measurements, meta, _ -> send(test_pid, {:retry, measurements, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      capture_log(fn ->
+        assert {:ok, [[0.1]]} = Voyage.embed_texts(["hello"], purpose: :query)
+      end)
+
+      assert_receive {:flaky_http_server, :served, 2}
+
+      assert_receive {:retry, %{count: 1},
+                      %{purpose: :query, reason: :closed, model: "voyage-4-large"}}
+    end
+
+    test "query purpose gives up after one retry of a closed connection" do
+      port = flaky_http_server(close_first: 2)
+      ServiceConfig.put_override(:voyage_url, "http://localhost:#{port}")
+
+      capture_log(fn ->
+        assert {:error, %Req.TransportError{reason: :closed}} =
+                 Voyage.embed_texts(["hello"], purpose: :query)
+      end)
+    end
+
+    # A timeout may have reached the model and still be running; retrying it
+    # would double the wait on a user-blocking path.
+    test "query purpose does not retry a timeout", %{bypass: bypass} do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.stub(bypass, "POST", "/v1/embeddings", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+        Process.sleep(300)
+        Plug.Conn.send_resp(conn, 200, ~s({"data":[{"embedding":[0.1]}]}))
+      end)
+
+      assert {:error, %Req.TransportError{reason: :timeout}} =
+               Voyage.embed_texts(["x"], purpose: :query, receive_timeout: 50)
+
+      Process.sleep(350)
+      assert Agent.get(counter, & &1) == 1
+      Bypass.pass(bypass)
+    end
+
+    test "retry_query? retries only failures that never got a response" do
+      req = Req.new()
+      assert Voyage.retry_query?(req, %Req.TransportError{reason: :closed}) == {:delay, 0}
+      assert Voyage.retry_query?(req, %Req.TransportError{reason: :econnrefused}) == {:delay, 0}
+      refute Voyage.retry_query?(req, %Req.TransportError{reason: :timeout})
+      refute Voyage.retry_query?(req, %Req.Response{status: 429})
+      refute Voyage.retry_query?(req, %Req.Response{status: 500})
     end
 
     test "index purpose keeps patient retry defaults" do
@@ -90,7 +158,7 @@ defmodule Engram.Embedders.VoyageTest do
 
     test "query purpose does not retry against a failing upstream", %{bypass: bypass} do
       # Behavior pin: with purpose: :query and no caller overrides, a 500
-      # gets exactly ONE request (retry: false), not 4.
+      # gets exactly ONE request (5xx is never retried), not 4.
       {:ok, counter} = Agent.start_link(fn -> 0 end)
 
       Bypass.expect(bypass, "POST", "/v1/embeddings", fn conn ->
@@ -279,6 +347,39 @@ defmodule Engram.Embedders.VoyageTest do
       assert Agent.get(counter, & &1) == 1
       # The client hung up on the sleeping handler; that is the point.
       Bypass.pass(bypass)
+    end
+  end
+
+  # Raw HTTP/1.1 server: the first `close_first` connections read the request
+  # and close without a response (what a stale pooled socket looks like to
+  # Mint: `:closed`); later ones answer 200. Reports each served connection.
+  defp flaky_http_server(close_first: n) do
+    test_pid = self()
+    {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+    {:ok, port} = :inet.port(listen)
+
+    pid = spawn_link(fn -> serve_flaky(listen, test_pid, n, 1) end)
+    :ok = :gen_tcp.controlling_process(listen, pid)
+    on_exit(fn -> :gen_tcp.close(listen) end)
+    port
+  end
+
+  defp serve_flaky(listen, test_pid, n, i) do
+    with {:ok, sock} <- :gen_tcp.accept(listen),
+         {:ok, _request} <- :gen_tcp.recv(sock, 0, 1_000) do
+      if i > n do
+        body = ~s({"data":[{"embedding":[0.1]}]})
+
+        :gen_tcp.send(
+          sock,
+          "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n" <>
+            "content-length: #{byte_size(body)}\r\nconnection: close\r\n\r\n" <> body
+        )
+      end
+
+      :gen_tcp.close(sock)
+      send(test_pid, {:flaky_http_server, :served, i})
+      serve_flaky(listen, test_pid, n, i + 1)
     end
   end
 

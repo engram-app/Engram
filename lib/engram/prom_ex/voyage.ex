@@ -10,6 +10,9 @@ defmodule Engram.PromEx.Voyage do
     * `[:engram, :voyage, :embed, :tokens]` — `%{total_tokens: integer}`,
       metadata `%{purpose: :index | :query}`. Only emitted on a successful
       200 with `usage.total_tokens` present in the Voyage payload.
+    * `[:engram, :voyage, :embed, :retry]` — `%{count: 1}`, metadata
+      `%{purpose: :query, model: String.t(), reason: :closed | :econnrefused}`, once per
+      in-call retry (`Voyage.retry_query?/2`).
 
   Metrics:
 
@@ -22,6 +25,10 @@ defmodule Engram.PromEx.Voyage do
     * `engram_prom_ex_voyage_client_rate_limited_total` — counter for the
       synthetic-429 path (`[:engram, :embed, :client_rate_limited]`,
       already emitted by the adapter), tagged by `:purpose`, `:model`.
+    * `engram_prom_ex_voyage_embed_retry_total` — counter of in-call retries
+      of a connection that failed before any response, tagged by `:purpose`,
+      `:model`, `:reason`. Each is a search rescued from keyword-only (or a retry that
+      also failed: compare with `embed_total{status="error"}`).
     * `engram_prom_ex_voyage_embed_tokens_per_chunk` — histogram of tokens
       per chunk, batch-averaged, one observation per request (`tokens /
       texts`), tags `[:purpose, :model]`.
@@ -36,7 +43,7 @@ defmodule Engram.PromEx.Voyage do
       NOT per-tenant — see `Engram.UsageMeters` for tenant-attributed token
       accounting.
 
-  Cardinality contract: only bounded labels (`status`, `purpose`, `tier`,
+  Cardinality contract: only bounded labels (`status`, `purpose`, `reason`, `tier`,
   `trigger`, and `model`: operator-configured model names, a handful). NEVER
   add `user_id`, `vault_id`, or any per-tenant identifier — Voyage RPS ×
   user count would explode the time series.
@@ -50,6 +57,7 @@ defmodule Engram.PromEx.Voyage do
   @embed_tokens_event [:engram, :voyage, :embed, :tokens]
   @tokens_per_chunk_event [:engram, :voyage, :embed, :tokens_per_chunk]
   @client_rate_limited_event [:engram, :embed, :client_rate_limited]
+  @embed_retry_event [:engram, :voyage, :embed, :retry]
 
   @impl true
   def event_metrics(opts) do
@@ -80,6 +88,13 @@ defmodule Engram.PromEx.Voyage do
           description:
             "Synthetic 429s from the local Hammer throttle — purpose-tagged for tuning :voyage_rpm vs :voyage_query_rpm.",
           tags: [:purpose, :model]
+        ),
+        counter(
+          metric_prefix ++ [:embed, :retry, :total],
+          event_name: @embed_retry_event,
+          description:
+            "Voyage embed requests retried in-call after the connection failed before any response.",
+          tags: [:purpose, :model, :reason]
         ),
         sum(
           metric_prefix ++ [:embed, :tokens, :total],
