@@ -199,10 +199,22 @@ defmodule Engram.Release do
     "ALTER ROLE kwsearch_feed SET statement_timeout = '30s';",
     "GRANT USAGE ON SCHEMA public TO kwsearch_feed;",
     "GRANT SELECT ON keyword_feed, keyword_deletions, keyword_feed_horizon TO kwsearch_feed;",
-    "DROP POLICY IF EXISTS kwsearch_feed_read ON keyword_feed;",
-    "CREATE POLICY kwsearch_feed_read ON keyword_feed FOR SELECT TO kwsearch_feed USING (true);",
-    "DROP POLICY IF EXISTS kwsearch_feed_read ON keyword_deletions;",
-    "CREATE POLICY kwsearch_feed_read ON keyword_deletions FOR SELECT TO kwsearch_feed USING (true);"
+    # Created when missing, never dropped and re-created: a boot-time DROP
+    # would open a window where the reader sees no rows of a live feed.
+    """
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_policies WHERE schemaname = 'public'
+                     AND tablename = 'keyword_feed' AND policyname = 'kwsearch_feed_read') THEN
+        CREATE POLICY kwsearch_feed_read ON keyword_feed FOR SELECT TO kwsearch_feed USING (true);
+      END IF;
+      IF NOT EXISTS (SELECT FROM pg_policies WHERE schemaname = 'public'
+                     AND tablename = 'keyword_deletions' AND policyname = 'kwsearch_feed_read') THEN
+        CREATE POLICY kwsearch_feed_read ON keyword_deletions FOR SELECT TO kwsearch_feed USING (true);
+      END IF;
+    END
+    $$;
+    """
   ]
 
   @doc """
@@ -266,16 +278,25 @@ defmodule Engram.Release do
 
   @doc """
   The `kwsearch_feed` role, its grants and its SELECT policies, when the
-  Tantivy keyword store is configured (`Engram.KeywordStore.Tantivy`);
+  kwsearch feed is written (`Engram.KeywordStore.feed?/0`);
   otherwise nothing (security F16). Runs after the migrations, every boot:
   idempotent, and the password is re-applied as a SCRAM verifier from
   KWSEARCH_FEED_DB_PASSWORD (F13). Public only so it can be tested.
   """
   @spec prepare_kwsearch_feed(module()) :: :ok | :skipped
   def prepare_kwsearch_feed(repo) do
-    if Engram.KeywordStore.Tantivy.configured?() do
-      Enum.each(@kwsearch_feed_sql, &repo.query!(&1, []))
-      set_role_password(repo, "kwsearch_feed", "KWSEARCH_FEED_DB_PASSWORD")
+    if Engram.KeywordStore.feed?() do
+      # One transaction, so a boot sees all of it or none, and a short
+      # lock_timeout: a policy DDL waiting behind an open index transaction
+      # must fail this boot step, not queue every index commit behind it.
+      {:ok, :ok} =
+        repo.transaction(fn ->
+          repo.query!("SET LOCAL lock_timeout = '5s'", [])
+          Enum.each(@kwsearch_feed_sql, &repo.query!(&1, []))
+          set_role_password(repo, "kwsearch_feed", "KWSEARCH_FEED_DB_PASSWORD")
+        end)
+
+      :ok
     else
       :skipped
     end
