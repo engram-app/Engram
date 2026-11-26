@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.96.0](https://github.com/engram-app/Engram/compare/0.95.0...0.96.0) (2026-11-26)
+
+
+### Features
+
+* **search:** embed queries with voyage-4-large on all plans ([#2708](https://github.com/engram-app/Engram/issues/2708)) ([37ae788](https://github.com/engram-app/Engram/commit/37ae788fe9a58bcaabf2554dd3c31e417bc3e6ab))
+* **search:** KeywordStore seam + filter telemetry (P1) ([#2709](https://github.com/engram-app/Engram/issues/2709)) ([1b979bc](https://github.com/engram-app/Engram/commit/1b979bc7c43f1ab415181b4bad29ac9eadeb7cd3))
+
+
+### Bug Fixes
+
+* retry a closed Voyage query conn once ([#2711](https://github.com/engram-app/Engram/issues/2711)) ([13ea82f](https://github.com/engram-app/Engram/commit/13ea82f11a9fc2fcf3b77c561344798e65c6775d))
+
 ## [0.95.0](https://github.com/engram-app/Engram/compare/0.94.0...0.95.0) (2026-11-25)
 
 
