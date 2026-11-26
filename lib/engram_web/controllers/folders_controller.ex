@@ -289,7 +289,7 @@ defmodule EngramWeb.FoldersController do
       # content counts only, so 0/0 cannot distinguish "nothing was there" from
       # "a nested empty marker was cleared", and a broadcast on the former
       # costs nothing. The plugin's `folders.batch` handler reads only a
-      # rename's `from`, so for a delete it re-polls GET /folders/explicit and
+      # rename's `from` and `folder`, so for a delete it re-polls GET /folders/explicit and
       # trashes only a folder the server no longer lists AND that is empty on
       # disk (see `syncExplicitFolders` in plugin/src/sync.ts). A phantom
       # event is one extra GET, not a lost local folder.
