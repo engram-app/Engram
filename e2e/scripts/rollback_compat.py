@@ -147,9 +147,9 @@ def _tree_rows(tree: dict) -> dict[str, list]:
 
 
 def _check(client: ApiClient, expected: set[str], label: str, rows: dict | None = None) -> list[str]:
-    """Explicit names equal `expected`; tree folders are those plus their
-    ancestors and every note's folders; with `rows`, each tree folder keeps
-    the id and parent id NEW served."""
+    """Explicit names equal `expected`; tree folders are those plus every
+    file's folders; with `rows`, each tree folder keeps the id and parent
+    id NEW served."""
     errors = []
     explicit = client.get_explicit_folders()
     if explicit != expected:
@@ -159,9 +159,11 @@ def _check(client: ApiClient, expected: set[str], label: str, rows: dict | None 
         )
     tree = client.get_vault_tree()
     got = _tree_rows(tree)
+    # The tree lists explicit folders and every folder holding a file (an
+    # empty implicit parent, like Batch, is not listed).
     want = set(expected)
-    for p in expected | {r["path"] for r in (tree.get("notes") or []) + (tree.get("attachments") or [])}:
-        want |= _ancestors(p)
+    for r in (tree.get("notes") or []) + (tree.get("attachments") or []):
+        want |= _ancestors(r["path"])
     if set(got) != want:
         errors.append(
             f"{label}: /vault/tree folders missing {sorted(want - set(got))}, "
