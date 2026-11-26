@@ -33,7 +33,7 @@ defmodule Engram.Workers.TrimKeywordFeed do
   use Oban.Worker,
     queue: :maintenance,
     max_attempts: 1,
-    unique: [period: 240, states: [:available, :scheduled]]
+    unique: Engram.Jobs.unique(__MODULE__)
 
   alias Engram.KeywordStore
   alias Engram.KeywordStore.Tantivy.Client
@@ -42,6 +42,11 @@ defmodule Engram.Workers.TrimKeywordFeed do
 
   @every_s 300
   @batch 10_000
+
+  # Bounded work (20 batches per kind, see `trim/2`): 10 min is far past a
+  # normal run and still finite.
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(10)
 
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
