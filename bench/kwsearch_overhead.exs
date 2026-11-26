@@ -55,14 +55,18 @@ b64_body = fn terms, inc ->
   Jason.encode!(Map.merge(base, %{terms: terms, include_b64: Engram.Kwsearch.encode_ids(inc)}))
 end
 
-# Encode only (each body built from the same 10,240 string ids, 200 times).
+# The b64 path gets RAW 16-byte ids, as a filter query selecting `uuid`
+# without an Ecto cast hands them over (dumping string ids costs ~20 ms).
+raw_ids = Enum.map(ids, &Ecto.UUID.dump!/1)
+
+# Encode only (each body built from the same 10,240 ids, 200 times).
 enc = fn f ->
   for(_ <- 1..200, do: elem(time_ms.(fn -> f.(hd(queries), ids) end), 0)) |> pct.()
 end
 
 IO.puts(
-  "encode 10,240 ids: json #{inspect(enc.(json_body))} ms, b64 #{inspect(enc.(b64_body))} ms; " <>
-    "bytes json #{byte_size(json_body.(hd(queries), ids))}, b64 #{byte_size(b64_body.(hd(queries), ids))}, " <>
+  "encode 10,240 ids: json #{inspect(enc.(json_body))} ms, b64 #{inspect(enc.(fn t, _ -> b64_body.(t, raw_ids) end))} ms; " <>
+    "bytes json #{byte_size(json_body.(hd(queries), ids))}, b64 #{byte_size(b64_body.(hd(queries), raw_ids))}, " <>
     "no filter #{byte_size(Jason.encode!(Map.put(base, :terms, hd(queries))))}"
 )
 
@@ -95,9 +99,9 @@ end
 
 run.("no filter", fn q -> Jason.encode!(Map.put(base, :terms, q)) end)
 run.("include 10,240 json", fn q -> json_body.(q, ids) end)
-run.("include 10,240 b64", fn q -> b64_body.(q, ids) end)
+run.("include 10,240 b64", fn q -> b64_body.(q, raw_ids) end)
 
 {ms, {:ok, hits}} =
-  time_ms.(fn -> Engram.Kwsearch.search(user, [vault], hd(queries), include: ids) end)
+  time_ms.(fn -> Engram.Kwsearch.search(user, [vault], hd(queries), include: raw_ids) end)
 
 IO.puts("client module, include 10,240: #{Float.round(ms, 2)} ms, #{length(hits)} hits")

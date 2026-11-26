@@ -500,7 +500,7 @@ fn bench(args: &[String]) {
             let mut server: Vec<f64> = Vec::new();
             for _ in 0..passes {
                 for (_, set, terms) in all.iter().skip(env_n("KW_SKIP", 0)).take(n) {
-                    let b = body(terms, false);
+                    let b = body(terms, env("KW_SHARD_STATS", "0") == "1");
                     let t = Instant::now();
                     let r = post(&agent, &url, &secret, &b);
                     let ms = t.elapsed().as_secs_f64() * 1e3;
