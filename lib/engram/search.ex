@@ -377,7 +377,10 @@ defmodule Engram.Search do
   request counter as scope `filter_page`. `opts` are the page opts plus
   `:surface` (also read from `filter`, where MCP passes it).
   """
-  @spec filter_page(map(), map(), keyword(), keyword()) :: {:ok, map()} | {:error, term()}
+  # Same contract as `NoteFilter.page/4`, whose result it returns.
+  @spec filter_page(map(), map(), NoteFilter.filter(), keyword()) ::
+          {:ok, %{notes: [Engram.Notes.Note.t()], next_cursor: String.t() | nil}}
+          | {:error, Engram.Search.FieldFilters.error() | :invalid_cursor}
   def filter_page(user, vault, filter, opts \\ []) do
     start = System.monotonic_time()
     result = NoteFilter.page(user, vault, filter, opts)
