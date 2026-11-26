@@ -330,6 +330,10 @@ config :engram, Oban,
         # Blobs of attachments soft-deleted over 24h ago (#2159): a soft
         # delete never touches storage, this reaps the bytes later.
         {"3 * * * *", Engram.Workers.AttachmentBlobGC},
+        # keyword_feed trim (security F2): a no-op unless the Tantivy keyword
+        # store is configured; there each run chains the next 5 min out and
+        # this hourly entry restarts a lost chain.
+        {"47 * * * *", Engram.Workers.TrimKeywordFeed},
         # Paddle drift check. Daily: drift logs at :error to Sentry, and a
         # repair is manual, so more runs would only repeat the alert.
         {"0 2 * * *", Engram.Billing.Workers.PaddleReconcile},
