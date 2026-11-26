@@ -184,9 +184,21 @@ pub struct Shard {
 #[derive(Default, Debug, PartialEq)]
 pub struct Applied {
     pub applied: u64,
+    /// Rows that cannot be applied (ragged terms, a note op without its note
+    /// or vault): skipped and counted, never a panic, so one bad row cannot
+    /// crash-loop the service for every tenant.
+    pub skipped_malformed: u64,
     pub filled_stale: u64,
     pub skipped_stale: u64,
     pub skipped_tomb: u64,
+}
+
+impl Applied {
+    /// No ids or terms in the log line: the feed seq is enough to find it.
+    fn malformed(&mut self, r: &Row) {
+        self.skipped_malformed += 1;
+        eprintln!("feed row skipped: malformed (seq {})", r.seq);
+    }
 }
 
 enum Scope<'a> {
@@ -306,7 +318,7 @@ impl Shard {
                 }
                 kwfeed::DELETE_VAULT => {
                     let Some(v) = r.vault else {
-                        out.skipped_stale += 1; // malformed row, nothing to scope it by
+                        out.malformed(r);
                         continue;
                     };
                     self.drop_vault(st, &r.user, &v)?;
@@ -325,9 +337,16 @@ impl Shard {
                 }
                 op => {
                     let (Some(note), Some(vault)) = (r.note, r.vault) else {
-                        out.skipped_stale += 1;
+                        out.malformed(r);
                         continue;
                     };
+                    if op == kwfeed::UPSERT
+                        && (r.point.is_none()
+                            || kwfeed::unpack(r.terms.as_deref().unwrap_or_default()).is_none())
+                    {
+                        out.malformed(r);
+                        continue;
+                    }
                     if !self.note_op(st, r, op, note, vault, &mut out)? {
                         continue;
                     }
@@ -879,9 +898,16 @@ impl Shard {
             ))
         };
         let zero = |q: Box<dyn Query>| -> Box<dyn Query> { Box::new(ConstScoreQuery::new(q, 0.0)) };
+        // The user-prefixed terms already scope the search to one user; the
+        // zero-score user clause is a second guard if that prefix ever changes.
+        let user_clause: Box<dyn Query> = Box::new(TermQuery::new(
+            Term::from_field_text(f.user, &id(user)),
+            IndexRecordOption::Basic,
+        ));
         let mut clauses: Vec<(Occur, Box<dyn Query>)> = vec![
             (Occur::Must, Box::new(BooleanQuery::new(should))),
             (Occur::Must, zero(set(f.vault, vaults))),
+            (Occur::Must, zero(user_clause)),
         ];
         if let Some(inc) = include {
             clauses.push((Occur::Must, zero(set(f.note, inc))));

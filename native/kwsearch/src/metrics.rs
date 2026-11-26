@@ -86,6 +86,12 @@ pub fn render(index: &Index, s: &Stats) -> String {
         s.skipped_gen.load(Relaxed),
     );
     put(
+        "skipped_malformed_total",
+        "counter",
+        "Feed rows skipped as malformed (ragged terms, missing note or vault)",
+        s.skipped_malformed.load(Relaxed),
+    );
+    put(
         "purges_total",
         "counter",
         "Purge merges of segments holding deletes",

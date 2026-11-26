@@ -195,6 +195,26 @@ t_replay() {
   if $BIN verify 2> $LOG/verify.err; then pass replay "$(tail -1 $LOG/verify.err)"; else explain; fail replay "mismatch"; fi
 }
 
-for t in ${@:-tls replay crash panic xid restore}; do "t_$t"; done
+# Review N3: a node behind the feed (fresh, or restored from a snapshot still
+# inside the feed window) answers nothing until it has replayed to the head.
+t_catchup() {
+  reset
+  export KW_DATA=/work/kw-catchup; rm -rf $KW_DATA
+  KW_TENANTS=${TENANTS:-100} KW_THREADS=${THREADS:-8} KW_SECS=${SECS:-20} $BIN gen > /dev/null
+  start
+  for _ in $(seq 1 100); do $H > /dev/null && break; sleep 0.1; done
+  early=$($H)
+  tok=$($BIN token '{"s":"search","u":"00000000-0000-4000-8000-000000000001","v":["00000000-0000-4000-8000-000000000002"]}')
+  code=$(curl -s -o /dev/null -w '%{http_code}' --cacert $S/ca.crt -H "authorization: Bearer $tok" \
+         -H 'content-type: application/json' -d '{"terms":[1],"limit":5}' https://localhost:7700/search)
+  wait_drained; up 100; late=$($H); stop
+  if echo "$early" | grep -q '"up":false' && [ "$code" = 503 ] && echo "$late" | grep -q '"up":true'; then
+    pass catchup "down and 503 while behind, up once drained"
+  else
+    fail catchup "early=$early search=$code late=$late"
+  fi
+}
+
+for t in ${@:-tls replay catchup crash panic xid restore}; do "t_$t"; done
 echo "integration: $fails failed"
 exit $fails

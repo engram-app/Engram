@@ -30,15 +30,13 @@ pub fn now() -> u64 {
 const SNAPSHOT: &str =
     "SELECT pg_snapshot_xmin(s)::text, pg_snapshot_xmax(s)::text FROM pg_current_snapshot() s";
 
-// `xid::text` gets an alias: unaliased, the output column is named `xid` and
-// `ORDER BY xid` sorts by that TEXT ("1000" < "883") while the WHERE compares
-// the real xid8, so the cursor skipped rows for good once xids crossed a
-// digit-count boundary (integration harness; the POC never crossed one).
-const READ: &str =
-    "SELECT seq, xid::text AS xid_text, user_id, index_set, op, vault_id, note_id, point_id, stamp, terms, keep
-  FROM keyword_feed
-  WHERE (xid, seq) > ($1::text::xid8, $2) AND xid < $3::text::xid8
-  ORDER BY xid, seq LIMIT $4";
+// The read lives in its own file so an Elixir test can run the exact text
+// in CI (test/engram/keyword_store/tantivy_feed_read_sql_test.exs).
+// `xid::text` is aliased there: unaliased, the output column is named `xid`
+// and `ORDER BY xid` sorts by that TEXT ("1000" < "883") while the WHERE
+// compares the real xid8, so the cursor skipped rows for good once xids
+// crossed a digit-count boundary.
+const READ: &str = include_str!("../sql/read.sql");
 
 const HORIZON: &str = "SELECT xid::text AS xid_text, seq FROM keyword_feed_horizon WHERE id = 1";
 
@@ -189,6 +187,7 @@ pub struct Stats {
     pub filled_stale: AtomicU64,
     pub skipped_tomb: AtomicU64,
     pub skipped_gen: AtomicU64,
+    pub skipped_malformed: AtomicU64,
     pub purges: AtomicU64,
     pub restored_deletes: AtomicU64,
     pub searches: AtomicU64,
@@ -299,7 +298,9 @@ pub fn run(index: Arc<Index>, cfg: Cfg, stats: Arc<Stats>) -> ! {
         std::thread::sleep(Duration::from_secs(2));
         db = connect_retry(&cfg);
     }
-    stats.ready.store(!stats.gap.load(Relaxed), Relaxed);
+    // Not ready yet: a node restored from a snapshot still inside the feed
+    // window must replay up to the feed head (its deletes included) before
+    // it answers a search. `ready` goes up after the first drained round.
     // Test hooks: abort (no cleanup, like kill -9) after this many shard
     // commits; panic in the loop after this many rounds.
     let crash_at: u64 = crate::env("KW_CRASH_AFTER_COMMITS", "0")
@@ -350,6 +351,9 @@ pub fn run(index: Arc<Index>, cfg: Cfg, stats: Arc<Stats>) -> ! {
         let n = stats.rounds.fetch_add(1, Relaxed) + 1;
         if drained {
             stats.drained_at.store(now(), Relaxed);
+            if !stats.gap.load(Relaxed) && !stats.ready.swap(true, Relaxed) {
+                eprintln!("feed caught up: serving");
+            }
         }
         check_horizon(&mut db, &index, &cfg, cursor, &stats);
         if last_purge_check.elapsed() > Duration::from_secs(60) {
@@ -388,6 +392,9 @@ fn apply_round(
                 stats.skipped_stale.fetch_add(a.skipped_stale, Relaxed);
                 stats.filled_stale.fetch_add(a.filled_stale, Relaxed);
                 stats.skipped_tomb.fetch_add(a.skipped_tomb, Relaxed);
+                stats
+                    .skipped_malformed
+                    .fetch_add(a.skipped_malformed, Relaxed);
             }
             if shard
                 .commit(cursor, watermark, now, cfg.tomb_ttl_s)
