@@ -1008,7 +1008,11 @@ fn run_property(seed: u64) {
     let big = std::env::var("KW_BIG").is_ok();
     let mut at = 0;
     while at < rows.len() {
-        let n = if big { rows.len() - at } else { rng.random_range(1..12).min(rows.len() - at) };
+        let n = if big {
+            rows.len() - at
+        } else {
+            rng.random_range(1..12).min(rows.len() - at)
+        };
         let batch: Vec<&Row> = rows[at..at + n].iter().collect();
         s.apply(&batch, MB, NOW).unwrap();
         if trace {
