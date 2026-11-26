@@ -89,12 +89,26 @@ defmodule Engram.Embedders.VoyageTest do
     test "query purpose retries a closed connection once, immediately" do
       port = flaky_http_server(close_first: 1)
       ServiceConfig.put_override(:voyage_url, "http://localhost:#{port}")
+      test_pid = self()
+      handler = "voyage-retry-#{inspect(test_pid)}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :voyage, :embed, :retry],
+        fn _event, measurements, meta, _ -> send(test_pid, {:retry, measurements, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
 
       capture_log(fn ->
         assert {:ok, [[0.1]]} = Voyage.embed_texts(["hello"], purpose: :query)
       end)
 
       assert_receive {:flaky_http_server, :served, 2}
+
+      assert_receive {:retry, %{count: 1},
+                      %{purpose: :query, reason: :closed, model: "voyage-4-large"}}
     end
 
     test "query purpose gives up after one retry of a closed connection" do

@@ -105,7 +105,8 @@ defmodule Engram.Embedders.Voyage do
   for the whole call, so a Voyage brownout must fail fast (one attempt,
   short timeout) instead of holding searches for up to ~2 minutes. It gets
   one immediate retry, only for a connection that failed before any response
-  (see `retry_query?/2`), so the worst case stays near one 5 s timeout.
+  (see `retry_query?/2`): worst case about 10 s, if the close lands late in
+  the first attempt.
   `:index` runs in Oban workers where patient retries are the right call.
   Explicit caller opts always win over these defaults.
   """
@@ -131,17 +132,35 @@ defmodule Engram.Embedders.Voyage do
 
   @doc """
   Req `retry` for `:query`: retry at once, with no delay, a connection that
-  failed before any response. Req's default pool (`Req.Finch`) keeps
-  keep-alive sockets forever (`conn_max_idle_time: :infinity`); one Voyage
-  closed while idle fails the next request instantly with `:closed`, and a
-  fresh connection succeeds. Never a timeout (the model may be working, a
-  retry doubles the user's wait), a 429 or a 5xx.
+  failed before any response. A pooled keep-alive socket can be closed by
+  Voyage just as we send on it (the close and the request cross on the wire),
+  which fails the request with `:closed`; a fresh connection succeeds. Never a
+  timeout (the model may be working, a retry doubles the user's wait), a 429
+  or a 5xx.
+
+  Costs: a close that arrives late (after Voyage read the request) can mean
+  one duplicate, billed query embed, and the retry can add up to one more
+  5 s receive timeout. Emits `[:engram, :voyage, :embed, :retry]` so rescued
+  searches are visible.
   """
   @spec retry_query?(Req.Request.t(), Req.Response.t() | Exception.t()) ::
           false | {:delay, 0}
-  def retry_query?(_request, %Req.TransportError{reason: reason})
-      when reason in [:closed, :econnrefused],
-      do: {:delay, 0}
+  def retry_query?(request, %Req.TransportError{reason: reason})
+      when reason in [:closed, :econnrefused] do
+    model =
+      case Req.Request.get_option(request, :json) do
+        %{model: model} -> model
+        _ -> resolve_model([])
+      end
+
+    :telemetry.execute([:engram, :voyage, :embed, :retry], %{count: 1}, %{
+      purpose: :query,
+      model: model,
+      reason: reason
+    })
+
+    {:delay, 0}
+  end
 
   def retry_query?(_request, _response_or_exception), do: false
 
