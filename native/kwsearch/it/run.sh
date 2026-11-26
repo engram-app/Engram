@@ -26,8 +26,12 @@ up() { for _ in $(seq 1 ${1:-100}); do $H | grep -q '"up":true' && return 0; sle
 psql_() { PGPASSWORD=$(cat $S/pgpw) psql -h kwit-pg -U postgres -qAt -c "$1"; }
 command -v psql >/dev/null || (apt-get update -qq && apt-get install -y -qq postgresql-client >/dev/null)
 $BIN schema >/dev/null
+# Each test starts from an empty feed: a horizon left by the restore test
+# would read as a gap to a fresh index.
+reset() { psql_ "TRUNCATE keyword_feed, keyword_deletions, truth_users, truth_vaults, truth_notes, truth_chunks; DELETE FROM keyword_feed_horizon"; }
 
 t_tls() {
+  reset
   export KW_DATA=/work/kw-tls; rm -rf $KW_DATA
   start KW_FEED_CA_FILE=$S/wrong.crt
   sleep 4
@@ -36,6 +40,7 @@ t_tls() {
 }
 
 t_crash() {
+  reset
   export KW_DATA=/work/kw-crash; rm -rf $KW_DATA; mkdir -p $KW_DATA
   : > $LOG/serve.log
   start; up || { fail crash "never up"; return; }
@@ -68,6 +73,7 @@ t_panic() {
 }
 
 t_xid() {
+  reset
   export KW_DATA=/work/kw-xid; rm -rf $KW_DATA
   start; up || { fail xid "never up"; return; }
   out=$($BIN xidtest); code=$?
@@ -81,8 +87,8 @@ t_xid() {
 }
 
 t_restore() {
+  reset
   export KW_DATA=/work/kw-restore; rm -rf $KW_DATA /work/kw-snap
-  psql_ "TRUNCATE keyword_feed, keyword_deletions; DELETE FROM keyword_feed_horizon"
   start; up || { fail restore "never up"; return; }
   ua=00000000-0000-4000-8000-0000000000a1; va=00000000-0000-4000-8000-0000000000a2
   ub=00000000-0000-4000-8000-0000000000b1; vb=00000000-0000-4000-8000-0000000000b2
@@ -127,9 +133,9 @@ t_restore() {
 # cache (needs /cold: xfs on a zvol with primarycache=metadata), start a
 # read-only node, run one query. Not part of the default set.
 t_bench() {
+  reset
   Q=/work/queries.json O=/work/out; mkdir -p $O
   export KW_DATA=/work/kw-bench KW_CORPUS=$S/corpus.jsonl KW_REPS=12; rm -rf $KW_DATA
-  psql_ "TRUNCATE keyword_feed, keyword_deletions; DELETE FROM keyword_feed_horizon"
   KW_FILLERS=200 KW_FILLER_CHUNKS=800 $BIN load-eval | tee $O/load.json
   start; up 600
   for _ in $(seq 1 600); do $H | grep -q '"lag_s":0' && break; sleep 1; done; sleep 5
