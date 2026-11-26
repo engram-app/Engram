@@ -28,6 +28,18 @@ command -v psql >/dev/null || (apt-get update -qq && apt-get install -y -qq post
 $BIN schema >/dev/null
 # Each test starts from an empty feed: a horizon left by the restore test
 # would read as a gap to a fresh index.
+# Drained: the applied cursor (/cursor, ops token) has reached the feed's
+# last row, i.e. a whole round committed past it. lag_s alone is not enough:
+# it reads 0 right after a drained read, before the next round commits.
+drained() {
+  local want got
+  want=$(psql_ "SELECT xid::text || ' ' || seq FROM keyword_feed ORDER BY xid DESC, seq DESC LIMIT 1")
+  [ -n "$want" ] || return 0
+  got=$(curl -s --cacert $S/ca.crt -H "authorization: Bearer $($BIN token ops)" https://localhost:7700/cursor \
+        | sed -E 's/.*"seq":([0-9]+).*"xid":"([0-9]+)".*/\2 \1/')
+  [ "$(printf '%s\n%s\n' "$want" "$got" | sort -n -k1,1 -k2,2 | tail -1)" = "$got" ]
+}
+wait_drained() { for _ in $(seq 1 ${1:-600}); do drained && return 0; sleep 1; done; return 1; }
 reset() { psql_ "TRUNCATE keyword_feed, keyword_deletions, truth_users, truth_vaults, truth_notes, truth_chunks; DELETE FROM keyword_feed_horizon"; }
 
 t_tls() {
@@ -44,7 +56,7 @@ t_crash() {
   export KW_DATA=/work/kw-crash; rm -rf $KW_DATA; mkdir -p $KW_DATA
   : > $LOG/serve.log
   start; up || { fail crash "never up"; return; }
-  KW_TENANTS=300 KW_THREADS=8 KW_SECS=${SECS:-90} $BIN gen > $LOG/gen.json 2>$LOG/gen.err & GEN=$!
+  KW_TENANTS=${TENANTS:-300} KW_THREADS=${THREADS:-8} KW_SECS=${SECS:-90} $BIN gen > $LOG/gen.json 2>$LOG/gen.err & GEN=$!
   kills=0
   for i in $(seq 1 ${KILLS:-12}); do
     sleep $(( (RANDOM % 5) + 2 ))
@@ -56,17 +68,17 @@ t_crash() {
   done
   wait $GEN
   up 300
-  # drained: lag stays 0 for a few rounds
-  for _ in $(seq 1 60); do $H | grep -q '"lag_s":0' && break; sleep 1; done
-  sleep 3
+  wait_drained || { fail crash "never drained"; stop; return; }
   stop
-  out=$($BIN verify); code=$?
+  out=$($BIN verify 2> $LOG/verify.err); code=$?
+  [ $code -eq 0 ] || explain
   echo "$out"; cat $LOG/gen.json
   echo "kills=$kills aborts=$(grep -c KW_CRASH_AFTER_COMMITS $LOG/serve.log) resumes=$(grep -c 'feed resume' $LOG/serve.log)"
   if [ $code -eq 0 ]; then pass crash "$out"; else fail crash "$out"; fi
 }
 
 t_panic() {
+  reset
   export KW_DATA=/work/kw-panic; rm -rf $KW_DATA
   KW_PANIC_AFTER_ROUNDS=3 timeout 60 $BIN serve >> $LOG/panic.log 2>&1; code=$?
   if [ $code -eq 70 ] && grep -q "feed loop died" $LOG/panic.log; then pass panic "exit 70"; else fail panic "exit $code"; fi
@@ -100,7 +112,7 @@ t_restore() {
              VALUES ('$u', 1, '$v', '${u%1}$n', gen_random_uuid(), 1, '\\x0700000001000000')"
     done
   done
-  sleep 3; stop
+  wait_drained 60; stop
   cp -a $KW_DATA /work/kw-snap   # the "snapshot"
   start; up || { fail restore "never up after snapshot"; return; }
   # After the snapshot: delete user A, vault B, one note of C (feed + log).
@@ -108,7 +120,7 @@ t_restore() {
          INSERT INTO keyword_feed (user_id, op, vault_id) VALUES ('$ub', 4, '$vb'); INSERT INTO keyword_deletions (user_id, op, vault_id) VALUES ('$ub', 4, '$vb');
          INSERT INTO keyword_feed (user_id, op, vault_id, note_id, stamp) VALUES ('$uc', 3, '$vc', '${uc%1}3', 2);
          INSERT INTO keyword_deletions (user_id, op, vault_id, note_id) VALUES ('$uc', 3, '$vc', '${uc%1}3'); COMMIT;"
-  sleep 3; stop
+  wait_drained 60; stop
   # The feed is trimmed (it was applied); the trim records its horizon.
   psql_ "INSERT INTO keyword_feed_horizon (id, xid, seq) SELECT 1, max(xid), max(seq) FROM keyword_feed
          ON CONFLICT (id) DO UPDATE SET xid = EXCLUDED.xid, seq = EXCLUDED.seq; TRUNCATE keyword_feed"
@@ -138,7 +150,7 @@ t_bench() {
   export KW_DATA=/work/kw-bench KW_CORPUS=$S/corpus.jsonl KW_REPS=12; rm -rf $KW_DATA
   KW_FILLERS=200 KW_FILLER_CHUNKS=800 $BIN load-eval | tee $O/load.json
   start; up 600
-  for _ in $(seq 1 600); do $H | grep -q '"lag_s":0' && break; sleep 1; done; sleep 5
+  wait_drained 900
   stop
   start KW_READ_ONLY=1; up
   for cfg in "0 0" "10240 0" "0 10240" "10240 10240"; do
@@ -160,6 +172,29 @@ t_bench() {
   pass bench "see numbers above"
 }
 
-for t in ${@:-tls crash panic xid restore}; do "t_$t"; done
+# The feed rows of the note behind one missing and one extra point.
+explain() {
+  cat $LOG/verify.err
+  for kind in missing extra; do
+    p=$(grep "$kind sample" $LOG/verify.err | grep -oE '[0-9a-f-]{36}' | head -1)
+    [ -n "$p" ] || continue
+    echo "== $kind $p"
+    psql_ "SELECT note_id FROM keyword_feed WHERE point_id = '$p' LIMIT 1"
+    psql_ "SELECT xid, seq, op, stamp, point_id = '$p' AS this, array_length(keep, 1), '$p' = ANY(keep) AS kept FROM keyword_feed
+           WHERE note_id = (SELECT note_id FROM keyword_feed WHERE point_id = '$p' LIMIT 1) ORDER BY xid, seq"
+  done
+}
+
+# The whole feed applied in one catch-up from an empty index: big rounds,
+# and xids past a digit-count boundary (the text-sorted xid bug).
+t_replay() {
+  reset
+  export KW_DATA=/work/kw-replay; rm -rf $KW_DATA
+  KW_TENANTS=${TENANTS:-30} KW_THREADS=${THREADS:-8} KW_SECS=${SECS:-20} KW_OPS=${OPS:-0} $BIN gen > /dev/null
+  start; up 300; wait_drained; stop
+  if $BIN verify 2> $LOG/verify.err; then pass replay "$(tail -1 $LOG/verify.err)"; else explain; fail replay "mismatch"; fi
+}
+
+for t in ${@:-tls replay crash panic xid restore}; do "t_$t"; done
 echo "integration: $fails failed"
 exit $fails

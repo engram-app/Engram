@@ -30,15 +30,19 @@ pub fn now() -> u64 {
 const SNAPSHOT: &str =
     "SELECT pg_snapshot_xmin(s)::text, pg_snapshot_xmax(s)::text FROM pg_current_snapshot() s";
 
+// `xid::text` gets an alias: unaliased, the output column is named `xid` and
+// `ORDER BY xid` sorts by that TEXT ("1000" < "883") while the WHERE compares
+// the real xid8, so the cursor skipped rows for good once xids crossed a
+// digit-count boundary (integration harness; the POC never crossed one).
 const READ: &str =
-    "SELECT seq, xid::text, user_id, index_set, op, vault_id, note_id, point_id, stamp, terms, keep
+    "SELECT seq, xid::text AS xid_text, user_id, index_set, op, vault_id, note_id, point_id, stamp, terms, keep
   FROM keyword_feed
   WHERE (xid, seq) > ($1::text::xid8, $2) AND xid < $3::text::xid8
   ORDER BY xid, seq LIMIT $4";
 
-const HORIZON: &str = "SELECT xid::text, seq FROM keyword_feed_horizon WHERE id = 1";
+const HORIZON: &str = "SELECT xid::text AS xid_text, seq FROM keyword_feed_horizon WHERE id = 1";
 
-const DELETIONS: &str = "SELECT xid::text, user_id, op, vault_id, note_id
+const DELETIONS: &str = "SELECT xid::text AS xid_text, user_id, op, vault_id, note_id
   FROM keyword_deletions WHERE xid >= $1::text::xid8 ORDER BY xid, seq";
 
 /// One read: the rows, the snapshot's xmin (every row below it that exists

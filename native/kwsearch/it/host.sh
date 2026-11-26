@@ -37,6 +37,6 @@ docker run -d --name $PG --network $NET -e POSTGRES_PASSWORD="$(cat pgpw)" -v "$
 until docker exec $PG pg_isready -U postgres >/dev/null 2>&1; do sleep 0.5; done
 sleep 1
 docker run --rm --name $RUN --network $NET --cpus=8 --memory=12g \
-  -v "$B/target:/target" -v "$B/src:/src" -v "$W:/work" -e BIN=/target/release/kwsearch \
+  -v "$B/target:/target" -v "$B/src:/src" -v "$W:/work" -e BIN=/target/release/kwsearch -e KILLS -e SECS -e COLD_N -e TENANTS -e THREADS -e OPS \
   $( [ -d "$B/cold" ] && mountpoint -q "$B/cold" && echo "-v $B/cold:/cold" ) \
   rust:1.94-bookworm bash /src/native/kwsearch/it/run.sh "$@"
