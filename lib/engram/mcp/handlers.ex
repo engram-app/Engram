@@ -1640,7 +1640,7 @@ defmodule Engram.MCP.Handlers do
 
     vaults
     |> Enum.reduce_while({:ok, []}, fn v, {:ok, acc} ->
-      case Engram.Search.NoteFilter.page(user, v, filter, limit: limit) do
+      case Search.filter_page(user, v, filter, limit: limit) do
         {:ok, %{notes: notes}} -> {:cont, {:ok, acc ++ Enum.map(notes, &{&1, v})}}
         {:error, _} = err -> {:halt, err}
       end
@@ -2215,7 +2215,14 @@ defmodule Engram.MCP.Handlers do
       # and leaving it free made the write path an unmetered search channel.
       # But auto-placement is incidental to creating a note, so a spent budget
       # drops the note in the default folder rather than refusing the create.
-      case Search.search(user, vault, query, limit: 10, diversity: 0, surface: "mcp") do
+      # `internal: true`: no client asked for this search (the metric's
+      # `surface` label); analytics keeps the MCP surface.
+      case Search.search(user, vault, query,
+             limit: 10,
+             diversity: 0,
+             surface: "mcp",
+             internal: true
+           ) do
         {:ok, results} when results != [] ->
           case folder_counts(results) do
             [{folder, _} | _] -> folder

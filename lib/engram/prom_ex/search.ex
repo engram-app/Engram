@@ -15,8 +15,15 @@ defmodule Engram.PromEx.Search do
   Metrics:
 
     * `engram_prom_ex_search_request_total` — tags `[:status,
-      :cross_vault, :rerank]`. Latency is read from Tempo spans, not a
-      histogram here.
+      :cross_vault, :rerank, :filtered, :scope, :surface]` (#2697): `scope`
+      is none / ids / exclude / too_wide / filter_page, `surface` mcp /
+      rest / web / plugin / internal. Latency is read from Tempo spans, not
+      a histogram here.
+    * `engram_prom_ex_search_empty_total` (tag `[:filtered]`): searches
+      that returned nothing.
+    * `engram_prom_ex_search_filter_resolve_milliseconds` (tag `[:scope]`):
+      Postgres resolving a search's filter (`[:engram, :search,
+      :filter_resolve]`).
     * `engram_prom_ex_search_gate_total` (tags `[:outcome, :gate,
       :upstream]`: `ok` or `busy`; `admission`, `qdrant` or `pool`) and `engram_prom_ex_search_gate_wait_milliseconds`: every
       search through `Engram.Search.Gate`, `[:engram, :search, :gate]`.
@@ -65,6 +72,10 @@ defmodule Engram.PromEx.Search do
   @post_filter_event [:engram, :search, :post_filter]
   @name_terms_capped_event [:engram, :search, :name_terms, :scan_capped]
   @gate_event [:engram, :search, :gate]
+  @filter_resolve_event [:engram, :search, :filter_resolve]
+
+  # Emitters that predate the filter labels (#2697) still count.
+  @request_defaults %{filtered: false, scope: :none, surface: :internal}
 
   # Self-heal outcomes of the name indexes, one sum per event, tag `reason`:
   # `{metric, event, description}`. Add a name index's pair here.
@@ -90,8 +101,27 @@ defmodule Engram.PromEx.Search do
         counter(
           metric_prefix ++ [:request, :total],
           event_name: @stop_event,
-          description: "Search requests by status, cross-vault, rerank.",
-          tags: [:status, :cross_vault, :rerank]
+          description:
+            "Search requests by status, cross-vault, rerank, filtered, scope, surface.",
+          tags: [:status, :cross_vault, :rerank, :filtered, :scope, :surface],
+          tag_values: &Map.merge(@request_defaults, &1)
+        ),
+        counter(
+          metric_prefix ++ [:empty, :total],
+          event_name: @stop_event,
+          description: "Searches that returned no result, by filtered.",
+          keep: &(&1[:empty] == true),
+          tags: [:filtered],
+          tag_values: &Map.merge(@request_defaults, &1)
+        ),
+        distribution(
+          metric_prefix ++ [:filter_resolve, :milliseconds],
+          event_name: @filter_resolve_event,
+          measurement: :duration,
+          description: "Time Postgres took to resolve a search's filter, by scope.",
+          reporter_options: Engram.PromEx.Buckets.opts(Engram.PromEx.Search.FilterResolveBuckets),
+          tags: [:scope],
+          unit: {:native, :millisecond}
         ),
         # The per-node search concurrency cap (`Engram.Search.Gate`): every
         # search by `outcome` (`ok` got a slot, `busy` was refused), and how
@@ -220,4 +250,9 @@ end
 defmodule Engram.PromEx.Search.GateWaitBuckets do
   @moduledoc false
   use Engram.PromEx.Buckets, [1, 10, 50, 100, 250, 500, 1_000, 2_500, 5_000]
+end
+
+defmodule Engram.PromEx.Search.FilterResolveBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [1, 5, 10, 25, 50, 100, 250, 500, 1_000, 2_500]
 end
