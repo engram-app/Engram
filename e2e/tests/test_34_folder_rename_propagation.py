@@ -10,6 +10,7 @@ import uuid
 
 import pytest
 
+from helpers import folder_ops
 from helpers.log_oracle import wait_for_delivery
 from helpers.vault import (
     wait_for_file_gone,
@@ -82,6 +83,10 @@ async def test_folder_rename_only_empty_subfolder(
     "rename" is the only folder signal) B has the new folder and the old one
     is gone. Before the plugin fix B kept the emptied old folder.
     """
+    # With folder_ops on, folder_changed would carry the rename instead and
+    # this would not exercise the folders.batch path.
+    assert folder_ops.switch_reads() is False, "precondition: folder_ops must be off"
+
     root = f"E2E/EmptySub34-{uuid.uuid4().hex[:12]}"
     old_folder, new_folder = f"{root}/old", f"{root}/new"
 
