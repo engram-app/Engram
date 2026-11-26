@@ -82,6 +82,11 @@ async def test_folder_rename_only_empty_subfolder(
     server-side rename (web app / MCP, folder_ops off, so folders.batch
     "rename" is the only folder signal) B has the new folder and the old one
     is gone. Before the plugin fix B kept the emptied old folder.
+
+    `old` is explicit too (the staging AR6 shape). Renaming an IMPLICIT parent
+    whose only content is an explicit bare subfolder moves nothing and answers
+    404: a known server gap, tracked separately (red test parked on branch
+    claude/implicit-parent-rename-red).
     """
     # With folder_ops on, folder_changed would carry the rename instead and
     # this would not exercise the folders.batch path.
@@ -90,6 +95,7 @@ async def test_folder_rename_only_empty_subfolder(
     root = f"E2E/EmptySub34-{uuid.uuid4().hex[:12]}"
     old_folder, new_folder = f"{root}/old", f"{root}/new"
 
+    assert api_sync.create_folder(old_folder) in (200, 201)
     assert api_sync.create_folder(f"{old_folder}/sub") in (200, 201)
     wait_for_folder(vault_b, f"{old_folder}/sub")
 
