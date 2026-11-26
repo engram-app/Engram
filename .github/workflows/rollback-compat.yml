@@ -208,9 +208,20 @@ jobs:
             [ "$n" -ge 1 ] || fail "selfhost shape: OLD left no unstamped explicit row, so NEW's boot stamp is not exercised"
           fi
           halt old-seed
-          # pg_class row of folders: an ALTER TABLE (the FORCE RLS toggle in a
-          # boot migration) rewrites it, so its xmin moves; ANALYZE does not.
-          sql "SELECT xmin FROM pg_class WHERE oid = 'public.folders'::regclass" > "$RUNNER_TEMP/folders-xmin.txt"
+          # Record every DDL command NEW's boot runs, DO blocks included
+          # (event triggers fire inside plpgsql). pg_class xmin cannot tell:
+          # prepare_database re-GRANTs on every boot.
+          sql "CREATE TABLE rbc_ddl_log (tag text, obj text);
+            CREATE FUNCTION rbc_ddl() RETURNS event_trigger LANGUAGE plpgsql AS \$\$
+            DECLARE r record;
+            BEGIN
+              FOR r IN SELECT * FROM pg_event_trigger_ddl_commands() LOOP
+                INSERT INTO rbc_ddl_log VALUES (r.command_tag, r.object_identity);
+              END LOOP;
+            END \$\$;
+            CREATE EVENT TRIGGER rbc_ddl ON ddl_command_end EXECUTE FUNCTION rbc_ddl();"
+          # The boot migration's early return is exactly this ledger state.
+          sql "SELECT name FROM data_migrations WHERE name IN ('explicit_folder_reconcile', 'folder_marker_delete') AND completed_at IS NOT NULL ORDER BY 1" | tr '\n' ' '; echo "<- ledgers done before NEW boots"
 
       - name: "Phase 2: NEW migrates (Release.migrate + boot migrations) and seeds"
         run: |
@@ -220,12 +231,16 @@ jobs:
           echo "unstamped explicit rows after NEW's boot: $n"
           [ "$n" -eq 0 ] || fail "NEW's boot left $n explicit rows unstamped"
           rls_forced "NEW's boot"
-          xmin=$(sql "SELECT xmin FROM pg_class WHERE oid = 'public.folders'::regclass")
-          echo "folders pg_class xmin before NEW: $(cat "$RUNNER_TEMP/folders-xmin.txt"), after: $xmin"
+          sql "SELECT tag || ' ' || obj FROM rbc_ddl_log" | sort | uniq -c | sed 's/^/DDL during NEW boot: /'
+          alter=$(sql "SELECT count(*) FROM rbc_ddl_log WHERE tag = 'ALTER TABLE' AND obj = 'public.folders'")
+          sql "DROP EVENT TRIGGER rbc_ddl; DROP FUNCTION rbc_ddl(); DROP TABLE rbc_ddl_log"
           out=$(rpc new-probe.exs)
           echo "$out"
           if [ "$SHAPE" = prod ]; then
-            [ "$xmin" = "$(cat "$RUNNER_TEMP/folders-xmin.txt")" ] || fail "prod shape: NEW's boot altered the folders table (its boot migration did not take the early return)"
+            [ "$alter" -eq 0 ] || fail "prod shape: NEW's boot ran ALTER TABLE on folders $alter times (its boot migration did not take the early return)"
+          else
+            # The probe itself: the self-host boot does toggle FORCE RLS.
+            [ "$alter" -ge 1 ] || fail "selfhost shape: no ALTER TABLE on folders seen during NEW's boot (DDL probe blind?)"
             [ "$(val MARKER_STOP "$out")" = true ] || fail "prod shape: NEW's writers are not on the marker stop path"
           fi
           python3 e2e/scripts/rollback_compat.py seed-new --api-url "$API" --state "$STATE" --fault "$FAULT"
