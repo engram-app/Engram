@@ -33,8 +33,9 @@ defmodule Engram.EmbedCeiling do
   Spent means fewer than `floor/0` tokens left (one full chunk): below that a
   pass could only embed nothing and re-park, so it is not run.
 
-  Query embeds do NOT count toward the ceiling: each is a few dozen tokens on
-  the cheap query model, already bounded per user by the MCP and API rate
+  Query embeds do NOT count toward the ceiling: each is a few dozen tokens
+  (on voyage-4-large for every plan since roadmap D15, still a rounding error
+  next to document embeds), already bounded per user by the MCP and API rate
   limits (and by `ai_searches_per_day` on Free), and counting them would put
   a write on every search. Over the ceiling they stop anyway, because search
   goes keyword-only. Cost: one `usage_meters` primary-key read per search of

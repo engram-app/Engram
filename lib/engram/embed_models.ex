@@ -3,10 +3,12 @@ defmodule Engram.EmbedModels do
   Which Voyage model embeds a note's documents and a user's queries, by plan
   (chunker v5 rebuild, "model per plan").
 
-  SaaS (`:billing_enabled`): Free embeds documents AND queries with
-  `voyage-4-lite`, Starter and Pro with `voyage-4-large`. The voyage-4 family
-  shares one embedding space, so lite and large points coexist in one
-  collection and either query model searches both (workspace report
+  SaaS (`:billing_enabled`): Free embeds documents with `voyage-4-lite`,
+  Starter and Pro with `voyage-4-large`; every plan embeds QUERIES with
+  `voyage-4-large` (search-storage roadmap D15: +4.6% pooled quality over lite
+  queries, ~36 ms p50). The voyage-4 family shares one embedding space, so
+  lite and large points coexist in one collection and either query model
+  searches both, with no re-embed (workspace report
   `reports/2026-10-19-rechunk-once/multilingual-model-quality.md`).
 
     * The DOC model follows the note OWNER's plan at embed time (ordinary
@@ -17,7 +19,8 @@ defmodule Engram.EmbedModels do
       (`reuse_models/2`), never a lower one. A kept vector's fingerprint
       still names the model that made it.
     * The QUERY model follows the SEARCHING user's plan
-      (`Engram.Search.SearchProfile`); a `search_query_model` override wins.
+      (`Engram.Search.SearchProfile`), large on every plan by default; a
+      `search_query_model` override wins.
 
   ## Plan changes re-embed nothing by themselves
 
@@ -48,13 +51,16 @@ defmodule Engram.EmbedModels do
   alias Engram.Billing
   alias Engram.Indexing
 
-  @plan_defaults %{free: "voyage-4-lite", starter: "voyage-4-large", pro: "voyage-4-large"}
   @large "voyage-4-large"
+  @plan_defaults %{
+    plan_doc_embed_models: %{free: "voyage-4-lite", starter: @large, pro: @large},
+    plan_query_embed_models: %{free: @large, starter: @large, pro: @large}
+  }
   @prices %{"voyage-4-large" => 120_000, "voyage-4-lite" => 20_000}
 
   @type tier :: :free | :starter | :pro
 
-  @doc "The per-plan defaults; an unset env var reads these (runtime.exs)."
+  @doc "The per-plan defaults by config key; an unset env var reads these (runtime.exs)."
   def plan_defaults, do: @plan_defaults
 
   @doc "True when models follow the plan: billing on and a nameable model."
@@ -153,7 +159,8 @@ defmodule Engram.EmbedModels do
     div(tokens * price(model) + large - 1, large)
   end
 
-  defp plan_models(key), do: Map.merge(@plan_defaults, Application.get_env(:engram, key, %{}))
+  defp plan_models(key),
+    do: Map.merge(Map.fetch!(@plan_defaults, key), Application.get_env(:engram, key, %{}))
 
   defp plan_model(key, tier), do: Map.fetch!(plan_models(key), tier)
 end

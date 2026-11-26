@@ -112,8 +112,9 @@ end
 
 # Model per plan (SaaS, billing on): `{DOC,QUERY}_EMBED_MODEL_{FREE,STARTER,PRO}`.
 # Only the set ones are configured; an unset or blank plan reads its default
-# in `Engram.EmbedModels` (`plan_defaults/0`, the one copy: Free
-# voyage-4-lite, Starter and Pro voyage-4-large). Self-host ignores them.
+# in `Engram.EmbedModels` (`plan_defaults/0`, the one copy: docs Free
+# voyage-4-lite, Starter and Pro voyage-4-large; queries voyage-4-large on
+# every plan). Self-host ignores them.
 plan_models = fn prefix ->
   for plan <- [:free, :starter, :pro],
       model = System.get_env("#{prefix}_#{String.upcase(to_string(plan))}", "") |> String.trim(),

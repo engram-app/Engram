@@ -30,8 +30,8 @@ defmodule Engram.PromEx.Voyage do
       none`) and `:trigger` (`edit | rebuild | upgrade | retry | reconcile |
       none`; `none` = outside an indexing pass, e.g. search queries). Drives
       the Grafana tokens/min + estimated-cost panels (the dashboard prices
-      each `model` series at its own per-1M-token list price: Free embeds on
-      voyage-4-lite, paid tiers on voyage-4-large). Existing `sum by
+      each `model` series at its own per-1M-token list price: Free docs embed
+      on voyage-4-lite, paid docs and every query on voyage-4-large). Existing `sum by
       (purpose)` queries keep working: the added labels only split series.
       NOT per-tenant — see `Engram.UsageMeters` for tenant-attributed token
       accounting.
