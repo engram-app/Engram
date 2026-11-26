@@ -1,0 +1,226 @@
+# Rollback compat: can a schema/data release roll back to the release before it?
+#
+# migration-gates' n1-compat proves NEW migrations apply on top of OLD's
+# schema (the upgrade). This proves the other direction: OLD's image keeps
+# serving, and its data migrations keep the data, after NEW has migrated and
+# written. Real images, one database, the rollout and rollback order:
+#
+#   1. OLD boots on a fresh tmpfs Postgres (its migrate, its @reboot ledgers)
+#      and seeds marker-era explicit folders over REST.
+#   2. NEW boots on that DB: Release.migrate/0 + the boot migrations
+#      (entrypoint.sh), then seeds through its own writers.
+#   3. OLD boots again (the rollback), runs ExplicitFolderReconcile through
+#      `DataMigrationsRunner.run/2` (re-verify forced), and serves REST.
+#
+# Asserts: the boot stamp ran (no unstamped explicit row after NEW's boot),
+# the reconcile cleared 0 explicit flags (SQL before/after), OLD logged 0
+# error lines, and both listings equal the seeded set before and after a
+# rename + delete through OLD. `fault: unstamped-row` must go red: it leaves
+# one explicit row unstamped after NEW's boot, which OLD's reconcile clears.
+#
+# Images are the release artifacts, never built here: build-and-publish-image
+# tags every main commit `ghcr.io/engram-app/engram:<sha7>`. The seed/verify
+# client is e2e/scripts/rollback_compat.py. The stack is ci/compose.database.yml
+# (self-host shape: local auth, bytea storage, no Qdrant/MinIO).
+#
+# Dispatch: gh workflow run rollback-compat.yml -f new_ref=<sha> -f old_ref=<sha>
+name: rollback-compat
+
+on:
+  # Push to this workflow's own file only registers it (a new workflow cannot
+  # be dispatched until GitHub has seen it); the job runs on dispatch alone.
+  push:
+    paths: [.github/workflows/rollback-compat.yml]
+  workflow_dispatch:
+    inputs:
+      new_ref:
+        description: Commit of the release being shipped (its GHCR sha7 image must exist)
+        required: true
+      old_ref:
+        description: Commit of the rollback target, e.g. the previous release-v* tag's commit
+        required: true
+      fault:
+        description: Red-path proof. unstamped-row leaves one explicit row unstamped after NEW's boot
+        type: choice
+        options: [none, unstamped-row]
+        default: none
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  rollback-compat:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, x64, isolated]
+    timeout-minutes: 30
+    env:
+      CI_PROJECT: engram-rbc-${{ github.run_id }}
+      KEY_PROVIDER: local
+      # Same CI-only fixture fallback as verify.yml: the DB is throwaway.
+      ENCRYPTION_MASTER_KEY: ${{ secrets.CI_ENCRYPTION_MASTER_KEY || 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }}
+      ENGRAM_SETUP_TOKEN: rollback-compat-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve images
+        env:
+          NEW_REF: ${{ inputs.new_ref }}
+          OLD_REF: ${{ inputs.old_ref }}
+        run: |
+          new=$(git rev-parse --verify "${NEW_REF}^{commit}")
+          old=$(git rev-parse --verify "${OLD_REF}^{commit}")
+          {
+            echo "NEW_IMAGE=ghcr.io/engram-app/engram:${new::7}"
+            echo "OLD_IMAGE=ghcr.io/engram-app/engram:${old::7}"
+            # Per runner, per job: runners on one host share /tmp.
+            echo "STATE=$RUNNER_TEMP/rbc-state.json"
+            echo "LOGS=$RUNNER_TEMP/rbc-logs"
+            echo "FAILURES=$RUNNER_TEMP/rbc-failures"
+            echo "OVERRIDE=$RUNNER_TEMP/rbc-override.yml"
+          } >> "$GITHUB_ENV"
+          echo "new $new -> ghcr.io/engram-app/engram:${new::7}"
+          echo "old $old -> ghcr.io/engram-app/engram:${old::7}"
+
+      - name: Pull images
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin >/dev/null
+          docker pull -q "$NEW_IMAGE"
+          docker pull -q "$OLD_IMAGE"
+
+      - name: Prepare stack
+        id: ports
+        run: |
+          mkdir -p "$LOGS"
+          : > "$FAILURES"
+          read -r ENGRAM_PORT PG_PORT <<< "$(python3 -c "import socket; ss=[socket.socket() for _ in range(2)]; [s.bind(('',0)) for s in ss]; print(' '.join(str(s.getsockname()[1]) for s in ss))")"
+          echo "CI_ENGRAM_PORT=$ENGRAM_PORT" >> "$GITHUB_ENV"
+          echo "CI_PG_PORT=$PG_PORT" >> "$GITHUB_ENV"
+          echo "API=http://localhost:$ENGRAM_PORT/api" >> "$GITHUB_ENV"
+          # compose.database.yml plus the first-user setup token and quieter logs.
+          cat > "$OVERRIDE" <<'YAML'
+          services:
+            engram:
+              environment:
+                ENGRAM_SETUP_TOKEN: ${ENGRAM_SETUP_TOKEN}
+                LOG_LEVEL: info
+          YAML
+          python3 -m pip install --user --quiet --break-system-packages "requests>=2.33.0"
+          # Every helper below reads these; one definition.
+          cat > "$RUNNER_TEMP/rbc-lib.sh" <<'SH'
+          dc() { docker compose -f ci/compose.database.yml -f "$OVERRIDE" -p "$CI_PROJECT" "$@"; }
+          sql() { dc exec -T postgres psql -U engram -d engram -v ON_ERROR_STOP=1 -Atc "$1"; }
+          fail() { echo "::error::$1"; echo "$1" >> "$FAILURES"; }
+          # Boot IMAGE as the engram service (recreates the container; Postgres stays).
+          boot() {
+            ENGRAM_CI_IMAGE="$1" dc up -d --no-build --wait engram
+          }
+          # Save the running engram container's log as PHASE, then stop it.
+          halt() {
+            dc logs --no-color engram > "$LOGS/$1.log" 2>&1 || true
+            dc stop engram
+          }
+          explicit_ids() {
+            sql "SELECT id FROM folders WHERE explicit AND deleted_at IS NULL ORDER BY id"
+          }
+          SH
+
+      - name: "Phase 1: OLD on a fresh DB, seed marker-era folders"
+        run: |
+          . "$RUNNER_TEMP/rbc-lib.sh"
+          ENGRAM_CI_IMAGE="$OLD_IMAGE" dc up -d --no-build --wait
+          python3 e2e/scripts/rollback_compat.py seed-old --api-url "$API" --state "$STATE"
+          n=$(sql "SELECT count(*) FROM folders WHERE explicit AND explicit_seq IS NULL AND deleted_at IS NULL")
+          echo "unstamped explicit rows before NEW boots: $n"
+          # Without one, NEW's boot stamp is not exercised and the run proves less.
+          [ "$n" -ge 1 ] || fail "OLD left no unstamped explicit row, so NEW's boot stamp is not exercised"
+          halt old-seed
+
+      - name: "Phase 2: NEW migrates (Release.migrate + boot migrations) and seeds"
+        env:
+          FAULT: ${{ inputs.fault }}
+        run: |
+          . "$RUNNER_TEMP/rbc-lib.sh"
+          boot "$NEW_IMAGE"
+          n=$(sql "SELECT count(*) FROM folders WHERE explicit AND explicit_seq IS NULL AND deleted_at IS NULL")
+          echo "unstamped explicit rows after NEW's boot: $n"
+          [ "$n" -eq 0 ] || fail "NEW's boot left $n explicit rows unstamped"
+          python3 e2e/scripts/rollback_compat.py seed-new --api-url "$API" --state "$STATE" --fault "$FAULT"
+          if [ "$FAULT" = "unstamped-row" ]; then
+            # The newest explicit row ("Unstamped"; folder ids are uuidv7).
+            sql "UPDATE folders SET explicit_seq = NULL WHERE id = (SELECT id FROM folders WHERE explicit ORDER BY id DESC LIMIT 1) RETURNING id"
+          fi
+          sql "SELECT count(*) FILTER (WHERE explicit_seq IS NULL), count(*) FROM folders WHERE explicit AND deleted_at IS NULL" \
+            | awk -F'|' '{print "explicit rows: " $2 ", unstamped: " $1}'
+          halt new
+          explicit_ids > "$RUNNER_TEMP/explicit-before.txt"
+
+      - name: "Phase 3: rollback, OLD runs ExplicitFolderReconcile"
+        run: |
+          . "$RUNNER_TEMP/rbc-lib.sh"
+          boot "$OLD_IMAGE"
+          # OLD's @reboot DataMigrationsRunner may already be walking; let it
+          # finish so the after-snapshot sees everything it did.
+          for _ in $(seq 1 120); do
+            busy=$(sql "SELECT count(*) FROM oban_jobs WHERE worker = 'Engram.Workers.DataMigrationsRunner' AND state IN ('available', 'executing', 'retryable')")
+            [ "$busy" -eq 0 ] && break
+            sleep 1
+          done
+          [ "$busy" -eq 0 ] || echo "::warning::OLD's @reboot DataMigrationsRunner still busy after 120 s"
+          # The runner's own entry point, re-verify forced (runs the pass even
+          # on a done ledger, as the daily walk does).
+          out=$(dc exec -T engram /app/bin/engram rpc '
+            r = Engram.Workers.DataMigrationsRunner.run(Engram.DataMigrations.ExplicitFolderReconcile, true)
+            IO.puts("RECONCILE_RESULT=#{inspect(r)}")
+          ')
+          echo "$out"
+          grep -qE 'RECONCILE_RESULT=:(done|more)$' <<<"$out" || fail "ExplicitFolderReconcile did not run a pass: $(grep RECONCILE_RESULT <<<"$out")"
+          explicit_ids > "$RUNNER_TEMP/explicit-after.txt"
+          cleared=$(comm -23 "$RUNNER_TEMP/explicit-before.txt" "$RUNNER_TEMP/explicit-after.txt" | wc -l)
+          echo "explicit rows before: $(wc -l < "$RUNNER_TEMP/explicit-before.txt"), after: $(wc -l < "$RUNNER_TEMP/explicit-after.txt"), cleared: $cleared"
+          [ "$cleared" -eq 0 ] || fail "OLD's ExplicitFolderReconcile cleared $cleared explicit flags: $(comm -23 "$RUNNER_TEMP/explicit-before.txt" "$RUNNER_TEMP/explicit-after.txt" | tr '\n' ' ')"
+
+      - name: "Phase 3: OLD lists, renames, deletes"
+        run: |
+          . "$RUNNER_TEMP/rbc-lib.sh"
+          python3 e2e/scripts/rollback_compat.py verify-old --api-url "$API" --state "$STATE" \
+            || fail "OLD's listings after the rollback do not match the seeded folders"
+
+      - name: "Phase 3: OLD logged no errors"
+        run: |
+          . "$RUNNER_TEMP/rbc-lib.sh"
+          halt old-rollback
+          # LoggerJSON severity, plus any plain-text [error] (boot evals, crash reports).
+          errors=$(grep -cE '"severity":"(error|critical|alert|emergency)"|\[error\]' "$LOGS/old-rollback.log" || true)
+          echo "error lines in OLD's log after the rollback: $errors"
+          if [ "$errors" -ne 0 ]; then
+            grep -E '"severity":"(error|critical|alert|emergency)"|\[error\]' "$LOGS/old-rollback.log" | head -20
+            fail "OLD logged $errors error lines after the rollback"
+          fi
+
+      - name: Verdict
+        run: |
+          if [ -s "$FAILURES" ]; then
+            echo "::error::rollback-compat FAILED ($(wc -l < "$FAILURES") checks):"
+            sed 's/^/  /' "$FAILURES"
+            exit 1
+          fi
+          echo "rollback-compat OK: ${{ inputs.old_ref }} serves and keeps its data after ${{ inputs.new_ref }}"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rollback-compat-logs-${{ github.run_id }}
+          path: ${{ env.LOGS }}
+          if-no-files-found: ignore
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose -f ci/compose.database.yml -f "$OVERRIDE" -p "$CI_PROJECT" down -v --remove-orphans 2>/dev/null || true
+          rm -f "$STATE"
