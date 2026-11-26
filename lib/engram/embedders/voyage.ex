@@ -103,12 +103,15 @@ defmodule Engram.Embedders.Voyage do
 
   `:query` backs synchronous user search — the request process is pinned
   for the whole call, so a Voyage brownout must fail fast (one attempt,
-  short timeout) instead of holding searches for up to ~2 minutes.
+  short timeout) instead of holding searches for up to ~2 minutes. It gets
+  one immediate retry, only for a connection that failed before any response
+  (see `retry_query?/2`), so the worst case stays near one 5 s timeout.
   `:index` runs in Oban workers where patient retries are the right call.
   Explicit caller opts always win over these defaults.
   """
   @spec request_defaults(atom()) :: keyword()
-  def request_defaults(:query), do: [receive_timeout: 5_000, retry: false]
+  def request_defaults(:query),
+    do: [receive_timeout: 5_000, retry: &__MODULE__.retry_query?/2, max_retries: 1]
 
   # A maintenance pass re-embeds unchanged content at our cost. A receive
   # timeout may still have been billed, so a retry can pay twice (H6).
@@ -125,6 +128,22 @@ defmodule Engram.Embedders.Voyage do
   def retry_maintenance?(_request, %Req.Response{status: 429}), do: true
   def retry_maintenance?(_request, %Req.TransportError{reason: :econnrefused}), do: true
   def retry_maintenance?(_request, _response_or_exception), do: false
+
+  @doc """
+  Req `retry` for `:query`: retry at once, with no delay, a connection that
+  failed before any response. Req's default pool (`Req.Finch`) keeps
+  keep-alive sockets forever (`conn_max_idle_time: :infinity`); one Voyage
+  closed while idle fails the next request instantly with `:closed`, and a
+  fresh connection succeeds. Never a timeout (the model may be working, a
+  retry doubles the user's wait), a 429 or a 5xx.
+  """
+  @spec retry_query?(Req.Request.t(), Req.Response.t() | Exception.t()) ::
+          false | {:delay, 0}
+  def retry_query?(_request, %Req.TransportError{reason: reason})
+      when reason in [:closed, :econnrefused],
+      do: {:delay, 0}
+
+  def retry_query?(_request, _response_or_exception), do: false
 
   defp do_embed_texts(texts, opts) do
     url = ServiceConfig.get(:voyage_url, @default_url)
