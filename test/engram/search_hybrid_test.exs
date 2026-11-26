@@ -3,7 +3,7 @@ defmodule Engram.SearchHybridTest do
 
   import Mox
   import Ecto.Query
-  import Engram.Fixtures, only: [insert_chunk!: 4, insert_note!: 3]
+  import Engram.Fixtures, only: [insert_chunk!: 4, insert_note!: 3, sorted_point_ids: 1]
 
   alias Engram.Crypto.DekCache
   alias Engram.QdrantStub
@@ -131,9 +131,8 @@ defmodule Engram.SearchHybridTest do
     Engram.MockEmbedder
     |> expect(:embed_texts, fn ["iron"], _opts -> {:ok, [[0.1, 0.2, 0.3]]} end)
 
-    # Fixed ids, ordered as the names: the tie breaks on the id.
-    [aa, mm, zz] =
-      for d <- ~w(1 5 9), do: String.duplicate(d, 8) <> "-0000-4000-8000-000000000000"
+    # Ids ordered as the names: the tie breaks on the id.
+    [aa, mm, zz] = sorted_point_ids(3)
 
     both_dense = hit_point(user, vault, "mm-both", mm, 0.9)
     dense = [both_dense, hit_point(user, vault, "aa-dense", aa, 0.8)]
