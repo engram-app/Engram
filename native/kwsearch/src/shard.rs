@@ -210,11 +210,17 @@ impl Shard {
         std::fs::create_dir_all(dir)?;
         let (schema, f) = schema();
         let index = Index::open_or_create(MmapDirectory::open(dir)?, schema)?;
-        let meta = index
-            .load_metas()?
-            .payload
-            .and_then(|p| serde_json::from_str(&p).ok())
-            .unwrap_or_default();
+        // No payload: a shard never committed. An unreadable one fails the
+        // open: defaulting would reset the cursor and drop every tombstone,
+        // so deleted users and vaults could come back (review #11).
+        let meta = match index.load_metas()?.payload {
+            None => Meta::default(),
+            Some(p) => serde_json::from_str(&p).map_err(|e| {
+                tantivy::TantivyError::InvalidArgument(format!(
+                    "shard {dir:?}: unreadable commit payload: {e}"
+                ))
+            })?,
+        };
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)
@@ -382,6 +388,16 @@ impl Shard {
         match op {
             kwfeed::UPSERT => {
                 let Some(p) = r.point else { return Ok(false) };
+                // A pass's upserts are a subset of its own keep set. An upsert
+                // at the marker's stamp naming a point outside it came from a
+                // keep set read too early (review #1): drop it rather than
+                // bring back a point the note no longer has.
+                let m = &st.markers[&note];
+                if stamp == m.stamp && (m.keep.is_some() || m.committed) && !self.kept(m, &note, &p)
+                {
+                    out.skipped_stale += 1;
+                    return Ok(false);
+                }
                 self.remove(st, &r.user, Scope::Point(p))?;
                 self.add(st, r, &p, vault)?;
             }
@@ -828,6 +844,7 @@ impl Shard {
     }
 
     /// Committed (docs, tokens) of a user: one term lookup.
+    #[cfg(any(test, feature = "harness"))]
     pub fn user_stats(&self, user: &Uuid) -> (u64, u64) {
         stats_of(&self.reader.searcher(), self.f, user)
     }
@@ -887,6 +904,7 @@ impl Shard {
     }
 
     /// Every live chunk doc: (point, len, crc of its terms).
+    #[cfg(any(test, feature = "harness"))]
     pub fn dump(&self) -> Vec<(Uuid, u64, u64)> {
         let s = self.reader.searcher();
         let mut out = Vec::new();

@@ -25,10 +25,15 @@ base64 = "0.22"
 hmac = "0.13"
 sha2 = "0.11"
 libc = "0.2"
-# Integration harness tooling only (subcommands of the same binary).
-ureq = { version = "2", default-features = false, features = ["tls"] }
-rand = "0.9"
+# Integration harness subcommands only (`--features harness`); the service
+# image builds without them (no NoTls client, no plaintext role password).
+ureq = { version = "2", default-features = false, features = ["tls"], optional = true }
+rand = { version = "0.9", optional = true }
+
+[features]
+harness = ["dep:ureq", "dep:rand"]
 
 [dev-dependencies]
+rand = "0.9"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

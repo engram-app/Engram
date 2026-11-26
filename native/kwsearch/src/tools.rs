@@ -87,6 +87,7 @@ fn schema() {
          CREATE TABLE IF NOT EXISTS keyword_feed_horizon (
            id smallint PRIMARY KEY CHECK (id = 1), xid xid8 NOT NULL, seq bigint NOT NULL,
            updated_at timestamptz NOT NULL DEFAULT now());
+         INSERT INTO keyword_feed_horizon (id, xid, seq) VALUES (1, '0', 0) ON CONFLICT (id) DO NOTHING;
          CREATE TABLE IF NOT EXISTS truth_users (user_id uuid PRIMARY KEY, dead bool NOT NULL DEFAULT false);
          CREATE TABLE IF NOT EXISTS truth_vaults (vault_id uuid PRIMARY KEY, user_id uuid NOT NULL, dead bool NOT NULL DEFAULT false);
          CREATE TABLE IF NOT EXISTS truth_notes (note_id uuid PRIMARY KEY, user_id uuid NOT NULL, vault_id uuid NOT NULL, stamp bigint NOT NULL);
