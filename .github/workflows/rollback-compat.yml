@@ -215,7 +215,7 @@ jobs:
           # OLD's @reboot DataMigrationsRunner job: wait for Oban to insert it
           # and for it to finish, so it cannot race the passes below.
           for _ in $(seq 1 180); do
-            st=$(sql "SELECT string_agg(state, ',') FROM oban_jobs WHERE worker = 'Engram.Workers.DataMigrationsRunner' AND inserted_at > '$since'")
+            st=$(sql "SELECT string_agg(state::text, ',') FROM oban_jobs WHERE worker = 'Engram.Workers.DataMigrationsRunner' AND inserted_at > '$since'")
             case "$st" in *available*|*executing*|*retryable*|*scheduled*|"") sleep 1 ;; *) break ;; esac
           done
           rls_forced "OLD's rollback boot"
