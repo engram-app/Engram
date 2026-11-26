@@ -19,19 +19,16 @@
 # separate login. selfhost is ci/compose.database.yml as shipped: one
 # superuser login, folder_marker_delete off, markers kept.
 #
-# Every OLD data migration runs once more through DataMigrationsRunner.run/2
-# in phase 3 (none may return :error or log a failure). Pair checks live in
-# ci/rollback-compat/<checks>/hooks.sh.
-#
-# Asserts: OLD reads explicit folders from the flag (as prod), the reconcile
-# cleared 0 explicit flags (SQL before/after), FORCE RLS still on for folders
-# and notes after NEW's boot, OLD logged 0 error lines, and /folders/explicit
-# plus the vault tree equal the seeded set before and after a rename + delete
-# through OLD. prod also: NEW's boot migration took its early return (no DDL
-# on folders), and NEW's writers ran with the marker stop on. selfhost also:
-# NEW's boot stamp ran (an unstamped row before, none after).
-# `fault: unstamped-row` leaves one explicit row unstamped after NEW's boot
-# and must go red in the listing check and the SQL diff.
+# Generic asserts: FORCE RLS on folders and notes after each boot; OLD's
+# @reboot runner job completes; every OLD data migration runs once more
+# through DataMigrationsRunner.run/2 (ci/rollback-compat/run-migrations.exs)
+# and ends `done`, done-and-not-re-verified, or on the pair's allowlist with a
+# reason (migrations-allow.txt); the pair's snapshot loses no row; OLD logs no
+# error, runner failure or skipped vault; prod shape: the app is engram_app
+# (no BYPASSRLS). The pair's own asserts are listed in its hooks.sh.
+# Faults (must go red): unstamped-row leaves one explicit row unstamped after
+# NEW's writers; vault-lock holds every vault row FOR UPDATE through OLD's
+# forced passes, so the reconcile skips them.
 #
 # Images are the release artifacts, never built here: build-and-publish-image
 # tags every main commit `ghcr.io/engram-app/engram:<sha7>`. The REST client
@@ -62,9 +59,9 @@ on:
         description: Per-pair rpc snippets under ci/rollback-compat/
         default: explicit-folders
       fault:
-        description: Red-path proof. unstamped-row leaves one explicit row unstamped after NEW's boot
+        description: Red-path proof. unstamped-row leaves one explicit row unstamped; vault-lock holds every vault during OLD's passes
         type: choice
-        options: [none, unstamped-row]
+        options: [none, unstamped-row, vault-lock]
         default: none
 
 permissions:
@@ -225,18 +222,46 @@ jobs:
           rls_forced "OLD's rollback boot"
           echo "OLD's @reboot DataMigrationsRunner jobs: ${st:-none}"
           grep -q completed <<<"$st" || fail "OLD's @reboot DataMigrationsRunner did not complete (states: ${st:-none})"
-          # Every OLD data migration once through the runner's entry point, a
-          # re-verify forced, so each meets NEW's schema and data.
-          out=$(dc exec -T engram /app/bin/engram rpc '
-            for m <- Engram.Workers.DataMigrationsRunner.migrations() do
-              IO.puts("MIGRATION #{m.name()}=#{inspect(Engram.Workers.DataMigrationsRunner.run(m, true))}")
-            end' | tee -a "$LOGS/rpc-old-rollback.log")
-          echo "$out"
+          if [ "$FAULT" = vault-lock ]; then
+            # Hold every vault row FOR UPDATE through OLD's forced passes.
+            dc exec -T postgres psql -U engram -d engram -c "BEGIN; SELECT count(*) FROM (SELECT id FROM vaults FOR UPDATE) v; SELECT pg_sleep(600); COMMIT;" >/dev/null 2>&1 &
+            for _ in $(seq 1 30); do
+              [ "$(sql "SELECT count(*) FROM pg_stat_activity WHERE query LIKE '%pg_sleep(600)%' AND pid <> pg_backend_pid()")" -ge 1 ] && break
+              sleep 1
+            done
+            echo "fault vault-lock: every vault row held FOR UPDATE"
+          fi
+          # Every OLD data migration once through the runner's entry point,
+          # re-verify forced.
+          out=$(dc exec -T engram /app/bin/engram rpc "$(cat ci/rollback-compat/run-migrations.exs)" | tee -a "$LOGS/rpc-old-rollback.log")
+          echo "$out" > "$RUNNER_TEMP/migrations-rpc.txt"
+          total=$(val MIGRATIONS_TOTAL "$out")
           ran=$(grep -c '^MIGRATION ' <<<"$out" || true)
-          [ "$ran" -ge 1 ] || fail "OLD's runner ran no data migration"
-          grep -E '^MIGRATION .*=:error$' <<<"$out" && fail "OLD data migrations returned :error: $(grep -E '=:error$' <<<"$out" | tr '\n' ' ')"
+          echo "OLD data migrations: $ran of ${total:-?} ran"
+          grep -q '^MIGRATIONS_END$' <<<"$out" && [ "$ran" -eq "${total:-0}" ] && [ "$ran" -ge 1 ] \
+            || fail "OLD's runner loop ran $ran of ${total:-?} migrations"
+          grep '^MIGRATION ' <<<"$out" | awk '{print $3}' | sort | uniq -c | sed 's/^/  results: /'
+          allow="$CHECKS_DIR/migrations-allow.txt"
+          while read -r _ name class; do
+            short=${name%%:*}
+            case "$class" in
+              done) continue ;;
+              skipped-done-noreverify) echo "  $short: skipped (done, not re-verified: it never runs again after a rollback)"; continue ;;
+            esac
+            reason=$(awk -v s="$SHAPE" -v n="$short" -v c="$class" '$1 !~ /^#/ && ($1 == s || $1 == "*") && $2 == n && $3 == c {$1=$2=$3=""; sub(/^ +/, ""); print; exit}' "$allow" 2>/dev/null)
+            if [ -n "$reason" ]; then
+              echo "  $short: $class (allowed: $reason)"
+            else
+              fail "OLD data migration $short ended $class, not done and not on $allow"
+            fi
+          done < <(grep '^MIGRATION ' <<<"$out")
           hook_old_reconcile
+          if [ "$FAULT" = vault-lock ]; then
+            sql "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE query LIKE '%pg_sleep(600)%' AND pid <> pg_backend_pid()" >/dev/null
+            wait || true
+          fi
           hook_snapshot > "$RUNNER_TEMP/snapshot-after.txt"
+          [ -s "$RUNNER_TEMP/snapshot-before.txt" ] || fail "the pair's snapshot is empty, so a lost row cannot show"
           lost=$(comm -23 "$RUNNER_TEMP/snapshot-before.txt" "$RUNNER_TEMP/snapshot-after.txt" | wc -l)
           echo "snapshot rows before: $(wc -l < "$RUNNER_TEMP/snapshot-before.txt"), after: $(wc -l < "$RUNNER_TEMP/snapshot-after.txt"), lost: $lost"
           [ "$lost" -eq 0 ] || fail "OLD's data migrations lost $lost rows of the snapshot: $(comm -23 "$RUNNER_TEMP/snapshot-before.txt" "$RUNNER_TEMP/snapshot-after.txt" | tr '\n' ' ')"
@@ -257,7 +282,7 @@ jobs:
           logs=("$LOGS/old-rollback.log" "$LOGS/rpc-old-rollback.log")
           # LoggerJSON severity, plain-text [error] (boot evals, crash
           # reports, rpc output), and the runner's warning-level failures.
-          pat='"severity":"(error|critical|alert|emergency)"|\[error\]|data migration (pass failed|summary failed|stuck)'
+          pat='"severity":"(error|critical|alert|emergency)"|\[error\]|data migration (pass failed|summary failed|stuck)|vault skipped by the re-verify walk'
           # prod shape: the app must not be on a role that bypasses RLS.
           if [ "$SHAPE" = prod ]; then pat="$pat|RLS NOT enforced"; fi
           errors=$(cat "${logs[@]}" | grep -cE "$pat" || true)
@@ -266,13 +291,14 @@ jobs:
             cat "${logs[@]}" | grep -E "$pat" | head -20
             fail "OLD logged $errors error lines after the rollback"
           fi
-          # The runner's own log: a pass that returns :done always logs
-          # `data migration pass` (a :more with nothing fixed does not).
-          want=$(grep -cE '^MIGRATION .*=:done$' "$LOGS/rpc-old-rollback.log" || true)
-          got=$(grep -cE '\[info\] data migration pass$|"message":"data migration pass"' "$LOGS/rpc-old-rollback.log" || true)
-          echo "runner: $want :done results, $got 'data migration pass' log lines"
-          [ "$want" -ge 1 ] || fail "OLD's runner returned no :done pass"
-          [ "$got" -ge "$want" ] || fail "OLD's runner logged $got passes for $want :done results"
+          # The runner's own log, from the migrations rpc alone (not the
+          # pair's reconcile rpc): a pass that ends :done always logs
+          # `data migration pass`.
+          want=$(grep -c '^MIGRATION .* done$' "$RUNNER_TEMP/migrations-rpc.txt" || true)
+          got=$(grep -cE '\[info\] data migration pass$|"message":"data migration pass"' "$RUNNER_TEMP/migrations-rpc.txt" || true)
+          echo "runner: $want done results, $got 'data migration pass' log lines"
+          [ "$want" -ge 1 ] || fail "OLD's runner returned no done pass"
+          [ "$got" -ge "$want" ] || fail "OLD's runner logged $got passes for $want done results"
 
       - name: Verdict
         run: |

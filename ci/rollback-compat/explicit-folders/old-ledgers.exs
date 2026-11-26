@@ -12,6 +12,13 @@ mods =
 
 if mode == "prod", do: Engram.ServiceConfig.override(:folder_marker_delete, true)
 
+# note_payload_stamps is done in prod (and on any install past release E), but
+# its heal needs the vector store this stack lacks. Closed by hand so
+# NoteFolderHashNull, which it blocks, really walks in phase 3; with the vector
+# gate shut its own re-verify then stays :done.
+nps = Engram.DataMigrations.NotePayloadStamps
+:ok = DM.mark_done(nps.name(), nps.version())
+
 done? = fn -> Enum.all?(mods, &DM.done?(&1.name(), &1.version())) end
 
 Enum.reduce_while(1..30, nil, fn i, _ ->

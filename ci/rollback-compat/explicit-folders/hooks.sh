@@ -2,6 +2,16 @@
 # (folders stop writing path hashes) rolled back to release I (whose
 # ExplicitFolderReconcile clears explicit flags no marker names).
 #
+# Asserts, both shapes: OLD lists explicit folders from the flag (as prod);
+# every explicit row is stamped after NEW's writers; both merges leave one
+# stamped survivor; OLD's forced reconcile clears no flag (the snapshot) and
+# skips no vault; /folders/explicit and the vault tree equal the seeded set
+# with NEW's ids and parents, before and after a rename + delete through OLD.
+# prod: no live markers and no unstamped row before NEW; NEW's boot runs no
+# ALTER TABLE on folders (20261125100100's early return); NEW's writers run
+# with the marker stop on. selfhost: NEW's boot stamp covers OLD's
+# unstamped rows (and its FORCE RLS toggle shows the DDL probe works).
+#
 # Sourced after the workflow's rbc-lib.sh (dc, sql, rpc, val, fail, SHAPE,
 # FAULT, API, STATE). The workflow calls each hook at its phase; a later pair
 # copies this directory, keeps the hooks it needs and edits the rest.
@@ -83,7 +93,24 @@ hook_after_new_boot() {
     # The row seed-new created last ("Unstamped"; folder ids are uuidv7).
     sql "UPDATE folders SET explicit_seq = NULL WHERE id = (SELECT id FROM folders WHERE explicit AND deleted_at IS NULL ORDER BY id DESC LIMIT 1) RETURNING id"
   fi
-  echo "explicit rows: $(explicit_ids | wc -l), unstamped: $(unstamped)"
+  local left
+  left=$(unstamped)
+  echo "explicit rows: $(explicit_ids | wc -l), unstamped: $left"
+  if [ "$FAULT" = "unstamped-row" ]; then
+    [ "$left" -eq 1 ] || fail "fault unstamped-row: want exactly 1 unstamped row, got $left"
+  else
+    [ "$left" -eq 0 ] || fail "NEW's writers left $left explicit rows unstamped"
+  fi
+  # Each merge: the survivor live, explicit and stamped; the other row retired.
+  local kind live retired
+  for kind in merge_restore rename_merge; do
+    read -r live retired < <(python3 -c "import json,sys; m=json.load(open(sys.argv[1]))['merges'][sys.argv[2]]; print(m['live'], m['retired'])" "$STATE" "$kind")
+    echo "$kind: survivor $(sql "SELECT explicit || ' seq=' || coalesce(explicit_seq::text, 'NULL') || ' deleted=' || (deleted_at IS NOT NULL) FROM folders WHERE id = '$live'"), retired $(sql "SELECT 'deleted=' || (deleted_at IS NOT NULL) FROM folders WHERE id = '$retired'")"
+    [ "$(sql "SELECT count(*) FROM folders WHERE id = '$live' AND explicit AND explicit_seq IS NOT NULL AND deleted_at IS NULL")" -eq 1 ] \
+      || fail "$kind: survivor $live is not a live, explicit, stamped row"
+    [ "$(sql "SELECT count(*) FROM folders WHERE id = '$retired' AND deleted_at IS NOT NULL")" -eq 1 ] \
+      || fail "$kind: $retired was not retired, so nothing merged"
+  done
 }
 
 # Before OLD's rollback boot and after its data migrations: the state the
@@ -103,8 +130,10 @@ hook_old_reconcile() {
   grep -qxE "$want" <<<"$result" || fail "OLD's reconcile returned '$result', want $want"
   # On a closed ledger run_pass returns :done even when it skipped a locked
   # vault; the walk logs that instead.
+  # Logged by the forced passes, so in the rpc output, not the container log
+  # (once per vault per node per day, so the first forced pass carries it).
   local skipped
-  skipped=$(dc logs --no-color engram 2>&1 | grep -c 'vault skipped by the re-verify walk' || true)
+  skipped=$(grep -c 'vault skipped by the re-verify walk' "$LOGS/rpc-old-rollback.log" || true)
   echo "vaults the re-verify walk skipped: $skipped"
   [ "$skipped" -eq 0 ] || fail "OLD's reconcile skipped $skipped locked vaults, so some rows were never examined"
 }

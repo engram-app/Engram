@@ -10,8 +10,8 @@ upgrade followed by a rollback). This script is the client side of each phase:
   seed-new    On NEW, every writer that makes or keeps a row explicit: create,
               move, nested rename, a root-only rename that leaves a child's
               path hash stale ("Legacy" -> "Renamed"), a folder a note
-              implied first, a batch create, a revive, a trash restore and a
-              merge restore. Snapshots the tree's (id, parent_id) per folder.
+              implied first, a batch create, a revive, a trash restore, a
+              merge restore and a rename onto an occupied folder (a merge). Snapshots the tree's (id, parent_id) per folder.
               `--fault unstamped-row` also creates "Unstamped", which the
               workflow then unstamps in SQL (what a missing stamp leaves).
   verify-old  On OLD after the rollback: /folders/explicit and the vault
@@ -112,12 +112,31 @@ def seed_new(api_url: str, state: str, fault: str) -> None:
     _mcp(client, data, "restore_deleted", {"op_id": _delete_op(client, data, "Trashed")})
     # Merge restore: restore a deleted folder onto a live one at its path (the keeper).
     _expect("create Merged", client.create_folder("Merged"), (200, 201))
+    merged_orig = _id(client, "Merged")
     op = _delete_op(client, data, "Merged")
     _expect("re-create Merged", client.create_folder("Merged"), (200, 201))
+    merged_new = _id(client, "Merged")
     _mcp(client, data, "restore_deleted", {"op_id": op})
+    merged = _id(client, "Merged")
+    if merged_orig == merged_new or merged not in (merged_orig, merged_new):
+        raise SystemExit(f"merge restore: Merged ids orig={merged_orig} new={merged_new} after={merged}")
+    # Rename merge (Rows.retire/2): an explicit folder renamed onto a path a
+    # note already occupies; the implicit row there keeps it and the flag.
+    client.create_note("Dup/x.md", "occupies Dup")
+    _expect("create Src", client.create_folder("Src"), (200, 201))
+    src = _id(client, "Src")
+    _expect("rename Src -> Dup (merge)", client.rename_folder("Src", "Dup"), (200,))
+    dup = _id(client, "Dup")
+    if dup == src:
+        raise SystemExit(f"rename merge: Dup kept Src's id {src}, so nothing merged")
+    # The workflow checks these rows in SQL: the survivor stamped, the other retired.
+    data["merges"] = {
+        "merge_restore": {"live": merged, "retired": merged_new if merged == merged_orig else merged_orig},
+        "rename_merge": {"live": dup, "retired": src},
+    }
     expected = {
         "Renamed", "Renamed/Child", "Root", "Root/Inner", "Root/Moved", "Implied",
-        "Batch/One", "Batch/Two", "Revived", "Trashed", "Merged",
+        "Batch/One", "Batch/Two", "Revived", "Trashed", "Merged", "Dup",
     }
     if fault == "unstamped-row":
         # Created LAST: the workflow unstamps the newest explicit row by id (uuidv7).
@@ -130,6 +149,13 @@ def seed_new(api_url: str, state: str, fault: str) -> None:
         raise SystemExit("NEW's own listings do not match its seed: " + "; ".join(errors))
     _save(state, data)
     print(f"seed-new: expected explicit folders {data['expected']}")
+
+
+def _id(client: ApiClient, name: str) -> str:
+    ident = _tree_rows(client.get_vault_tree()).get(name, [None])[0]
+    if not ident:
+        raise SystemExit(f"{name}: no id in the vault tree")
+    return ident
 
 
 def _ancestors(path: str) -> set[str]:
@@ -207,7 +233,7 @@ def main() -> None:
     p.add_argument("phase", choices=["seed-old", "seed-new", "verify-old"])
     p.add_argument("--api-url", required=True, help="e.g. http://localhost:8110/api")
     p.add_argument("--state", required=True, help="0600 JSON state file")
-    p.add_argument("--fault", choices=["none", "unstamped-row"], default="none")
+    p.add_argument("--fault", choices=["none", "unstamped-row", "vault-lock"], default="none")
     a = p.parse_args()
     if a.phase == "seed-old":
         seed_old(a.api_url, a.state)

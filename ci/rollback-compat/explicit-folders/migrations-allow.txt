@@ -1,0 +1,5 @@
+# Phase-3 data migration results this pair accepts other than `done` (and
+# `skipped-done-noreverify`, accepted for every pair: a done ledger that does
+# not re-verify never runs again after a rollback in prod either).
+# Format: <shape|*> <name before any ':'> <class> <reason>
+selfhost folder_marker_delete skipped-disabled ships off on self-host (its kill switch defaults off)
