@@ -23,8 +23,10 @@ defmodule Engram.Workers.TrimKeywordFeed do
   value so the decision changes no code. A restore older than it rebuilds
   through the bulk path (P2 part 2), never through the feed.
 
-  Does nothing unless the Tantivy keyword store is configured (self-host and
-  the default config write no feed rows). Where it is, each run schedules
+  Runs whenever the feed is written or `keyword_feed` still holds rows,
+  whatever the configured stores: a feed rolled back to off leaves its rows
+  to this trim, never in RDS with no end date. Self-host (no feed, no rows)
+  reads one empty index and stops. While there is work, each run schedules
   the next one #{div(300, 60)} minutes out; the hourly cron entry restarts
   the chain if a run was lost.
   """
@@ -33,7 +35,7 @@ defmodule Engram.Workers.TrimKeywordFeed do
     max_attempts: 1,
     unique: [period: 240, states: [:available, :scheduled]]
 
-  alias Engram.KeywordStore.Tantivy
+  alias Engram.KeywordStore
   alias Engram.KeywordStore.Tantivy.Client
   alias Engram.Maintenance.Prune
   alias Engram.Repo
@@ -43,18 +45,25 @@ defmodule Engram.Workers.TrimKeywordFeed do
 
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
-    if Tantivy.configured?() do
+    if KeywordStore.feed?() or rows?() do
       result =
         Repo.maintenance_only("TrimKeywordFeed", "keyword_feed would read 0 rows", fn ->
           {:ok, trim(DateTime.utc_now(), applied_cursor())}
         end)
 
-      _ = %{} |> new(schedule_in: @every_s) |> Oban.insert()
+      _ =
+        if KeywordStore.feed?() or rows?(), do: %{} |> new(schedule_in: @every_s) |> Oban.insert()
+
       result
     else
       :ok
     end
   end
+
+  # Cross-tenant on the maintenance pool (raw SQL: see the moduledoc's RLS
+  # note); a blind app-pool read would say "no rows" and stop the trim.
+  defp rows?,
+    do: Repo.maintenance().query!("SELECT EXISTS (SELECT 1 FROM keyword_feed)").rows == [[true]]
 
   @doc false
   # `cursor` nil: kwsearch unreachable, so nothing counts as applied.
@@ -152,9 +161,8 @@ defmodule Engram.Workers.TrimKeywordFeed do
   defp horizon({x, s}, repo) do
     repo.query!(
       """
-      INSERT INTO keyword_feed_horizon (id, xid, seq, updated_at) VALUES (1, $1::text::xid8, $2, now())
-      ON CONFLICT (id) DO UPDATE SET xid = EXCLUDED.xid, seq = EXCLUDED.seq, updated_at = now()
-      WHERE (keyword_feed_horizon.xid, keyword_feed_horizon.seq) < (EXCLUDED.xid, EXCLUDED.seq)
+      UPDATE keyword_feed_horizon SET xid = $1::text::xid8, seq = $2, updated_at = now()
+      WHERE id = 1 AND (xid, seq) < ($1::text::xid8, $2)
       """,
       [Integer.to_string(x), s]
     )
