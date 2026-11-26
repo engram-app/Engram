@@ -1949,8 +1949,15 @@ defmodule Engram.Vector.Qdrant do
     with {:ok, points} <- fused_points(col || collection(), Enum.map(fused, & &1.id), search_opts) do
       by_id = Map.new(points, &{&1.qdrant_id, &1})
 
-      # A point deleted between the legs and the retrieve is dropped.
-      {:ok, for(%{id: id, score: score} <- fused, p = by_id[id], do: Map.put(p, :score, score))}
+      # A fused id the retrieve did not return keeps its place with no dense
+      # vector: a keyword hit from a store outside this collection may have
+      # no point here (MMR scores a nil vector by relevance alone), and a
+      # point deleted since the legs has no chunk row either, so search
+      # drops it there.
+      {:ok,
+       for %{id: id, score: score} <- fused do
+         by_id |> Map.get(id, %{qdrant_id: id, vector: nil}) |> Map.put(:score, score)
+       end}
     end
   end
 

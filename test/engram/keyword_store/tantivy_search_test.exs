@@ -27,7 +27,8 @@ defmodule Engram.KeywordStore.TantivySearchTest do
     QdrantStub.stub_retrieve(dense)
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{dense.port}")
     ServiceConfig.put_override(:qdrant_search_timeout, 30_000)
-    ServiceConfig.put_override(:keyword_store, Tantivy)
+    ServiceConfig.put_override(:keyword_feed, true)
+    ServiceConfig.put_override(:keyword_read, :tantivy)
 
     ServiceConfig.put_override(:kwsearch,
       url: "http://localhost:#{kw.port}",
@@ -98,6 +99,31 @@ defmodule Engram.KeywordStore.TantivySearchTest do
     assert u == to_string(user.id) and v == to_string(vault.id)
     assert Map.keys(body) |> Enum.sort() == ~w(gen limit terms)
     refute Map.has_key?(body, "user")
+  end
+
+  # Review #2: with the default diversity the fused ids are retrieved for
+  # their dense vectors, and a keyword hit the vector service did not return
+  # used to vanish there.
+  test "default diversity: a hit only the keyword leg found is kept",
+       %{dense: dense, kw: kw, user: user, vault: vault, ids: {_a, _m, z}} do
+    embed_ok()
+    dense_leg(dense, [])
+    kwsearch(kw, 200, %{"hits" => [[z, 9.0]]})
+
+    assert {:ok, [%{title: "zulu"}]} = Search.search(user, vault, "ferritin", mode: :hybrid)
+  end
+
+  # Review #5: an all-vaults search names the user's vaults in the token.
+  test "no vault scope: the token carries the user's active vaults, never []",
+       %{kw: kw, user: user, vault: vault} do
+    kwsearch(kw, 200, %{"hits" => []})
+
+    assert {:ok, []} =
+             Tantivy.search(%{indices: [1], values: [1.0]}, user_id: to_string(user.id), limit: 5)
+
+    assert_received {:kwsearch, token, _body}
+    assert {:ok, %{"v" => [v]}} = Token.verify(token, [@key])
+    assert v == to_string(vault.id)
   end
 
   test "kwsearch down: hybrid is dense-only and counts a fallback",
