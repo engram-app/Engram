@@ -1926,18 +1926,32 @@ defmodule Engram.Vector.Qdrant do
       opts = [json: hybrid_search_body(dense, sparse, search_opts)] ++ req_opts(:search)
 
       with {:ok, legs} <- do_query(col, "/points/query/batch", opts, &batch_results/1),
-           fused =
-             legs
-             |> Enum.map(fn leg -> Enum.map(leg, &%{id: &1.qdrant_id, score: &1.score}) end)
-             |> Fusion.rrf(@rrf_k)
-             |> Enum.take(limit),
-           {:ok, points} <- fused_points(col, Enum.map(fused, & &1.id), search_opts) do
-        by_id = Map.new(points, &{&1.qdrant_id, &1})
-
-        # A point deleted between the legs and the retrieve is dropped.
-        {:ok, for(%{id: id, score: score} <- fused, p = by_id[id], do: Map.put(p, :score, score))}
-      end
+           do: fuse(col, legs, limit, search_opts)
     end)
+  end
+
+  @doc """
+  Fuses ranked legs (hits with `:qdrant_id` and `:score`, best first) by
+  point id (`Search.Fusion.rrf/2`, k = 2), keeps `limit`, and retrieves the
+  dense vectors when `:with_vector` asks. Shared by `hybrid_search/4` and a
+  keyword store whose leg runs outside this service
+  (`Engram.KeywordStore.Tantivy`).
+  """
+  @spec fuse(String.t() | nil, [[map()]], pos_integer(), keyword()) ::
+          {:ok, [map()]} | {:error, term()}
+  def fuse(col, legs, limit, search_opts) do
+    fused =
+      legs
+      |> Enum.map(fn leg -> Enum.map(leg, &%{id: &1.qdrant_id, score: &1.score}) end)
+      |> Fusion.rrf(@rrf_k)
+      |> Enum.take(limit)
+
+    with {:ok, points} <- fused_points(col || collection(), Enum.map(fused, & &1.id), search_opts) do
+      by_id = Map.new(points, &{&1.qdrant_id, &1})
+
+      # A point deleted between the legs and the retrieve is dropped.
+      {:ok, for(%{id: id, score: score} <- fused, p = by_id[id], do: Map.put(p, :score, score))}
+    end
   end
 
   # The payload keys `search_results/1` reads for a v3/v4 hit's text and

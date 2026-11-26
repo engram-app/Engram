@@ -25,7 +25,7 @@ defmodule Engram.KeywordStoreTest do
     scope = %{user_id: "u", vault_id: "v", note_id: "n"}
 
     assert KeywordStore.index(scope, [%{id: "p1", sparse: sparse}]) ==
-             {:ok, %{"p1" => %{"keyword" => sparse}}}
+             {:ok, %{"p1" => %{"keyword" => sparse}}, nil}
   end
 
   test "empty deletes and upserts never reach the backend" do
