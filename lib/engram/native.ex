@@ -38,6 +38,14 @@ defmodule Engram.Native do
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
+  Per text, its `keyword_feed.terms` column for the Tantivy keyword service
+  (kwsearch): `(u32 LE dim, u32 LE count)` pairs ascending, the same dims as
+  `encode_query_nif/3` and the BM25 encoder (kwfeed codec, native/kwfeed).
+  """
+  def keyword_feed_terms_nif(_texts, _filter_key, _language),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
   Per text, how many of `phrases` it holds as a run of consecutive words
   (stemmed per `language`), reading at most `max_bytes` of each text.
   """
