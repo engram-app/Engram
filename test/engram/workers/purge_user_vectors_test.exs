@@ -52,7 +52,7 @@ defmodule Engram.Workers.PurgeUserVectorsTest do
       Plug.Conn.send_resp(conn, 500, ~s({"status":{"error":"boom"}}))
     end)
 
-    Engram.ServiceConfig.put_override(:keyword_store, Engram.KeywordStoreFailing)
+    Engram.KeywordStoreRecorder.install(fail: :keyword_down)
 
     log =
       ExUnit.CaptureLog.capture_log(fn ->
