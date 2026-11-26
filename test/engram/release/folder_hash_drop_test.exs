@@ -144,28 +144,133 @@ defmodule Engram.Release.FolderHashDropTest do
     assert present() == {0, 0}
   end
 
-  test "flags fetch times out: the step runs with the default and returns" do
+  # AppConfig answered by a Req.Test stub; `sign` false keeps ex_aws's own
+  # credential chain (the prod path) instead of fixed test credentials.
+  defp appconfig!(sign \\ true) do
     Req.Test.set_req_test_to_shared()
+    opts = [plug: {Req.Test, Engram.ServiceConfig.Flags}]
 
-    Application.put_env(:engram, :service_flags_req_options,
-      plug: {Req.Test, Engram.ServiceConfig.Flags},
-      aws_sigv4: [access_key_id: "test", secret_access_key: "test", service: :appconfig]
-    )
+    opts =
+      if sign,
+        do:
+          opts ++
+            [aws_sigv4: [access_key_id: "test", secret_access_key: "test", service: :appconfig]],
+        else: opts
+
+    Application.put_env(:engram, :service_flags_req_options, opts)
 
     on_exit(fn ->
       Application.delete_env(:engram, :service_flags_req_options)
       Req.Test.set_req_test_to_private()
     end)
 
-    Req.Test.stub(Engram.ServiceConfig.Flags, fn conn ->
-      Process.sleep(1_000)
-      Req.Test.json(conn, %{"InitialConfigurationToken" => "t0"})
-    end)
-
     use_source(
       {:appconfig,
        %{application: "app", environment: "env", profile: "prof", region: "us-east-1"}}
     )
+  end
+
+  defp serve_flags!(doc) do
+    Req.Test.stub(Engram.ServiceConfig.Flags, fn conn ->
+      if conn.method == "POST" do
+        conn
+        |> Plug.Conn.put_status(201)
+        |> Req.Test.json(%{"InitialConfigurationToken" => "t0"})
+      else
+        conn
+        |> Plug.Conn.put_resp_header("next-poll-configuration-token", "t1")
+        |> Plug.Conn.send_resp(200, Jason.encode!(doc))
+      end
+    end)
+  end
+
+  defp put_env_restoring(app, key, value) do
+    prev = Application.fetch_env(app, key)
+    Application.put_env(app, key, value)
+
+    on_exit(fn ->
+      case prev do
+        {:ok, v} -> Application.put_env(app, key, v)
+        :error -> Application.delete_env(app, key)
+      end
+    end)
+  end
+
+  defp system_env_restoring(vars) do
+    prev = Map.new(vars, fn {k, _} -> {k, System.get_env(k)} end)
+    Enum.each(vars, fn {k, v} -> if v, do: System.put_env(k, v), else: System.delete_env(k) end)
+
+    on_exit(fn ->
+      Enum.each(prev, fn {k, v} -> if v, do: System.put_env(k, v), else: System.delete_env(k) end)
+    end)
+  end
+
+  # Prod's shape: the migrate eval starts no app, and AppConfig is signed with
+  # the ECS task role, which ex_aws resolves through its AuthCache (a table
+  # the :ex_aws application owns) and the task-role endpoint. Red before: only
+  # :req was started, the lookup raised, and the step ran despite `false`.
+  test "in the migrate eval (ex_aws not started), a false flag read with the task role disables" do
+    appconfig!(false)
+    serve_flags!(%{"folder_path_hash_drop" => false})
+
+    system_env_restoring([
+      {"AWS_ACCESS_KEY_ID", nil},
+      {"AWS_SECRET_ACCESS_KEY", nil},
+      {"AWS_SESSION_TOKEN", nil},
+      {"AWS_CONTAINER_CREDENTIALS_FULL_URI", nil},
+      {"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/test"}
+    ])
+
+    for k <- [:access_key_id, :secret_access_key, :security_token],
+        do: put_env_restoring(:ex_aws, k, nil)
+
+    # The task-role endpoint (169.254.170.2), answered through ex_aws's Req client.
+    put_env_restoring(:ex_aws, :req_opts, plug: {Req.Test, ExAws.InstanceMeta})
+
+    Req.Test.stub(ExAws.InstanceMeta, fn conn ->
+      Req.Test.json(conn, %{
+        "AccessKeyId" => "ASIATEST",
+        "SecretAccessKey" => "secret",
+        "Token" => "session",
+        "Expiration" => DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601()
+      })
+    end)
+
+    :ok = Application.stop(:ex_aws)
+    # Restarted fresh: its AuthCache must not keep this test's task-role creds.
+    on_exit(fn ->
+      _ = Application.stop(:ex_aws)
+      {:ok, _} = Application.ensure_all_started(:ex_aws)
+    end)
+
+    assert run() == :disabled
+    assert present() == {1, 1}
+  end
+
+  test "the flags fetch process exits: the step runs with the default and returns" do
+    appconfig!()
+    Req.Test.stub(Engram.ServiceConfig.Flags, fn _conn -> exit(:boom) end)
+
+    log = capture_log(fn -> assert run() == :done end)
+
+    assert log =~ "folder_path_hash_drop flags unreadable"
+    assert present() == {0, 0}
+  end
+
+  # As every flag-owned key the step reads only from the flags file: a DB
+  # override would be silently ignored, so it is refused.
+  test "a DB override of the kill switch is refused" do
+    assert {:error, :managed_by_flags} =
+             Engram.ServiceConfig.override(:folder_path_hash_drop, false, by: "t")
+  end
+
+  test "flags fetch times out: the step runs with the default and returns" do
+    appconfig!()
+
+    Req.Test.stub(Engram.ServiceConfig.Flags, fn conn ->
+      Process.sleep(1_000)
+      Req.Test.json(conn, %{"InitialConfigurationToken" => "t0"})
+    end)
 
     log = capture_log(fn -> assert run(flags_timeout_ms: 100) == :done end)
 
