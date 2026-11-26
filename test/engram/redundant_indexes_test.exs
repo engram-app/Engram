@@ -17,7 +17,10 @@ defmodule Engram.RedundantIndexesTest do
     "idx_attachments_user",
     "user_limit_overrides_user_id_index",
     # user_code is UNIQUE: at most one row to filter on status.
-    "device_authorizations_pending_user_code_index"
+    "device_authorizations_pending_user_code_index",
+    # The S3 by-name index (Engram#2523): no reader since #2589; the
+    # by-name lookup probes notes_name_key_live.
+    "notes_folder_name_live"
   ]
 
   test "the dead and redundant indexes are gone" do

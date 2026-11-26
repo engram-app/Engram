@@ -44,6 +44,10 @@ defmodule Engram.DataMigrations.FolderTable do
   `Crypto.aad_for_row(:folders, :name, id)`: the key scheme `folder_ciphertext`
   already uses. Root notes keep a NULL `folder_ref_id` (the root has no row).
 
+  A row this makes explicit gets `explicit_seq` 0 when it has none: release J
+  writes no folder path hash, and release I's reconcile (a rollback
+  target) clears an unstamped explicit row no marker hash names.
+
   Known edges, none blocking: an emptied derived folder row is not pruned
   here (writers own that); a marker created after a derived row of the same
   name exists makes that row `explicit` and keeps ITS id.
@@ -61,7 +65,6 @@ defmodule Engram.DataMigrations.FolderTable do
   alias Engram.Crypto.RotationInProgressError
   alias Engram.DataMigrations
   alias Engram.Folders.Folder
-  alias Engram.Folders.PathHmacs
   alias Engram.Folders.Rows
   alias Engram.Logger.Metadata
   alias Engram.Notes.Helpers
@@ -258,27 +261,27 @@ defmodule Engram.DataMigrations.FolderTable do
 
   # ---- the in-memory folder tree -------------------------------------------
 
-  # `by_key`: {vault, parent, name_hmac} -> %{id, full} for live folders;
+  # `by_key`: {vault, parent, name_hmac} -> %{id: id} for live folders;
   # `by_id`: id -> key. All ids are raw 16-byte binaries, as Postgrex returns them.
   defp load_tree(repo, ctx) do
     %{rows: rows} =
       repo.query!(
         """
-        SELECT id, vault_id, parent_id, name_hmac, full_path_hmac FROM folders
+        SELECT id, vault_id, parent_id, name_hmac FROM folders
         WHERE user_id = $1 AND deleted_at IS NULL
         """,
         [dump(ctx.user_id)]
       )
 
-    Enum.reduce(rows, %{by_key: %{}, by_id: %{}}, fn [id, vault, parent, name, full], tree ->
-      put(tree, {vault, parent, name}, id, full)
+    Enum.reduce(rows, %{by_key: %{}, by_id: %{}}, fn [id, vault, parent, name], tree ->
+      put(tree, {vault, parent, name}, id)
     end)
   end
 
-  defp put(tree, key, id, full) do
+  defp put(tree, key, id) do
     %{
       tree
-      | by_key: Map.put(tree.by_key, key, %{id: id, full: full}),
+      | by_key: Map.put(tree.by_key, key, %{id: id}),
         by_id: Map.put(tree.by_id, id, key)
     }
   end
@@ -290,23 +293,20 @@ defmodule Engram.DataMigrations.FolderTable do
     segments = String.split(path, "/", trim: true)
     last = length(segments) - 1
 
-    {_prefix, parent, state} =
+    {parent, state} =
       segments
       |> Enum.with_index()
-      |> Enum.reduce({"", nil, {tree, stats}}, fn {segment, i}, {prefix, parent, state} ->
-        full_path = if prefix == "", do: segment, else: prefix <> "/" <> segment
+      |> Enum.reduce({nil, {tree, stats}}, fn {segment, i}, {parent, state} ->
         opts = if i == last, do: leaf, else: nil
-        {id, state} = ensure_one(repo, ctx, state, vault, parent, segment, full_path, opts)
-        {full_path, id, state}
+        ensure_one(repo, ctx, state, vault, parent, segment, opts)
       end)
 
     {parent, state}
   end
 
   # `leaf` is `%{id: marker_id}` for a marker's own folder, else nil.
-  defp ensure_one(repo, ctx, {tree, stats}, vault, parent, segment, full_path, leaf) do
+  defp ensure_one(repo, ctx, {tree, stats}, vault, parent, segment, leaf) do
     name_hmac = Folder.name_hmac(ctx.fk, segment)
-    full = Rows.path_hmac(ctx.fk, full_path)
     key = {vault, parent, name_hmac}
     explicit? = leaf != nil
 
@@ -320,8 +320,7 @@ defmodule Engram.DataMigrations.FolderTable do
           vault: vault,
           parent: parent,
           segment: segment,
-          name_hmac: name_hmac,
-          full: full
+          name_hmac: name_hmac
         }
 
         if existing? do
@@ -329,47 +328,44 @@ defmodule Engram.DataMigrations.FolderTable do
           # renamed the marker. Move it here (the place is free).
           :ok = update_row(repo, ctx, row, true)
           tree = %{tree | by_key: Map.delete(tree.by_key, tree.by_id[id])}
-          {id, {put(tree, key, id, full), bump(stats)}}
+          {id, {put(tree, key, id), bump(stats)}}
         else
           case insert_row(repo, ctx, row, explicit?) do
             1 ->
-              {id, {put(tree, key, id, full), bump(stats)}}
+              {id, {put(tree, key, id), bump(stats)}}
 
             # A writer made the same folder after the tree was read, or the
             # marker's UUID names a tombstoned row: read the winner, or revive
             # that row here, instead of failing the user's whole pass.
             0 ->
               case live_row(repo, vault, parent, name_hmac) do
-                [found, found_full] ->
-                  tree = put(tree, key, found, found_full)
-                  ensure_one(repo, ctx, {tree, stats}, vault, parent, segment, full_path, leaf)
+                [found] ->
+                  tree = put(tree, key, found)
+                  ensure_one(repo, ctx, {tree, stats}, vault, parent, segment, leaf)
 
                 nil ->
                   :ok = update_row(repo, ctx, row, true)
-                  {id, {put(tree, key, id, full), bump(stats)}}
+                  {id, {put(tree, key, id), bump(stats)}}
               end
           end
         end
 
-      %{id: id, full: ^full} when not explicit? ->
+      %{id: id} when not explicit? ->
         {id, {tree, stats}}
 
       %{id: id} ->
-        # Present: set what the marker or the trigger lookup needs. Counts as
-        # a change only if a row really moved (the daily pass must find none).
-        %{num_rows: marked} =
+        # Present: set what the marker needs. Counts as a change only if a
+        # row really changed (the daily pass must find none).
+        %{num_rows: n} =
           repo.query!(
-            "UPDATE folders SET explicit = true, updated_at = now() " <>
+            "UPDATE folders SET explicit = true, explicit_seq = COALESCE(explicit_seq, 0), " <>
+              "updated_at = now() " <>
               "WHERE id = $1 AND $2 AND NOT explicit",
             [id, explicit?]
           )
 
-        # The hash through its one writer (released from any stale holder).
-        {:ok, set} = PathHmacs.put(repo, ctx.user_id, [{id, full}])
-        n = marked + set
-
         if n > 0,
-          do: {id, {put(tree, key, id, full), bump(stats)}},
+          do: {id, {put(tree, key, id), bump(stats)}},
           else: {id, {tree, stats}}
     end
   end
@@ -377,7 +373,7 @@ defmodule Engram.DataMigrations.FolderTable do
   defp live_row(repo, vault, parent, name_hmac) do
     case repo.query!(
            """
-           SELECT id, full_path_hmac FROM folders
+           SELECT id FROM folders
            WHERE vault_id = $1 AND name_hmac = $2 AND deleted_at IS NULL
              AND parent_id IS NOT DISTINCT FROM $3::uuid
            """,
@@ -397,8 +393,9 @@ defmodule Engram.DataMigrations.FolderTable do
       repo.query!(
         """
         INSERT INTO folders (id, vault_id, user_id, parent_id, name_ciphertext, name_nonce,
-                             name_hmac, dek_version, explicit, name_ci_hmac, name_stamp)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                             name_hmac, dek_version, explicit, name_ci_hmac, name_stamp,
+                             explicit_seq)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CASE WHEN $9 THEN 0 END)
         ON CONFLICT DO NOTHING
         """,
         [
@@ -416,10 +413,6 @@ defmodule Engram.DataMigrations.FolderTable do
         ]
       )
 
-    # Inserted without a hash; its one writer sets it.
-    {:ok, _} =
-      if n == 1, do: PathHmacs.put(repo, ctx.user_id, [{row.id, row.full}]), else: {:ok, 0}
-
     n
   end
 
@@ -432,6 +425,7 @@ defmodule Engram.DataMigrations.FolderTable do
       """
       UPDATE folders SET parent_id = $2, name_ciphertext = $3, name_nonce = $4, name_hmac = $5,
              dek_version = $6, explicit = explicit OR $7, updated_at = now(),
+             explicit_seq = CASE WHEN explicit OR $7 THEN COALESCE(explicit_seq, 0) ELSE explicit_seq END,
              deleted_at = NULL, delete_op_id = NULL, name_ci_hmac = $10, name_stamp = $11,
              seq = COALESCE($12, seq), notes_cascaded = notes_cascaded AND $12::bigint IS NULL
       WHERE id = $1 AND vault_id = $8 AND user_id = $9
@@ -452,7 +446,6 @@ defmodule Engram.DataMigrations.FolderTable do
       ]
     )
 
-    {:ok, _} = PathHmacs.put(repo, ctx.user_id, [{row.id, row.full}])
     :ok
   end
 

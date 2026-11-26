@@ -156,22 +156,6 @@ defmodule Engram.Cache.Registry do
     # Whether listings read `folders.explicit` (Engram.Folders.Rows.explicit_reads?/0):
     # its ledgers, read at most once a minute per node.
     %{name: :explicit_folders, ttl: 60_000, cache_nil: false, evict_match: :key, pg_channel: nil},
-    # Vaults the reconcile's re-verify walk skipped today (one warning a vault a day).
-    %{
-      name: :reconcile_skipped_warned,
-      ttl: 86_400_000,
-      cache_nil: false,
-      evict_match: :key,
-      pg_channel: nil
-    },
-    # Vaults `FolderMarkerDelete` already warned about today (one line a vault a day).
-    %{
-      name: :marker_delete_warned,
-      ttl: 86_400_000,
-      cache_nil: false,
-      evict_match: :key,
-      pg_channel: nil
-    },
     # Legal floor / current version / hash per document; evicted on publish.
     %{
       name: :legal_version,

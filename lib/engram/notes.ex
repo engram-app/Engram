@@ -1010,7 +1010,7 @@ defmodule Engram.Notes do
                  end
 
                # No live marker: a row left explicit without one (before the
-               # `ExplicitFolderReconcile` heal, or once markers stop) is still
+               # explicit-flag reconcile, or once markers stop) is still
                # listed, so the delete clears it (S6 step 4, #2639 review H1).
                _no_live_marker ->
                  if Rows.clear_explicit(user, vault.id, folder),
@@ -8571,10 +8571,8 @@ defmodule Engram.Notes do
   targets (ids and HMACs, one `RewriteNoteLinks` chain per 1,000 notes).
   Folder markers under it (explicit folders, O(subfolders)) are still
   rewritten: their writers and readers key on the stored folder path. The
-  descendant folder rows are not, once S6 step 3's write stop is on
-  (`Engram.Folders.PathHashStop`): the move writes one folder row and reads
-  only it (`Rows.rename/5`). While it is inert their path hashes are
-  rewritten as in release D, O(subfolders).
+  descendant folder rows are not: the move writes one folder row and reads
+  only it (`Rows.rename/5`).
 
   Runs in the caller's transaction (`Folders.rename/5`).
   """
@@ -9305,7 +9303,7 @@ defmodule Engram.Notes do
 
         rows =
           Enum.uniq_by(
-            by_ref ++ folder_markers_in(user, vault, live, row_hmacs) ++ drifted,
+            by_ref ++ folder_markers_in(live, row_hmacs) ++ drifted,
             & &1.id
           )
 
@@ -9333,32 +9331,17 @@ defmodule Engram.Notes do
 
   # The live folder markers a cascade must see, in one read on
   # `notes_user_vault_folder_marker` (the vault's markers, not its notes): those
-  # at the subtree rows' current path hashes, plus those no live row places
-  # (a row that died under a marker, a marker the previous release wrote
-  # before its row), which nothing else finds. The caller's final path filter
-  # keeps only the target's.
-  #
-  # "No live row places it": while S6 step 3's write stop is inert
-  # (`Engram.Folders.PathHashStop`), no live row at its path hash (release
-  # D's rule, about 0 rows in steady state). Once it is on the hash is not
-  # written, so: its own row (a marker's row keeps its UUID,
-  # `Rows.ensure_markers/3`) is not live. That also returns a marker made on
-  # an existing row (its id names none), so the stop waits for S6 step 4 to
-  # delete the vault's markers (`PathHashStop.markers_gone?/2`): then it reads
-  # nothing. One probe per marker of the vault either way.
-  defp folder_markers_in(user, vault, live, row_hmacs) do
+  # at the subtree rows' current path hashes, plus those whose own row (a
+  # marker's row keeps its UUID, `Rows.ensure_markers/3`) is not live, which
+  # nothing else finds. That also returns a marker made on an existing row (its
+  # id names none): a superset, which the caller's final path filter cuts to the
+  # target's. No folder path hash read (S6 step 3, release J). One probe
+  # per marker of the vault; none once S6 step 4 deleted the vault's markers.
+  defp folder_markers_in(live, row_hmacs) do
     live_row =
-      if Engram.Folders.PathHashStop.write?(user.id, vault.id),
-        do:
-          from(f in Engram.Folders.Folder,
-            where:
-              f.vault_id == parent_as(:n).vault_id and
-                f.full_path_hmac == parent_as(:n).folder_hmac and is_nil(f.deleted_at)
-          ),
-        else:
-          from(f in Engram.Folders.Folder,
-            where: f.id == parent_as(:n).id and is_nil(f.deleted_at)
-          )
+      from(f in Engram.Folders.Folder,
+        where: f.id == parent_as(:n).id and is_nil(f.deleted_at)
+      )
 
     Repo.all(
       from(n in live,
