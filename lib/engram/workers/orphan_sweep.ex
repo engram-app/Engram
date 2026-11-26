@@ -383,7 +383,7 @@ defmodule Engram.Workers.OrphanSweep do
   end
 
   defp delete_batch(batch, acc) do
-    case Qdrant.delete_points(batch) do
+    case Indexing.delete_points(nil, batch) do
       :ok ->
         Logger.info(
           "orphan_sweep deleted stranded Qdrant points",
@@ -928,7 +928,7 @@ defmodule Engram.Workers.OrphanSweep do
   end
 
   defp delete_spelling(user_id) do
-    case Qdrant.delete_by_user(user_id) do
+    case Indexing.delete_user_points(user_id) do
       :ok ->
         Logger.debug(
           "orphan_sweep deleted Qdrant points",

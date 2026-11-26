@@ -19,7 +19,9 @@ defmodule Engram.Workers.PurgeUserVectorsTest do
       Plug.Conn.send_resp(conn, 200, ~s({"status":"ok","result":{}}))
     end)
 
+    Engram.KeywordStoreRecorder.install()
     assert :ok = perform_job(PurgeUserVectors, %{"user_id" => user_id})
+    assert_received {:keyword_store, :delete_user, [^user_id]}
 
     expected = Engram.Vector.Qdrant.match_filter(:user, user_id) |> Jason.encode!()
     assert_received {:filter, %{"must" => [filter]}}

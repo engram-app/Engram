@@ -1,6 +1,6 @@
 defmodule Engram.Workers.PurgeUserVectors do
   @moduledoc """
-  Deletes every Qdrant point a deleted account owned.
+  Deletes every index point (dense and keyword) a deleted account owned.
 
   Inserted by `Engram.Accounts.Lifecycle.hard_delete/2` inside the Postgres
   delete's transaction, so it exists only once the account is gone, and
@@ -17,7 +17,7 @@ defmodule Engram.Workers.PurgeUserVectors do
   # days, so a Qdrant outage delays the purge rather than dropping it.
   use Oban.Worker, queue: :events, max_attempts: 20
 
-  alias Engram.Vector.Qdrant
+  alias Engram.Indexing
 
   @spec enqueue(Ecto.UUID.t()) :: {:ok, Oban.Job.t()} | {:error, term()}
   def enqueue(user_id), do: %{"user_id" => user_id} |> new() |> Oban.insert()
@@ -28,5 +28,5 @@ defmodule Engram.Workers.PurgeUserVectors do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id}}),
-    do: Qdrant.delete_by_user(nil, user_id, :indexing)
+    do: Indexing.delete_user_points(user_id, :indexing)
 end

@@ -227,6 +227,7 @@ defmodule Engram.IndexingFloorTest do
     test "the floor belt delete matches the note's points by n", %{user: user, vault: vault} do
       bypass = Bypass.open()
       ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+      Engram.KeywordStoreRecorder.install()
       test_pid = self()
 
       Bypass.stub(bypass, :any, :any, fn conn ->
@@ -256,6 +257,11 @@ defmodule Engram.IndexingFloorTest do
 
       by_id = %{"key" => "n", "match" => %{"value" => FilterId.uuid(note.id)}}
       assert_received {:delete, %{"filter" => %{"must_not" => [_], "must" => must}}}
+      # The floor's stale and except deletes reach the keyword seam, keeping the floor point.
+      note_id = note.id
+      [%{qdrant_point_id: floor_id}] = chunk_rows(note)
+      assert_received {:keyword_store, :delete_note, [_user, _vault, ^note_id, keep]}
+      assert floor_id in keep
       assert by_id in must
       refute inspect(must) =~ ~s("p")
     end

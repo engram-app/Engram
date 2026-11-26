@@ -1758,7 +1758,7 @@ defmodule Engram.Crypto.UserDekRotation do
 
     # A failed delete leaves the orphan for the next rotation; it is never
     # read (no row names it), so it costs nothing until then.
-    if orphans != [] and :ok == Qdrant.delete_points(Qdrant.collection_name(), orphans) do
+    if orphans != [] and :ok == Indexing.delete_points(user_id, orphans) do
       :telemetry.execute(
         [:engram, :crypto, :rotate, :dek, :row_failed],
         %{count: length(orphans)},

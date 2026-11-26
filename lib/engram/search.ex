@@ -11,20 +11,24 @@ defmodule Engram.Search do
   alias Engram.Billing
   alias Engram.EmbedCeiling
   alias Engram.KeywordIndex
+  alias Engram.KeywordStore
   alias Engram.Logger.Metadata
   alias Engram.Notes.Helpers
   alias Engram.Search.FieldFilters
   alias Engram.Search.Gate
   alias Engram.Search.MMR
   alias Engram.Search.NameTerms
+  alias Engram.Search.NoteFilter
   alias Engram.Search.PhraseCheck
   alias Engram.Search.SearchProfile
   alias Engram.Vector.Qdrant
   alias EngramWeb.RateLimiter
 
+  require OpenTelemetry.Tracer, as: Tracer
+
   require Logger
 
-  defp collection, do: Application.get_env(:engram, :qdrant_collection, "obsidian_notes")
+  defp collection, do: Qdrant.collection_name()
 
   defp embedder, do: Application.get_env(:engram, :embedder, Engram.Embedders.Voyage)
 
@@ -284,12 +288,11 @@ defmodule Engram.Search do
 
     # Entitlement is already checked in `search/4`, ahead of the budget spend —
     # `cross_vault` here only selects the nil vault filter.
+    vault = if cross_vault, do: nil, else: vault
+    {filter, filter_tags} = resolve_filter(user, vault, opts)
+
     result =
-      if cross_vault do
-        do_search(user, nil, query, opts)
-      else
-        do_search(user, vault, query, opts)
-      end
+      do_search(user, vault, query, opts, filter)
       |> scrub_result_utf8()
       |> window_texts(query)
 
@@ -307,10 +310,90 @@ defmodule Engram.Search do
         duration: System.monotonic_time() - start_mono,
         result_count: result_count(result)
       },
-      %{
+      Map.merge(filter_tags, %{
         status: search_status(result),
         cross_vault: cross_vault,
-        rerank: rerank
+        rerank: rerank,
+        empty: match?({:ok, []}, result)
+      })
+    )
+
+    result
+  end
+
+  # Filter telemetry (#2697). Filter usage was unobservable: which keys a
+  # search sets (span only, sorted keys, never values), how its scope
+  # resolved, whether it filtered and who asked (request counter labels), and
+  # how long Postgres took to resolve it.
+  defp resolve_filter(user, vault, opts) do
+    keys = NoteFilter.keys(opts)
+
+    {filter, scope} =
+      if keys == [] do
+        {search_filter(user, vault, opts), :none}
+      else
+        start = System.monotonic_time()
+        filter = search_filter(user, vault, opts)
+        scope = scope_label(filter)
+
+        :telemetry.execute(
+          [:engram, :search, :filter_resolve],
+          %{duration: System.monotonic_time() - start},
+          %{scope: scope}
+        )
+
+        {filter, scope}
+      end
+
+    Tracer.set_attributes(%{
+      "engram.search.filters" => Enum.join(keys, ","),
+      "engram.search.scope" => Atom.to_string(scope)
+    })
+
+    {filter, %{filtered: keys != [], scope: scope, surface: surface_label(opts)}}
+  end
+
+  defp scope_label({:ok, [note_scope: {kind, _ids}], _within}) when kind in [:ids, :exclude],
+    do: kind
+
+  defp scope_label({:ok, [], {_vaults, _filter, _sample}}), do: :too_wide
+  # Postgres matched no note: an empty id scope.
+  defp scope_label(:no_match), do: :ids
+  defp scope_label(_none_or_error), do: :none
+
+  # The `surface` label: `opts[:surface]` (the analytics surface) folded to
+  # mcp / rest / web / plugin, and `:internal` for searches no client asked
+  # for (`internal: true`, note auto-placement) or with no surface at all.
+  @surface_labels %{"mcp" => :mcp, "api" => :rest, "web" => :web, "obsidian_sync" => :plugin}
+
+  defp surface_label(opts) do
+    if Keyword.get(opts, :internal, false),
+      do: :internal,
+      else: Map.get(@surface_labels, Keyword.get(opts, :surface), :internal)
+  end
+
+  @doc """
+  A filter-only page (no query): `NoteFilter.page/4`, counted on the search
+  request counter as scope `filter_page`. `opts` are the page opts plus
+  `:surface` (also read from `filter`, where MCP passes it).
+  """
+  @spec filter_page(map(), map(), keyword(), keyword()) :: {:ok, map()} | {:error, term()}
+  def filter_page(user, vault, filter, opts \\ []) do
+    start = System.monotonic_time()
+    result = NoteFilter.page(user, vault, filter, opts)
+    count = if match?({:ok, %{notes: _}}, result), do: length(elem(result, 1).notes), else: 0
+
+    :telemetry.execute(
+      [:engram, :search, :request, :stop],
+      %{duration: System.monotonic_time() - start, result_count: count},
+      %{
+        status: search_status(result),
+        cross_vault: false,
+        rerank: :off,
+        filtered: true,
+        scope: :filter_page,
+        surface: surface_label(opts ++ filter),
+        empty: count == 0 and search_status(result) == :ok
       }
     )
 
@@ -608,7 +691,7 @@ defmodule Engram.Search do
 
   defp date_param(_non_binary), do: :error
 
-  defp do_search(user, vault, query, opts) do
+  defp do_search(user, vault, query, opts, filter) do
     # Hybrid, not dense-only, when the caller names no mode (MCP's
     # `suggest_folder` and note auto-placement). A note indexed while its
     # owner's embed budget was spent has only the sparse leg, so a dense-only
@@ -649,7 +732,7 @@ defmodule Engram.Search do
     # (unchanged chunk-path behavior).
     rerank_keep = if group? or diversify?, do: pool, else: limit
 
-    case search_filter(user, vault, opts) do
+    case filter do
       {:ok, filter_kw, within} ->
         # A filter Postgres could not narrow to `max_note_ids` notes either
         # way (or no `n` index) is searched over the whole tenant,
@@ -936,26 +1019,28 @@ defmodule Engram.Search do
     end
   end
 
-  # Keyword leg: HMAC the query tokens → sparse Qdrant search. No DEK → empty.
+  # Keyword leg: HMAC the query tokens → the keyword store. No DEK → empty.
   defp run_legs(:keyword, user, query, search_opts, _profile) do
     case sparse_query(user, query) do
       {:ok, sparse} ->
-        qdrant(user, fn -> Qdrant.sparse_search(collection(), sparse, search_opts) end)
+        qdrant(user, fn -> KeywordStore.search(sparse, search_opts) end)
 
       :no_vault ->
         {:ok, []}
     end
   end
 
-  # Hybrid: dense + sparse fused server-side. No-DEK or empty-query degrades to
-  # vector-only. Embedding failure (backend down/rate-limited) degrades to
-  # keyword-only rather than failing a search the keyword leg could still serve.
+  # Hybrid: dense + keyword through the keyword store (one Qdrant batch
+  # request while the store is colocated), fused by point id. No-DEK or
+  # empty-query degrades to vector-only. Embedding failure (backend
+  # down/rate-limited) degrades to keyword-only rather than failing a search
+  # the keyword leg could still serve.
   defp run_legs(:hybrid, user, query, search_opts, profile) do
     case query_embedding(query, search_opts, profile) do
       {:ok, [vector]} ->
         case sparse_query(user, query) do
           {:ok, sparse} ->
-            qdrant(user, fn -> Qdrant.hybrid_search(collection(), vector, sparse, search_opts) end)
+            qdrant(user, fn -> KeywordStore.hybrid_search(vector, sparse, search_opts) end)
 
           :no_vault ->
             qdrant(user, fn -> Qdrant.search(collection(), vector, search_opts) end)
@@ -1000,7 +1085,7 @@ defmodule Engram.Search do
               %{leg: :keyword, reason: error_label(reason)}
             )
 
-            qdrant(user, fn -> Qdrant.sparse_search(collection(), sparse, search_opts) end)
+            qdrant(user, fn -> KeywordStore.search(sparse, search_opts) end)
 
           :no_vault ->
             err

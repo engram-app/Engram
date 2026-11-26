@@ -521,9 +521,13 @@ defmodule Engram.Workers.CleanupVaultTest do
         }
         |> Repo.insert!(skip_tenant_check: true)
 
+      Engram.KeywordStoreRecorder.install()
       assert :ok = CleanupVault.perform_cleanup(vault.id, user.id)
 
       refute Repo.get(Chunk, chunk.id, skip_tenant_check: true)
+      # Vault delete reaches the keyword seam.
+      {user_id, vault_id} = {to_string(user.id), to_string(vault.id)}
+      assert_received {:keyword_store, :delete_vault, [^user_id, ^vault_id]}
     end
 
     test "Qdrant failure does not prevent DB cleanup", %{

@@ -121,12 +121,16 @@ defmodule Engram.Accounts.LifecycleTest do
 
       stub(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts -> :ok end)
       user = insert(:user)
+      Engram.KeywordStoreRecorder.install()
 
       ExUnit.CaptureLog.capture_log(fn ->
         assert :ok = Lifecycle.soft_delete(user, :inactivity)
       end)
 
       assert Agent.get(attempts, & &1) == 2
+      # The inactivity drop reaches the keyword seam.
+      user_id = to_string(user.id)
+      assert_received {:keyword_store, :delete_user, [^user_id]}
     end
 
     test "sets users.deleted_at, revokes refresh tokens, emits telemetry" do
