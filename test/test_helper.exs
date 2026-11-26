@@ -96,11 +96,16 @@ vendor_conformance_excluded =
 #   minutes of CPU and ~250 MB a case. Its own CI job runs them → HUGE_TESTS=1.
 huge_excluded = if System.get_env("HUGE_TESTS") == "1", do: [], else: [:huge]
 
+# - :kwsearch calls a running kwsearch (Tantivy keyword service POC) and
+#   its throwaway feed Postgres → KWSEARCH=1 (see test/engram/kwsearch_test.exs).
+kwsearch_excluded = if System.get_env("KWSEARCH") == "1", do: [], else: [:kwsearch]
+
 case qdrant_excluded ++
        cluster_excluded ++
        integration_excluded ++
        vendor_conformance_excluded ++
-       huge_excluded do
+       huge_excluded ++
+       kwsearch_excluded do
   [] -> :ok
   excluded -> ExUnit.configure(exclude: excluded)
 end
