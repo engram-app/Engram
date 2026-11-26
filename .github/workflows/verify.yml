@@ -10,6 +10,7 @@ on:
       - "bot/**"
       - "bump/**"
       - "chore/**"
+      - "ci/**"
       - "dependabot/**"
       - "docs/**"
       - "feat/**"
