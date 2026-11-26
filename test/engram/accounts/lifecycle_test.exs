@@ -112,7 +112,12 @@ defmodule Engram.Accounts.LifecycleTest do
       Engram.ServiceConfig.put_override(:qdrant_retry, :transient)
       {:ok, attempts} = Agent.start_link(fn -> 0 end)
 
+      test_pid = self()
+
       Bypass.stub(bypass, "POST", "/collections/:col/points/delete", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:qdrant_delete, Jason.decode!(body)})
+
         case Agent.get_and_update(attempts, &{&1 + 1, &1 + 1}) do
           1 -> Plug.Conn.send_resp(conn, 503, ~s({"status":"overloaded"}))
           _ -> Plug.Conn.send_resp(conn, 200, ~s({"status":"ok","result":{}}))
@@ -128,7 +133,11 @@ defmodule Engram.Accounts.LifecycleTest do
       end)
 
       assert Agent.get(attempts, & &1) == 2
-      # The inactivity drop reaches the keyword seam.
+      # The same user filter delete as before the seam, then the keyword seam.
+      expected =
+        Jason.decode!(Jason.encode!(%{must: [Engram.Vector.Qdrant.match_filter(:user, user.id)]}))
+
+      assert_received {:qdrant_delete, %{"filter" => ^expected}}
       user_id = to_string(user.id)
       assert_received {:keyword_store, :delete_user, [^user_id]}
     end

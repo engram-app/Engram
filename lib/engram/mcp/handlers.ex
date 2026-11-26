@@ -1638,16 +1638,10 @@ defmodule Engram.MCP.Handlers do
     limit = max(1, min(args["limit"] || 5, 20))
     filter = build_search_opts(args)
 
-    vaults
-    |> Enum.reduce_while({:ok, []}, fn v, {:ok, acc} ->
-      case Search.filter_page(user, v, filter, limit: limit) do
-        {:ok, %{notes: notes}} -> {:cont, {:ok, acc ++ Enum.map(notes, &{&1, v})}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-    |> case do
-      {:ok, pairs} ->
-        pairs
+    case Search.filter_page(user, vaults, filter, limit: limit) do
+      {:ok, pages} ->
+        pages
+        |> Enum.flat_map(fn {v, %{notes: notes}} -> Enum.map(notes, &{&1, v}) end)
         |> Enum.sort_by(fn {n, _v} -> n.updated_at end, {:desc, DateTime})
         |> Enum.take(limit)
         |> render_recent(names, "No notes match these filters.")

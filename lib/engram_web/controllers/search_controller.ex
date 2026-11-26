@@ -103,8 +103,8 @@ defmodule EngramWeb.SearchController do
       page_opts =
         [surface: EngramWeb.RequestMeta.surface(conn.assigns)] ++ Pager.rest_opts(params)
 
-      case Search.filter_page(user, conn.assigns.current_vault, filters, page_opts) do
-        {:ok, %{notes: notes, next_cursor: next}} ->
+      case Search.filter_page(user, [conn.assigns.current_vault], filters, page_opts) do
+        {:ok, [{_vault, %{notes: notes, next_cursor: next}}]} ->
           results =
             Enum.map(notes, fn n ->
               %{

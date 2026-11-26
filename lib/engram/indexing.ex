@@ -1426,13 +1426,15 @@ defmodule Engram.Indexing do
 
   # Every index delete goes through `delete_points/2`, `delete_user_points/2`,
   # `delete_vault_points/2` and this one, so the keyword store
-  # (`Engram.KeywordStore`) sees each one right after the dense delete.
+  # (`Engram.KeywordStore`) sees each one beside the dense delete.
   defp delete_note_points_except(note, keep) do
     user_id = to_string(note.user_id)
     vault_id = to_string(note.vault_id)
 
-    with :ok <- Qdrant.delete_by_note_except(collection(), user_id, vault_id, note.id, keep),
-         do: KeywordStore.delete_note(user_id, vault_id, note.id, keep)
+    both_legs(
+      Qdrant.delete_by_note_except(collection(), user_id, vault_id, note.id, keep),
+      fn -> KeywordStore.delete_note(user_id, vault_id, note.id, keep) end
+    )
   end
 
   # Bounded upsert bodies: thousands of 1024-dim float vectors as one JSON PUT
@@ -1454,7 +1456,7 @@ defmodule Engram.Indexing do
     points
     |> point_batches()
     |> Enum.reduce_while(:ok, fn batch, :ok ->
-      case Qdrant.upsert_points(collection(), Enum.map(batch, &unpack_point/1)) do
+      case Qdrant.upsert_points(collection(), Enum.map(batch, &Qdrant.unpack_point/1)) do
         :ok -> {:cont, collect_garbage(n)}
         other -> {:halt, other}
       end
@@ -1506,23 +1508,21 @@ defmodule Engram.Indexing do
   # packed f32 (4 bytes) prints in at most 15 (`-1.2345678e-38,`), a packed
   # sparse entry (u32 index + f64 value, 12 bytes) in at most 36, a payload
   # string in its own bytes plus quotes and key.
-  # A keyword store entry (`resparse/3`) is sized as the point it updates.
-  defp point_json_bytes(%{sparse: sparse} = entry),
-    do: point_json_bytes(%{id: entry.id, vector: %{"keyword" => sparse}})
+  # A keyword store entry (`resparse/3`) is sized as its one vector.
+  defp point_json_bytes(%{sparse: sparse}), do: vector_json_bytes(sparse) + 256
 
   defp point_json_bytes(%{vector: named} = point) do
-    vectors =
-      for {_name, v} <- named, reduce: 0 do
-        acc ->
-          case v do
-            v when is_binary(v) -> acc + div(byte_size(v), 4) * 15
-            %{indices: i} when is_binary(i) -> acc + div(byte_size(i), 4) * 36
-            v when is_list(v) -> acc + length(v) * 26
-            %{indices: i} when is_list(i) -> acc + length(i) * 36
-          end
-      end
-
+    vectors = Enum.reduce(named, 0, fn {_name, v}, acc -> acc + vector_json_bytes(v) end)
     vectors + payload_json_bytes(Map.get(point, :payload, %{})) + 256
+  end
+
+  defp vector_json_bytes(v) do
+    case v do
+      v when is_binary(v) -> div(byte_size(v), 4) * 15
+      %{indices: i} when is_binary(i) -> div(byte_size(i), 4) * 36
+      v when is_list(v) -> length(v) * 26
+      %{indices: i} when is_list(i) -> length(i) * 36
+    end
   end
 
   defp payload_json_bytes(payload) do
@@ -1606,15 +1606,17 @@ defmodule Engram.Indexing do
   """
   @spec delete_points(term(), [String.t()]) :: :ok | {:error, term()}
   def delete_points(user_id, ids) do
-    with :ok <- Qdrant.delete_points(collection(), ids),
-         do: KeywordStore.delete_points(user_id, ids)
+    both_legs(Qdrant.delete_points(collection(), ids), fn ->
+      KeywordStore.delete_points(user_id, ids)
+    end)
   end
 
   @doc "Delete every index point of a user, dense then keyword. `purpose` picks the Qdrant retry profile."
   @spec delete_user_points(term(), atom()) :: :ok | {:error, term()}
   def delete_user_points(user_id, purpose \\ :indexing) do
-    with :ok <- Qdrant.delete_by_user(nil, user_id, purpose),
-         do: KeywordStore.delete_user(user_id)
+    both_legs(Qdrant.delete_by_user(nil, user_id, purpose), fn ->
+      KeywordStore.delete_user(user_id)
+    end)
   end
 
   @doc "Delete every index point of one vault, dense then keyword."
@@ -1622,8 +1624,18 @@ defmodule Engram.Indexing do
   def delete_vault_points(user_id, vault_id) do
     {user_id, vault_id} = {to_string(user_id), to_string(vault_id)}
 
-    with :ok <- Qdrant.delete_by_vault(collection(), user_id, vault_id),
-         do: KeywordStore.delete_vault(user_id, vault_id)
+    both_legs(Qdrant.delete_by_vault(collection(), user_id, vault_id), fn ->
+      KeywordStore.delete_vault(user_id, vault_id)
+    end)
+  end
+
+  # The keyword delete runs whatever the dense one returned: several callers
+  # never retry (CleanupVault, the inactivity drop) and OrphanSweep finds its
+  # targets by scanning Qdrant, so a keyword delete skipped after a dense
+  # failure would never be issued again. The first error wins.
+  defp both_legs(dense, keyword) do
+    keyword = keyword.()
+    if dense == :ok, do: keyword, else: dense
   end
 
   @doc """
@@ -2653,25 +2665,6 @@ defmodule Engram.Indexing do
   # An embedder may already return packed float32 (Voyage does, for indexing).
   defp pack_vector(packed) when is_binary(packed), do: packed
   defp pack_vector(vector), do: Engram.Native.pack_f32(vector)
-
-  # Straight from the packed binary to the JSON array text, as a pre-encoded
-  # fragment. Unpacking to a float list and letting Jason walk it was the heap
-  # peak of indexing (~26 MB per 64-point batch): a list cell, a boxed float
-  # and a formatted binary per element, all live until the request was sent.
-  @doc false
-  def unpack_point(%{vector: named} = point),
-    do: %{point | vector: Map.new(named, fn {name, v} -> {name, vector_json(v)} end)}
-
-  # Formatted in Rust (`Engram.Native.dense_json/1`): no per-float term at all,
-  # and each value printed as its shortest f32 decimal, half the text of the
-  # widened-f64 form for the same stored f32.
-  defp vector_json(dense) when is_binary(dense),
-    do: Jason.Fragment.new(Engram.Native.dense_json(dense))
-
-  # Packed sparse (`KeywordIndex.packed_sparse`), written straight to JSON for
-  # the same reason as the dense leg.
-  defp vector_json(%{indices: indices, values: values}) when is_binary(indices),
-    do: Jason.Fragment.new(Engram.Native.sparse_json(indices, values))
 
   defp embed_for_indexing(texts, opts) do
     n = length(texts)
@@ -3761,6 +3754,28 @@ defmodule Engram.Indexing do
         fn {entry, point_id}, pending -> build_entry(entry, {ctx, point_id}, pending) end
       )
 
+    with {:ok, built} <- keyword_index(note, built),
+         do: prepared_map(note, plan, built, dek, note_payload, rebuild?, flat)
+  end
+
+  # The note's keyword docs go through the keyword store with their note's
+  # user, vault and id. A colocated store (QdrantSparse) hands back the named
+  # vectors to put on each dense point, so the one upsert writes both as before.
+  defp keyword_index(note, built) do
+    scope = %{user_id: note.user_id, vault_id: note.vault_id, note_id: note.id}
+    entries = for %{point: %{id: id}, sparse: s} <- built, do: %{id: id, sparse: s}
+
+    with {:ok, vectors} <- KeywordStore.index(scope, entries) do
+      {:ok, Enum.map(built, &merge_keyword_vectors(&1, vectors))}
+    end
+  end
+
+  defp merge_keyword_vectors(%{point: %{id: id} = p} = built, vectors),
+    do: %{built | point: %{p | vector: Map.merge(p.vector, Map.get(vectors, id, %{}))}}
+
+  defp merge_keyword_vectors(built, _vectors), do: built
+
+  defp prepared_map(note, plan, built, dek, note_payload, rebuild?, flat) do
     mode = if display_ct?(note), do: :sealed, else: :sum
     qdrant_points = for(%{point: p} <- built, p != nil, do: p)
 
@@ -3894,12 +3909,9 @@ defmodule Engram.Indexing do
     #
     # Omit the dense named vector entirely when there is none — Qdrant
     # rejects a null vector, and a partial named-vector upsert is the
-    # supported way to store sparse-only points.
-    named_vectors =
-      case vector do
-        nil -> KeywordStore.point_vectors(sparse)
-        v -> Map.put(KeywordStore.point_vectors(sparse), "dense", v)
-      end
+    # supported way to store sparse-only points. The keyword store adds its
+    # vectors after (`keyword_index/2`).
+    named_vectors = if vector, do: %{"dense" => vector}, else: %{}
 
     # A floor or merged row's length stays out of `avgdl` (see
     # `floor_plan/2`, `cap_chunks/3`).
@@ -3909,7 +3921,8 @@ defmodule Engram.Indexing do
       row: chunk_row(note, chunk, point_id, token_count),
       point: %{id: point_id, vector: named_vectors, payload: note_payload},
       kind: metric_kind(note.path, chunk.kind),
-      dense?: vector != nil
+      dense?: vector != nil,
+      sparse: sparse
     }
 
     {built, rest}

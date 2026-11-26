@@ -50,6 +50,16 @@ defmodule Engram.PromEx.SearchTest do
       refute empty.keep.(%{})
     end
 
+    test "counts filter-only listings on [:engram, :search, :filter_page]" do
+      metrics =
+        PromExMetrics.of(SearchPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
+      assert [%Telemetry.Metrics.Counter{tags: [:status, :surface, :empty]} = c] =
+               Enum.filter(metrics, &(&1.event_name == [:engram, :search, :filter_page]))
+
+      assert c.name == [:engram, :prom_ex, :search, :filter_page, :total]
+    end
+
     test "times filter resolution on [:engram, :search, :filter_resolve], by scope" do
       metrics =
         PromExMetrics.of(SearchPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)

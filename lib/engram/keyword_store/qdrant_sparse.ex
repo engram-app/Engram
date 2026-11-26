@@ -10,20 +10,22 @@ defmodule Engram.KeywordStore.QdrantSparse do
   """
   @behaviour Engram.KeywordStore
 
-  alias Engram.Indexing
   alias Engram.Vector.Qdrant
 
   @vector "keyword"
 
+  # Colocated: nothing to write here, the dense upsert carries the vector.
   @impl true
-  def point_vectors(sparse), do: %{@vector => sparse}
+  def index(_scope, entries), do: {:ok, Map.new(entries, &{&1.id, point_vectors(&1.sparse)})}
+
+  defp point_vectors(sparse), do: %{@vector => sparse}
 
   # Sparse-only update of points that exist (`PUT /points/vectors`): the
   # dense vector and payload stay as they are.
   @impl true
   def upsert(_scope, entries) do
     points =
-      Enum.map(entries, &Indexing.unpack_point(%{id: &1.id, vector: point_vectors(&1.sparse)}))
+      Enum.map(entries, &Qdrant.unpack_point(%{id: &1.id, vector: point_vectors(&1.sparse)}))
 
     Qdrant.update_vectors(Qdrant.collection_name(), points)
   end

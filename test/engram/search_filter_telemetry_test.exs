@@ -15,6 +15,7 @@ defmodule Engram.SearchFilterTelemetryTest do
 
   @stop [:engram, :search, :request, :stop]
   @resolve [:engram, :search, :filter_resolve]
+  @page [:engram, :search, :filter_page]
 
   setup do
     bypass = Bypass.open()
@@ -25,7 +26,7 @@ defmodule Engram.SearchFilterTelemetryTest do
       payload_schema: fn -> %{"n" => %{"data_type" => "uuid"}} end
     )
 
-    ref = :telemetry_test.attach_event_handlers(self(), [@stop, @resolve])
+    ref = :telemetry_test.attach_event_handlers(self(), [@stop, @resolve, @page])
     on_exit(fn -> :telemetry.detach(ref) end)
     {:ok, user} = insert(:user) |> Engram.Crypto.ensure_user_dek()
     %{bypass: bypass, user: user, vault: insert(:vault, user: user), ref: ref}
@@ -90,11 +91,16 @@ defmodule Engram.SearchFilterTelemetryTest do
     assert_received {@stop, ^ref, _, %{surface: :internal}}
   end
 
-  test "a filter-only page counts as scope filter_page", %{user: user, vault: vault, ref: ref} do
-    assert {:ok, %{notes: []}} =
-             Search.filter_page(user, vault, [folder: "Nowhere"], surface: "mcp")
+  test "a filter-only listing counts once on its own event, not as a search",
+       %{user: user, vault: vault, ref: ref} do
+    other = insert(:vault, user: user)
 
-    assert_received {@stop, ^ref, %{result_count: 0},
-                     %{filtered: true, scope: :filter_page, surface: :mcp, empty: true}}
+    # A map filter (`NoteFilter.filter`), surface read from it.
+    assert {:ok, [{^vault, %{notes: []}}, {^other, %{notes: []}}]} =
+             Search.filter_page(user, [vault, other], %{folder: "Nowhere", surface: "mcp"})
+
+    assert_received {@page, ^ref, %{result_count: 0}, %{status: :ok, surface: :mcp, empty: true}}
+    refute_received {@page, ^ref, _, _}
+    refute_received {@stop, ^ref, _, _}
   end
 end

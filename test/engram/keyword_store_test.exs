@@ -22,7 +22,10 @@ defmodule Engram.KeywordStoreTest do
 
   test "QdrantSparse keeps the keyword vector on the dense point" do
     sparse = %{indices: <<1::little-32>>, values: <<1.0::little-float-64>>}
-    assert KeywordStore.point_vectors(sparse) == %{"keyword" => sparse}
+    scope = %{user_id: "u", vault_id: "v", note_id: "n"}
+
+    assert KeywordStore.index(scope, [%{id: "p1", sparse: sparse}]) ==
+             {:ok, %{"p1" => %{"keyword" => sparse}}}
   end
 
   test "empty deletes and upserts never reach the backend" do

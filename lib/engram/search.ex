@@ -324,7 +324,8 @@ defmodule Engram.Search do
   # Filter telemetry (#2697). Filter usage was unobservable: which keys a
   # search sets (span only, sorted keys, never values), how its scope
   # resolved, whether it filtered and who asked (request counter labels), and
-  # how long Postgres took to resolve it.
+  # how long Postgres took to resolve it. Filter-only listings count apart
+  # (`filter_page/4`).
   defp resolve_filter(user, vault, opts) do
     keys = NoteFilter.keys(opts)
 
@@ -366,36 +367,50 @@ defmodule Engram.Search do
   # for (`internal: true`, note auto-placement) or with no surface at all.
   @surface_labels %{"mcp" => :mcp, "api" => :rest, "web" => :web, "obsidian_sync" => :plugin}
 
+  # `opts` may be a keyword list or a map (a `NoteFilter.filter`).
   defp surface_label(opts) do
-    if Keyword.get(opts, :internal, false),
+    if opts[:internal],
       do: :internal,
-      else: Map.get(@surface_labels, Keyword.get(opts, :surface), :internal)
+      else: Map.get(@surface_labels, opts[:surface], :internal)
   end
 
   @doc """
-  A filter-only page (no query): `NoteFilter.page/4`, counted on the search
-  request counter as scope `filter_page`. `opts` are the page opts plus
-  `:surface` (also read from `filter`, where MCP passes it).
+  A filter-only listing (no query): `NoteFilter.page/4` for each vault, in
+  order, as `{:ok, [{vault, page}]}` or the first error. Counted once per
+  call on its own counter (`[:engram, :search, :filter_page]`), not as a
+  search: it touches no Qdrant, embedder or search budget. `opts` are the
+  page opts plus `:surface` (or read from `filter`, where MCP passes it).
   """
-  # Same contract as `NoteFilter.page/4`, whose result it returns.
-  @spec filter_page(map(), map(), NoteFilter.filter(), keyword()) ::
-          {:ok, %{notes: [Engram.Notes.Note.t()], next_cursor: String.t() | nil}}
+  @spec filter_page(map(), [map()], NoteFilter.filter(), keyword()) ::
+          {:ok, [{map(), %{notes: [Engram.Notes.Note.t()], next_cursor: String.t() | nil}}]}
           | {:error, Engram.Search.FieldFilters.error() | :invalid_cursor}
-  def filter_page(user, vault, filter, opts \\ []) do
+  def filter_page(user, vaults, filter, opts \\ []) do
     start = System.monotonic_time()
-    result = NoteFilter.page(user, vault, filter, opts)
-    count = if match?({:ok, %{notes: _}}, result), do: length(elem(result, 1).notes), else: 0
+
+    result =
+      Enum.reduce_while(vaults, {:ok, []}, fn v, {:ok, acc} ->
+        case NoteFilter.page(user, v, filter, opts) do
+          {:ok, page} -> {:cont, {:ok, [{v, page} | acc]}}
+          {:error, _} = err -> {:halt, err}
+        end
+      end)
+      |> then(fn
+        {:ok, pages} -> {:ok, Enum.reverse(pages)}
+        err -> err
+      end)
+
+    count =
+      case result do
+        {:ok, pages} -> pages |> Enum.map(fn {_v, p} -> length(p.notes) end) |> Enum.sum()
+        _ -> 0
+      end
 
     :telemetry.execute(
-      [:engram, :search, :request, :stop],
+      [:engram, :search, :filter_page],
       %{duration: System.monotonic_time() - start, result_count: count},
       %{
         status: search_status(result),
-        cross_vault: false,
-        rerank: :off,
-        filtered: true,
-        scope: :filter_page,
-        surface: surface_label(opts ++ filter),
+        surface: surface_label(if(opts[:surface], do: opts, else: filter)),
         empty: count == 0 and search_status(result) == :ok
       }
     )

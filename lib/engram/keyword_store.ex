@@ -7,6 +7,10 @@ defmodule Engram.KeywordStore do
   keyword data goes through these functions, so the backend can move off
   Qdrant (P2: Tantivy) without touching the callers.
 
+  Every keyword write (`index/2` for the main index pass, `upsert/2` for
+  an in-place rewrite) carries the note's user, vault and id, so a
+  user-sharded backend can route it.
+
   Backend #1 is `Engram.KeywordStore.QdrantSparse`, which is what happened
   before the seam existed: the sparse `keyword` vector lives on the chunk's
   dense Qdrant point. It is the default everywhere (self-host and SaaS), so
@@ -17,16 +21,18 @@ defmodule Engram.KeywordStore do
 
   A colocated backend keeps keyword data on the dense point, so:
 
-    * the main index write puts the backend's `point_vectors/1` on the
-      dense point it upserts anyway (one request, as before);
+    * `index/2` writes nothing and returns the named vectors to put on
+      each dense point, so the one upsert writes both (as before);
     * the delete callbacks are no-ops, because the dense delete at the same
       call site removes the point and its keyword vector with it;
     * `hybrid_search/3` runs both legs in the one Qdrant batch request.
 
-  Every call site still calls the delete functions here, so a backend that
-  stores keywords elsewhere gets every delete. The non-colocated write and
-  hybrid read (dense and keyword in parallel, then `Search.Fusion.rrf/2`)
-  arrive with that backend in P2.
+  A non-colocated backend writes in `index/2` and returns `%{}`. Every
+  delete reaches the backend whether or not the dense delete succeeded
+  (`Engram.Indexing.delete_points/2` and siblings). The parallel hybrid
+  read (dense and keyword legs, then `Search.Fusion.rrf/2`) arrives with
+  that backend in P2, and so does dropping sparse-only points from Qdrant
+  (a chunk with no dense vector has nothing to put there).
 
   ## Filter contract (`search/2`, `hybrid_search/3`)
 
@@ -52,13 +58,22 @@ defmodule Engram.KeywordStore do
 
   @type result :: :ok | {:error, term()}
 
-  @doc "The named vectors a colocated backend adds to the chunk's dense point (`%{}` if none)."
-  @callback point_vectors(KeywordIndex.packed_sparse()) :: map()
+  @doc """
+  Index a note's new keyword docs (the main index pass). Returns, per point
+  id, the named vectors a colocated backend wants on that dense point; a
+  backend that stores keywords elsewhere writes them and returns `%{}`.
+  """
+  @callback index(scope(), [entry()]) :: {:ok, %{point_id() => map()}} | {:error, term()}
 
   @doc "Rewrite the keyword vectors of existing chunk points (resparse, DEK re-key)."
   @callback upsert(scope(), [entry()]) :: result()
 
-  @doc "Delete the listed points. `user_id` is nil when the tenant is unknown (orphan sweep)."
+  @doc """
+  Delete the listed points. `user_id` nil means the tenant is unknown:
+  OrphanSweep's point pass scans Qdrant ids with no payload. A sharded
+  backend may treat that as a no-op and rely on its own orphan pass rather
+  than fan the delete out to every shard.
+  """
   @callback delete_points(user_id() | nil, [point_id()]) :: result()
 
   @doc "Delete one note's points except `keep` (empty: all of them)."
@@ -80,8 +95,9 @@ defmodule Engram.KeywordStore do
   @spec impl() :: module()
   def impl, do: Engram.ServiceConfig.get(:keyword_store, Engram.KeywordStore.QdrantSparse)
 
-  @spec point_vectors(KeywordIndex.packed_sparse()) :: map()
-  def point_vectors(sparse), do: impl().point_vectors(sparse)
+  @spec index(scope(), [entry()]) :: {:ok, %{point_id() => map()}} | {:error, term()}
+  def index(_scope, []), do: {:ok, %{}}
+  def index(scope, entries), do: impl().index(scope, entries)
 
   @spec upsert(scope(), [entry()]) :: result()
   def upsert(_scope, []), do: :ok

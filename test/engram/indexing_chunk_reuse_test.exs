@@ -423,8 +423,8 @@ defmodule Engram.IndexingChunkReuseTest do
       assert length(upserts(ctx.recorder)) == count
       # The rebuild's write-first delete of the note's other points hits the seam.
       assert_received {:keyword_store, :delete_note, [_user, _vault, ^note_id, [_ | _]]}
-      # And every upserted point's keyword vector came from the store.
-      assert_received {:keyword_store, :point_vectors, [_sparse]}
+      # The main write goes through the store, scoped to the note.
+      assert_received {:keyword_store, :index, [%{note_id: ^note_id}, [_ | _]]}
       assert set_payloads(ctx.recorder) == []
     end
   end

@@ -16,11 +16,14 @@ defmodule Engram.PromEx.Search do
 
     * `engram_prom_ex_search_request_total` — tags `[:status,
       :cross_vault, :rerank, :filtered, :scope, :surface]` (#2697): `scope`
-      is none / ids / exclude / too_wide / filter_page, `surface` mcp /
+      is none / ids / exclude / too_wide, `surface` mcp /
       rest / web / plugin / internal. Latency is read from Tempo spans, not
       a histogram here.
     * `engram_prom_ex_search_empty_total` (tag `[:filtered]`): searches
       that returned nothing.
+    * `engram_prom_ex_search_filter_page_total` (tags `[:status, :surface,
+      :empty]`): filter-only listings (`Search.filter_page/4`), one per
+      request. Not searches: no Qdrant, embedder or budget.
     * `engram_prom_ex_search_filter_resolve_milliseconds` (tag `[:scope]`):
       Postgres resolving a search's filter (`[:engram, :search,
       :filter_resolve]`).
@@ -73,6 +76,7 @@ defmodule Engram.PromEx.Search do
   @name_terms_capped_event [:engram, :search, :name_terms, :scan_capped]
   @gate_event [:engram, :search, :gate]
   @filter_resolve_event [:engram, :search, :filter_resolve]
+  @filter_page_event [:engram, :search, :filter_page]
 
   # Emitters that predate the filter labels (#2697) still count.
   @request_defaults %{filtered: false, scope: :none, surface: :internal}
@@ -113,6 +117,12 @@ defmodule Engram.PromEx.Search do
           keep: &(&1[:empty] == true),
           tags: [:filtered],
           tag_values: &Map.merge(@request_defaults, &1)
+        ),
+        counter(
+          metric_prefix ++ [:filter_page, :total],
+          event_name: @filter_page_event,
+          description: "Filter-only listings (no query), by status, surface and empty.",
+          tags: [:status, :surface, :empty]
         ),
         distribution(
           metric_prefix ++ [:filter_resolve, :milliseconds],

@@ -506,8 +506,6 @@ defmodule Engram.Workers.CleanupVaultTest do
       vault: vault,
       note: note
     } do
-      stub_qdrant(bypass)
-
       # Insert a chunk directly
       chunk =
         %Chunk{
@@ -522,7 +520,21 @@ defmodule Engram.Workers.CleanupVaultTest do
         |> Repo.insert!(skip_tenant_check: true)
 
       Engram.KeywordStoreRecorder.install()
+      test_pid = self()
+
+      Bypass.expect(bypass, "POST", "/collections/engram_notes/points/delete", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:qdrant_delete, Jason.decode!(body)})
+        Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "acknowledged"}}))
+      end)
+
       assert :ok = CleanupVault.perform_cleanup(vault.id, user.id)
+
+      # The same filter delete as before the seam: this user, this vault.
+      user_f = Engram.Vector.Qdrant.match_filter(:user, to_string(user.id))
+      vault_f = Engram.Vector.Qdrant.match_filter(:vault, to_string(vault.id))
+      expected = Jason.decode!(Jason.encode!(%{must: [user_f, vault_f]}))
+      assert_received {:qdrant_delete, %{"filter" => ^expected}}
 
       refute Repo.get(Chunk, chunk.id, skip_tenant_check: true)
       # Vault delete reaches the keyword seam.

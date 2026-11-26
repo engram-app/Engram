@@ -38,6 +38,9 @@ defmodule Engram.Workers.PurgeUserVectorsTest do
       Plug.Conn.send_resp(conn, 500, ~s({"status":{"error":"boom"}}))
     end)
 
+    Engram.KeywordStoreRecorder.install()
     assert {:error, _} = perform_job(PurgeUserVectors, %{"user_id" => user_id})
+    # The keyword delete does not wait on the dense one.
+    assert_received {:keyword_store, :delete_user, [^user_id]}
   end
 end
