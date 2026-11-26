@@ -45,4 +45,17 @@ defmodule Engram.KeywordStore.Tantivy.TokenTest do
     assert :error = Token.verify("not-a-token", [@current], @now)
     assert :error = Token.verify("a.b.c", [@current], @now)
   end
+
+  # Review N4: one vector pinned on both sides. native/kwsearch verifies this
+  # exact string (sorted keys, 60 s ttl), so a format drift on either side
+  # fails a test instead of turning every search into a quiet 401.
+  test "cross-language vector: Elixir signs exactly what kwsearch verifies" do
+    assert Token.search(
+             "00000000-0000-4000-8000-000000000001",
+             ["00000000-0000-4000-8000-000000000002"],
+             "0123456789abcdef0123456789abcdef-crosslang",
+             1_800_000_000
+           ) ==
+             "eyJleHAiOjE4MDAwMDAwNjAsInMiOiJzZWFyY2giLCJ1IjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwidiI6WyIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiXX0.CIlleZ0S7lBZSmf774fVt7M7gssJLegZa-yQL7hgPi4"
+  end
 end

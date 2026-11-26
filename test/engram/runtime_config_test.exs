@@ -6,7 +6,9 @@ defmodule Engram.RuntimeConfigTest do
   defp getenv(map), do: fn key -> Map.get(map, key) end
 
   describe "keyword_store/1 (search storage roadmap P2 task 8)" do
-    @kw %{"KWSEARCH_URL" => "https://kw:7700", "KWSEARCH_TOKEN_KEYS" => "cur,next"}
+    @cur String.duplicate("c", 32)
+    @next String.duplicate("n", 40)
+    @kw %{"KWSEARCH_URL" => "https://kw:7700", "KWSEARCH_TOKEN_KEYS" => " #{@cur} , #{@next} "}
 
     test "unset: the sparse store only (self-host, default SaaS)" do
       assert RuntimeConfig.keyword_store(getenv(%{})) == []
@@ -15,7 +17,7 @@ defmodule Engram.RuntimeConfigTest do
     test "KEYWORD_FEED=on: dual-write, reads stay on the sparse store" do
       cfg = RuntimeConfig.keyword_store(getenv(Map.put(@kw, "KEYWORD_FEED", "on")))
       assert cfg[:keyword_feed] == true and cfg[:keyword_read] == :sparse
-      assert cfg[:kwsearch][:token_keys] == ["cur", "next"]
+      assert cfg[:kwsearch][:token_keys] == [@cur, @next], "keys are trimmed"
       assert cfg[:kwsearch][:feed_max_age_h] == 48
     end
 
@@ -48,6 +50,21 @@ defmodule Engram.RuntimeConfigTest do
 
       assert_raise RuntimeError, ~r/KWSEARCH_TOKEN_KEYS/, fn ->
         RuntimeConfig.keyword_store(getenv(%{"KEYWORD_FEED" => "on"}))
+      end
+    end
+
+    # Review N5: the same key rules as kwsearch (`Keys::parse`).
+    test "token keys: under 32 bytes or more than two refuse to boot" do
+      on = Map.put(@kw, "KEYWORD_FEED", "on")
+
+      assert_raise RuntimeError, ~r/32\+ bytes/, fn ->
+        RuntimeConfig.keyword_store(getenv(Map.put(on, "KWSEARCH_TOKEN_KEYS", "#{@cur},short")))
+      end
+
+      three = Enum.join([@cur, @next, @cur], ",")
+
+      assert_raise RuntimeError, ~r/at most two/, fn ->
+        RuntimeConfig.keyword_store(getenv(Map.put(on, "KWSEARCH_TOKEN_KEYS", three)))
       end
     end
   end
