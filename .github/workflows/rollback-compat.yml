@@ -19,6 +19,10 @@
 # separate login. selfhost is ci/compose.database.yml as shipped: one
 # superuser login, folder_marker_delete off, markers kept.
 #
+# Every OLD data migration runs once more through DataMigrationsRunner.run/2
+# in phase 3 (none may return :error or log a failure). Pair checks live in
+# ci/rollback-compat/<checks>/hooks.sh.
+#
 # Asserts: OLD reads explicit folders from the flag (as prod), the reconcile
 # cleared 0 explicit flags (SQL before/after), FORCE RLS still on for folders
 # and notes after NEW's boot, OLD logged 0 error lines, and /folders/explicit
@@ -167,12 +171,6 @@ jobs:
             dc logs --no-color engram > "$LOGS/$1.log" 2>&1 || true
             dc stop engram
           }
-          explicit_ids() {
-            sql "SELECT id FROM folders WHERE explicit AND deleted_at IS NULL ORDER BY id"
-          }
-          unstamped() {
-            sql "SELECT count(*) FROM folders WHERE explicit AND explicit_seq IS NULL AND deleted_at IS NULL"
-          }
           rls_forced() {
             for t in folders notes; do
               f=$(sql "SELECT relforcerowsecurity FROM pg_class WHERE oid = 'public.$t'::regclass")
@@ -180,125 +178,93 @@ jobs:
               [ "$f" = t ] || fail "FORCE ROW LEVEL SECURITY is off on $t after $1"
             done
           }
+          # The pair's checks (hook_* functions).
+          . "$CHECKS_DIR/hooks.sh"
           SH
 
       - name: "Phase 1: OLD on a fresh DB, seed, close its ledgers"
         run: |
           . "$RUNNER_TEMP/rbc-lib.sh"
           ENGRAM_CI_IMAGE="$OLD_IMAGE" dc up -d --no-build --wait
-          python3 e2e/scripts/rollback_compat.py seed-old --api-url "$API" --state "$STATE"
-          echo "unstamped explicit rows after OLD's seed: $(unstamped)"
-          out=$(rpc old-ledgers.exs)
-          echo "$out"
-          [ "$(val LEDGERS_DONE "$out")" = true ] || fail "OLD's ledgers did not close in phase 1"
-          [ "$(val EXPLICIT_READS "$out")" = true ] || fail "OLD does not read explicit folders from the flag after phase 1"
-          markers=$(sql "SELECT count(*) FROM notes WHERE kind = 'folder' AND deleted_at IS NULL")
-          echo "live folder markers: $markers"
           if [ "$SHAPE" = prod ]; then
-            [ "$markers" -eq 0 ] || fail "prod shape: $markers live folder markers left (folder_marker_delete should have deleted them)"
             # The app's login must be the restricted role, so RLS binds it.
             sql "SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname IN ('engram_app', 'engram_maintenance') ORDER BY 1" | tee "$RUNNER_TEMP/roles.txt"
             grep -qx 'engram_app|f|f' "$RUNNER_TEMP/roles.txt" || fail "engram_app is superuser or BYPASSRLS"
             app=$(sql "SELECT count(*) FROM pg_stat_activity WHERE usename = 'engram_app'")
             echo "engram_app sessions: $app"
             [ "$app" -ge 1 ] || fail "prod shape: the app is not connected as engram_app"
-          else
-            n=$(unstamped)
-            # Without one, NEW's boot stamp is not exercised and the run proves less.
-            [ "$n" -ge 1 ] || fail "selfhost shape: OLD left no unstamped explicit row, so NEW's boot stamp is not exercised"
           fi
+          hook_seed_old
           halt old-seed
-          # Record every DDL command NEW's boot runs, DO blocks included
-          # (event triggers fire inside plpgsql). pg_class xmin cannot tell:
-          # prepare_database re-GRANTs on every boot.
-          sql "CREATE TABLE rbc_ddl_log (tag text, obj text);
-            CREATE FUNCTION rbc_ddl() RETURNS event_trigger LANGUAGE plpgsql AS \$\$
-            DECLARE r record;
-            BEGIN
-              FOR r IN SELECT * FROM pg_event_trigger_ddl_commands() LOOP
-                INSERT INTO rbc_ddl_log VALUES (r.command_tag, r.object_identity);
-              END LOOP;
-            END \$\$;
-            CREATE EVENT TRIGGER rbc_ddl ON ddl_command_end EXECUTE FUNCTION rbc_ddl();"
-          # The boot migration's early return is exactly this ledger state.
-          sql "SELECT name FROM data_migrations WHERE name IN ('explicit_folder_reconcile', 'folder_marker_delete') AND completed_at IS NOT NULL ORDER BY 1" | tr '\n' ' '; echo "<- ledgers done before NEW boots"
+          hook_before_new
 
       - name: "Phase 2: NEW migrates (Release.migrate + boot migrations) and seeds"
         run: |
           . "$RUNNER_TEMP/rbc-lib.sh"
           boot "$NEW_IMAGE"
-          n=$(unstamped)
-          echo "unstamped explicit rows after NEW's boot: $n"
-          [ "$n" -eq 0 ] || fail "NEW's boot left $n explicit rows unstamped"
           rls_forced "NEW's boot"
-          sql "SELECT tag || ' ' || obj FROM rbc_ddl_log" | sort | uniq -c | sed 's/^/DDL during NEW boot: /'
-          alter=$(sql "SELECT count(*) FROM rbc_ddl_log WHERE tag = 'ALTER TABLE' AND obj = 'public.folders'")
-          sql "DROP EVENT TRIGGER rbc_ddl; DROP FUNCTION rbc_ddl(); DROP TABLE rbc_ddl_log"
-          out=$(rpc new-probe.exs)
-          echo "$out"
-          if [ "$SHAPE" = prod ]; then
-            [ "$alter" -eq 0 ] || fail "prod shape: NEW's boot ran ALTER TABLE on folders $alter times (its boot migration did not take the early return)"
-          else
-            # The probe itself: the self-host boot does toggle FORCE RLS.
-            [ "$alter" -ge 1 ] || fail "selfhost shape: no ALTER TABLE on folders seen during NEW's boot (DDL probe blind?)"
-            [ "$(val MARKER_STOP "$out")" = true ] || fail "prod shape: NEW's writers are not on the marker stop path"
-          fi
-          python3 e2e/scripts/rollback_compat.py seed-new --api-url "$API" --state "$STATE" --fault "$FAULT"
-          if [ "$FAULT" = "unstamped-row" ]; then
-            # The newest live explicit row ("Unstamped"; folder ids are uuidv7).
-            sql "UPDATE folders SET explicit_seq = NULL WHERE id = (SELECT id FROM folders WHERE explicit AND deleted_at IS NULL ORDER BY id DESC LIMIT 1) RETURNING id"
-          fi
-          echo "explicit rows: $(explicit_ids | wc -l), unstamped: $(unstamped)"
+          hook_after_new_boot
           halt new
-          explicit_ids > "$RUNNER_TEMP/explicit-before.txt"
+          hook_snapshot > "$RUNNER_TEMP/snapshot-before.txt"
 
-      - name: "Phase 3: rollback, OLD runs its reconcile"
+      - name: "Phase 3: rollback, every OLD data migration, then the pair's reconcile"
         run: |
           . "$RUNNER_TEMP/rbc-lib.sh"
+          since=$(sql "SELECT now()")
           boot "$OLD_IMAGE"
-          # OLD's @reboot DataMigrationsRunner may already be walking; let it
-          # finish so the after-snapshot sees everything it did.
-          for _ in $(seq 1 120); do
-            busy=$(sql "SELECT count(*) FROM oban_jobs WHERE worker = 'Engram.Workers.DataMigrationsRunner' AND state IN ('available', 'executing', 'retryable')")
-            [ "$busy" -eq 0 ] && break
-            sleep 1
+          # OLD's @reboot DataMigrationsRunner job: wait for Oban to insert it
+          # and for it to finish, so it cannot race the passes below.
+          for _ in $(seq 1 180); do
+            st=$(sql "SELECT string_agg(state, ',') FROM oban_jobs WHERE worker = 'Engram.Workers.DataMigrationsRunner' AND inserted_at > '$since'")
+            case "$st" in *available*|*executing*|*retryable*|*scheduled*|"") sleep 1 ;; *) break ;; esac
           done
-          [ "$busy" -eq 0 ] || echo "::warning::OLD's @reboot DataMigrationsRunner still busy after 120 s"
-          out=$(rpc old-reconcile.exs)
+          rls_forced "OLD's rollback boot"
+          echo "OLD's @reboot DataMigrationsRunner jobs: ${st:-none}"
+          grep -q completed <<<"$st" || fail "OLD's @reboot DataMigrationsRunner did not complete (states: ${st:-none})"
+          # Every OLD data migration once through the runner's entry point, a
+          # re-verify forced, so each meets NEW's schema and data.
+          out=$(dc exec -T engram /app/bin/engram rpc '
+            for m <- Engram.Workers.DataMigrationsRunner.migrations() do
+              IO.puts("MIGRATION #{m.name()}=#{inspect(Engram.Workers.DataMigrationsRunner.run(m, true))}")
+            end')
           echo "$out"
-          result=$(val RECONCILE_RESULT "$out")
-          # :more with no fault means a row was skipped on a lock, unexamined.
-          if [ "$FAULT" = none ]; then want=':done'; else want=':(done|more)'; fi
-          grep -qxE "$want" <<<"$result" || fail "OLD's reconcile returned '$result', want $want"
-          explicit_ids > "$RUNNER_TEMP/explicit-after.txt"
-          cleared=$(comm -23 "$RUNNER_TEMP/explicit-before.txt" "$RUNNER_TEMP/explicit-after.txt" | wc -l)
-          echo "explicit rows before: $(wc -l < "$RUNNER_TEMP/explicit-before.txt"), after: $(wc -l < "$RUNNER_TEMP/explicit-after.txt"), cleared: $cleared"
-          [ "$cleared" -eq 0 ] || fail "OLD's reconcile cleared $cleared explicit flags: $(comm -23 "$RUNNER_TEMP/explicit-before.txt" "$RUNNER_TEMP/explicit-after.txt" | tr '\n' ' ')"
+          echo "$out" > "$RUNNER_TEMP/migrations.txt"
+          ran=$(grep -c '^MIGRATION ' <<<"$out" || true)
+          [ "$ran" -ge 1 ] || fail "OLD's runner ran no data migration"
+          grep -E '^MIGRATION .*=:error$' <<<"$out" && fail "OLD data migrations returned :error: $(grep -E '=:error$' <<<"$out" | tr '\n' ' ')"
+          hook_old_reconcile
+          hook_snapshot > "$RUNNER_TEMP/snapshot-after.txt"
+          lost=$(comm -23 "$RUNNER_TEMP/snapshot-before.txt" "$RUNNER_TEMP/snapshot-after.txt" | wc -l)
+          echo "snapshot rows before: $(wc -l < "$RUNNER_TEMP/snapshot-before.txt"), after: $(wc -l < "$RUNNER_TEMP/snapshot-after.txt"), lost: $lost"
+          [ "$lost" -eq 0 ] || fail "OLD's data migrations lost $lost rows of the snapshot: $(comm -23 "$RUNNER_TEMP/snapshot-before.txt" "$RUNNER_TEMP/snapshot-after.txt" | tr '\n' ' ')"
 
-      - name: "Phase 3: OLD lists, renames, deletes"
+      - name: "Phase 3: OLD serves the data"
         run: |
           . "$RUNNER_TEMP/rbc-lib.sh"
-          out=$(rpc old-probe.exs)
-          echo "$out"
-          # The listing check only sees a lost flag when OLD lists from the flag.
-          [ "$(val EXPLICIT_READS "$out")" = true ] || fail "OLD lists explicit folders from markers, not the flag, so the listing check is blind"
-          python3 e2e/scripts/rollback_compat.py verify-old --api-url "$API" --state "$STATE" \
-            || fail "OLD's listings after the rollback do not match the seeded folders"
+          hook_verify_old
 
       - name: "Phase 3: OLD logged no errors"
         run: |
           . "$RUNNER_TEMP/rbc-lib.sh"
           halt old-rollback
-          # LoggerJSON severity, plus any plain-text [error] (boot evals, crash reports).
-          pat='"severity":"(error|critical|alert|emergency)"|\[error\]'
+          log="$LOGS/old-rollback.log"
+          # LoggerJSON severity, plain-text [error] (boot evals, crash
+          # reports), and the runner's warning-level failures.
+          pat='"severity":"(error|critical|alert|emergency)"|\[error\]|data migration (pass failed|summary failed|stuck)'
           # prod shape: the app must not be on a role that bypasses RLS.
-          [ "$SHAPE" = prod ] && pat="$pat|RLS NOT enforced"
-          errors=$(grep -cE "$pat" "$LOGS/old-rollback.log" || true)
+          if [ "$SHAPE" = prod ]; then pat="$pat|RLS NOT enforced"; fi
+          errors=$(grep -cE "$pat" "$log" || true)
           echo "error lines in OLD's log after the rollback: $errors"
           if [ "$errors" -ne 0 ]; then
-            grep -E "$pat" "$LOGS/old-rollback.log" | head -20
+            grep -E "$pat" "$log" | head -20
             fail "OLD logged $errors error lines after the rollback"
           fi
+          # The runner's own log: one `data migration pass` line per pass
+          # that ran (a forced re-verify logs even a clean :done).
+          want=$(grep -cvE '=:skipped$' "$RUNNER_TEMP/migrations.txt" || true)
+          got=$(grep -c 'data migration pass"' "$log" || true)
+          echo "runner passes: $want non-skipped results, $got 'data migration pass' log lines"
+          [ "$got" -ge "$want" ] || fail "OLD's runner logged $got passes for $want non-skipped migrations"
 
       - name: Verdict
         run: |

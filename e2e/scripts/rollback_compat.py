@@ -7,15 +7,16 @@ upgrade followed by a rollback). This script is the client side of each phase:
   seed-old    On OLD, before the upgrade: a self-host user, a vault and two
               marker-era explicit folders ("Legacy", "Legacy/Child"). NEW's
               boot stamps them (`explicit_seq = 0`); the workflow checks that.
-  seed-new    On NEW: a root ("Root"), a nested ("Root/Nested") and a moved
-              ("Mover" -> "Root/Moved") folder, all stamped by NEW's writers,
-              and a root-only rename ("Legacy" -> "Renamed") that leaves the
-              child's path hash stale, the case the boot stamp exists for.
+  seed-new    On NEW, every writer that makes or keeps a row explicit: create,
+              move, nested rename, a root-only rename that leaves a child's
+              path hash stale ("Legacy" -> "Renamed"), a folder a note
+              implied first, a batch create, a revive, a trash restore and a
+              merge restore. Snapshots the tree's (id, parent_id) per folder.
               `--fault unstamped-row` also creates "Unstamped", which the
               workflow then unstamps in SQL (what a missing stamp leaves).
   verify-old  On OLD after the rollback: /folders/explicit and the vault
-              tree list exactly the seeded set, then a rename and a delete
-              through OLD and both listings again.
+              tree list exactly the seeded set with NEW's ids and parents,
+              then a rename and a delete through OLD and both again.
 
 State (API key, vault id, expected folders) lives in a 0600 JSON file the
 workflow keeps in $RUNNER_TEMP; nothing secret is printed.
@@ -72,35 +73,83 @@ def seed_old(api_url: str, state: str) -> None:
     print(f"seed-old: created {LEGACY}")
 
 
+def _mcp(client: ApiClient, data: dict, tool: str, args: dict) -> dict:
+    return client.mcp_tool(tool, {"vault_id": data["vault_id"], **args})["structuredContent"]
+
+
+def _delete_op(client: ApiClient, data: dict, folder: str) -> str:
+    op = _mcp(client, data, "delete_folder", {"folder": folder}).get("delete_op_id")
+    if not op:
+        raise SystemExit(f"MCP delete_folder {folder}: no delete_op_id")
+    return op
+
+
 def seed_new(api_url: str, state: str, fault: str) -> None:
+    """Every NEW writer that makes or keeps a row explicit, once each."""
     data = _load(state)
     client = _client(api_url, data)
+    # create: a root, a nested folder, one to move.
     for folder in ("Root", "Root/Nested", "Mover"):
         _expect(f"create {folder}", client.create_folder(folder), (200, 201))
+    # move, nested rename, root-only rename (leaves Legacy/Child's path hash stale).
     _expect("move Mover -> Root/Moved", client.rename_folder("Mover", "Root/Moved"), (200,))
+    _expect("rename Root/Nested -> Root/Inner", client.rename_folder("Root/Nested", "Root/Inner"), (200,))
     _expect("rename Legacy -> Renamed", client.rename_folder("Legacy", "Renamed"), (200,))
-    expected = {"Renamed", "Renamed/Child", "Root", "Root/Nested", "Root/Moved"}
+    # A folder a note implied first, then made explicit (an existing implicit row).
+    client.create_note("Implied/note.md", "implied by a note")
+    _expect("create Implied", client.create_folder("Implied"), (200, 201))
+    # Batch create (the plugin's push path): two leaves, their parent stays implicit.
+    resp = client.session.post(
+        f"{client.base_url}/folders/batch", json={"folders": ["Batch/One", "Batch/Two"]}, timeout=10
+    )
+    _expect("batch create Batch/One, Batch/Two", resp.status_code, (200, 201))
+    # Revive: delete, then create at the same path.
+    _expect("create Revived", client.create_folder("Revived"), (200, 201))
+    _expect("delete Revived", client.delete_folder("Revived"), (200, 204))
+    _expect("re-create Revived", client.create_folder("Revived"), (200, 201))
+    # Trash restore.
+    _expect("create Trashed", client.create_folder("Trashed"), (200, 201))
+    _mcp(client, data, "restore_deleted", {"op_id": _delete_op(client, data, "Trashed")})
+    # Merge restore: restore a deleted folder onto a live one at its path (the keeper).
+    _expect("create Merged", client.create_folder("Merged"), (200, 201))
+    op = _delete_op(client, data, "Merged")
+    _expect("re-create Merged", client.create_folder("Merged"), (200, 201))
+    _mcp(client, data, "restore_deleted", {"op_id": op})
+    expected = {
+        "Renamed", "Renamed/Child", "Root", "Root/Inner", "Root/Moved", "Implied",
+        "Batch/One", "Batch/Two", "Revived", "Trashed", "Merged",
+    }
     if fault == "unstamped-row":
         # Created LAST: the workflow unstamps the newest explicit row by id (uuidv7).
         _expect("create Unstamped", client.create_folder("Unstamped"), (200, 201))
         expected.add("Unstamped")
     data["expected"] = sorted(expected)
+    data["tree"] = _tree_rows(client.get_vault_tree())
+    errors = _check(client, expected, "NEW after seeding", data["tree"])
+    if errors:
+        raise SystemExit("NEW's own listings do not match its seed: " + "; ".join(errors))
     _save(state, data)
     print(f"seed-new: expected explicit folders {data['expected']}")
 
 
-def _note_folders(tree: dict) -> set[str]:
-    """Every ancestor folder of the tree's notes and attachments."""
+def _ancestors(path: str) -> set[str]:
     out = set()
-    for row in (tree.get("notes") or []) + (tree.get("attachments") or []):
-        d = posixpath.dirname(row["path"])
-        while d:
-            out.add(d)
-            d = posixpath.dirname(d)
+    d = posixpath.dirname(path)
+    while d:
+        out.add(d)
+        d = posixpath.dirname(d)
     return out
 
 
-def _check(client: ApiClient, expected: set[str], label: str) -> list[str]:
+def _tree_rows(tree: dict) -> dict[str, list]:
+    """Tree folders by name: [id, parent_id], what a client keys on."""
+    return {f["name"]: [f.get("id"), f.get("parent_id")] for f in tree.get("folders") or [] if f["name"]}
+
+
+def _check(client: ApiClient, expected: set[str], label: str, rows: dict | None = None) -> list[str]:
+    """Explicit names equal `expected`; tree folders are those plus their
+    ancestors and every note's folders; with `rows`, each tree folder keeps
+    the id and parent id NEW served."""
     errors = []
     explicit = client.get_explicit_folders()
     if explicit != expected:
@@ -109,14 +158,19 @@ def _check(client: ApiClient, expected: set[str], label: str) -> list[str]:
             f"extra {sorted(explicit - expected)}"
         )
     tree = client.get_vault_tree()
-    folders = {f["name"] for f in tree.get("folders") or [] if f["name"]}
-    want = expected | _note_folders(tree)
-    if folders != want:
+    got = _tree_rows(tree)
+    want = set(expected)
+    for p in expected | {r["path"] for r in (tree.get("notes") or []) + (tree.get("attachments") or [])}:
+        want |= _ancestors(p)
+    if set(got) != want:
         errors.append(
-            f"{label}: /vault/tree folders missing {sorted(want - folders)}, "
-            f"extra {sorted(folders - want)}"
+            f"{label}: /vault/tree folders missing {sorted(want - set(got))}, "
+            f"extra {sorted(set(got) - want)}"
         )
-    print(f"{label}: explicit={sorted(explicit)} tree={sorted(folders)}")
+    for name, ids in sorted((rows or {}).items()):
+        if name in got and got[name] != ids:
+            errors.append(f"{label}: {name} is {got[name]} (id, parent_id), NEW served {ids}")
+    print(f"{label}: explicit={sorted(explicit)} tree={sorted(got)}")
     return errors
 
 
@@ -124,16 +178,20 @@ def verify_old(api_url: str, state: str) -> None:
     data = _load(state)
     client = _client(api_url, data)
     expected = set(data["expected"])
-    errors = _check(client, expected, "after rollback")
+    rows = data["tree"]
+    errors = _check(client, expected, "after rollback", rows)
 
-    status = client.rename_folder("Root/Nested", "Root/Nested2")
+    status = client.rename_folder("Root/Inner", "Root/Inner2")
     if status != 200:
-        errors.append(f"rename Root/Nested -> Root/Nested2 on OLD: HTTP {status}")
+        errors.append(f"rename Root/Inner -> Root/Inner2 on OLD: HTTP {status}")
     status = client.delete_folder("Root/Moved")
     if status not in (200, 204):
         errors.append(f"delete Root/Moved on OLD: HTTP {status}")
-    expected = (expected - {"Root/Nested", "Root/Moved"}) | {"Root/Nested2"}
-    errors += _check(client, expected, "after OLD rename + delete")
+    expected = (expected - {"Root/Inner", "Root/Moved"}) | {"Root/Inner2"}
+    # The renamed folder keeps its id and parent; the rest are untouched.
+    rows = {k: v for k, v in rows.items() if k not in ("Root/Inner", "Root/Moved")}
+    rows["Root/Inner2"] = data["tree"].get("Root/Inner")
+    errors += _check(client, expected, "after OLD rename + delete", rows)
 
     for e in errors:
         print(f"::error::{e}")
