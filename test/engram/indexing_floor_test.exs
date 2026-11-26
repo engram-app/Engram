@@ -260,7 +260,7 @@ defmodule Engram.IndexingFloorTest do
       # The floor's stale and except deletes reach the keyword seam, keeping the floor point.
       note_id = note.id
       [%{qdrant_point_id: floor_id}] = chunk_rows(note)
-      assert_received {:keyword_store, :delete_note, [_user, _vault, ^note_id, keep]}
+      assert_received {:keyword_store, :delete_note, [_user, _vault, ^note_id, keep, :replaced]}
       assert floor_id in keep
       assert by_id in must
       refute inspect(must) =~ ~s("p")

@@ -139,7 +139,7 @@ defmodule Engram.Accounts.LifecycleTest do
 
       assert_received {:qdrant_delete, %{"filter" => ^expected}}
       user_id = to_string(user.id)
-      assert_received {:keyword_store, :delete_user, [^user_id]}
+      assert_received {:keyword_store, :delete_user, [^user_id, :soft]}
     end
 
     test "sets users.deleted_at, revokes refresh tokens, emits telemetry" do
