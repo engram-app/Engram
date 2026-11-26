@@ -160,8 +160,10 @@ jobs:
           sql() { dc exec -T postgres psql -U engram -d engram -v ON_ERROR_STOP=1 -Atc "$1"; }
           fail() { echo "::error::$1"; echo "$1" >> "$FAILURES"; }
           # Run a checks snippet on the running node; `mode` is bound for it.
+          # Its Logger lines come back on the rpc's stdout, not the container
+          # log, so every rpc output is kept for the phase's error scan.
           rpc() { dc exec -T engram /app/bin/engram rpc "mode = \"$SHAPE\"
-          $(cat "$CHECKS_DIR/$1")"; }
+          $(cat "$CHECKS_DIR/$1")" | tee -a "$LOGS/rpc-${RPC_LOG:-misc}.log"; }
           # Value of a KEY=value line in rpc output.
           val() { grep -oE "^$1=.*" <<<"$2" | tail -1 | cut -d= -f2-; }
           # Boot IMAGE as the engram service (recreates the container; Postgres stays).
@@ -208,6 +210,8 @@ jobs:
           hook_snapshot > "$RUNNER_TEMP/snapshot-before.txt"
 
       - name: "Phase 3: rollback, every OLD data migration, then the pair's reconcile"
+        env:
+          RPC_LOG: old-rollback
         run: |
           . "$RUNNER_TEMP/rbc-lib.sh"
           since=$(sql "SELECT now()")
@@ -226,9 +230,8 @@ jobs:
           out=$(dc exec -T engram /app/bin/engram rpc '
             for m <- Engram.Workers.DataMigrationsRunner.migrations() do
               IO.puts("MIGRATION #{m.name()}=#{inspect(Engram.Workers.DataMigrationsRunner.run(m, true))}")
-            end')
+            end' | tee -a "$LOGS/rpc-old-rollback.log")
           echo "$out"
-          echo "$out" > "$RUNNER_TEMP/migrations.txt"
           ran=$(grep -c '^MIGRATION ' <<<"$out" || true)
           [ "$ran" -ge 1 ] || fail "OLD's runner ran no data migration"
           grep -E '^MIGRATION .*=:error$' <<<"$out" && fail "OLD data migrations returned :error: $(grep -E '=:error$' <<<"$out" | tr '\n' ' ')"
@@ -239,6 +242,8 @@ jobs:
           [ "$lost" -eq 0 ] || fail "OLD's data migrations lost $lost rows of the snapshot: $(comm -23 "$RUNNER_TEMP/snapshot-before.txt" "$RUNNER_TEMP/snapshot-after.txt" | tr '\n' ' ')"
 
       - name: "Phase 3: OLD serves the data"
+        env:
+          RPC_LOG: old-rollback
         run: |
           . "$RUNNER_TEMP/rbc-lib.sh"
           hook_verify_old
@@ -247,24 +252,27 @@ jobs:
         run: |
           . "$RUNNER_TEMP/rbc-lib.sh"
           halt old-rollback
-          log="$LOGS/old-rollback.log"
+          # The container log and every phase-3 rpc output (where the
+          # runner's own Logger lines land).
+          logs=("$LOGS/old-rollback.log" "$LOGS/rpc-old-rollback.log")
           # LoggerJSON severity, plain-text [error] (boot evals, crash
-          # reports), and the runner's warning-level failures.
+          # reports, rpc output), and the runner's warning-level failures.
           pat='"severity":"(error|critical|alert|emergency)"|\[error\]|data migration (pass failed|summary failed|stuck)'
           # prod shape: the app must not be on a role that bypasses RLS.
           if [ "$SHAPE" = prod ]; then pat="$pat|RLS NOT enforced"; fi
-          errors=$(grep -cE "$pat" "$log" || true)
-          echo "error lines in OLD's log after the rollback: $errors"
+          errors=$(cat "${logs[@]}" | grep -cE "$pat" || true)
+          echo "error lines in OLD's log and rpc output after the rollback: $errors"
           if [ "$errors" -ne 0 ]; then
-            grep -E "$pat" "$log" | head -20
+            cat "${logs[@]}" | grep -E "$pat" | head -20
             fail "OLD logged $errors error lines after the rollback"
           fi
-          # The runner's own log: one `data migration pass` line per pass
-          # that ran (a forced re-verify logs even a clean :done).
-          want=$(grep -cvE '=:skipped$' "$RUNNER_TEMP/migrations.txt" || true)
-          got=$(grep -c 'data migration pass"' "$log" || true)
-          echo "runner passes: $want non-skipped results, $got 'data migration pass' log lines"
-          [ "$got" -ge "$want" ] || fail "OLD's runner logged $got passes for $want non-skipped migrations"
+          # The runner's own log: a pass that returns :done always logs
+          # `data migration pass` (a :more with nothing fixed does not).
+          want=$(grep -cE '^MIGRATION .*=:done$' "$LOGS/rpc-old-rollback.log" || true)
+          got=$(grep -cE '\[info\] data migration pass$|"message":"data migration pass"' "$LOGS/rpc-old-rollback.log" || true)
+          echo "runner: $want :done results, $got 'data migration pass' log lines"
+          [ "$want" -ge 1 ] || fail "OLD's runner returned no :done pass"
+          [ "$got" -ge "$want" ] || fail "OLD's runner logged $got passes for $want :done results"
 
       - name: Verdict
         run: |
