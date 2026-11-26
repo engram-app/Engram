@@ -6,15 +6,15 @@ defmodule Engram.FolderRows do
   alias Engram.Crypto.Envelope
   alias Engram.Repo
 
-  @doc "Inserts one folder row; returns its id. Opts: `:parent`, `:full_path_hmac`, `:deleted_at`."
+  @doc "Inserts one folder row; returns its id. Opts: `:parent`, `:deleted_at`."
   def insert!(user, vault, name_hmac, opts \\ []) do
     id = Ecto.UUID.generate()
 
     Repo.query!(
       """
       INSERT INTO folders (id, vault_id, user_id, parent_id, name_ciphertext, name_nonce,
-                           name_hmac, full_path_hmac, dek_version, deleted_at)
-      VALUES ($1, $2, $3, $4, '\\x00', '\\x00', $5, $6, 2, $7)
+                           name_hmac, dek_version, deleted_at)
+      VALUES ($1, $2, $3, $4, '\\x00', '\\x00', $5, 2, $6)
       """,
       [
         Ecto.UUID.dump!(id),
@@ -22,7 +22,6 @@ defmodule Engram.FolderRows do
         Ecto.UUID.dump!(user.id),
         opts[:parent] && Ecto.UUID.dump!(opts[:parent]),
         name_hmac,
-        opts[:full_path_hmac],
         opts[:deleted_at]
       ]
     )
@@ -131,8 +130,8 @@ defmodule Engram.FolderRows do
 
   @doc """
   A folder rename that writes ONE folder row and nothing else (the S5 write
-  shape, `notes_cascaded = false`): its own name and path key move, its
-  descendants' `full_path_hmac` and the notes under it keep the old path.
+  shape, `notes_cascaded = false`): its own name moves, the notes under it
+  keep the old path.
   """
   def move_uncascaded!(user, folder_id, new_name) do
     alias Engram.Folders.Rows
@@ -141,22 +140,10 @@ defmodule Engram.FolderRows do
     {:ok, fk} = Crypto.dek_filter_key(user)
     {ct, nonce} = Rows.encrypt_name(dek, folder_id, new_name)
 
-    %{rows: [[vault_id]]} =
-      Repo.query!(
-        "UPDATE folders SET name_ciphertext = $2, name_nonce = $3, name_hmac = $4, " <>
-          "notes_cascaded = false WHERE id = $1 RETURNING vault_id",
-        [Ecto.UUID.dump!(folder_id), ct, nonce, Rows.name_hmac(fk, new_name)]
-      )
-
-    # Its own path key too (S5 keeps that one row's keys current).
-    {:ok, path} =
-      Repo.with_tenant!(user.id, fn ->
-        Rows.path_by_id(user, Ecto.UUID.load!(vault_id), folder_id)
-      end)
-
-    Repo.query!("UPDATE folders SET full_path_hmac = $2 WHERE id = $1", [
-      Ecto.UUID.dump!(folder_id),
-      Rows.path_hmac(fk, path)
-    ])
+    Repo.query!(
+      "UPDATE folders SET name_ciphertext = $2, name_nonce = $3, name_hmac = $4, " <>
+        "notes_cascaded = false WHERE id = $1",
+      [Ecto.UUID.dump!(folder_id), ct, nonce, Rows.name_hmac(fk, new_name)]
+    )
   end
 end

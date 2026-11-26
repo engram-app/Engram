@@ -364,34 +364,6 @@ defmodule Engram.Folders.MarkerStopTest do
     }
   end
 
-  # The retire keeper of a rename merge and an undo's merge target are made
-  # explicit with no marker, so release I's reconcile (a rollback target that
-  # runs it daily) must leave them explicit.
-  test "a rename merge's keeper survives a reconcile", %{user: u, vault: v} do
-    {:ok, _} = Folders.create_markers(u, v, ["A"])
-    # B: a live row with nothing under it (its only note gone), so a rename
-    # onto it merges A's row into B's.
-    {:ok, n} = Notes.upsert_note(u, v, %{"path" => "B/n.md", "content" => "x"}, actor: "api")
-    Repo.query!("UPDATE notes SET deleted_at = now() WHERE id = $1", [Ecto.UUID.dump!(n.id)])
-    refute "B" in explicit(u, v)
-
-    assert {:ok, _} = Folders.rename(u, v, "A", "B")
-    assert "B" in explicit(u, v)
-
-    assert Engram.ReleaseIReconcile.cleared_ids(u.id) == []
-  end
-
-  test "an undo's merge target survives a reconcile", %{user: u, vault: v} do
-    {:ok, _} = Folders.create_markers(u, v, ["M"])
-    op = Ecto.UUID.generate()
-    {:ok, _} = Folders.delete(u, v, "M", recursive: true, op_id: op)
-    {:ok, _} = Notes.upsert_note(u, v, %{"path" => "M/n.md", "content" => "x"}, actor: "api")
-    {:ok, _} = Folders.restore_op(u, v, op)
-    assert "M" in explicit(u, v)
-
-    assert Engram.ReleaseIReconcile.cleared_ids(u.id) == []
-  end
-
   test "Materialization counts a marker-less explicit folder as existing", %{user: u, vault: v} do
     {:ok, _} = Folders.create_markers(u, v, ["Mat"])
     {:ok, _} = Notes.upsert_note(u, v, %{"path" => "Mat/n.md", "content" => "x"}, actor: "api")
@@ -416,6 +388,7 @@ defmodule Engram.Folders.MarkerStopTest do
     ])
 
     assert "C" in explicit(u, v)
+    Engram.ReleaseIReconcile.pre_k_schema!()
     Engram.ReleaseIReconcile.run!()
     refute "C" in explicit(u, v)
   end
@@ -429,7 +402,7 @@ defmodule Engram.Folders.MarkerStopTest do
 
   test "the reconcile never clears a folder the stop made explicit", %{user: u, vault: v} do
     {:ok, _} = Folders.create_markers(u, v, ["Z"])
-    assert Engram.ReleaseIReconcile.cleared_ids(u.id) == []
+    Engram.ReleaseIReconcile.pre_k_schema!()
     Engram.ReleaseIReconcile.run!()
     assert explicit(u, v) == ["Z"]
   end

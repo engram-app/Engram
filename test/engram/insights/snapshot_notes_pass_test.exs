@@ -37,8 +37,7 @@ defmodule Engram.Insights.SnapshotNotesPassTest do
     rich = insert(:vault, user: user)
     # Each note folder has its row and the note its reference, as a writer
     # sets it (the count reads references, not hashes).
-    [r1, r2, r4] =
-      for f <- [f1, f2, f4], do: FolderRows.insert!(user, rich, h(), full_path_hmac: f)
+    [r1, r2, r4] = for _ <- 1..3, do: FolderRows.insert!(user, rich, h())
 
     note = &insert(:note, Keyword.merge([user: user, vault: rich], &1))
     note.(folder_hmac: f1, folder_ref_id: r1, tags_hmac: [t1, t2])
@@ -52,7 +51,7 @@ defmodule Engram.Insights.SnapshotNotesPassTest do
     note.(folder_hmac: h(), tags_hmac: [h()], deleted_at: DateTime.utc_now())
 
     untagged = insert(:vault, user: user)
-    u2 = FolderRows.insert!(user, untagged, h(), full_path_hmac: f2)
+    u2 = FolderRows.insert!(user, untagged, h())
     insert(:note, user: user, vault: untagged, folder_hmac: f2, folder_ref_id: u2, tags_hmac: [])
 
     markers_only = insert(:vault, user: user)
