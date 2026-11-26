@@ -30,6 +30,15 @@ defmodule Engram.Vector.FilterId do
 
   def dashed(other), do: other
 
+  @doc """
+  The one spelling every store's user (or vault) id is compared in:
+  lowercase and dashed. The vector store's `u` is undashed, a legacy
+  `user_id` or an S3 prefix is whatever was written, `users.id` is Ecto's.
+  Not validated: `Ecto.UUID.cast/1` the result where a uuid is required.
+  """
+  @spec canonical(String.t()) :: String.t()
+  def canonical(id) when is_binary(id), do: id |> String.downcase() |> uuid() |> dashed()
+
   @doc "Full HMAC of a frontmatter key name (Postgres `key_hmac`)."
   @spec key_hmac(binary(), String.t()) :: binary()
   def key_hmac(filter_key, key), do: Crypto.hmac_field(filter_key, "fmk:" <> norm(key))

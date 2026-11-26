@@ -126,6 +126,19 @@ defmodule Engram.KeywordStore.TantivySearchTest do
     assert v == to_string(vault.id)
   end
 
+  test "a user with no active vault calls nothing and counts no fallback" do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :search, :keyword_fallback]])
+    lonely = insert(:user)
+
+    assert {:ok, []} =
+             Tantivy.search(%{indices: [1], values: [1.0]},
+               user_id: to_string(lonely.id),
+               limit: 5
+             )
+
+    refute_received {[:engram, :search, :keyword_fallback], ^ref, _, _}
+  end
+
   test "kwsearch down: hybrid is dense-only and counts a fallback",
        %{dense: dense, kw: kw, user: user, vault: vault, ids: {a, m, _z}} do
     embed_ok()

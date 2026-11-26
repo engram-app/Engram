@@ -28,6 +28,7 @@ defmodule Engram.KeywordStore.Tantivy do
   alias Engram.Logger.Metadata
   alias Engram.Native
   alias Engram.Vaults
+  alias Engram.Vector.FilterId
   alias Engram.Vector.Qdrant
 
   require Logger
@@ -90,9 +91,9 @@ defmodule Engram.KeywordStore.Tantivy do
   def delete_user(_user_id, :soft), do: :ok
 
   def delete_user(user_id, :purge) do
-    # `Ecto.UUID.cast/1` takes either case, dashed or not, and returns the
-    # one canonical spelling the tenant and the tombstone use.
-    case Ecto.UUID.cast(user_id) do
+    # The spelling OrphanSweep compares in (`FilterId.canonical/1`), since
+    # `Ecto.UUID.cast/1` alone refuses the vector store's undashed `u`.
+    case user_id |> FilterId.canonical() |> Ecto.UUID.cast() do
       {:ok, id} -> Feed.delete_user(id)
       :error -> :ok
     end
@@ -135,8 +136,12 @@ defmodule Engram.KeywordStore.Tantivy do
 
   defp keyword_leg(sparse, search_opts) do
     user_id = Keyword.fetch!(search_opts, :user_id)
-    vaults = vault_ids(to_string(user_id), Keyword.get(search_opts, :vault_id))
-    Client.search(to_string(user_id), vaults, sparse.indices, search_opts)
+    # No active vault: nothing to read, so no request (kwsearch would answer
+    # 400 to an empty list, counted as a fallback).
+    case vault_ids(to_string(user_id), Keyword.get(search_opts, :vault_id)) do
+      [] -> {:ok, []}
+      vaults -> Client.search(to_string(user_id), vaults, sparse.indices, search_opts)
+    end
   end
 
   defp reason({:ok, {:error, reason}}), do: reason
