@@ -120,10 +120,12 @@ def seed_new(api_url: str, state: str, fault: str) -> None:
     merged = _id(client, "Merged")
     if merged_orig == merged_new or merged not in (merged_orig, merged_new):
         raise SystemExit(f"merge restore: Merged ids orig={merged_orig} new={merged_new} after={merged}")
-    # Rename merge (Rows.retire/2): an explicit folder renamed onto a path a
-    # note already occupies; the implicit row there keeps it and the flag.
+    # Rename merge (Rows.retire/2): an explicit folder holding a note renamed
+    # onto a path another note already occupies (an empty one is refused 409);
+    # the implicit row there keeps both notes and takes the flag.
     client.create_note("Dup/x.md", "occupies Dup")
     _expect("create Src", client.create_folder("Src"), (200, 201))
+    client.create_note("Src/a.md", "moves into Dup")
     src = _id(client, "Src")
     _expect("rename Src -> Dup (merge)", client.rename_folder("Src", "Dup"), (200,))
     dup = _id(client, "Dup")
