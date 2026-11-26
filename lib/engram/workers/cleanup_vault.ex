@@ -527,7 +527,7 @@ defmodule Engram.Workers.CleanupVault do
   end
 
   defp delete_qdrant_points(vault) do
-    case Engram.Vector.Qdrant.delete_by_vault(to_string(vault.user_id), to_string(vault.id)) do
+    case Engram.Indexing.delete_vault_points(vault.user_id, vault.id) do
       :ok ->
         Logger.debug(
           "CleanupVault: deleted Qdrant points",

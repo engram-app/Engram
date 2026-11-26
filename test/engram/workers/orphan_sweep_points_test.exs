@@ -81,11 +81,14 @@ defmodule Engram.Workers.OrphanSweepPointsTest do
       Plug.Conn.resp(conn, 200, ~s({"result":{}}))
     end)
 
+    Engram.KeywordStoreRecorder.install()
     assert :ok = perform_job(OrphanSweep, %{})
 
     assert_received {:qdrant_delete, %{"points" => ids}}
     assert ids == [stranded]
     refute Enum.member?(ids, kept)
+    # Point reaping reaches the keyword seam; the tenant of an orphan is unknown.
+    assert_received {:keyword_store, :delete_points, [nil, [^stranded]]}
   end
 
   test "walks every scroll page and probes each one", %{bypass: bypass} do

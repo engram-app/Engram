@@ -20,6 +20,8 @@ defmodule Engram.IndexingDeleteByPointIdTest do
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
+    Engram.KeywordStoreRecorder.install()
+
     user = insert(:user)
     vault = insert(:vault, user: user)
     %{bypass: bypass, user: user, vault: vault}
@@ -92,6 +94,12 @@ defmodule Engram.IndexingDeleteByPointIdTest do
 
     assert MapSet.member?(deleted_ids, point_a)
     assert MapSet.member?(deleted_ids, point_b)
+
+    # Note delete and trash route the keyword data through the seam too.
+    user_id = to_string(user.id)
+    vault_id = to_string(vault.id)
+    assert_received {:keyword_store, :delete_points, [^user_id, [^point_a, ^point_b]]}
+    assert_received {:keyword_store, :delete_note, [^user_id, ^vault_id, ^note_id, []]}
 
     assert Repo.all(from(c in Chunk, where: c.note_id == ^note_id), skip_tenant_check: true) == []
   end

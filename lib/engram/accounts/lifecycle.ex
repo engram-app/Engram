@@ -25,7 +25,6 @@ defmodule Engram.Accounts.Lifecycle do
   alias Engram.OAuth
   alias Engram.Repo
   alias Engram.Storage
-  alias Engram.Vector.Qdrant
   alias Engram.Workers.PaddleCancelSubscription
   alias Engram.Workers.PurgeUserVectors
 
@@ -527,7 +526,7 @@ defmodule Engram.Accounts.Lifecycle do
 
     # A background job with no request to hold, so the patient indexing
     # retries. What a failure leaves is purged after the hard delete.
-    case Qdrant.delete_by_user(nil, user.id, :indexing) do
+    case Indexing.delete_user_points(user.id, :indexing) do
       :ok ->
         :ok
 

@@ -2109,8 +2109,12 @@ defmodule Engram.Crypto.UserDekRotationTest do
     test "an orphan point under neither key is deleted, scoped to the user, with no rebuild",
          %{user: user, bypass: bypass} do
       %{note: note, bad: bad} = neither_key_fixture(user, bypass, false)
+      Engram.KeywordStoreRecorder.install()
 
       assert :ok = UserDekRotation.rotate_user(user.id)
+      # The orphan's keyword data goes through the seam, scoped to the user.
+      user_id = to_string(user.id)
+      assert_received {:keyword_store, :delete_points, [^user_id, [^bad]]}
 
       # The ids come from a scroll filtered to this user, and only those go.
       assert_received {:scroll_filter,

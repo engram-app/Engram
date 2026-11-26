@@ -1422,6 +1422,22 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
+  A point ready to send: each packed vector (a float32 binary, or a packed
+  sparse `%{indices, values}`) as a pre-encoded JSON fragment. Unpacking to a
+  float list and letting Jason walk it was the heap peak of indexing (~26 MB
+  per 64-point batch).
+  """
+  def unpack_point(%{vector: named} = point),
+    do: %{point | vector: Map.new(named, fn {name, v} -> {name, vector_json(v)} end)}
+
+  # Formatted in Rust: no per-float term, each value its shortest f32 decimal.
+  defp vector_json(dense) when is_binary(dense),
+    do: Jason.Fragment.new(Engram.Native.dense_json(dense))
+
+  defp vector_json(%{indices: indices, values: values}) when is_binary(indices),
+    do: Jason.Fragment.new(Engram.Native.sparse_json(indices, values))
+
+  @doc """
   Delete the listed point ids outright. Empty list is a no-op.
 
   The identity-safe delete: point ids come from `chunks.qdrant_point_id`, so

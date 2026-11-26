@@ -158,6 +158,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/vaults/",
     "lib/engram/vector/",
     "lib/engram/keyword_index.ex",
+    # The keyword store sees search queries' sparse vectors and point ids.
+    "lib/engram/keyword_store.ex",
+    "lib/engram/keyword_store/",
     # Rust NIF wrappers: note text and search queries pass through them.
     "lib/engram/native.ex",
     "lib/engram/embedder.ex",

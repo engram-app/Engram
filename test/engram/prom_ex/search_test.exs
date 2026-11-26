@@ -26,8 +26,48 @@ defmodule Engram.PromEx.SearchTest do
       metrics =
         PromExMetrics.of(SearchPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
-      assert [%Telemetry.Metrics.Counter{tags: [:status, :cross_vault, :rerank]}] =
-               Enum.filter(metrics, &(&1.event_name == [:engram, :search, :request, :stop]))
+      assert [
+               %Telemetry.Metrics.Counter{
+                 tags: [:status, :cross_vault, :rerank, :filtered, :scope, :surface]
+               } = requests,
+               %Telemetry.Metrics.Counter{tags: [:filtered]} = empty
+             ] = Enum.filter(metrics, &(&1.event_name == [:engram, :search, :request, :stop]))
+
+      # An emitter without the #2697 labels still counts, under the defaults.
+      assert requests.tag_values.(%{status: :ok, cross_vault: false, rerank: :off}) ==
+               %{
+                 status: :ok,
+                 cross_vault: false,
+                 rerank: :off,
+                 filtered: false,
+                 scope: :none,
+                 surface: :internal
+               }
+
+      assert empty.name == [:engram, :prom_ex, :search, :empty, :total]
+      assert empty.keep.(%{empty: true})
+      refute empty.keep.(%{empty: false})
+      refute empty.keep.(%{})
+    end
+
+    test "counts filter-only listings on [:engram, :search, :filter_page]" do
+      metrics =
+        PromExMetrics.of(SearchPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
+      assert [%Telemetry.Metrics.Counter{tags: [:status, :surface, :empty]} = c] =
+               Enum.filter(metrics, &(&1.event_name == [:engram, :search, :filter_page]))
+
+      assert c.name == [:engram, :prom_ex, :search, :filter_page, :total]
+    end
+
+    test "times filter resolution on [:engram, :search, :filter_resolve], by scope" do
+      metrics =
+        PromExMetrics.of(SearchPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
+      assert [%Telemetry.Metrics.Distribution{unit: :millisecond, tags: [:scope]} = d] =
+               Enum.filter(metrics, &(&1.event_name == [:engram, :search, :filter_resolve]))
+
+      assert d.name == [:engram, :prom_ex, :search, :filter_resolve, :milliseconds]
     end
 
     test "counts gate outcomes and times the wait on [:engram, :search, :gate]" do

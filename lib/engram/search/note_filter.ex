@@ -200,7 +200,13 @@ defmodule Engram.Search.NoteFilter do
 
   @doc "Whether `filter` names any filter at all (an empty one matches every note)."
   @spec any?(filter()) :: boolean()
-  def any?(filter), do: filter |> take() |> Enum.any?(fn {_k, v} -> v not in [nil, [], ""] end)
+  def any?(filter), do: keys(filter) != []
+
+  @doc "The filter keys `filter` sets, sorted. For telemetry: keys, never values."
+  @spec keys(filter()) :: [atom()]
+  def keys(filter) do
+    Enum.sort(for {k, v} <- take(filter), v not in [nil, [], ""], do: k)
+  end
 
   # -- compile: filter -> one non-NULL boolean over `notes` (binding n) ----
 

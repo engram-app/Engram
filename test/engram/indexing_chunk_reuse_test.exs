@@ -49,6 +49,7 @@ defmodule Engram.IndexingChunkReuseTest do
   setup do
     bypass = Bypass.open()
     Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+    Engram.KeywordStoreRecorder.install()
 
     user = insert(:user)
     vault = insert(:vault, user: user)
@@ -232,6 +233,8 @@ defmodule Engram.IndexingChunkReuseTest do
       kept = for {pos, id} <- now, Map.get(before, pos) == id, do: id
       assert length(kept) == map_size(now) - 1, "every unchanged chunk must keep its point"
       assert deleted_ids(ctx.recorder) == replaced, "the replaced point must be deleted"
+      # The stale keyword data goes through the seam with it.
+      assert_received {:keyword_store, :delete_points, [_user, ^replaced]}
     end
   end
 
@@ -407,6 +410,8 @@ defmodule Engram.IndexingChunkReuseTest do
       # re-index would reuse ids that no longer exist in Qdrant.
       old_hmac = Base.encode64(note.path_hmac)
       assert :ok = Indexing.delete_points_by_path_hmac(note, old_hmac)
+      note_id = note.id
+      assert_received {:keyword_store, :delete_note, [_user, _vault, ^note_id, []]}
       # Rebuilt means sent: no vector cache to answer from.
       clear_vector_cache()
 
@@ -416,6 +421,10 @@ defmodule Engram.IndexingChunkReuseTest do
       # Every chunk but the frontmatter one, which is sparse-only.
       assert length(embedded_texts()) == count - 1, "every chunk must be rebuilt"
       assert length(upserts(ctx.recorder)) == count
+      # The rebuild's write-first delete of the note's other points hits the seam.
+      assert_received {:keyword_store, :delete_note, [_user, _vault, ^note_id, [_ | _]]}
+      # The main write goes through the store, scoped to the note.
+      assert_received {:keyword_store, :index, [%{note_id: ^note_id}, [_ | _]]}
       assert set_payloads(ctx.recorder) == []
     end
   end

@@ -72,9 +72,15 @@ defmodule Engram.IndexingResparseTest do
   test "rewrites each point's keyword vector in place, embedding nothing", ctx do
     %{user: user, note: note, upserted: upserted} = ctx
     expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("embedded") end)
+    Engram.KeywordStoreRecorder.install()
 
     assert {:ok, count, 0} = Indexing.resparse_note(note, user)
     assert count == length(upserted)
+
+    # The rewrite (DEK re-key and keyword_version reconcile) goes through the seam.
+    note_id = note.id
+    assert_received {:keyword_store, :upsert, [%{note_id: ^note_id}, entries]}
+    assert length(entries) == count
 
     assert_receive {:qdrant, "PUT", path, body}
     assert String.ends_with?(path, "/points/vectors")

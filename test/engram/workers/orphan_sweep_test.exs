@@ -48,6 +48,7 @@ defmodule Engram.Workers.OrphanSweepTest do
 
     # Undashed, as `u` is written (`FilterId.uuid/1`).
     stub_qdrant(bypass, [FilterId.uuid(live.id), FilterId.uuid(ghost_id)])
+    Engram.KeywordStoreRecorder.install()
 
     Bypass.expect(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -71,6 +72,9 @@ defmodule Engram.Workers.OrphanSweepTest do
     decoded = Jason.decode!(body)
     assert get_in(hd(legacy_view(decoded["filter"]["must"])), ["match", "value"]) == ghost_id
     refute_received {:qdrant_delete, _live_user}
+    # Tenant reaping reaches the keyword seam, for the departed tenant only.
+    assert_received {:keyword_store, :delete_user, [^ghost_id]}
+    refute_received {:keyword_store, :delete_user, _live_user}
   end
 
   # A point written before `u` existed (a self-hoster skipping releases) has
