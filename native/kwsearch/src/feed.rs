@@ -454,7 +454,13 @@ fn check_horizon(
             r.get::<_, String>(0).parse().unwrap_or(0),
             r.get::<_, i64>(1),
         ),
-        Ok(None) => return true,
+        // The migration seeds the row; a missing one means the table was
+        // tampered with, so gap detection cannot be trusted (review #10).
+        Ok(None) => {
+            eprintln!("feed horizon row missing: not serving");
+            stats.ready.store(false, Relaxed);
+            return false;
+        }
         Err(e) => {
             eprintln!("feed horizon read failed: {e}");
             return false;

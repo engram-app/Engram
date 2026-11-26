@@ -5,7 +5,8 @@
 #
 #   B=<dir holding src/native, target, cargo, rustup> bash host.sh [tests...]
 #
-# Needs a built `target/release/kwsearch` (cargo build --release -p kwsearch).
+# Needs `target/release/kwsearch` built with the harness subcommands
+# (`--features harness` on the release build of `-p kwsearch`).
 set -euo pipefail
 B=${B:?set B to the build dir}
 NET=kwit-net PG=kwit-pg RUN=kwit-run

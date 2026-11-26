@@ -278,6 +278,89 @@ fn a_vault_delete_between_passes_keeps_the_newer_marker() {
     assert_eq!(points(&s), HashSet::from([a, b]));
 }
 
+// Review #1 guard: an upsert at the marker's stamp for a point outside that
+// pass's keep set (a keep set read before a newer pass committed) is dropped,
+// never indexed.
+#[test]
+fn an_upsert_outside_its_passs_keep_set_is_dropped() {
+    let dir = tmp();
+    let s = Shard::open(dir.path()).unwrap();
+    let (user, vault, note, kept, stray) = (u(1), u(2), u(3), u(10), u(11));
+    let mut r = Rows::new();
+    r.push(
+        1,
+        2,
+        user,
+        kwfeed::DELETE_NOTE_EXCEPT,
+        Some(vault),
+        Some(note),
+        None,
+        2,
+        Some(vec![kept]),
+    );
+    r.push(
+        1,
+        2,
+        user,
+        kwfeed::UPSERT,
+        Some(vault),
+        Some(note),
+        Some(kept),
+        2,
+        None,
+    );
+    r.push(
+        1,
+        2,
+        user,
+        kwfeed::UPSERT,
+        Some(vault),
+        Some(note),
+        Some(stray),
+        2,
+        None,
+    );
+    apply_all(&s, &r.out);
+    assert_eq!(points(&s), HashSet::from([kept]));
+    // Also against the committed marker in a later round.
+    let mut r = Rows {
+        seq: 10,
+        out: vec![],
+    };
+    r.push(
+        3,
+        4,
+        user,
+        kwfeed::UPSERT,
+        Some(vault),
+        Some(note),
+        Some(stray),
+        2,
+        None,
+    );
+    apply_all(&s, &r.out);
+    assert_eq!(points(&s), HashSet::from([kept]));
+}
+
+// Review #11: an unreadable commit payload fails the open instead of
+// resetting the cursor and dropping every tombstone.
+#[test]
+fn an_unreadable_payload_fails_the_open() {
+    let dir = tmp();
+    {
+        let s = Shard::open(dir.path()).unwrap();
+        let mut r = Rows::new();
+        r.push(1, 2, u(1), kwfeed::DELETE_USER, None, None, None, 0, None);
+        apply_all(&s, &r.out);
+    }
+    let meta = dir.path().join("meta.json");
+    let text = std::fs::read_to_string(&meta).unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    v["payload"] = serde_json::json!("{not json");
+    std::fs::write(&meta, v.to_string()).unwrap();
+    assert!(Shard::open(dir.path()).is_err());
+}
+
 // Task 4c: two users whose 32-bit dims collide in one shard. Each user's
 // document frequency, and so each score, is unchanged by the other.
 #[test]

@@ -73,6 +73,7 @@ impl Keys {
 
 /// Signs `payload` (JSON) with `key`. Test and harness use; the app has
 /// its own signer (`Engram.KeywordStore.Tantivy`).
+#[cfg(any(test, feature = "harness"))]
 pub fn sign(key: &[u8], payload: &str) -> String {
     let p = B64.encode(payload);
     let mut m = HmacSha256::new_from_slice(key).expect("hmac takes any key length");

@@ -40,7 +40,7 @@ drained() {
   [ "$(printf '%s\n%s\n' "$want" "$got" | sort -n -k1,1 -k2,2 | tail -1)" = "$got" ]
 }
 wait_drained() { for _ in $(seq 1 ${1:-600}); do drained && return 0; sleep 1; done; return 1; }
-reset() { psql_ "TRUNCATE keyword_feed, keyword_deletions, truth_users, truth_vaults, truth_notes, truth_chunks; DELETE FROM keyword_feed_horizon"; }
+reset() { psql_ "TRUNCATE keyword_feed, keyword_deletions, truth_users, truth_vaults, truth_notes, truth_chunks; UPDATE keyword_feed_horizon SET xid = '0', seq = 0"; }
 
 t_tls() {
   reset

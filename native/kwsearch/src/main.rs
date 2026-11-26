@@ -10,6 +10,7 @@ mod shard;
 #[cfg(test)]
 mod shard_tests;
 mod token;
+#[cfg(feature = "harness")]
 mod tools;
 
 use std::path::PathBuf;
@@ -176,7 +177,10 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("serve") => serve(),
+        #[cfg(feature = "harness")]
         Some(cmd) => tools::run(cmd, &args[1..]),
+        #[cfg(not(feature = "harness"))]
+        Some(cmd) => eprintln!("unknown command {cmd} (harness subcommands need --features harness)"),
         None => eprintln!("usage: kwsearch serve | schema | gen | burst | load-eval | verify | bench | xidtest | du"),
     }
 }
