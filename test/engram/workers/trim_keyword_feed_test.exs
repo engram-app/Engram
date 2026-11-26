@@ -2,7 +2,6 @@ defmodule Engram.Workers.TrimKeywordFeedTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
-  alias Engram.KeywordStore.Tantivy
   alias Engram.ServiceConfig
   alias Engram.Workers.TrimKeywordFeed
 
@@ -97,15 +96,41 @@ defmodule Engram.Workers.TrimKeywordFeedTest do
     assert %{expired: 1} = TrimKeywordFeed.trim(@now, nil)
   end
 
-  test "perform is a no-op and schedules nothing unless Tantivy is configured", %{user: u} do
-    _ = row(u, 49 * 3_600)
+  test "no feed and no rows: perform is a no-op and schedules nothing" do
     assert :ok = perform_job(TrimKeywordFeed, %{})
-    assert length(left()) == 1
     refute_enqueued(worker: TrimKeywordFeed)
   end
 
+  # Review #14: rows left after the feed is rolled back to off are trimmed
+  # all the same (the hashed corpus never stays in RDS with no end date).
+  test "feed off but rows left: perform still trims them", %{user: u} do
+    Repo.query!(
+      "INSERT INTO keyword_feed (user_id, op, inserted_at) VALUES ($1, 5, now() - interval '49 hours')",
+      [Ecto.UUID.dump!(to_string(u.id))]
+    )
+
+    assert {:ok, %{expired: 1}} = perform_job(TrimKeywordFeed, %{})
+    assert left() == []
+  end
+
+  # Review #9: the trim's DELETEs reach rows only through `maintenance_all`;
+  # a missing policy would delete 0 rows with no error.
+  test "as engram_maintenance the trim deletes the expected rows", %{user: u} do
+    old = row(u, 49 * 3_600)
+    {_, young} = row(u, 60)
+
+    assert {:error, {stats, rows, horizon}} =
+             Repo.transaction(fn ->
+               Repo.query!("SET LOCAL ROLE engram_maintenance")
+               stats = TrimKeywordFeed.trim(@now, nil)
+               Repo.rollback({stats, left(), horizon()})
+             end)
+
+    assert stats.expired == 1 and rows == [young] and horizon == old
+  end
+
   test "configured: perform trims (kwsearch unreachable) and chains the next run", %{user: u} do
-    ServiceConfig.put_override(:keyword_store, Tantivy)
+    ServiceConfig.put_override(:keyword_feed, true)
 
     ServiceConfig.put_override(:kwsearch,
       url: "http://localhost:1",

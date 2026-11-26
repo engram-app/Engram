@@ -52,7 +52,8 @@ defmodule Engram.KeywordStore.Tantivy.Client do
   @doc "The highest `(xid, seq)` every shard has applied and committed."
   @spec cursor() :: {:ok, {non_neg_integer(), integer()}} | {:error, term()}
   def cursor do
-    with {:ok, req} <- req() do
+    with :ok <- configured(),
+         {:ok, req} <- req() do
       req |> Req.get(url: "/cursor", auth: {:bearer, Token.ops(signing_key())}) |> cursor_of()
     end
   end
@@ -84,6 +85,16 @@ defmodule Engram.KeywordStore.Tantivy.Client do
   defp raw_uuid(id), do: Ecto.UUID.dump!(to_string(id))
 
   defp config, do: ServiceConfig.get(:kwsearch, [])
+
+  # The trim also runs after the feed is rolled back, when kwsearch may no
+  # longer be configured at all.
+  defp configured do
+    cfg = config()
+
+    if Keyword.has_key?(cfg, :url) and Keyword.get(cfg, :token_keys, []) != [],
+      do: :ok,
+      else: {:error, :kwsearch_not_configured}
+  end
 
   defp signing_key do
     case Keyword.get(config(), :token_keys, []) do
