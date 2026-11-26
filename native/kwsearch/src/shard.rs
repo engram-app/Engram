@@ -8,7 +8,9 @@
 //! * chunk docs (`t`, `point`, `note`, `vault`, `user`, `ph`/`pl`, `len`, `crc`);
 //! * note markers (`mnote`, ...): a note's highest applied index stamp and
 //!   its full point set, needed only while ops for the note can still
-//!   arrive out of order (roadmap P2 task 4a, 4g);
+//!   arrive out of order (roadmap P2 task 4a, 4g) and for `MARKER_HOLD_S`
+//!   after they were applied, so a bulk batch read before the op is
+//!   recognised as older (`bulk`);
 //! * user stats (`suser`, `sdocs`, `stokens`): the user's live chunk count
 //!   and token total, maintained on apply and read in O(1) at search time
 //!   (P2 task 4). The POC scanned them per search: ~166 ms at 193k chunks,
@@ -44,6 +46,21 @@ pub const SHARDS: usize = 256;
 /// is 1.0: a deleted doc's bytes could stay on disk forever, security F1).
 pub const DEL_DOCS_RATIO: f32 = 0.1;
 
+/// A bulk batch (backfill, reconcile) read longer ago than this is refused:
+/// the per-note markers that order it against live feed ops are only kept
+/// this long (roadmap P2 task 5).
+pub const BULK_MAX_AGE_S: u64 = 3_600;
+
+/// How long a note marker outlives its apply, past the feed's own bound
+/// (the snapshot xmax): the bulk age plus 10 minutes of clock skew between
+/// the app and this node. A bulk batch is accepted only while every note
+/// op applied after its read still has its marker here.
+pub const MARKER_HOLD_S: u64 = BULK_MAX_AGE_S + 600;
+
+/// Re-keyed upserts (same point, other terms: a DEK rotation or a tokenizer
+/// change) purge the shard once none has arrived for this long (F5).
+pub const REKEY_SETTLE_S: u64 = 600;
+
 /// FNV-1a 64. Shard placement must never change across Rust releases
 /// (std's DefaultHasher may).
 pub fn fnv(bytes: &[u8]) -> u64 {
@@ -78,6 +95,10 @@ pub struct F {
     pub pl: Field,
     pub len: Field,
     pub crc: Field,
+    pub nh: Field,
+    pub nl: Field,
+    pub vh: Field,
+    pub vl: Field,
     pub mnote: Field,
     pub muser: Field,
     pub mvault: Field,
@@ -85,6 +106,7 @@ pub struct F {
     pub mhaskeep: Field,
     pub mkeep: Field,
     pub mexp: Field,
+    pub mat: Field,
     pub suser: Field,
     pub sdocs: Field,
     pub stokens: Field,
@@ -107,6 +129,10 @@ pub fn schema() -> (Schema, F) {
         pl: s.add_u64_field("pl", FAST),
         len: s.add_u64_field("len", FAST),
         crc: s.add_u64_field("crc", FAST),
+        nh: s.add_u64_field("nh", FAST),
+        nl: s.add_u64_field("nl", FAST),
+        vh: s.add_u64_field("vh", FAST),
+        vl: s.add_u64_field("vl", FAST),
         mnote: s.add_text_field("mnote", STRING),
         muser: s.add_text_field("muser", STRING),
         mvault: s.add_text_field("mvault", STRING),
@@ -114,6 +140,7 @@ pub fn schema() -> (Schema, F) {
         mhaskeep: s.add_u64_field("mhaskeep", FAST),
         mkeep: s.add_text_field("mkeep", STRING),
         mexp: s.add_u64_field("mexp", INDEXED | FAST),
+        mat: s.add_u64_field("mat", INDEXED | FAST),
         suser: s.add_text_field("suser", STRING),
         sdocs: s.add_u64_field("sdocs", FAST),
         stokens: s.add_u64_field("stokens", FAST),
@@ -135,6 +162,9 @@ pub struct Meta {
     /// Unix seconds of the oldest delete not yet purged from disk (F1).
     #[serde(default)]
     pub first_delete_at: Option<u64>,
+    /// Unix seconds of the last re-keyed upsert not yet purged (F5).
+    #[serde(default)]
+    pub rekey_at: Option<u64>,
 }
 
 pub struct Writer {
@@ -163,6 +193,8 @@ pub struct State {
     delta: HashMap<Uuid, (i64, i64)>,
     /// A delete_user / delete_vault ran: purge right after the commit (F1).
     pub purge_now: bool,
+    /// Unix seconds of the apply in progress (stamped on markers).
+    now: u64,
 }
 
 /// A note's highest applied index stamp and, if the op that set it named
@@ -172,6 +204,19 @@ pub struct Marker {
     stamp: u64,
     keep: Option<HashSet<Uuid>>,
     committed: bool,
+}
+
+/// One note of a bulk batch: its full point set at `stamp` (taken under the
+/// note's row lock when the batch read it) and the docs of those points.
+#[derive(Debug, Clone)]
+pub struct BulkNote {
+    pub vault: Uuid,
+    pub note: Uuid,
+    pub stamp: i64,
+    /// xmax of the snapshot the batch was read under (marker expiry, 4g).
+    pub xmax: u64,
+    pub keep: Vec<Uuid>,
+    pub docs: Vec<(Uuid, Vec<u8>)>,
 }
 
 pub struct Shard {
@@ -250,6 +295,7 @@ impl Shard {
                 gone: HashSet::new(),
                 delta: HashMap::new(),
                 purge_now: false,
+                now: 0,
             }),
         })
     }
@@ -260,6 +306,10 @@ impl Shard {
 
     pub fn first_delete_at(&self) -> Option<u64> {
         self.state.lock().unwrap().meta.first_delete_at
+    }
+
+    pub fn rekey_at(&self) -> Option<u64> {
+        self.state.lock().unwrap().meta.rekey_at
     }
 
     fn ensure_writer(&self, st: &mut State, writer_mb: usize) -> tantivy::Result<()> {
@@ -288,6 +338,7 @@ impl Shard {
     pub fn apply(&self, rows: &[&Row], writer_mb: usize, now: u64) -> tantivy::Result<Applied> {
         let mut guard = self.state.lock().unwrap();
         let st = &mut *guard;
+        st.now = now;
         let mut out = Applied::default();
         for r in rows {
             if (r.xid, r.seq) <= st.meta.cursor {
@@ -417,8 +468,7 @@ impl Shard {
                     out.skipped_stale += 1;
                     return Ok(false);
                 }
-                self.remove(st, &r.user, Scope::Point(p))?;
-                self.add(st, r, &p, vault)?;
+                self.upsert_doc(st, r, &p, vault)?;
             }
             kwfeed::DELETE_POINTS => {
                 let Some(p) = r.point else { return Ok(false) };
@@ -435,6 +485,19 @@ impl Shard {
             _ => unreachable!("op checked in apply"),
         }
         Ok(true)
+    }
+
+    /// A fresh upsert: the point's doc is replaced. Same point, other terms
+    /// means the key or the tokenizer changed (point ids follow content);
+    /// the old doc's bytes stay in its segment until a merge, so the shard
+    /// purges once the re-key settles (F5).
+    fn upsert_doc(&self, st: &mut State, r: &Row, p: &Uuid, vault: Uuid) -> tantivy::Result<()> {
+        let new_crc = fnv(r.terms.as_deref().unwrap_or_default());
+        if self.committed_crc(&r.user, p).is_some_and(|c| c != new_crc) {
+            st.meta.rekey_at = Some(st.now);
+        }
+        self.remove(st, &r.user, Scope::Point(*p))?;
+        self.add(st, r, p, vault)
     }
 
     fn set_marker(
@@ -462,6 +525,7 @@ impl Shard {
         // this row was read in has been applied: a stale pass for this note
         // committed before this one, so its xid is below that xmax.
         m.add_u64(f.mexp, r.xmax);
+        m.add_u64(f.mat, st.now);
         for p in keep.iter().copied().flatten() {
             m.add_text(f.mkeep, id(p));
         }
@@ -609,13 +673,20 @@ impl Shard {
         d.add_u64(f.pl, lo);
         d.add_u64(f.len, len);
         d.add_u64(f.crc, fnv(raw));
+        let (nh, nl) = r.note.unwrap().as_u64_pair();
+        d.add_u64(f.nh, nh);
+        d.add_u64(f.nl, nl);
+        let (vh, vl) = vault.as_u64_pair();
+        d.add_u64(f.vh, vh);
+        d.add_u64(f.vl, vl);
         Ok((d, len))
     }
 
     /// Commits pending ops with `cursor`, folds the round's stats changes
     /// into each touched user's stats doc, expires markers every row of
     /// which has been applied (`watermark`: every feed row with a lower xid
-    /// is applied) and tombstones older than `tomb_ttl_s`, then reloads.
+    /// is applied) once they are also older than `MARKER_HOLD_S`, and
+    /// tombstones older than `tomb_ttl_s`, then reloads.
     pub fn commit(
         &self,
         cursor: (u64, i64),
@@ -644,10 +715,23 @@ impl Shard {
             d.add_u64(f.stokens, (t as i64 + dt).max(0) as u64);
             w.add_document(d)?;
         }
-        w.delete_query(Box::new(RangeQuery::new(
-            Bound::Unbounded,
-            Bound::Included(Term::from_field_u64(f.mexp, watermark)),
-        )))?;
+        let held = now.saturating_sub(MARKER_HOLD_S);
+        w.delete_query(Box::new(BooleanQuery::new(vec![
+            (
+                Occur::Must,
+                Box::new(RangeQuery::new(
+                    Bound::Unbounded,
+                    Bound::Included(Term::from_field_u64(f.mexp, watermark)),
+                )) as Box<dyn Query>,
+            ),
+            (
+                Occur::Must,
+                Box::new(RangeQuery::new(
+                    Bound::Unbounded,
+                    Bound::Included(Term::from_field_u64(f.mat, held)),
+                )),
+            ),
+        ])))?;
         let cutoff = now.saturating_sub(tomb_ttl_s);
         st.meta.tomb_users.retain(|_, at| *at > cutoff);
         st.meta.tomb_vaults.retain(|_, at| *at > cutoff);
@@ -720,6 +804,7 @@ impl Shard {
             .map(|s| s.segment_id())
             .collect();
         self.ensure_writer(st, writer_mb)?;
+        st.meta.rekey_at = None;
         if ids.is_empty() {
             st.meta.first_delete_at = None;
             st.dirty = true;
@@ -807,6 +892,150 @@ impl Shard {
         st.purge_now = true;
         st.meta.first_delete_at.get_or_insert(now);
         Ok(true)
+    }
+
+    /// Applies one bulk batch of `user` (backfill, reconcile; roadmap P2
+    /// task 5). Each note is a whole pass at its own stamp: the note's full
+    /// point set, then its docs. The feed's ordering does not cover a batch,
+    /// so each note is checked here instead:
+    /// * a tombstoned user or vault: dropped (a batch read before the delete);
+    /// * a note whose applied stamp (its marker, kept `MARKER_HOLD_S` after
+    ///   apply) is above the batch's: dropped, so a batch read before an
+    ///   edit or a delete never brings back older content.
+    ///
+    /// The batch's age bound (`BULK_MAX_AGE_S`, checked by the caller) is
+    /// what makes a missing marker safe: every op applied after the batch was
+    /// read is younger than the hold. Commit with `commit_here`.
+    pub fn bulk(
+        &self,
+        user: &Uuid,
+        gen: i16,
+        notes: &[BulkNote],
+        writer_mb: usize,
+        now: u64,
+    ) -> tantivy::Result<Applied> {
+        let mut guard = self.state.lock().unwrap();
+        let st = &mut *guard;
+        st.now = now;
+        let mut out = Applied::default();
+        for n in notes {
+            if st.meta.tomb_users.contains_key(user) || st.meta.tomb_vaults.contains_key(&n.vault) {
+                out.skipped_tomb += 1;
+                continue;
+            }
+            if n.stamp <= 0 || n.docs.iter().any(|d| kwfeed::unpack(&d.1).is_none()) {
+                out.skipped_malformed += 1;
+                continue;
+            }
+            if let std::collections::hash_map::Entry::Vacant(e) = st.markers.entry(n.note) {
+                e.insert(self.committed_marker(&n.note));
+            }
+            // Stamps are unique per note op, so an equal one is this same
+            // batch note again: the rest of a note too big for one request,
+            // or a retry. Its point set is already applied; its docs still
+            // go through the marker's keep check.
+            let have = st.markers[&n.note].stamp;
+            if (n.stamp as u64) < have {
+                out.skipped_stale += 1;
+                continue;
+            }
+            self.ensure_writer(st, writer_mb)?;
+            let row = Row {
+                xmax: n.xmax,
+                user: *user,
+                gen,
+                op: kwfeed::UPSERT,
+                vault: Some(n.vault),
+                note: Some(n.note),
+                stamp: n.stamp,
+                ..Row::default()
+            };
+            if n.stamp as u64 > have {
+                // The note now has exactly `keep`, at this stamp.
+                let keep: HashSet<Uuid> = n.keep.iter().copied().collect();
+                self.set_marker(st, &row, n.note, n.vault, n.stamp as u64, Some(&n.keep))?;
+                self.remove(st, user, Scope::Note(n.note, Some(&keep)))?;
+            }
+            for (p, terms) in &n.docs {
+                // Only points of the note's set at this stamp.
+                if !self.kept(&st.markers[&n.note], &n.note, p) {
+                    out.skipped_stale += 1;
+                    continue;
+                }
+                let r = Row {
+                    point: Some(*p),
+                    terms: Some(terms.clone()),
+                    ..row.clone()
+                };
+                self.upsert_doc(st, &r, p, n.vault)?;
+            }
+            out.applied += 1;
+            st.dirty = true;
+            st.meta.first_delete_at.get_or_insert(now);
+        }
+        Ok(out)
+    }
+
+    /// Commits at the shard's own cursor (a bulk batch moves no cursor).
+    pub fn commit_here(&self, now: u64, tomb_ttl_s: u64) -> tantivy::Result<bool> {
+        let c = self.cursor();
+        self.commit(c, 0, now, tomb_ttl_s)
+    }
+
+    /// The crc of `user`'s committed doc for point `p`, if indexed.
+    fn committed_crc(&self, user: &Uuid, p: &Uuid) -> Option<u64> {
+        let f = self.f;
+        let s = self.reader.searcher();
+        let q = BooleanQuery::new(vec![must(f.user, user), must(f.point, p)]);
+        let a = s.search(&q, &DocSetCollector).ok()?.into_iter().next()?;
+        s.segment_reader(a.segment_ord)
+            .fast_fields()
+            .u64("crc")
+            .ok()?
+            .first(a.doc_id)
+    }
+
+    /// `user`'s committed chunk docs per note as (note, vault, count), notes
+    /// after `after` in id order, at most `limit` (the reconcile's drift
+    /// check and orphan pass). One pass over the user's docs (fast fields).
+    pub fn notes(
+        &self,
+        user: &Uuid,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> tantivy::Result<Vec<(Uuid, Uuid, u64)>> {
+        let mut counts: BTreeMap<Uuid, (Uuid, u64)> = BTreeMap::new();
+        let s = self.reader.searcher();
+        let mut err = None;
+        for_each_doc(
+            &s,
+            &Term::from_field_text(self.f.user, &id(user)),
+            |seg, doc| {
+                let ff = seg.fast_fields();
+                let col = |name: &str| ff.u64(name).map(|c| c.first(doc));
+                match (col("nh"), col("nl"), col("vh"), col("vl")) {
+                    (Ok(Some(nh)), Ok(Some(nl)), Ok(Some(vh)), Ok(Some(vl))) => {
+                        let e = counts
+                            .entry(Uuid::from_u64_pair(nh, nl))
+                            .or_insert((Uuid::from_u64_pair(vh, vl), 0));
+                        e.1 += 1;
+                    }
+                    (Err(e), ..) | (_, Err(e), ..) | (.., Err(e), _) | (.., Err(e)) => {
+                        err = Some(e)
+                    }
+                    _ => {}
+                }
+            },
+        );
+        if let Some(e) = err {
+            return Err(e);
+        }
+        Ok(counts
+            .into_iter()
+            .filter(|(n, _)| after.is_none_or(|a| *n > a))
+            .take(limit)
+            .map(|(n, (v, c))| (n, v, c))
+            .collect())
     }
 
     fn committed_marker(&self, note: &Uuid) -> Marker {

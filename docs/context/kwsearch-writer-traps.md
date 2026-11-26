@@ -1,6 +1,6 @@
 # Context Doc: kwsearch writer traps (Tantivy keyword service)
 
-_Last verified: 2026-11-26_
+_Last verified: 2026-11-26 (bulk path added in P2 part 2)_
 
 ## Status
 
@@ -20,6 +20,11 @@ Working. Built in PR #2713 (P2 part 1 of the search storage roadmap). Each trap 
 6. **The deletion log is replayed only on a feed gap.** It has no note stamps, so replaying a note delete on a normal restart can delete a newer pass that took a lower xid and is already applied. On a gap (trim horizon above the node's cursor) the node stays down until a rebuild, so over-deleting there is harmless.
 7. **"Drained" means the applied cursor reached the feed's last row.** `lag_s` reads 0 right after a drained read, before the next round commits. The harness waits on `GET /cursor` (ops token) instead; any future readiness check should too.
 8. **In-process "crashes" must not leave writer threads alive.** Dropping a Tantivy writer in a test lets its merge thread save meta over the next writer's. The property test's crash is `Shard::crash` (rollback + wait for merges); real `kill -9` runs live in the harness.
+
+9. **A bulk batch is ordered by the note marker, so the marker must outlive the feed's bound.** The bulk endpoint (backfill, reconcile) is not in the feed, so feed order does not protect it. Each batch note carries a stamp taken under the note's row lock; kwsearch drops it when the note's marker stamp is higher. The feed alone lets a marker go once the watermark passes its snapshot xmax (trap 5), which is seconds, but a batch may arrive up to `BULK_MAX_AGE_S` (1 h) after its read. So markers also stay `MARKER_HOLD_S` (1 h + 10 min skew) after apply, and `/bulk` refuses older batches (409 `stale_batch`). A per-doc stamp (the roadmap's first idea) is not enough: a pass that only REMOVES points, or a note delete, leaves no doc to carry the stamp, and the stale batch would bring the removed point back. Tests: `note_markers_outlive_the_watermark_for_the_bulk_window`, and the property test pushes bulk batches at random points between feed rounds.
+10. **An equal bulk stamp is a continuation, not stale.** Stamps are unique per note op, so the same stamp twice is one batch note split across requests (a huge note) or a retry. It skips the leading point-set delete and applies the docs against the marker's keep set. Test: `a_bulk_note_split_across_requests_lands_whole`.
+11. **`ready` needs a finished epoch.** A new index and any feed gap start a new epoch with `rebuilding: true` (`<data>/epoch`); `/health` stays down until the app's reconcile has bulk-loaded every user and posted `/rebuilt` with THAT epoch id. A restart keeps the state. An older epoch's `/rebuilt` is refused (409).
+12. **A re-keyed upsert purges the shard once it settles (F5).** Same point id, different terms crc = a DEK rotation or tokenizer change; `rekey_at` is set and `purge_old` force-merges the shard after `REKEY_SETTLE_S` (10 min) with no further re-key.
 
 ## How to check a change
 

@@ -21,14 +21,26 @@ pub const MAX_TTL_S: u64 = 300;
 #[derive(Deserialize, Debug, PartialEq)]
 #[serde(tag = "s", rename_all = "lowercase")]
 pub enum Claims {
-    Search { u: Uuid, v: Vec<Uuid>, exp: u64 },
-    Ops { exp: u64 },
+    Search {
+        u: Uuid,
+        v: Vec<Uuid>,
+        exp: u64,
+    },
+    /// One user's bulk writes and note listing (backfill, reconcile): the
+    /// user comes from the signature, never from the body.
+    Bulk {
+        u: Uuid,
+        exp: u64,
+    },
+    Ops {
+        exp: u64,
+    },
 }
 
 impl Claims {
     fn exp(&self) -> u64 {
         match self {
-            Claims::Search { exp, .. } | Claims::Ops { exp } => *exp,
+            Claims::Search { exp, .. } | Claims::Bulk { exp, .. } | Claims::Ops { exp } => *exp,
         }
     }
 }
@@ -120,6 +132,14 @@ mod tests {
         }
         let ops = sign(A.as_bytes(), &format!(r#"{{"s":"ops","exp":{}}}"#, NOW + 5));
         assert_eq!(k.verify(&ops, NOW), Some(Claims::Ops { exp: NOW + 5 }));
+        let bulk = format!(
+            r#"{{"s":"bulk","u":"00000000-0000-4000-8000-000000000001","exp":{}}}"#,
+            NOW + 5
+        );
+        assert!(matches!(
+            k.verify(&sign(A.as_bytes(), &bulk), NOW),
+            Some(Claims::Bulk { exp, .. }) if exp == NOW + 5
+        ));
     }
 
     #[test]

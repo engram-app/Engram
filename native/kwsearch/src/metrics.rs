@@ -50,6 +50,18 @@ pub fn render(index: &Index, s: &Stats) -> String {
         s.window.load(Relaxed),
     );
     put(
+        "rebuilding",
+        "gauge",
+        "1 until the app has bulk-loaded every user for this index epoch",
+        index.epoch().rebuilding as u64,
+    );
+    put(
+        "bulk_notes_total",
+        "counter",
+        "Notes applied through POST /bulk",
+        s.bulk_notes.load(Relaxed),
+    );
+    put(
         "shard_commits_total",
         "counter",
         "Shard commits",
