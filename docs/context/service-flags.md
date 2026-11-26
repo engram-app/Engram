@@ -19,7 +19,8 @@ together): `folder_marker_delete`, `folder_marker_delete_max_fixed`,
 env value (app config / runtime.exs), then the caller's code default. Values are checked with the same validator
 as a DB override (`Overrides.validate/2`).
 
-`folder_path_hash_drop` (boolean, default on) is read once at boot, before the
+`folder_path_hash_drop` (boolean, default on, flags-only: a DB override is
+refused) is read once at boot, before the
 reader starts, by `Engram.Release.FolderHashDrop` through `Flags.read_once/2`
 (3 s budget; unreachable or timed out = on). `false` stops release K's
 owner-run drop of `folders.full_path_hmac`; it takes effect at the next boot.

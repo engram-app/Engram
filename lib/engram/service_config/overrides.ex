@@ -51,7 +51,7 @@ defmodule Engram.ServiceConfig.Overrides do
   (prod, staging) a flag key reads flag, then env: a DB row for it is ignored
   (one warning per key per node) and `put/3` and `delete/2` refuse it with
   `{:error, :managed_by_flags}`. Every other key, and every key on self-host,
-  reads DB row, then env. `paused_accounts` is flags-only everywhere.
+  reads DB row, then env. `paused_accounts` and `folder_path_hash_drop` are flags-only everywhere.
   """
 
   import Ecto.Query
@@ -143,7 +143,9 @@ defmodule Engram.ServiceConfig.Overrides do
   @flag_keys ~w(folder_marker_delete folder_marker_delete_max_fixed folder_ops
                 client_logs_stop_writes plugin_floor_enabled plugin_floor paused_accounts
                 folder_path_hash_drop)a
-  @flags_only [:paused_accounts]
+  # Never a DB row: `paused_accounts`, and `folder_path_hash_drop`, which its
+  # boot step reads from the flags source only.
+  @flags_only [:paused_accounts, :folder_path_hash_drop]
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})
 

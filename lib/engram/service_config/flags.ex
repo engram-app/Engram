@@ -211,7 +211,8 @@ defmodule Engram.ServiceConfig.Flags do
     end
   end
 
-  # Never raises: the task is linked to the caller.
+  # Never raises or exits: the task is linked to the caller, so an exit here
+  # would kill it before `Task.yield/2` could report one.
   defp once(source) do
     case read(%{source: source, token: nil}) do
       {:ok, "", _version, _state} -> {:ok, %{}}
@@ -220,6 +221,8 @@ defmodule Engram.ServiceConfig.Flags do
     end
   rescue
     e -> {:error, Metadata.safe_reason(e)}
+  catch
+    :exit, reason -> {:error, Metadata.safe_exit_reason(reason)}
   end
 
   defp status(state, reason), do: status(state, state.doc_status, reason)

@@ -184,9 +184,13 @@ defmodule Engram.Release.FolderHashDropTest do
     end)
   end
 
+  # `nil` deletes the key (a nil value would shadow ex_aws's default chain).
   defp put_env_restoring(app, key, value) do
     prev = Application.fetch_env(app, key)
-    Application.put_env(app, key, value)
+
+    if is_nil(value),
+      do: Application.delete_env(app, key),
+      else: Application.put_env(app, key, value)
 
     on_exit(fn ->
       case prev do

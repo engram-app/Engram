@@ -63,7 +63,10 @@ defmodule Engram.Release.FolderHashDrop do
         true
 
       source ->
-        _ = Application.ensure_all_started(:req)
+        # The migrate eval starts no app. The fetch needs Req (and its Finch
+        # pool, which ex_aws's Req client shares) and ex_aws, whose AuthCache
+        # holds the task-role credentials that sign the AppConfig call.
+        _ = Application.ensure_all_started([:req, :ex_aws])
 
         case Flags.read_once(source, timeout_ms) do
           {:ok, flags} ->
