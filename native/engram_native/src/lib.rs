@@ -1511,7 +1511,11 @@ mod tests {
     fn feed_terms_name_the_encoded_dims() {
         let k = keyed(&KEY);
         let (mut memo, mut buf) = (HashMap::new(), String::new());
-        let bm25 = Bm25 { avgdl: 50.0, b: 0.75, cap: None };
+        let bm25 = Bm25 {
+            avgdl: 50.0,
+            b: 0.75,
+            cap: None,
+        };
         for text in corpus() {
             let (idx, _, doc_len) = encode(&text, &k, bm25, Some("en"), &mut memo, &mut buf);
             let (counts, n) = count_terms(&text, &k, Some("en"), &mut memo, &mut buf);
