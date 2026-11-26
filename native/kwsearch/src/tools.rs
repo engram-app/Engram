@@ -618,8 +618,21 @@ fn verify() {
         .collect();
     let missing = truth.keys().filter(|p| !seen.contains_key(p)).count();
     let extra = seen.keys().filter(|p| !truth.contains_key(p)).count();
-    eprintln!("missing sample: {:?}", truth.keys().filter(|p| !seen.contains_key(p)).take(3).collect::<Vec<_>>());
-    eprintln!("extra sample: {:?}", seen.keys().filter(|p| !truth.contains_key(p)).take(3).collect::<Vec<_>>());
+    eprintln!(
+        "missing sample: {:?}",
+        truth
+            .keys()
+            .filter(|p| !seen.contains_key(p))
+            .take(3)
+            .collect::<Vec<_>>()
+    );
+    eprintln!(
+        "extra sample: {:?}",
+        seen.keys()
+            .filter(|p| !truth.contains_key(p))
+            .take(3)
+            .collect::<Vec<_>>()
+    );
     let stale = truth
         .iter()
         .filter(|(p, crc)| seen.get(p).is_some_and(|c| c != *crc))
