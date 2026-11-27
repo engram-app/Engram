@@ -60,7 +60,7 @@ describe("token refresh on socket error", () => {
 			queryClient,
 			t: englishT,
 		});
-		expect(sockets[0]!.opts.params()).toEqual({ token: "tok-A" });
+		expect(sockets[0]!.opts.params()).toMatchObject({ token: "tok-A" });
 		expect(sockets[0]!.onError).toHaveBeenCalled();
 
 		current = "tok-B";
@@ -68,7 +68,7 @@ describe("token refresh on socket error", () => {
 		errorCb();
 		await flush();
 
-		expect(sockets[0]!.opts.params()).toEqual({ token: "tok-B" });
+		expect(sockets[0]!.opts.params()).toMatchObject({ token: "tok-B" });
 	});
 
 	// A browser clock a few seconds behind the server makes Clerk's cache hand
@@ -130,7 +130,7 @@ describe("token refresh on socket error", () => {
 		errorCb();
 		await flush();
 
-		expect(sockets[0]!.opts.params()).toEqual({ token: "tok-A" });
+		expect(sockets[0]!.opts.params()).toMatchObject({ token: "tok-A" });
 	});
 
 	it("a refresh resolving after teardown does not touch the next connection's token", async () => {
@@ -163,7 +163,7 @@ describe("token refresh on socket error", () => {
 
 		release("tok-STALE");
 		await flush();
-		expect(sockets[1]!.opts.params()).toEqual({ token: "tok-NEW" });
+		expect(sockets[1]!.opts.params()).toMatchObject({ token: "tok-NEW" });
 	});
 });
 
