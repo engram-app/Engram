@@ -28,7 +28,8 @@ defmodule Engram.PromEx.Search do
       Postgres resolving a search's filter (`[:engram, :search,
       :filter_resolve]`).
     * `engram_prom_ex_search_gate_total` (tags `[:outcome, :gate,
-      :upstream]`: `ok` or `busy`; `admission`, `qdrant` or `pool`) and `engram_prom_ex_search_gate_wait_milliseconds`: every
+      :upstream]`: `ok` or `busy`; `admission`, `qdrant`, `pool` or `shadow`, the keyword shadow
+      sample, never live traffic) and `engram_prom_ex_search_gate_wait_milliseconds`: every
       search through `Engram.Search.Gate`, `[:engram, :search, :gate]`.
     * `engram_prom_ex_search_hits_dropped_total`: sum of `count` from
       `[:engram, :search, :hit_dropped]`, tag `[:reason]`.

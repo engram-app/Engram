@@ -9,10 +9,11 @@ defmodule Engram.KeywordStore.Shadow do
   the feed is written, and `:keyword_shadow_permille` (`KEYWORD_SHADOW_RATE`
   at boot, a runtime override after; default 0: off) picks the search. Each
   sample costs one extra keyword-only query on each store: at most
-  #{4} run at once (else the sample is dropped), and the sparse one goes
-  through the same concurrency gate and pool check as a live search
-  (`Engram.Search.Gate`), so a busy pool drops the sample (outcome `busy`)
-  rather than queueing behind live traffic (review M2).
+  ONE runs at a time (else the sample is dropped), and the sparse one takes
+  a slot of the live searches' gate only when one is free right now with
+  another to spare, under its own key (`Engram.Search.Gate.try_run/1`): it
+  never waits, never queues, never uses a user's per-user slots, and is
+  dropped (outcome `busy`) instead (reviews M2, N1).
 
   Emits `[:engram, :search, :keyword_shadow]` with `overlap` (share of the
   sparse top 10 that kwsearch also returned, 1.0 when both are empty; also
@@ -28,7 +29,7 @@ defmodule Engram.KeywordStore.Shadow do
   alias Engram.ServiceConfig
 
   @top 10
-  @max_in_flight 4
+  @max_in_flight 1
   @slots {__MODULE__, :in_flight}
 
   @doc "Starts a compare for this search when sampled; never blocks or fails it."
@@ -89,11 +90,10 @@ defmodule Engram.KeywordStore.Shadow do
   def compare(sparse, search_opts) do
     opts = Keyword.put(search_opts, :limit, @top)
     {t_us, tantivy} = :timer.tc(fn -> Tantivy.keyword_hits(sparse, opts) end)
-    user_id = Keyword.fetch!(opts, :user_id)
 
     {s_us, sparse_hits} =
       :timer.tc(fn ->
-        Gate.run(user_id, fn ->
+        Gate.try_run(fn ->
           Gate.pool_busy(:qdrant, fn -> KeywordStore.impl().search(sparse, opts) end)
         end)
       end)

@@ -138,14 +138,45 @@ defmodule Engram.Workers.ReconcileKeywordIndex do
   was nothing due, `:halted` when it stopped on an error.
   """
   @spec run(%{id: String.t(), rebuilding: boolean()}, integer()) ::
-          :more | :done | :idle | :halted
+          :more | :done | :idle | :halted | :rebuilt_failed
   def run(epoch, now) do
     target = "#{epoch.id}:#{@version}"
     cursor = Cursor.get(@cursor) || %{}
 
     case walk(cursor, target, epoch, now) do
       :idle -> :idle
+      :retry_rebuilt -> retry_rebuilt(cursor, epoch)
       walk -> step(walk, epoch, now)
+    end
+  end
+
+  # The last walk finished but its `rebuilt` failed: say it once more before
+  # any reload. Failing again, the flag clears, so the next run reloads in
+  # full (M4) rather than retrying forever (review L3).
+  defp retry_rebuilt(cursor, epoch) do
+    result = rebuilt(epoch)
+    :ok = Cursor.put(@cursor, Map.delete(cursor, "rebuilt_failed"))
+
+    :telemetry.execute([:engram, :keyword_reconcile, :run], %{pushed: 0, skipped: 0}, %{
+      outcome: result,
+      mode: "rebuilt"
+    })
+
+    result
+  end
+
+  defp rebuilt(epoch) do
+    case Client.rebuilt(epoch.id) do
+      :ok ->
+        :done
+
+      {:error, reason} ->
+        Logger.warning(
+          "keyword reconcile: rebuilt refused",
+          Metadata.with_category(:warning, :search, reason: Metadata.safe_reason(reason))
+        )
+
+        :rebuilt_failed
     end
   end
 
@@ -156,6 +187,7 @@ defmodule Engram.Workers.ReconcileKeywordIndex do
     cond do
       cursor["target"] != target -> full
       is_nil(done_at) -> cursor
+      epoch.rebuilding and cursor["rebuilt_failed"] == true -> :retry_rebuilt
       # Finished, yet kwsearch still waits: a restored mid-load snapshot or a
       # lost `rebuilt`. Reload (a walk that skipped notes waits a day first).
       epoch.rebuilding and (cursor["skipped"] || 0) == 0 -> full
@@ -172,13 +204,16 @@ defmodule Engram.Workers.ReconcileKeywordIndex do
     result =
       case result do
         :finished ->
-          :ok = Cursor.put(@cursor, Map.merge(walk, %{"done_at" => now, "user" => nil}))
+          done = Map.merge(walk, %{"done_at" => now, "user" => nil})
 
-          _ =
-            if walk["mode"] == "full" and (walk["skipped"] || 0) == 0 and epoch.rebuilding,
-              do: Client.rebuilt(epoch.id)
-
-          :done
+          if walk["mode"] == "full" and (walk["skipped"] || 0) == 0 and epoch.rebuilding do
+            result = rebuilt(epoch)
+            :ok = Cursor.put(@cursor, Map.put(done, "rebuilt_failed", result == :rebuilt_failed))
+            result
+          else
+            :ok = Cursor.put(@cursor, done)
+            :done
+          end
 
         other ->
           other
@@ -383,22 +418,35 @@ defmodule Engram.Workers.ReconcileKeywordIndex do
   # point, content bytes}], by id, under the user's tenant.
   defp page(user_id, after_note, size) do
     {:ok, rows} =
-      Repo.with_tenant(user_id, fn ->
-        from(n in Note,
-          left_join: b in NoteBody,
-          on: b.note_id == n.id,
-          left_join: c in Chunk,
-          on: c.note_id == n.id and not is_nil(c.qdrant_point_id),
-          where: n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at),
-          group_by: [n.id, b.content_bytes],
-          order_by: n.id,
-          limit: ^size,
-          select: {n.id, count(c.qdrant_point_id), coalesce(b.content_bytes, 0)}
-        )
-        |> then(fn q -> if after_note, do: where(q, [n], n.id > ^after_note), else: q end)
-        |> Repo.all()
-      end)
+      Repo.with_tenant(user_id, fn -> Repo.all(page_query(user_id, after_note, size)) end)
 
     rows
+  end
+
+  @doc """
+  The page read: `size` live notes after `after_note` by id, each with its
+  chunk count and content bytes as correlated lookups. No GROUP BY, so the
+  plan streams the notes index and stops at the LIMIT instead of
+  aggregating the whole user first (review L4; pinned by a plan test).
+  """
+  @spec page_query(String.t(), String.t() | nil, pos_integer()) :: Ecto.Query.t()
+  def page_query(user_id, after_note, size) do
+    chunks =
+      from(c in Chunk,
+        where: c.note_id == parent_as(:note).id and not is_nil(c.qdrant_point_id),
+        select: count()
+      )
+
+    bytes =
+      from(b in NoteBody, where: b.note_id == parent_as(:note).id, select: b.content_bytes)
+
+    from(n in Note,
+      as: :note,
+      where: n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at),
+      order_by: n.id,
+      limit: ^size,
+      select: {n.id, subquery(chunks), coalesce(subquery(bytes), 0)}
+    )
+    |> then(fn q -> if after_note, do: where(q, [n], n.id > ^after_note), else: q end)
   end
 end

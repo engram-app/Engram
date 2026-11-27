@@ -72,7 +72,8 @@ defmodule Engram.KeywordStore.TantivyBulkTest do
          kw,
          listing \\ [],
          epoch \\ %{"epoch" => "e1", "rebuilding" => true},
-         status \\ 200
+         status \\ 200,
+         rebuilt_status \\ 200
        ) do
     test_pid = self()
 
@@ -98,7 +99,7 @@ defmodule Engram.KeywordStore.TantivyBulkTest do
 
         "/rebuilt" ->
           send(test_pid, {:rebuilt, body["epoch"]})
-          json(conn, 200, %{"ok" => true})
+          json(conn, rebuilt_status, %{"ok" => rebuilt_status == 200})
       end
     end)
   end
@@ -317,6 +318,25 @@ defmodule Engram.KeywordStore.TantivyBulkTest do
       assert_received {:rebuilt, "e1"}
     end
 
+    test "a refused rebuilt is a run outcome, retried once before any reload (delta L3)",
+         %{kw: kw, user: user, vault: vault} do
+      _ = indexed_note!(user, vault, "A.md", "# A\n\nFerritin.")
+      kwsearch(kw, [], %{"epoch" => "e1", "rebuilding" => true}, 200, 403)
+      epoch = %{id: "e1", rebuilding: true}
+
+      assert ReconcileKeywordIndex.run(epoch, 1_000) == :rebuilt_failed
+      assert_received {:rebuilt, "e1"}
+      assert [_ | _] = pushed_notes()
+      assert %{"rebuilt_failed" => true} = Cursor.get("keyword_reconcile")
+
+      # Next run: only the rebuilt again, no walk.
+      kwsearch(kw)
+      assert ReconcileKeywordIndex.run(epoch, 1_100) == :done
+      assert_received {:rebuilt, "e1"}
+      assert pushed_notes() == [], "a lost rebuilt re-ran the full walk"
+      refute Map.has_key?(Cursor.get("keyword_reconcile"), "rebuilt_failed")
+    end
+
     test "a walk that skipped notes never says rebuilt (L2)", %{kw: kw, user: user, vault: vault} do
       _ = indexed_note!(user, vault, "A.md", "# A\n\nFerritin.")
       kwsearch(kw, [], %{"epoch" => "e1", "rebuilding" => true}, 413)
@@ -488,6 +508,60 @@ defmodule Engram.KeywordStore.TantivyBulkTest do
 
       assert_received {:shadow, %{overlap: +0.0}, %{outcome: :error}}
       refute_received {[:engram, :search, :keyword_fallback], ^ref, _, _}
+    end
+  end
+
+  describe "shadow compare beside live searches (delta N1)" do
+    setup %{kw: kw, user: user} do
+      # kwsearch's leg errors; only the sparse leg's slot is under test.
+      Bypass.down(kw)
+      {:ok, gate} = Engram.ConcurrencyGate.start_link(limit: 4, per_key: 2)
+      ServiceConfig.put_override(:search_gate, gate: gate)
+      ServiceConfig.put_override(:keyword_shadow_permille, 1000)
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :search, :gate]])
+      %{gate: gate, ref: ref, opts: [user_id: user.id, limit: 5, vault_id: Ecto.UUID.generate()]}
+    end
+
+    # `n` processes holding a slot each under `key` until the test ends.
+    defp hold(gate, key, n) do
+      test_pid = self()
+
+      for _ <- 1..n do
+        spawn_link(fn ->
+          :ok = Engram.ConcurrencyGate.acquire(gate, key, 1_000)
+          send(test_pid, :held)
+          Process.sleep(:infinity)
+        end)
+      end
+
+      for _ <- 1..n, do: assert_receive(:held, 1_000)
+    end
+
+    test "with the node one slot from its limit the shadow is dropped, and a live search still gets the last slot at once",
+         %{gate: gate, ref: ref, opts: opts, user: user} do
+      hold(gate, :others, 2)
+      hold(gate, user.id, 1)
+
+      shadow =
+        :telemetry_test.attach_event_handlers(self(), [[:engram, :search, :keyword_shadow]])
+
+      :ok = Shadow.compare(%{indices: [1], values: [1.0]}, opts)
+      assert_received {[:engram, :search, :keyword_shadow], ^shadow, _, %{outcome: :busy}}
+
+      assert_received {[:engram, :search, :gate], ^ref, %{wait: 0},
+                       %{gate: :shadow, outcome: :busy}}
+
+      {us, :live} = :timer.tc(fn -> Engram.Search.Gate.run(user.id, fn -> :live end) end)
+      assert us < 100_000, "the live search waited #{us} us behind a shadow"
+    end
+
+    test "on an idle node the shadow runs under its own key, never a user's slots",
+         %{gate: gate, ref: ref, opts: opts, user: user} do
+      hold(gate, user.id, 1)
+      :ok = Shadow.compare(%{indices: [1], values: [1.0]}, opts)
+      assert_received {[:engram, :search, :gate], ^ref, _, %{gate: :shadow, outcome: :ok}}
+      # The user's second slot is still theirs.
+      assert Engram.ConcurrencyGate.acquire(gate, user.id, 1_000) == :ok
     end
   end
 
