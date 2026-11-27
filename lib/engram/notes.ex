@@ -1661,7 +1661,7 @@ defmodule Engram.Notes do
                 # (its name keys are stale or untrusted): the path is taken.
                 # The same changeset error as a path index refusal, so every
                 # surface answers it as it answers that one (the wire's
-                # `create_failed`, which the web app name-bumps on).
+                # `id_conflict`, which the web app name-bumps on).
                 name_taken?(changeset, note_id) ->
                   {:error,
                    Ecto.Changeset.add_error(changeset, :user_id, "has already been taken",

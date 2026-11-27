@@ -32,6 +32,7 @@ defmodule EngramWeb.CrdtChannel do
   alias Engram.Notes.CrdtRoom
   alias Engram.Notes.CrdtTransport
   alias Engram.Notes.PathSanitizer
+  alias Engram.Notes.PathUniques
   alias EngramWeb.ChannelGate
   alias Yex.Sync.SharedDoc
 
@@ -457,11 +458,15 @@ defmodule EngramWeb.CrdtChannel do
           end
 
         {:error, %Ecto.Changeset{} = cs} ->
-          # Any changeset validation failure. A resurrect onto a path another
-          # live note holds no longer reaches here: `shown_check/5` refuses it
-          # as id_conflict before the write.
-          log_create_failed(socket, note_id, "changeset: #{inspect(cs.errors)}")
-          {:reply, {:error, %{reason: "create_failed"}}, socket}
+          # A "target taken" index (`PathUniques`, e.g. a stale name key
+          # holding `notes_name_live`) is a taken name; any other changeset
+          # failure stays a clean create_failed.
+          if path_taken?(cs) do
+            reply_name_taken(socket, note_id)
+          else
+            log_create_failed(socket, note_id, "changeset: #{inspect(cs.errors)}")
+            {:reply, {:error, %{reason: "create_failed"}}, socket}
+          end
 
         {:error, reason} ->
           # Catch-all for the crypto/KMS error class (a first-write user whose
@@ -2137,6 +2142,18 @@ defmodule EngramWeb.CrdtChannel do
   defp reply_name_taken(socket, note_id) do
     sync_error(socket, :id_conflict)
     {:reply, {:error, %{reason: "id_conflict", doc_id: note_id}}, socket}
+  end
+
+  # Ecto files a unique-constraint error under the constraint's FIRST field
+  # (`user_id`), so match the constraint by NAME, against the one list of
+  # "target taken" indexes.
+  @doc false
+  def path_taken?(%Ecto.Changeset{errors: errors}) do
+    names = PathUniques.names()
+
+    Enum.any?(errors, fn {_field, {_msg, opts}} ->
+      opts[:constraint] == :unique and to_string(opts[:constraint_name]) in names
+    end)
   end
 
   defp live_at?(user, vault, path) do
