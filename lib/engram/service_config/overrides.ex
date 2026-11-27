@@ -51,7 +51,8 @@ defmodule Engram.ServiceConfig.Overrides do
   (prod, staging) a flag key reads flag, then env: a DB row for it is ignored
   (one warning per key per node) and `put/3` and `delete/2` refuse it with
   `{:error, :managed_by_flags}`. Every other key, and every key on self-host,
-  reads DB row, then env. `paused_accounts` and `folder_path_hash_drop` are flags-only everywhere.
+  reads DB row, then env. `flags_only/0` (`paused_accounts` and the boot steps' kill
+  switches) never take a DB row.
   """
 
   import Ecto.Query
@@ -133,18 +134,43 @@ defmodule Engram.ServiceConfig.Overrides do
     # (`Engram.Release.FolderHashDrop`), default on. Flag-owned: the step reads
     # the flags source once at boot, before the reader starts.
     folder_path_hash_drop: :boolean,
+    # Release L's owner-run boot steps (`Engram.Release.NotesPathExpand`),
+    # each default on, flag-owned the same way: the shape check relax, the
+    # name collision guard build, the manifest name index build.
+    notes_shape_relax: :boolean,
+    notes_name_unique_build: :boolean,
+    notes_manifest_name_build: :boolean,
     # Flags-only (`Engram.ServiceConfig.Flags.paused?/1`, `Engram.ClientGate`):
     # `[%{"id" => uuid, "until" => UTC ISO 8601}]`. Never a DB row.
     paused_accounts: :paused_accounts
   }
 
   # The keys the reviewed flags file owns: exactly the `properties` of
-  # engram-infra `service_flags/schema.json`. Change both together.
-  @flag_keys ~w(folder_ops client_logs_stop_writes plugin_floor_enabled plugin_floor
-                paused_accounts folder_path_hash_drop)a
-  # Never a DB row: `paused_accounts`, and `folder_path_hash_drop`, which its
-  # boot step reads from the flags source only.
-  @flags_only [:paused_accounts, :folder_path_hash_drop]
+  # engram-infra `service_flags/schema.json`. Change both together. One map,
+  # so a key cannot be flags-only without being a flag key (the flags parser
+  # drops a non-flag key as unknown: a `false` would be ignored and the step
+  # it guards would still run). `:flags_only` keys never take a DB row:
+  # `paused_accounts`, and the owner-run boot steps' kill switches
+  # (`Engram.Release.BootStep`), which read the flags source only.
+  @flags %{
+    folder_ops: :db_fallback,
+    client_logs_stop_writes: :db_fallback,
+    plugin_floor_enabled: :db_fallback,
+    plugin_floor: :db_fallback,
+    paused_accounts: :flags_only,
+    folder_path_hash_drop: :flags_only,
+    notes_shape_relax: :flags_only,
+    notes_name_unique_build: :flags_only,
+    notes_manifest_name_build: :flags_only
+  }
+  @flag_keys Map.keys(@flags)
+  @flags_only for {key, :flags_only} <- @flags, do: key
+
+  # And every flag key is typed (`validate/2` checks its values).
+  case @flag_keys -- Map.keys(@types) do
+    [] -> :ok
+    untyped -> raise CompileError, description: "flag keys without a type: #{inspect(untyped)}"
+  end
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})
 
@@ -156,6 +182,9 @@ defmodule Engram.ServiceConfig.Overrides do
 
   @doc "The keys the reviewed flags file owns (`Engram.ServiceConfig.Flags`)."
   def flag_keys, do: @flag_keys
+
+  @doc "The flag keys that never take a DB row."
+  def flags_only, do: @flags_only
 
   @doc "`{:ok, key}` when the flags-file `name` is a flag key, else `:error`."
   # No @spec: dialyzer's :underspecs flags `atom()` against the literal keys.
