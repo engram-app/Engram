@@ -2584,23 +2584,22 @@ defmodule Engram.Notes do
     end
   end
 
-  # A live note SHOWN at the target (by name under a moved folder, which no
-  # unique key holds) is a conflict, as a keyed holder is. Run by `move_note`
+  # A live note at the target, SHOWN there (by name under a moved folder, which
+  # no unique key holds) or KEYED there, is a conflict. The keyed holder must be
+  # checked here too: left to the path unique constraint, the write aborts the
+  # transaction and the job discard after it raises, crashing the channel
+  # instead of replying `id_conflict`. Run by `move_note`
   # right after its `next_seq!` takes the vault seq lock, so no uncascaded
   # move (S5) lands between check and write, and the merge, encrypt and
   # NoteCommitted insert stay outside the lock (#1710). `moved?` (read with
   # the row) can be a stale `false`: the vault's FIRST move may commit before
-  # the lock, so the bit is re-read here. One index probe
-  # (`folders_moved_live`) in a vault that never moved a folder.
+  # the lock, so the bit is re-read here. Cost: the `folders_moved_live`
+  # probe plus one indexed path lookup, on resurrects only (rare).
   defp shown_check(moved?, user, vault, path, id) do
     fn ->
       moved? = moved? or Location.named?(user.id, vault.id)
 
-      cond do
-        not moved? -> {:ok, false}
-        shown_by_other?(user, vault, path, id) -> :conflict
-        true -> {:ok, true}
-      end
+      if shown_by_other?(user, vault, path, id), do: :conflict, else: {:ok, moved?}
     end
   end
 

@@ -31,6 +31,7 @@ defmodule EngramWeb.CrdtChannel do
   alias Engram.Notes.CrdtRegistry
   alias Engram.Notes.CrdtRoom
   alias Engram.Notes.CrdtTransport
+  alias Engram.Notes.PathSanitizer
   alias EngramWeb.ChannelGate
   alias Yex.Sync.SharedDoc
 
@@ -445,18 +446,22 @@ defmodule EngramWeb.CrdtChannel do
           {:reply, {:error, %{reason: "recently_deleted"}}, socket}
 
         {:error, :conflict} ->
-          reply_name_taken(socket, note_id)
-
-        {:error, %Ecto.Changeset{} = cs} ->
-          # The path unique constraint fires when a tombstoned id resurrects
-          # onto a path another live note holds. Any other changeset failure
-          # stays a clean create_failed.
-          if path_taken?(cs) do
+          # The index refused the claim. Final only when a LIVE note holds the
+          # path: a just-deleted note's entry is released by
+          # ReleaseIndexEntries, so a retry succeeds and must stay retryable.
+          if live_at?(user, vault, path) do
             reply_name_taken(socket, note_id)
           else
-            log_create_failed(socket, note_id, "changeset: #{inspect(cs.errors)}")
+            log_create_failed(socket, note_id, "index claim conflict, no live holder")
             {:reply, {:error, %{reason: "create_failed"}}, socket}
           end
+
+        {:error, %Ecto.Changeset{} = cs} ->
+          # Any changeset validation failure. A resurrect onto a path another
+          # live note holds no longer reaches here: `shown_check/5` refuses it
+          # as id_conflict before the write.
+          log_create_failed(socket, note_id, "changeset: #{inspect(cs.errors)}")
+          {:reply, {:error, %{reason: "create_failed"}}, socket}
 
         {:error, reason} ->
           # Catch-all for the crypto/KMS error class (a first-write user whose
@@ -2124,8 +2129,8 @@ defmodule EngramWeb.CrdtChannel do
   # GenServer.call/3 and crash the channel. Same reason as EngramWeb.SyncRateLimit's limits.
   defp room_probe_ms, do: Application.get_env(:engram, :crdt_room_probe_ms) || @room_probe_ms
 
-  # A crdt_create refused because another live note holds the path (an index
-  # claim's `:conflict`, or the path unique constraint). A name conflict, not a
+  # A crdt_create refused because another live note holds the path. A name
+  # conflict, not a
   # server failure: reply the reason clients already treat as final, never the
   # retryable create_failed, which made the plugin re-send it forever and pause
   # every create in the vault.
@@ -2134,11 +2139,8 @@ defmodule EngramWeb.CrdtChannel do
     {:reply, {:error, %{reason: "id_conflict", doc_id: note_id}}, socket}
   end
 
-  defp path_taken?(%Ecto.Changeset{errors: errors}) do
-    case errors[:path_hmac] do
-      {_msg, opts} -> opts[:constraint] == :unique
-      nil -> false
-    end
+  defp live_at?(user, vault, path) do
+    match?({:ok, _}, Notes.get_note_metadata(user, vault, PathSanitizer.sanitize(path)))
   end
 
   # A note_id is a non-sensitive UUID and is REQUIRED to diagnose which note
