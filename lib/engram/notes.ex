@@ -2586,21 +2586,59 @@ defmodule Engram.Notes do
 
   # A live note at the target, SHOWN there (by name under a moved folder, which
   # no unique key holds) or KEYED there, is a conflict. The keyed holder must be
-  # checked here too: left to the path unique constraint, the write aborts the
+  # checked here: left to the path unique constraint, the write aborts the
   # transaction and the job discard after it raises, crashing the channel
-  # instead of replying `id_conflict`. Run by `move_note`
-  # right after its `next_seq!` takes the vault seq lock, so no uncascaded
-  # move (S5) lands between check and write, and the merge, encrypt and
-  # NoteCommitted insert stay outside the lock (#1710). `moved?` (read with
-  # the row) can be a stale `false`: the vault's FIRST move may commit before
-  # the lock, so the bit is re-read here. Cost: the `folders_moved_live`
-  # probe plus one indexed path lookup, on resurrects only (rare).
+  # instead of replying `id_conflict`. Run by `move_note` right after its
+  # `next_seq!` takes the vault seq lock, so no uncascaded move (S5) lands
+  # between check and write, and the merge, encrypt and NoteCommitted insert
+  # stay outside the lock (#1710). `moved?` (read with the row) can be a stale
+  # `false`: the vault's FIRST move may commit before the lock, so the bit is
+  # re-read here, in the SAME statement as the keyed-holder probe: an unmoved
+  # vault pays one statement, as it did before the keyed check existed. In a
+  # moved vault `shown_by_other?/4` resolves keyed and shown holders alike.
   defp shown_check(moved?, user, vault, path, id) do
     fn ->
-      moved? = moved? or Location.named?(user.id, vault.id)
+      {moved?, keyed?} =
+        if moved?, do: {true, false}, else: moved_or_keyed(user, vault, path, id)
 
-      if shown_by_other?(user, vault, path, id), do: :conflict, else: {:ok, moved?}
+      cond do
+        keyed? -> :conflict
+        moved? and shown_by_other?(user, vault, path, id) -> :conflict
+        true -> {:ok, moved?}
+      end
     end
+  end
+
+  # One statement: has the vault a folder moved without a cascade
+  # (`Location.named?/2`'s probe), and does another live note hold `path`'s
+  # key (`notes_path_live`)? Unnamed like every keyed lookup
+  # (`Keys.lookup?/1` cannot see a keyed read inside a SELECT expression):
+  # a reused generic plan would read the whole vault under RLS
+  # (notes-generic-plan-mis-pick.md).
+  defp moved_or_keyed(user, vault, path, id) do
+    {:ok, fk} = Crypto.dek_filter_key(user)
+
+    ids? = Keys.ids?()
+
+    # `live_notes/3` carries `NOT is_folder`, the predicate `notes_path_live`
+    # is partial on; without it the probe reads the vault's notes instead.
+    keyed =
+      from(n in live_notes(user, vault, ids?),
+        where: ^Keys.eq(:path, Crypto.hmac_field(fk, path), ids?),
+        where: n.id != type(^id, Ecto.UUID),
+        select: 1
+      )
+
+    Repo.with_tenant!(user.id, fn ->
+      Repo.one(
+        from(_ in fragment("(SELECT)"),
+          select:
+            {fragment(WalkSql.moved(), type(^vault.id, Ecto.UUID)),
+             fragment("EXISTS ?", subquery(keyed))}
+        ),
+        prepare: :unnamed
+      )
+    end)
   end
 
   defp resurrect_move({prior, moved?}, user, vault, sanitized_path, folder, origin, recording) do

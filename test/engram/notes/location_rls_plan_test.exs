@@ -249,6 +249,29 @@ defmodule Engram.Notes.LocationRlsPlanTest do
       assert custom =~ "notes_name_key_live", custom
     end
 
+    # A deleted note's id asking for a path another live note holds: the
+    # keyed-holder probe rides the moved-folder probe's statement and must
+    # read `notes_path_live`, never the vault, and never go generic.
+    test "a resurrect onto a held path probes notes_path_live, unnamed", ctx do
+      {:ok, gone} =
+        Notes.upsert_note(ctx.user, ctx.vault, %{"path" => "gone.md", "content" => "g"},
+          actor: "api"
+        )
+
+      :deleted = Notes.delete_note_reporting(ctx.user, ctx.vault, "gone.md")
+
+      plans =
+        plans(ctx.user, fn ->
+          assert {:error, :id_conflict, _} =
+                   Notes.genesis_crdt_note(ctx.user, ctx.vault, gone.id, "top.md")
+        end)
+
+      assert [{_sql, probe}] = Enum.filter(plans, fn {sql, _} -> sql =~ "FROM (SELECT)" end)
+      refute Map.has_key?(probe, :generic)
+      assert probe.custom =~ "notes_path_live", probe.custom
+      refute_vault_scan!(%{"probe" => probe})
+    end
+
     test "a moved folder, a held path: the stale-holder check walks up on an id key",
          ctx do
       mark_moved!(ctx.user, ctx.vault)
