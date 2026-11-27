@@ -30,10 +30,10 @@ set -e
 # policies never bite. The tables carry FORCE ROW LEVEL SECURITY and it has
 # simply never applied to the connection making the queries.
 #
-# MIGRATOR_DATABASE_URL is that seam. Scoped PER COMMAND below — deliberately
-# NOT exported — so only these evals see the admin login, while the BEAM that
-# `exec`s at the bottom inherits the unmodified DATABASE_URL and runs as the
-# restricted role. Exporting it once here instead would look tidier and put
+# MIGRATOR_DATABASE_URL is that seam. Scoped PER COMMAND below, and unset
+# before the `exec`, so only these evals see the admin login, while the BEAM
+# that `exec`s at the bottom inherits the unmodified DATABASE_URL and runs as
+# the restricted role. Exporting it once here instead would look tidier and put
 # the entire app back on the admin login; `test/engram/entrypoint_test.exs`
 # pins against exactly that.
 #
@@ -63,6 +63,13 @@ DATABASE_URL="$MIGRATOR_DATABASE_URL" /app/bin/engram eval "Engram.Release.migra
 # message HERE, instead of the BEAM crash-looping on a cryptic Ecto.UUID
 # load error during boot. set -e turns the non-zero eval into a clean abort.
 DATABASE_URL="$MIGRATOR_DATABASE_URL" /app/bin/engram eval "Engram.Release.verify_schema_baseline()"
+
+# Drop the admin login before handing over. ECS injects MIGRATOR_DATABASE_URL
+# already exported, so without this the BEAM inherits it and the master
+# credential sits in /proc/<pid>/environ for the life of the app. It must be
+# unset HERE: environ is fixed at exec, so System.delete_env/1 cannot scrub
+# it later. Anything needing the admin login must run in an eval above.
+unset MIGRATOR_DATABASE_URL
 
 # NOT prefixed, and that is the whole point: the BEAM runs with the
 # unmodified DATABASE_URL, i.e. the restricted role.
