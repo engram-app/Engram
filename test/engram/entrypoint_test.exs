@@ -136,14 +136,9 @@ defmodule Engram.EntrypointTest do
            "prepare_database, migrate and verify_schema_baseline must run as the migrator"
   end
 
-  test "the migrator login is never exported globally", %{src: src} do
-    refute src =~ ~r/^\s*export\s+MIGRATOR_DATABASE_URL/m,
-           """
-           MIGRATOR_DATABASE_URL is exported, so it leaks into the BEAM's
-           environment. Harmless on its own, but it signals the per-command
-           scoping was replaced by a global assignment — check the `exec` line.
-           """
-
+  # Non-leakage of MIGRATOR_DATABASE_URL itself is proven by running the
+  # script above; this only guards the global DATABASE_URL reassignment.
+  test "DATABASE_URL is never globally reassigned to the migrator", %{src: src} do
     refute src =~ ~r/^\s*(export\s+)?DATABASE_URL="\$MIGRATOR_DATABASE_URL"\s*$/m,
            """
            DATABASE_URL is globally reassigned to the migrator login.
