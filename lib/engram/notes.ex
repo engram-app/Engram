@@ -3163,6 +3163,10 @@ defmodule Engram.Notes do
 
       :stale_snapshot ->
         :ok = discard_job(job)
+        # Every move leg (relocate, resurrect, restore) reports drift here,
+        # once, through the shared helper: a drifted row can never pass the
+        # fence, so its misses must not stay silent.
+        _ = PreImageFence.report_drift(prior.id, :move)
         :stale_snapshot
     end
   end
@@ -5614,6 +5618,7 @@ defmodule Engram.Notes do
               Metadata.with_category(:warning, :sync, user_id: user.id, note_id: note.id)
             )
 
+            _ = PreImageFence.report_drift(note.id, :move)
             :not_found
 
           other ->

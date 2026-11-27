@@ -65,13 +65,13 @@ defmodule Engram.Notes.PreImageFence do
   After a fence miss: is this row one the fence can NEVER match, because its
   CRDT nonce copies drifted apart (a restore or a hand edit, never an app
   writer)? When so, log a warning and emit
-  `[:engram, :crdt, :checkpoint_fence_drift]` (`writer`: `:checkpoint` or
-  `:rest`), so the case is loud instead of an endless silent retry or an
+  `[:engram, :crdt, :checkpoint_fence_drift]` (`writer`: `:checkpoint`, `:rest`
+  or `:move`), so the case is loud instead of an endless silent retry or an
   unexplained conflict. Call inside the caller's tenant transaction: the probe
   runs in a savepoint, and a probe that fails is logged and reads as no drift
   without aborting that transaction.
   """
-  @spec report_drift(Ecto.UUID.t(), :checkpoint | :rest) :: boolean()
+  @spec report_drift(Ecto.UUID.t(), :checkpoint | :rest | :move) :: boolean()
   def report_drift(note_id, writer) do
     drifted? =
       try do

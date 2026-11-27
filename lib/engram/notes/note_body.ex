@@ -656,10 +656,14 @@ defmodule Engram.Notes.NoteBody do
   the only drift that makes `Engram.Notes.PreImageFence` unsatisfiable. Runs
   in a SAVEPOINT, so it must be called inside a transaction, and a failing
   probe rolls back only itself: the caller's transaction stays usable.
+
+  `:crdt_drift_probe_fault_sql` (test-only, unset everywhere else) swaps in a
+  statement that fails in Postgres, so a test can prove that containment.
   """
   @spec crdt_nonce_drift?(module(), Ecto.UUID.t()) :: boolean()
   def crdt_nonce_drift?(repo, id) do
-    %{num_rows: n} = repo.query!(@crdt_drift_sql, [Ecto.UUID.dump!(id)], mode: :savepoint)
+    sql = Application.get_env(:engram, :crdt_drift_probe_fault_sql) || @crdt_drift_sql
+    %{num_rows: n} = repo.query!(sql, [Ecto.UUID.dump!(id)], mode: :savepoint)
     n > 0
   end
 end

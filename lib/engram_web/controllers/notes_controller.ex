@@ -146,6 +146,14 @@ defmodule EngramWeb.NotesController do
         {:error, :note_deleted} ->
           conn |> put_status(404) |> json(%{error: "not_found"})
 
+        # The row's CRDT nonce copies drifted apart (a restore or a hand edit),
+        # so no write can pass its fence until it is repaired. A stable 409, not
+        # the catch-all 500 the plugin would re-queue forever: released plugins
+        # read a 409 body as a conflict, stop pushing, and re-push only on the
+        # next local edit.
+        {:error, :crdt_state_drift} ->
+          conflict_reason(conn, "crdt_state_drift")
+
         # Under the byte check above, but invalid UTF-8 scrubbed to U+FFFD
         # (3 bytes each) can grow past the cap inside upsert_note.
         {:error, :too_large} ->
@@ -305,6 +313,10 @@ defmodule EngramWeb.NotesController do
 
   defp append_response(conn, _user, _path, {_, {:error, :note_deleted}}),
     do: conn |> put_status(404) |> json(%{error: "not_found"})
+
+  # Same stable 409 as upsert/2: the row cannot pass its write fence.
+  defp append_response(conn, _user, _path, {_, {:error, :crdt_state_drift}}),
+    do: conflict_reason(conn, "crdt_state_drift")
 
   defp append_response(conn, _user, _path, {_, {:error, :too_large}}), do: too_large(conn)
 

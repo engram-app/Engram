@@ -14,6 +14,30 @@ defmodule EngramWeb.NotesControllerTest do
   # ---------------------------------------------------------------------------
 
   describe "POST /notes" do
+    test "a row with drifted CRDT nonce copies answers a stable 409, not a 500", %{
+      conn: conn,
+      user: user
+    } do
+      # No write can pass its fence on such a row. A 500 `internal` is what the
+      # plugin re-queues forever; a 409 conflict body is what it stops on.
+      conn = as_plugin(conn)
+      body = %{path: "Test/Drift.md", content: "# drift", mtime: 1.0}
+      %{"note" => %{"id" => id}} = conn |> post("/api/notes", body) |> json_response(200)
+
+      Engram.Repo.with_tenant!(user.id, fn ->
+        Engram.Fixtures.write_note_body!(id, crdt_state_ciphertext: nil, crdt_state_nonce: nil)
+      end)
+
+      Engram.Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^id),
+        [set: [crdt_state_nonce: :crypto.strong_rand_bytes(12)]],
+        skip_tenant_check: true
+      )
+
+      resp = post(conn, "/api/notes", %{body | content: "# drift, edited"})
+      assert json_response(resp, 409) == %{"conflict" => true, "reason" => "crdt_state_drift"}
+    end
+
     test "creates a note and returns metadata", %{conn: conn} do
       conn =
         post(conn, "/api/notes", %{

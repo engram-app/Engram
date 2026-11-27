@@ -191,7 +191,7 @@ defmodule Engram.PromEx.Crdt do
         # A write fence miss (checkpoint or REST) on a row whose body and
         # `notes` CRDT nonce copies drifted apart: that row can never be written
         # through the fence until repaired. Expected 0; any increase is a row to
-        # fix by hand. `writer` is a closed set: checkpoint | rest.
+        # fix by hand. `writer` is a closed set: checkpoint | rest | move.
         counter(
           metric_prefix ++ [:checkpoint_fence_drift, :total],
           event_name: @fence_drift_event,

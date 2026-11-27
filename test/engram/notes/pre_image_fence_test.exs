@@ -148,4 +148,76 @@ defmodule Engram.Notes.PreImageFenceTest do
     assert_received {:fence_drift, %{count: 1}, %{writer: :rest}}
     assert log =~ "crdt fence drift"
   end
+
+  test "a probe that errors is contained: the caller's transaction stays usable", ctx do
+    %{user: user, note: note} = ctx
+    drift_crdt_nonce!(user, note.id)
+
+    # A probe statement that fails IN POSTGRES (division by zero). Without
+    # the savepoint that failure aborts the whole transaction (25P02), so the
+    # caller's next statement, and its retry signal, would be lost.
+    Application.put_env(
+      :engram,
+      :crdt_drift_probe_fault_sql,
+      "SELECT 1 / 0 WHERE $1::uuid IS NOT NULL"
+    )
+
+    on_exit(fn -> Application.delete_env(:engram, :crdt_drift_probe_fault_sql) end)
+
+    {:ok, after_probe} =
+      Repo.with_tenant(user.id, fn ->
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            refute PreImageFence.report_drift(note.id, :checkpoint)
+          end)
+
+        assert log =~ "crdt fence drift check failed"
+        %{rows: [[1]]} = Repo.query!("SELECT 1")
+        :usable
+      end)
+
+    assert after_probe == :usable
+  end
+
+  defp attach_drift do
+    test_pid = self()
+    handler = "fence-drift-move-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler,
+      [:engram, :crdt, :checkpoint_fence_drift],
+      fn _, m, meta, _ -> send(test_pid, {:fence_drift, m, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  test "a rename on a drifted row reports drift as a move", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+    drift_crdt_nonce!(user, note.id)
+    attach_drift()
+
+    ExUnit.CaptureLog.capture_log(fn -> Notes.rename_note(user, vault, "f.md", "g.md") end)
+    assert_received {:fence_drift, %{count: 1}, %{writer: :move}}
+  end
+
+  test "a resurrecting id-keyed move on a drifted row reports drift as a move", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+    # A TOMBSTONED id at a new path takes the id-keyed move (resurrect) leg.
+    :ok = Notes.delete_note(user, vault, "f.md")
+    drift_crdt_nonce!(user, note.id)
+    attach_drift()
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      Notes.upsert_note(
+        user,
+        vault,
+        %{"id" => note.id, "path" => "h.md", "content" => "before"},
+        actor: "api"
+      )
+    end)
+
+    assert_received {:fence_drift, %{count: 1}, %{writer: :move}}
+  end
 end
