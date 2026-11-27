@@ -122,6 +122,34 @@ defmodule EngramWeb.CrdtChannelTest do
       assert got == note.id
     end
 
+    # A tombstoned id resurrecting onto a path a DIFFERENT live note holds is a
+    # name conflict, not a server failure. It used to reply the generic
+    # `create_failed` (the path unique constraint), which clients must retry,
+    # so the plugin re-sent it forever and paused every create in the vault.
+    test "tombstoned id resurrected onto an OCCUPIED path replies id_conflict", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, gone} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/was.md", "content" => "old"},
+          actor: "api"
+        )
+
+      :ok = Notes.delete_note_by_id(user, vault, gone.id)
+
+      {:ok, holder} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/taken.md", "content" => "live"},
+          actor: "api"
+        )
+
+      ref = push(socket, "crdt_create", %{"doc_id" => gone.id, "path" => "Notes/taken.md"})
+      assert_reply ref, :error, %{reason: "id_conflict", doc_id: got}
+      assert got == gone.id
+      {:ok, still} = Notes.get_note(user, vault, "Notes/taken.md")
+      assert still.id == holder.id
+    end
+
     test "nil path replies bad_path without crashing the channel", %{socket: socket} do
       ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => nil})
       assert_reply ref, :error, %{reason: "bad_path"}
