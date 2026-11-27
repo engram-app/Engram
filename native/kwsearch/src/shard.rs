@@ -188,9 +188,10 @@ pub struct State {
     /// so a row or a bulk body naming another tenant's note reads and sets
     /// nothing of theirs (review M6).
     markers: HashMap<(Uuid, Uuid), Marker>,
-    pending: HashMap<Uuid, Pending>,
+    /// Keyed by (user, point), like the markers (review L1).
+    pending: HashMap<(Uuid, Uuid), Pending>,
     /// Committed (searcher-visible) chunk docs deleted this round.
-    gone: HashSet<Uuid>,
+    gone: HashSet<(Uuid, Uuid)>,
     /// Per-user (docs, tokens) change this round, folded into the stats doc
     /// on commit.
     delta: HashMap<Uuid, (i64, i64)>,
@@ -234,6 +235,9 @@ pub struct Shard {
     /// reader reload (the window review H1 found).
     #[cfg(test)]
     pub after_commit: Mutex<Option<Box<dyn Fn() + Send>>>,
+    /// Test hook: the committed-marker lookup fails.
+    #[cfg(test)]
+    pub fail_marker_lookup: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Default, Debug, PartialEq)]
@@ -309,6 +313,8 @@ impl Shard {
             }),
             #[cfg(test)]
             after_commit: Mutex::new(None),
+            #[cfg(test)]
+            fail_marker_lookup: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -444,7 +450,7 @@ impl Shard {
         let stamp = r.stamp.max(0) as u64;
         let key = (r.user, note);
         if let std::collections::hash_map::Entry::Vacant(e) = st.markers.entry(key) {
-            e.insert(self.committed_marker(&r.user, &note));
+            e.insert(self.committed_marker(&r.user, &note)?);
         }
         let have = st.markers[&key].stamp;
         if stamp < have {
@@ -455,8 +461,9 @@ impl Shard {
             // indexed point already holds this content. Everything else is
             // a no-op.
             let p = r.point.filter(|_| op == kwfeed::UPSERT);
-            let fill =
-                p.is_some_and(|p| self.kept(&st.markers[&key], &key, &p) && !self.indexed(st, &p));
+            let fill = p.is_some_and(|p| {
+                self.kept(&st.markers[&key], &key, &p) && !self.indexed(st, &r.user, &p)
+            });
             if !fill {
                 out.skipped_stale += 1;
                 return Ok(false);
@@ -567,7 +574,7 @@ impl Shard {
         let len = doc.1;
         st.writer.as_ref().unwrap().w.add_document(doc.0)?;
         st.pending.insert(
-            *p,
+            (r.user, *p),
             Pending {
                 user: r.user,
                 note: r.note.unwrap(),
@@ -611,12 +618,12 @@ impl Shard {
             let ff = s.segment_reader(a.segment_ord).fast_fields();
             let hi = ff.u64("ph")?.first(a.doc_id).unwrap_or(0);
             let lo = ff.u64("pl")?.first(a.doc_id).unwrap_or(0);
-            if st.gone.insert(Uuid::from_u64_pair(hi, lo)) {
+            if st.gone.insert((*user, Uuid::from_u64_pair(hi, lo))) {
                 freed.0 += 1;
                 freed.1 += ff.u64("len")?.first(a.doc_id).unwrap_or(0) as i64;
             }
         }
-        st.pending.retain(|p, d| {
+        st.pending.retain(|(_, p), d| {
             let hit = d.user == *user
                 && match &scope {
                     Scope::Point(x) => p == x,
@@ -960,7 +967,7 @@ impl Shard {
             }
             let key = (*user, n.note);
             if let std::collections::hash_map::Entry::Vacant(e) = st.markers.entry(key) {
-                e.insert(self.committed_marker(user, &n.note));
+                e.insert(self.committed_marker(user, &n.note)?);
             }
             // Stamps are unique per note op, so an equal one is this same
             // batch note again: the rest of a note too big for one request,
@@ -1074,7 +1081,18 @@ impl Shard {
             .collect())
     }
 
-    fn committed_marker(&self, user: &Uuid, note: &Uuid) -> Marker {
+    /// A failed lookup is an error, never "no marker": stamp 0 would let a
+    /// stale batch or row apply as fresh (review L2).
+    fn committed_marker(&self, user: &Uuid, note: &Uuid) -> tantivy::Result<Marker> {
+        #[cfg(test)]
+        if self
+            .fail_marker_lookup
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(tantivy::TantivyError::InternalError(
+                "test: marker lookup".into(),
+            ));
+        }
         let s = self.reader.searcher();
         let mut m = Marker {
             stamp: 0,
@@ -1082,14 +1100,12 @@ impl Shard {
             committed: false,
         };
         let q = BooleanQuery::new(vec![must(self.f.mnote, note), must(self.f.muser, user)]);
-        for a in s.search(&q, &DocSetCollector).unwrap_or_default() {
+        for a in s.search(&q, &DocSetCollector)? {
             let ff = s.segment_reader(a.segment_ord).fast_fields();
-            m.stamp = m
-                .stamp
-                .max(ff.u64("stamp").unwrap().first(a.doc_id).unwrap_or(0));
-            m.committed = ff.u64("mhaskeep").unwrap().first(a.doc_id) == Some(1);
+            m.stamp = m.stamp.max(ff.u64("stamp")?.first(a.doc_id).unwrap_or(0));
+            m.committed = ff.u64("mhaskeep")?.first(a.doc_id) == Some(1);
         }
-        m
+        Ok(m)
     }
 
     /// Is `p` in the note's point set as of its marker?
@@ -1112,20 +1128,20 @@ impl Shard {
             > 0
     }
 
-    fn indexed(&self, st: &State, p: &Uuid) -> bool {
-        if st.pending.contains_key(p) {
+    fn indexed(&self, st: &State, user: &Uuid, p: &Uuid) -> bool {
+        let key = (*user, *p);
+        if st.pending.contains_key(&key) {
             return true;
         }
-        if st.gone.contains(p) {
+        if st.gone.contains(&key) {
             return false;
         }
-        let mut any = false;
-        for_each_doc(
-            &self.reader.searcher(),
-            &Term::from_field_text(self.f.point, &id(p)),
-            |_, _| any = true,
-        );
-        any
+        let q = BooleanQuery::new(vec![must(self.f.user, user), must(self.f.point, p)]);
+        self.reader
+            .searcher()
+            .search(&q, &tantivy::collector::Count)
+            .unwrap_or(0)
+            > 0
     }
 
     /// Committed (docs, tokens) of a user: one term lookup.

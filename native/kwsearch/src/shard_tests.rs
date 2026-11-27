@@ -1834,3 +1834,73 @@ fn a_batch_that_aged_out_before_the_lock_applies_nothing() {
     s.commit_here(NOW, TTL).unwrap();
     assert!(points(&s).is_empty());
 }
+
+// Review L1: pending and removed-doc state is per (user, point). A bulk body
+// for user B naming one of A's point ids (one shard) used to overwrite A's
+// pending entry and make A's stale fill read as already indexed.
+#[test]
+fn a_bulk_body_naming_another_users_point_does_not_block_their_fill() {
+    let dir = tmp();
+    let s = Shard::open(dir.path()).unwrap();
+    let (ua, ub, vault, note, k, x) = (u(1), u(2), u(3), u(4), u(10), u(11));
+    // A's newer pass (stamp 2) keeps K and X but upserts only X; K arrives
+    // later from A's older pass (stamp 1), a stale fill.
+    let mut newer = Rows::new();
+    pass(&mut newer, 10, ua, vault, note, 2, &[k, x], &[x]);
+    let mut older = Rows {
+        seq: 10,
+        out: vec![],
+    };
+    pass(&mut older, 12, ua, vault, note, 1, &[k], &[k]);
+    let newer: Vec<&Row> = newer.out.iter().collect();
+    s.apply(&newer, MB, NOW).unwrap();
+    // In the same round, B's body names A's point K under B's own note.
+    s.bulk(&ub, 1, &[bulk_note(vault, u(5), 1, &[k])], MB, NOW, || true)
+        .unwrap()
+        .unwrap();
+    let older: Vec<&Row> = older.out.iter().collect();
+    s.apply(&older, MB, NOW).unwrap();
+    s.commit((12, 20), 0, NOW, TTL).unwrap();
+    let a_docs: Vec<Uuid> = s
+        .notes(&ua, None, None, 10)
+        .unwrap()
+        .into_iter()
+        .map(|n| n.0)
+        .collect();
+    assert_eq!(a_docs, vec![note]);
+    assert_eq!(
+        s.notes(&ua, None, None, 10).unwrap()[0].2,
+        2,
+        "A's stale fill of K was dropped"
+    );
+    let want: u64 = [k, x].iter().map(|p| len_of(&terms_of(p))).sum();
+    assert_eq!(s.user_stats(&ua), (2, want), "A's stats drifted");
+}
+
+// Review L2: a failed marker lookup rejects the batch; it is never read as
+// "no marker", which would apply a stale batch as fresh.
+#[test]
+fn a_failed_marker_lookup_rejects_the_batch() {
+    let dir = tmp();
+    let s = Shard::open(dir.path()).unwrap();
+    let (user, vault, note, a, b) = (u(1), u(2), u(3), u(10), u(11));
+    let mut r = Rows::new();
+    pass(&mut r, 4, user, vault, note, 5, &[b], &[b]);
+    apply_all(&s, &r.out);
+    s.fail_marker_lookup
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(s
+        .bulk(
+            &user,
+            1,
+            &[bulk_note(vault, note, 1, &[a])],
+            MB,
+            NOW,
+            || true
+        )
+        .is_err());
+    s.fail_marker_lookup
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    s.commit_here(NOW, TTL).unwrap();
+    assert_eq!(points(&s), HashSet::from([b]));
+}
