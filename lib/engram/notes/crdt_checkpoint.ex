@@ -827,40 +827,10 @@ defmodule Engram.Notes.CrdtCheckpoint do
       Metadata.with_category(:info, :sync, note_id: note_id)
     )
 
-    report_fence_drift(note_id)
+    _ = PreImageFence.report_drift(note_id, :checkpoint)
 
     {note.content_hash, note.content_hash, note.path, nil,
      if(note.deleted_at, do: :deleted, else: :not_written)}
-  end
-
-  # A miss is normally a newer write and retrying fixes it. A row whose body
-  # and `notes` copies of the state nonce disagree (drift: a restore or a hand
-  # edit, never an app writer) can never satisfy `PreImageFence`, so it would
-  # miss every checkpoint forever while its tail grows. One indexed read, only
-  # on a miss, so that case is loud: a warning and
-  # `[:engram, :crdt, :checkpoint_fence_drift]`. Never raises into the write.
-  defp report_fence_drift(note_id) do
-    if NoteBody.drift_ids(Repo, [note_id]) != [] do
-      :telemetry.execute([:engram, :crdt, :checkpoint_fence_drift], %{count: 1}, %{})
-
-      Logger.warning(
-        "crdt checkpoint fence drift note_id=#{note_id}",
-        Metadata.with_category(:warning, :sync, note_id: note_id)
-      )
-    end
-
-    :ok
-  rescue
-    e ->
-      Logger.warning(
-        "crdt checkpoint fence drift check failed note_id=#{note_id}",
-        Metadata.with_category(:warning, :sync,
-          note_id: note_id,
-          error_kind: Engram.Telemetry.error_kind(e)
-        )
-      )
-
-      :ok
   end
 
   defp encode(doc) do
@@ -1089,7 +1059,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # compaction that sets state without bumping seq) matches zero rows instead
   # of overwriting the claimed lineage. A row whose body and `notes` nonce have
   # drifted apart is fenced out in both directions; `fence_missed/2` reports
-  # that case (`crdt checkpoint fence drift`) instead of retrying in silence.
+  # that case (`PreImageFence.report_drift/2`) instead of retrying in silence.
   #
   # On a miss we skip WITHOUT pruning. That is the whole safety property: the
   # tail is the only durable copy of anything this doc holds that the newer row

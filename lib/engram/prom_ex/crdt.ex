@@ -188,13 +188,15 @@ defmodule Engram.PromEx.Crdt do
         # WHY. The 2026-08-19 staging import measured 406 rooms for 1,516 notes
         # and the remaining 27% could not be attributed to a path, which is the
         # question the routing rework has to answer.
-        # A checkpoint fence miss on a row whose body and `notes` nonce copies
-        # drifted apart: that row can never be checkpointed again until it is
-        # repaired. Expected 0; any increase is a row to fix by hand.
+        # A write fence miss (checkpoint or REST) on a row whose body and
+        # `notes` CRDT nonce copies drifted apart: that row can never be written
+        # through the fence until repaired. Expected 0; any increase is a row to
+        # fix by hand. `writer` is a closed set: checkpoint | rest.
         counter(
           metric_prefix ++ [:checkpoint_fence_drift, :total],
           event_name: @fence_drift_event,
-          description: "CRDT checkpoint fence misses on a row with drifted nonce copies."
+          description: "Write fence misses on a row with drifted CRDT nonce copies, by writer.",
+          tags: [:writer]
         ),
         counter(
           metric_prefix ++ [:room_start, :total],

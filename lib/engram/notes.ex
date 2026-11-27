@@ -3582,28 +3582,36 @@ defmodule Engram.Notes do
           nil ->
             {:error, :note_deleted}
 
+          # A row the fence can never match (its CRDT nonce copies drifted):
+          # a conflict would have the client retry forever. Reported, and a
+          # distinct error.
           fresh ->
-            # Distinct key. `{:conflict, _}` is also how a concurrent-INSERT
-            # race reports, and upsert_note logs that as
-            # `note_concurrent_insert_race` — a signal operators grep to reason
-            # about duplicate creates. Emitting one more of those for every lost
-            # snapshot fence would inflate that count and leave fence contention
-            # with no signal of its own. #1335.
-            Logger.warning(
-              "note_write_snapshot_fence_lost",
-              Metadata.with_category(:warning, :sync,
-                user_id: w.user.id,
-                note_id: fresh.id,
-                server_version: fresh.version
-              )
-            )
-
-            {:conflict, fresh}
+            if PreImageFence.report_drift(fresh.id, :rest),
+              do: {:error, :crdt_state_drift},
+              else: fence_lost_conflict(w, fresh)
         end
 
       other ->
         other
     end
+  end
+
+  defp fence_lost_conflict(w, fresh) do
+    # Distinct key. `{:conflict, _}` is also how a concurrent-INSERT race
+    # reports, and upsert_note logs that as `note_concurrent_insert_race` — a
+    # signal operators grep to reason about duplicate creates. Emitting one
+    # more of those for every lost snapshot fence would inflate that count and
+    # leave fence contention with no signal of its own. #1335.
+    Logger.warning(
+      "note_write_snapshot_fence_lost",
+      Metadata.with_category(:warning, :sync,
+        user_id: w.user.id,
+        note_id: fresh.id,
+        server_version: fresh.version
+      )
+    )
+
+    {:conflict, fresh}
   end
 
   # A legacy row (no crdt_state) whose tail was empty at the unlocked replay. A
@@ -3866,12 +3874,11 @@ defmodule Engram.Notes do
   #
   # The filters alone cannot fence a STATELESS pre-image (a nil filter cannot
   # sit beside a non-nil one, above), and seq alone misses a writer that sets
-  # state without bumping it: a genesis claim of a lineage-less row. So the
-  # row is first locked through the shared `PreImageFence`, which fences both
-  # halves (`IS NULL` for a stateless one); the update then runs on a row that
-  # can no longer move under it.
+  # state without bumping it: a genesis claim of a lineage-less row. So such a
+  # row is first locked through the shared `PreImageFence` (`IS NULL`); the
+  # update then runs on a row that can no longer move under it.
   defp fenced_update(changeset, %Note{} = pre, db_opts) do
-    with :ok <- PreImageFence.lock(pre.id, pre, db_opts),
+    with :ok <- lock_stateless(pre, db_opts),
          {:ok, updated} <- Repo.update(changeset, db_opts) do
       _ = NoteBody.put!({updated.id, changeset.changes}, db_opts)
       {:ok, updated}
@@ -3882,6 +3889,14 @@ defmodule Engram.Notes do
   rescue
     Ecto.StaleEntryError -> :stale_snapshot
   end
+
+  # Only a stateless pre-image takes the lock. A row with state is fenced by
+  # the update's own `seq` + `crdt_state_nonce` filters (`snapshot_fenced/2`),
+  # atomically, so a normal save pays no extra round trip.
+  defp lock_stateless(%Note{crdt_state_nonce: nil} = pre, db_opts),
+    do: PreImageFence.lock(pre.id, pre, db_opts)
+
+  defp lock_stateless(%Note{}, _db_opts), do: :ok
 
   # Posture C CRDT bridge — runs INSIDE the caller's Repo.with_tenant txn.
   #

@@ -222,6 +222,12 @@ defmodule Engram.Notes.NoteBody do
 
   # The ids among $1 whose body row exists and disagrees with its notes row
   # (`drift_ids/2`): owner, key version, either envelope's nonce, the head.
+  # Only the CRDT state nonce copies: the one pair `PreImageFence` compares.
+  @crdt_drift_sql """
+  SELECT 1 FROM notes n JOIN note_bodies b ON b.note_id = n.id
+  WHERE n.id = $1 AND n.kind = 'note' AND #{differs.("crdt_ct", "crdt_state_nonce")}
+  """
+
   @drift_sql """
   SELECT n.id::text FROM notes n JOIN note_bodies b ON b.note_id = n.id
   WHERE n.id = ANY($1) AND n.kind = 'note'
@@ -643,5 +649,17 @@ defmodule Engram.Notes.NoteBody do
   def drift_ids(repo, ids) do
     %{rows: rows} = repo.query!(@drift_sql, [Enum.map(ids, &Ecto.UUID.dump!/1)])
     Enum.map(rows, fn [id] -> id end)
+  end
+
+  @doc """
+  Whether `id`'s CRDT state nonce disagrees between `notes` and its body row:
+  the only drift that makes `Engram.Notes.PreImageFence` unsatisfiable. Runs
+  in a SAVEPOINT, so it must be called inside a transaction, and a failing
+  probe rolls back only itself: the caller's transaction stays usable.
+  """
+  @spec crdt_nonce_drift?(module(), Ecto.UUID.t()) :: boolean()
+  def crdt_nonce_drift?(repo, id) do
+    %{num_rows: n} = repo.query!(@crdt_drift_sql, [Ecto.UUID.dump!(id)], mode: :savepoint)
+    n > 0
   end
 end

@@ -101,7 +101,8 @@ defmodule Engram.PromEx.ZeroInit do
           do: {@genesis_reply, %{count: 0}, tags}
 
     # Expected to stay 0 forever, so it must exist at 0 for increase() to see a 1.
-    fence_drift_series = [{@fence_drift, %{count: 0}, %{}}]
+    fence_drift_series =
+      for writer <- [:checkpoint, :rest], do: {@fence_drift, %{count: 0}, %{writer: writer}}
 
     bookkeeping_series =
       [{@canary_rows, %{count: 0}, %{}}] ++

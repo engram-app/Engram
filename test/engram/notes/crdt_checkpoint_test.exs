@@ -1343,7 +1343,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     :telemetry.attach(
       handler,
       [:engram, :crdt, :checkpoint_fence_drift],
-      fn _, m, _, _ -> send(test_pid, {:fence_drift, m}) end,
+      fn _, m, meta, _ -> send(test_pid, {:fence_drift, m, meta}) end,
       nil
     )
 
@@ -1357,7 +1357,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
         assert :stale = CrdtCheckpoint.checkpoint_pruning(user.id, vault.id, note.id, doc)
       end)
 
-    assert_received {:fence_drift, %{count: 1}}
-    assert log =~ "crdt checkpoint fence drift"
+    assert_received {:fence_drift, %{count: 1}, %{writer: :checkpoint}}
+    assert log =~ "crdt fence drift"
   end
 end
