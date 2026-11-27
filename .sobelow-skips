@@ -11,7 +11,7 @@ SQL.Query: SQL injection,lib/engram/notes/bulk_rename.ex:69,7F6B27A
 SQL.Query: SQL injection,lib/engram/notes/moved_feed_sql.ex:64,2297BF6
 Traversal.FileModule: Directory Traversal in `File.open`,lib/engram/service_config/flags/file_source.ex:27,428C0B4
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/legal/manifest.ex:13,7ECB6B1
-Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/release/folder_hash_drop.ex:138,52C25CE
+Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/release/folder_hash_drop.ex:70,63EAC17
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/release/preflight.ex:117,4094D02
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram_web/controllers/spa_controller.ex:44,6BED2D7
 Traversal.FileModule: Directory Traversal in `File.read`,lib/engram/spa_integrity.ex:43,5D1BE94

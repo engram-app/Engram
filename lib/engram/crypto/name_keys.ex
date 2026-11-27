@@ -29,6 +29,20 @@ defmodule Engram.Crypto.NameKeys do
   @spec stamp(binary()) :: nonempty_binary()
   def stamp(nonce) when is_binary(nonce), do: nonce <> @version
 
+  @doc """
+  Whether `stamp` marks name keys current: anchored on EITHER the path nonce
+  (every stamp written before release L) or the name nonce (the anchor a
+  later release re-stamps onto). The `notes_set_name_key` trigger (migration
+  20261127100000) applies the same rule in SQL.
+  """
+  @spec current?(binary() | nil, binary() | nil, binary() | nil) :: boolean()
+  def current?(stamp, path_nonce, name_nonce) when is_binary(stamp),
+    do: anchored?(stamp, path_nonce) or anchored?(stamp, name_nonce)
+
+  def current?(_stamp, _path_nonce, _name_nonce), do: false
+
+  defp anchored?(stamp, nonce), do: is_binary(nonce) and stamp == stamp(nonce)
+
   # The same stamp in SQL, beside `stamp/1` so the two cannot drift. Macros:
   # `fragment/1` takes only a compile-time string (`require` this module).
   # Params: the stamp column, the source nonce column, `version/0`.

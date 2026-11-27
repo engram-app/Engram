@@ -194,7 +194,7 @@ defmodule Engram.ServiceConfig.Flags do
 
   @doc """
   One read of `source`, outside the reader, for a caller that runs before it
-  starts (the boot step `Engram.Release.FolderHashDrop`, in the migrate
+  starts (the boot steps, `Engram.Release.BootStep`, in the migrate
   eval): the reader's own source read and parse, bounded by `timeout_ms`.
   `{:ok, flags}` (an empty body is no flags), or `{:error, reason}` for an
   unreachable source, a bad document or a timeout. Installs nothing.

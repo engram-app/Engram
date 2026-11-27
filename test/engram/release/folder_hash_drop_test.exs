@@ -108,7 +108,8 @@ defmodule Engram.Release.FolderHashDropTest do
   test "a held lock defers the drop; released, the next run drops both and completes" do
     conn = hold_folders_lock!()
 
-    log = capture_log(fn -> assert run() == :deferred end)
+    # The index drop is CONCURRENTLY (no lock_timeout): the boot budget bounds it.
+    log = capture_log(fn -> assert run(budget_ms: 2_000) == :deferred end)
 
     assert log =~ "folder_path_hash_drop deferred"
     assert present() == {1, 1}

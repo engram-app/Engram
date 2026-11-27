@@ -644,6 +644,42 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
+  Builds release L's `notes_name_live` (it ships dark) inside the test's
+  sandbox transaction, so the rollback drops it with the test.
+  """
+  def name_live_index! do
+    alias Engram.Release.NotesPathExpand
+
+    Engram.Repo.query!(
+      "CREATE UNIQUE INDEX IF NOT EXISTS #{NotesPathExpand.unique_index()} #{NotesPathExpand.unique_on()}"
+    )
+
+    :ok
+  end
+
+  @doc """
+  Gives the live note `holder` the name of `path` (a note in the same folder)
+  while it keeps its own path: a stale name key. Every path lookup finds
+  `path` free, but `notes_name_live` (release L) holds the slot. Returns
+  `holder`.
+  """
+  def stale_name_holder!(user, vault, holder, path) do
+    name_live_index!()
+
+    {:ok, other} =
+      Engram.Notes.upsert_note(user, vault, %{"path" => path, "content" => "x"}, actor: "api")
+
+    id = &Ecto.UUID.dump!/1
+
+    %{rows: [[name]]} =
+      Engram.Repo.query!("SELECT name_hmac FROM notes WHERE id = $1", [id.(other.id)])
+
+    Engram.Repo.query!("DELETE FROM notes WHERE id = $1", [id.(other.id)])
+    Engram.Repo.query!("UPDATE notes SET name_hmac = $2 WHERE id = $1", [id.(holder.id), name])
+    holder
+  end
+
+  @doc """
   Puts `notes.content_ciphertext` and `notes.crdt_state_ciphertext` back,
   empty, inside the test's sandbox transaction (the R8(e) drop's `down`),
   for tests of the migrations a self-hoster who skips releases still runs

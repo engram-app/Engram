@@ -92,6 +92,36 @@ defmodule Engram.Notes.NameKeyTriggerTest do
     assert {nil, _, nil} = row(note.id)
   end
 
+  # Release L: a stamp anchored on `name_nonce` (the anchor a later release
+  # re-stamps onto, so `path_nonce` can stop being written) is current too;
+  # a stamp matching neither nonce still clears the key.
+  test "a stamp anchored on name_nonce keeps the key; one on neither clears it",
+       %{user: u, vault: v} do
+    note = note!(u, v, "A/x.md")
+    {key, _, _} = row(note.id)
+    assert is_binary(key)
+    id = Ecto.UUID.dump!(note.id)
+
+    Repo.query!("UPDATE notes SET name_stamp = name_nonce || $2::bytea WHERE id = $1", [
+      id,
+      NameKeys.version()
+    ])
+
+    assert {^key, _, _} = row(note.id)
+
+    Repo.query!("UPDATE notes SET name_stamp = '\\x00'::bytea WHERE id = $1", [id])
+    assert {nil, _, _} = row(note.id)
+
+    # And a path rewrite under a name-anchored stamp keeps it.
+    Repo.query!("UPDATE notes SET name_stamp = name_nonce || $2::bytea WHERE id = $1", [
+      id,
+      NameKeys.version()
+    ])
+
+    Repo.query!("UPDATE notes SET path_nonce = '\\x0102'::bytea WHERE id = $1", [id])
+    assert {^key, _, _} = row(note.id)
+  end
+
   # The trigger inlines the stamp's version byte: a bump of
   # `NameKeys.version/0` must ship a new trigger, or no name would match.
   test "the trigger's stamp version is NameKeys.version/0" do
