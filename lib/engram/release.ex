@@ -266,15 +266,25 @@ defmodule Engram.Release do
     end
   end
 
-  # The owner-run contract drops that must never fail boot run after the
-  # migrations, on the same connection and lock (`Engram.Release.FolderHashDrop`).
+  # The owner-run boot steps that must never fail boot run after the
+  # migrations, on the same connection and lock (`Engram.Release.BootStep`).
+  # This eval is the only place that holds the owner credential: nothing
+  # owner-run is scheduled after boot.
   @doc false
   def migrate_and_drop(repo) do
     migrated = Ecto.Migrator.run(repo, :up, all: true)
-    _ = Engram.Release.FolderHashDrop.run(repo)
+    _ = Engram.Release.BootStep.run_all(repo, boot_steps())
     _ = prepare_kwsearch_feed(repo)
     migrated
   end
+
+  @doc """
+  The one ordered list of owner-run boot steps: release K's folder path hash
+  drop, then release L's `notes.path_*` expand steps.
+  """
+  @spec boot_steps() :: [Engram.Release.BootStep.t()]
+  def boot_steps,
+    do: [Engram.Release.FolderHashDrop.step() | Engram.Release.NotesPathExpand.steps()]
 
   @doc """
   The `kwsearch_feed` role, its grants and its SELECT policies, when the

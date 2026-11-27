@@ -49,7 +49,7 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedTest do
              Repo.transaction(fn ->
                Repo.query!("ALTER TABLE notes DROP COLUMN crdt_state_ciphertext RESTRICT")
                Repo.query!("ALTER TABLE notes DROP COLUMN content_ciphertext RESTRICT")
-               assert shape_checks() == ["notes_kind_shape_v4_check"]
+               assert shape_checks() == ["notes_kind_shape_v5_check"]
                assert head_triggers() == ["notes_crdt_head_invalidate"]
                Repo.rollback(:rolled_back)
              end)
