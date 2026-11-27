@@ -153,7 +153,7 @@ def seed_new(api_url: str, state: str, fault: str) -> None:
         "Renamed", "Renamed/Child", "Root", "Root/Inner", "Root/Moved", "Implied",
         "Batch/One", "Batch/Two", "Revived", "Trashed", "Merged", merge_folder,
     }
-    if fault == "unstamped-row":
+    if fault in ("unstamped-row", "vault-lock"):
         # Created LAST: the workflow unstamps the newest explicit row by id (uuidv7).
         _expect("create Unstamped", client.create_folder("Unstamped"), (200, 201))
         expected.add("Unstamped")

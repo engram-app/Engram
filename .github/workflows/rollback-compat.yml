@@ -27,8 +27,9 @@
 # error, runner failure or skipped vault; prod shape: the app is engram_app
 # (no BYPASSRLS). The pair's own asserts are listed in its hooks.sh.
 # Faults (must go red): unstamped-row leaves one explicit row unstamped after
-# NEW's writers; vault-lock holds every vault row FOR UPDATE through OLD's
-# forced passes, so the reconcile skips them.
+# NEW's writers; vault-lock leaves the same row and holds every vault row FOR
+# UPDATE through OLD's forced passes, so the reconcile skips that vault (the
+# row survives; only the skipped-vault check can see it).
 #
 # Images are the release artifacts, never built here: build-and-publish-image
 # tags every main commit `ghcr.io/engram-app/engram:<sha7>`. The REST client

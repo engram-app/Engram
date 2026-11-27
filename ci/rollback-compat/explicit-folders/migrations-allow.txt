@@ -3,3 +3,6 @@
 # not re-verify never runs again after a rollback in prod either).
 # Format: <shape|*> <name before any ':'> <class> <reason>
 selfhost folder_marker_delete skipped-disabled ships off on self-host (its kill switch defaults off)
+* key_aliases skipped-disabled runs only while the vector rebuild mode is on (Engram.Rebuild.mode/0), never in this stack
+* person_origin_backfill skipped-disabled needs the product-analytics keys, which this stack does not set
+* note_meta skipped-disabled the note_meta_backfill override defaults off and is not on in prod at release I

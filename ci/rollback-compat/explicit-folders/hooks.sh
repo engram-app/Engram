@@ -89,15 +89,17 @@ hook_after_new_boot() {
     [ "$alter" -ge 1 ] || fail "selfhost shape: no ALTER TABLE on folders seen during NEW's boot (DDL probe blind?)"
   fi
   python3 e2e/scripts/rollback_compat.py seed-new --api-url "$API" --state "$STATE" --fault "$FAULT"
-  if [ "$FAULT" = "unstamped-row" ]; then
+  # vault-lock needs a stale row too: the walk reports a skipped vault only
+  # when that vault holds one (the lock then keeps it from being cleared).
+  if [ "$FAULT" != none ]; then
     # The row seed-new created last ("Unstamped"; folder ids are uuidv7).
     sql "UPDATE folders SET explicit_seq = NULL WHERE id = (SELECT id FROM folders WHERE explicit AND deleted_at IS NULL ORDER BY id DESC LIMIT 1) RETURNING id"
   fi
   local left
   left=$(unstamped)
   echo "explicit rows: $(explicit_ids | wc -l), unstamped: $left"
-  if [ "$FAULT" = "unstamped-row" ]; then
-    [ "$left" -eq 1 ] || fail "fault unstamped-row: want exactly 1 unstamped row, got $left"
+  if [ "$FAULT" != none ]; then
+    [ "$left" -eq 1 ] || fail "fault $FAULT: want exactly 1 unstamped row, got $left"
   else
     [ "$left" -eq 0 ] || fail "NEW's writers left $left explicit rows unstamped"
   fi
@@ -136,6 +138,12 @@ hook_old_reconcile() {
   skipped=$(grep -c 'vault skipped by the re-verify walk' "$LOGS/rpc-old-rollback.log" || true)
   echo "vaults the re-verify walk skipped: $skipped"
   [ "$skipped" -eq 0 ] || fail "OLD's reconcile skipped $skipped locked vaults, so some rows were never examined"
+  # note_folder_hash_null (blocked until phase 1 closed note_payload_stamps)
+  # must have walked NEW's notes in this phase: OLD's @reboot runner closes it.
+  local nfhn
+  nfhn=$(dc logs --no-color engram 2>&1 | grep '"migration":"note_folder_hash_null"' | grep -c '"message":"data migration done"' || true)
+  echo "note_folder_hash_null closed by OLD's @reboot walk over NEW's notes: $nfhn"
+  [ "$nfhn" -ge 1 ] || fail "note_folder_hash_null did not walk NEW's notes in phase 3"
 }
 
 # Phase 3: what OLD's REST serves, then a rename and a delete through it.
