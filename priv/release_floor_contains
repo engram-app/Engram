@@ -7,5 +7,4 @@ bbc77f8ebcdcaf0cd538d7c70c6c56c7b41c3d06 S6 step 6 attachment name reads (Engram
 57b9fc0fabc1c177a97c31e2ac7910fb7962dff7 S6 step 4 explicit folder reads (Engram#2639): the marker write stop needs them on every rollback target
 26ac16f6654225537a9237f84c74c723b7499b15 S6 step 4 marker write stop (Engram#2649): the marker delete (FolderMarkerDelete.floors?/1) needs it on every rollback target
 e362467679bbdedf1ffde6419332522b73ad6764 S6 step 4 marker delete and its daily re-verify (Engram#2652): the floor is release E, the release that ships it
-# PLACEHOLDER (release K): replace this comment with J's squash-merge commit once Engram#2707 merges:
-# <40-hex sha> S6 step 3 full_path_hmac retirement (Engram#2707): release K drops the column, so every rollback target must stop reading it
+ab025c59460ddb713e05eba8a917d54391e56b37 S6 step 3 full_path_hmac retirement (Engram#2707): release K drops the column, so every rollback target must stop reading it
