@@ -65,6 +65,9 @@ defmodule Engram.PromEx.Search do
 
   use PromEx.Plugin
 
+  alias Engram.PromEx.Buckets
+  alias Engram.PromEx.Search.{FilterResolveBuckets, GateWaitBuckets, OverlapBuckets}
+
   @stop_event [:engram, :search, :request, :stop]
   @degraded_event [:engram, :search, :degraded]
   @keyword_fallback_event [:engram, :search, :keyword_fallback]
@@ -132,7 +135,7 @@ defmodule Engram.PromEx.Search do
           event_name: @filter_resolve_event,
           measurement: :duration,
           description: "Time Postgres took to resolve a search's filter, by scope.",
-          reporter_options: Engram.PromEx.Buckets.opts(Engram.PromEx.Search.FilterResolveBuckets),
+          reporter_options: Buckets.opts(FilterResolveBuckets),
           tags: [:scope],
           unit: {:native, :millisecond}
         ),
@@ -153,7 +156,7 @@ defmodule Engram.PromEx.Search do
           event_name: @gate_event,
           measurement: :wait,
           description: "Time a search waited for a concurrency slot (or until refused).",
-          reporter_options: Engram.PromEx.Buckets.opts(Engram.PromEx.Search.GateWaitBuckets),
+          reporter_options: Buckets.opts(GateWaitBuckets),
           # A pool-busy refusal never waited on a gate.
           keep: &(&1[:gate] != :pool),
           tags: [:outcome, :gate],
@@ -194,7 +197,7 @@ defmodule Engram.PromEx.Search do
           event_name: @keyword_shadow_event,
           measurement: :overlap_pct,
           description: "Share of the sparse top 10 kwsearch also returned, percent.",
-          reporter_options: Engram.PromEx.Buckets.opts(Engram.PromEx.Search.OverlapBuckets),
+          reporter_options: Buckets.opts(OverlapBuckets),
           keep: &(&1[:outcome] == :ok)
         ),
         distribution(
@@ -202,7 +205,7 @@ defmodule Engram.PromEx.Search do
           event_name: @keyword_shadow_event,
           measurement: :tantivy_ms,
           description: "kwsearch keyword leg latency in shadow compares.",
-          reporter_options: Engram.PromEx.Buckets.opts(Engram.PromEx.Search.FilterResolveBuckets),
+          reporter_options: Buckets.opts(FilterResolveBuckets),
           keep: &(&1[:outcome] == :ok)
         ),
         # keyword_feed trim (security F2): rows trimmed, those trimmed before
