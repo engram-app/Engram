@@ -150,6 +150,33 @@ defmodule EngramWeb.CrdtChannelTest do
       assert still.id == holder.id
     end
 
+    # A rename onto a path only a just-DELETED note's index entry still names
+    # (ReleaseIndexEntries has not run yet) is refused by the claim, but a
+    # retry succeeds once the entry is released. It must stay retryable, never
+    # the final id_conflict, or the rename is dropped for good.
+    test "a claim refused by a deleted note's stale entry is not id_conflict", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, old} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/old.md", "content" => "old"},
+          actor: "api"
+        )
+
+      {:ok, draft} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/draft.md", "content" => "d"},
+          actor: "api"
+        )
+
+      :ok = Notes.delete_note_by_id(user, vault, old.id)
+      seed_index(user, vault, [{"Notes/old.md", %{"note_id" => old.id}}])
+
+      ref = push(socket, "crdt_create", %{"doc_id" => draft.id, "path" => "Notes/old.md"})
+      assert_reply ref, reply, %{} = body
+      refute {reply, body[:reason]} == {:error, "id_conflict"}
+    end
+
     test "nil path replies bad_path without crashing the channel", %{socket: socket} do
       ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => nil})
       assert_reply ref, :error, %{reason: "bad_path"}
@@ -4348,5 +4375,27 @@ defmodule EngramWeb.CrdtChannelTest do
     racer = spawn(fn -> Process.sleep(:infinity) end)
     :yes = :global.register_name({:crdt_doc, id}, racer)
     racer
+  end
+
+  # Write index entries the way a client does. If nothing else observes the
+  # room it stops on unobserve and persists, so a claim reads the snapshot;
+  # if the channel observes it, the claim reads the live room. Same map.
+  defp seed_index(user, vault, entries) do
+    {:ok, room} = Engram.Notes.CrdtIndexRegistry.ensure_observed(user.id, vault.id)
+
+    :ok =
+      SharedDoc.update_doc(room, fn doc ->
+        map = Yex.Doc.get_map(doc, Engram.Notes.CrdtIndexDoc.map_name())
+        Enum.each(entries, fn {path, value} -> Yex.Map.set(map, path, value) end)
+      end)
+
+    ref = Process.monitor(room)
+    :ok = SharedDoc.unobserve(room)
+
+    receive do
+      {:DOWN, ^ref, :process, ^room, _} -> :ok
+    after
+      2_000 -> Process.demonitor(ref, [:flush])
+    end
   end
 end
