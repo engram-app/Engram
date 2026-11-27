@@ -167,6 +167,24 @@ defmodule EngramWeb.UserSocketTest do
     end
   end
 
+  # `caps=a,b`: what the client opts into. Only known names count; a list
+  # value or an over-long one is ignored whole, like `plugin_version`.
+  test "caps: name_taken sets name_taken_terminal, anything else does not", %{user: user} do
+    for {sent, want} <- [
+          {"name_taken", true},
+          {"later_cap,name_taken", true},
+          {"later_cap", false},
+          {"NAME_TAKEN", false},
+          {String.duplicate("name_taken,", 20), false},
+          {["name_taken"], false},
+          {nil, false}
+        ] do
+      params = %{"token" => version_token(user), "caps" => sent}
+      assert {:ok, socket} = connect(EngramWeb.UserSocket, params)
+      assert socket.assigns.name_taken_terminal == want, inspect(sent)
+    end
+  end
+
   test "a socket that sends no plugin_version assigns nil, not a crash", %{user: user} do
     assert {:ok, socket} = connect(EngramWeb.UserSocket, %{"token" => version_token(user)})
 

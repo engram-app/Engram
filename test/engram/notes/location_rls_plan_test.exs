@@ -262,7 +262,7 @@ defmodule Engram.Notes.LocationRlsPlanTest do
 
       plans =
         plans(ctx.user, fn ->
-          assert {:error, :id_conflict, _} =
+          assert {:error, :path_taken, _} =
                    Notes.genesis_crdt_note(ctx.user, ctx.vault, gone.id, "top.md")
         end)
 

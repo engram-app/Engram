@@ -123,31 +123,45 @@ defmodule EngramWeb.CrdtChannelTest do
     end
 
     # A tombstoned id resurrecting onto a path a DIFFERENT live note holds is a
-    # name conflict, not a server failure. It used to reply the generic
-    # `create_failed` (the path unique constraint), which clients must retry,
-    # so the plugin re-sent it forever and paused every create in the vault.
-    test "tombstoned id resurrected onto an OCCUPIED path replies id_conflict", %{
-      socket: socket,
-      user: user,
-      vault: vault
-    } do
-      {:ok, gone} =
-        Notes.upsert_note(user, vault, %{"path" => "Notes/was.md", "content" => "old"},
-          actor: "api"
-        )
+    # name conflict, refused before the write (the path unique constraint used
+    # to abort the transaction and crash the channel). A client that says it
+    # handles a taken name gets `id_conflict`; a released plugin, which drops
+    # an `id_conflict` create silently, keeps the retryable `create_failed`.
+    for {label, join} <- [
+          {"an old plugin gets create_failed", :old},
+          {"a caps=name_taken plugin gets id_conflict", :caps},
+          {"the web app gets id_conflict", :web}
+        ] do
+      test "tombstoned id resurrected onto an OCCUPIED path: #{label}", %{
+        user: user,
+        vault: vault
+      } do
+        socket = join_as(user, vault, unquote(join))
 
-      :ok = Notes.delete_note_by_id(user, vault, gone.id)
+        {:ok, gone} =
+          Notes.upsert_note(user, vault, %{"path" => "Notes/was.md", "content" => "old"},
+            actor: "api"
+          )
 
-      {:ok, holder} =
-        Notes.upsert_note(user, vault, %{"path" => "Notes/taken.md", "content" => "live"},
-          actor: "api"
-        )
+        :ok = Notes.delete_note_by_id(user, vault, gone.id)
 
-      ref = push(socket, "crdt_create", %{"doc_id" => gone.id, "path" => "Notes/taken.md"})
-      assert_reply ref, :error, %{reason: "id_conflict", doc_id: got}
-      assert got == gone.id
-      {:ok, still} = Notes.get_note(user, vault, "Notes/taken.md")
-      assert still.id == holder.id
+        {:ok, holder} =
+          Notes.upsert_note(user, vault, %{"path" => "Notes/taken.md", "content" => "live"},
+            actor: "api"
+          )
+
+        id = gone.id
+        ref = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/taken.md"})
+
+        if unquote(join) == :old do
+          assert_reply ref, :error, %{reason: "create_failed"}
+        else
+          assert_reply ref, :error, %{reason: "id_conflict", doc_id: ^id}
+        end
+
+        {:ok, still} = Notes.get_note(user, vault, "Notes/taken.md")
+        assert still.id == holder.id
+      end
     end
 
     # A rename onto a path only a just-DELETED note's index entry still names
@@ -4397,5 +4411,24 @@ defmodule EngramWeb.CrdtChannelTest do
     after
       2_000 -> Process.demonitor(ref, [:flush])
     end
+  end
+
+  # A second crdt join for `user`: `:old` (a released plugin, no caps),
+  # `:caps` (connected with caps=name_taken) or `:web` (the web app's
+  # client_type).
+  defp join_as(user, vault, kind) do
+    assigns = %{current_user: user, current_api_key: nil, name_taken_terminal: kind == :caps}
+
+    params =
+      if kind == :web,
+        do: %{"crdt_proto" => 2, "client_type" => "web"},
+        else: %{"crdt_proto" => 2}
+
+    {:ok, _, joined} =
+      socket(EngramWeb.UserSocket, "user_#{user.id}_#{kind}", assigns)
+      |> subscribe_and_join(EngramWeb.CrdtChannel, "crdt:#{user.id}:#{vault.id}", params)
+
+    Sandbox.allow(Repo, self(), joined.channel_pid)
+    joined
   end
 end

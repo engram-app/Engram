@@ -1,10 +1,13 @@
 defmodule EngramWeb.CrdtCreateNameConflictTest do
   # A crdt_create at a path whose folder row and name another live note holds
-  # (`notes_name_live`, a stale name key) is a taken name, answered as the
-  # wire answers every taken name (`id_conflict`, final for every client; the
-  # web app name-bumps on it), never `create_failed` (retried forever by the
-  # plugin, under its vault-wide create pause), a crashed channel or a re-mint.
+  # (`notes_name_live`, a stale name key) is a taken name, never a crashed
+  # channel or a re-mint. A client that handles a taken name (caps=name_taken,
+  # or the web app, which name-bumps on either reply) gets `id_conflict`; a
+  # released plugin keeps `create_failed`, as for a path index refusal,
+  # because it drops an `id_conflict` create silently.
   use EngramWeb.ChannelCase, async: false
+
+  import ExUnit.CaptureLog
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.{Crypto, Notes, Repo, Vaults}
@@ -23,20 +26,45 @@ defmodule EngramWeb.CrdtCreateNameConflictTest do
     %{user: user, vault: vault}
   end
 
-  test "crdt_create replies id_conflict, as for any taken name", %{user: user, vault: vault} do
-    {:ok, _, socket} =
-      subscribe_and_join(
-        user_socket(user),
-        EngramWeb.CrdtChannel,
-        "crdt:#{user.id}:#{vault.id}",
-        %{"crdt_proto" => 2}
-      )
+  for {label, kind, want} <- [
+        {"an old plugin gets create_failed", :old, "create_failed"},
+        {"a caps=name_taken plugin gets id_conflict", :caps, "id_conflict"},
+        {"the web app gets id_conflict", :web, "id_conflict"}
+      ] do
+    test "crdt_create at a notes_name_live holder: #{label}", %{user: user, vault: vault} do
+      assigns = %{
+        current_user: user,
+        current_api_key: nil,
+        name_taken_terminal: unquote(kind) == :caps
+      }
 
-    Sandbox.allow(Repo, self(), socket.channel_pid)
+      params =
+        if unquote(kind) == :web,
+          do: %{"crdt_proto" => 2, "client_type" => "web"},
+          else: %{"crdt_proto" => 2}
 
-    id = Ecto.UUID.generate()
-    ref = push(socket, "crdt_create", %{"doc_id" => id, "path" => "F/x.md"})
-    assert_reply ref, :error, %{reason: "id_conflict", doc_id: ^id}
+      {:ok, _, socket} =
+        subscribe_and_join(
+          socket(EngramWeb.UserSocket, "user_#{user.id}", assigns),
+          EngramWeb.CrdtChannel,
+          "crdt:#{user.id}:#{vault.id}",
+          params
+        )
+
+      Sandbox.allow(Repo, self(), socket.channel_pid)
+
+      # The refusing index is logged on every reply, so stale name keys show.
+      log =
+        capture_log(fn ->
+          ref =
+            push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "F/x.md"})
+
+          assert_reply ref, :error, %{reason: unquote(want)}
+        end)
+
+      assert log =~ "notes_name_live"
+      refute log =~ "F/x.md"
+    end
   end
 
   # The control: only a "target taken" index (`PathUniques.names/0`) is a
