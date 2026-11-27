@@ -10,6 +10,7 @@ on:
       - "bot/**"
       - "bump/**"
       - "chore/**"
+      - "ci/**"
       - "dependabot/**"
       - "docs/**"
       - "feat/**"
@@ -3568,6 +3569,12 @@ jobs:
         # ~100 min (engram-infra#1758). Fails on a plain `docker run` that
         # bypasses ci/bin/ci-docker, or a compose service without the labels.
         run: bash test/scripts/ci_docker_labels_test.sh
+
+      - name: Rollback-compat verdict self-check
+        # Guards ci/rollback-compat/judge-migrations.sh: every OLD data
+        # migration gets a verdict (a helper that read the loop's stdin once
+        # judged 1 of 20 and passed), skips need a closed ledger row.
+        run: bash test/scripts/rollback_compat_judge_test.sh
 
       - name: CI port-race retry self-check
         # Guards ci/bin/ci-docker-run-retry: retries only bind errors, cleans

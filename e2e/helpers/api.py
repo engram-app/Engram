@@ -473,6 +473,12 @@ class ApiClient:
         self._raise_for_status(resp)
         return resp.json()
 
+    def get_explicit_folders(self) -> set[str]:
+        """GET /folders/explicit: the names of explicitly created folders."""
+        resp = self.session.get(f"{self.base_url}/folders/explicit", timeout=10)
+        self._raise_for_status(resp)
+        return {f["name"] for f in resp.json()["folders"]}
+
     def get_folders(self) -> list:
         """GET /folders."""
         resp = self.session.get(f"{self.base_url}/folders", timeout=10)

@@ -1,0 +1,29 @@
+# Phase-3 data migration results this pair (K rolled back to J) accepts
+# other than `done`. Every other result fails, including a done ledger that
+# does not re-verify: each such skip is reviewed here, per pair, because after
+# a rollback in prod it never runs on NEW's data either.
+#
+# What K changes that J's migrations could meet: K drops folders.full_path_hmac
+# and its folders_full_path index (Engram.Release.FolderHashDrop). J stopped
+# every read and write of both (Engram.Folders.FullPathHmacRetiredTest at
+# 27d714512); `git grep full_path_hmac 27d714512 -- lib` finds nothing, so no
+# J code at all (modules and the helpers they call) names the column.
+#
+# Format: <shape|*> <name before any ':'> <class> <reason>
+* index_versions skipped-done-noreverify done; reads chunk/index version stamps on notes, never the dropped column
+* crdt_state_seed skipped-done-noreverify done; seeds CRDT state from note content, no folder hash
+* envelope_format skipped-done-noreverify done; rewrites encryption envelopes of note content, no folder hash
+* link_resolution_keys_unicode_15.1.0 skipped-done-noreverify done; link key stamps on notes, no folder hash
+* note_split skipped-done-noreverify done; note row split, no folder hash
+* note_index_state skipped-done-noreverify done; note index-state rows, no folder hash
+* note_sizes skipped-done-noreverify done; note size columns, no folder hash
+* folder_table skipped-done-noreverify closed in phase 1 (prod: since release D); J's FolderTable no longer names full_path_hmac (grep at 27d714512), so a rerun would not meet the drop either
+* note_name skipped-done-noreverify done; note name columns, no folder hash
+* key_aliases skipped-disabled runs only while the vector rebuild mode is on; note key aliases only, no folder table
+* person_origin_backfill skipped-disabled needs the analytics keys (set in prod, not here); only enqueues PersonOriginSync jobs, touches no folder or note table
+* note_meta skipped-disabled note_meta_backfill override defaults off; prod's value NOT verified (a DB override, not in engram-infra); reads notes, users and CRDT logs, never the dropped column
+# These two stay although most runs print them as unused: OLD's @reboot runner
+# closes them before the forced loop on some runs (timing), and then the loop
+# reports them skipped. Dropping them made run 45959408210 go red for that.
+* note_effective_dates skipped-done-noreverify done (by OLD's @reboot runner or earlier); note date columns, no folder hash
+* name_terms skipped-done-noreverify closed by OLD's @reboot runner and its BackfillNameTerms chain before the loop (the workflow waits for it); indexes names, no folder hash

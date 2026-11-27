@@ -78,6 +78,4 @@ class TestMarkerStopOn:
             f"want no live marker for {folder} and its row explicit, got {lines}"
         )
 
-        resp = client.session.get(f"{client.base_url}/folders/explicit", timeout=10)
-        assert resp.status_code == 200
-        assert folder in {f["name"] for f in resp.json()["folders"]}
+        assert folder in client.get_explicit_folders()

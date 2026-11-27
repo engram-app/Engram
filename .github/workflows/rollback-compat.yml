@@ -1,0 +1,350 @@
+# Rollback compat: can a schema/data release roll back to the release before it?
+#
+# migration-gates' n1-compat proves NEW migrations apply on top of OLD's
+# schema (the upgrade). This proves the other direction: OLD's image keeps
+# serving, and its data migrations keep the data, after NEW has migrated and
+# written. Real images, one database, the rollout and rollback order:
+#
+#   1. OLD boots on a fresh tmpfs Postgres, seeds marker-era explicit folders
+#      over REST, then closes its ledgers the way the target install has them
+#      (ci/rollback-compat/<checks>/old-ledgers.exs).
+#   2. NEW boots on that DB: Release.migrate/0 + the boot migrations
+#      (entrypoint.sh), then seeds through its own writers.
+#   3. OLD boots again (the rollback), runs its reconcile through the
+#      runner's entry point (old-reconcile.exs) and serves REST.
+#
+# shape: prod (default) is prod's DB shape: folder_table, reconcile and
+# folder_marker_delete done, no live markers, the app on engram_app under
+# FORCE RLS with a maintenance pool (engram_maintenance), the migrator a
+# separate login. selfhost is ci/compose.database.yml as shipped: one
+# superuser login, folder_marker_delete off, markers kept.
+#
+# Generic asserts: FORCE RLS on folders and notes after each boot; OLD's
+# @reboot runner job completes; every OLD data migration runs once more
+# through DataMigrationsRunner.run/2 (ci/rollback-compat/run-migrations.exs)
+# and ends `done` or on the pair's allowlist with a reason per migration
+# (migrations-allow.txt; a done ledger that is not re-verified needs one too); the pair's snapshot loses no row; OLD logs no
+# error, runner failure or skipped vault; prod shape: the app is engram_app
+# (no BYPASSRLS). The pair's own asserts are listed in its hooks.sh.
+# Faults (must go red): unstamped-row leaves one explicit row unstamped after
+# NEW's writers; vault-lock leaves the same row and holds every vault row FOR
+# UPDATE through OLD's forced passes, so the reconcile skips that vault (the
+# row survives; only the skipped-vault check can see it).
+#
+# Images are the release artifacts, never built here: build-and-publish-image
+# tags every main commit `ghcr.io/engram-app/engram:<sha7>`. The REST client
+# is e2e/scripts/rollback_compat.py.
+#
+# Dispatch: gh workflow run rollback-compat.yml -f new_ref=<sha> -f old_ref=<sha>
+name: rollback-compat
+
+on:
+  # Push to this workflow's own file only registers it (a new workflow cannot
+  # be dispatched until GitHub has seen it); the job runs on dispatch alone.
+  push:
+    paths: [.github/workflows/rollback-compat.yml]
+  workflow_dispatch:
+    inputs:
+      new_ref:
+        description: Commit of the release being shipped (its GHCR sha7 image must exist)
+        required: true
+      old_ref:
+        description: Commit of the rollback target, e.g. the previous release-v* tag's commit
+        required: true
+      shape:
+        description: prod = prod's ledgers, no markers, engram_app under FORCE RLS; selfhost = compose.database.yml as shipped
+        type: choice
+        options: [prod, selfhost]
+        default: prod
+      checks:
+        description: Per-pair rpc snippets under ci/rollback-compat/
+        default: explicit-folders
+      fault:
+        description: "Red-path proof. explicit-folders: unstamped-row, vault-lock. folder-hash-drop: hash-read"
+        type: choice
+        options: [none, unstamped-row, vault-lock, hash-read]
+        default: none
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  rollback-compat:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, x64, isolated]
+    timeout-minutes: 30
+    env:
+      CI_PROJECT: engram-rbc-${{ github.run_id }}
+      KEY_PROVIDER: local
+      # Same CI-only fixture fallback as verify.yml: the DB is throwaway.
+      ENCRYPTION_MASTER_KEY: ${{ secrets.CI_ENCRYPTION_MASTER_KEY || 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }}
+      ENGRAM_SETUP_TOKEN: rollback-compat-${{ github.run_id }}
+      SHAPE: ${{ inputs.shape }}
+      FAULT: ${{ inputs.fault }}
+      NEW_REF: ${{ inputs.new_ref }}
+      OLD_REF: ${{ inputs.old_ref }}
+      CHECKS_DIR: ci/rollback-compat/${{ inputs.checks }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve images
+        run: |
+          [ -d "$CHECKS_DIR" ] || { echo "::error::no checks dir $CHECKS_DIR"; exit 1; }
+          new=$(git rev-parse --verify "${NEW_REF}^{commit}")
+          old=$(git rev-parse --verify "${OLD_REF}^{commit}")
+          {
+            echo "NEW_IMAGE=ghcr.io/engram-app/engram:${new::7}"
+            echo "OLD_IMAGE=ghcr.io/engram-app/engram:${old::7}"
+            # Per runner, per job: runners on one host share /tmp.
+            echo "STATE=$RUNNER_TEMP/rbc-state.json"
+            echo "LOGS=$RUNNER_TEMP/rbc-logs"
+            echo "FAILURES=$RUNNER_TEMP/rbc-failures"
+            echo "OVERRIDE=$RUNNER_TEMP/rbc-override.yml"
+            # The job token's docker login stays out of the runner's ~/.docker.
+            echo "DOCKER_CONFIG=$RUNNER_TEMP/docker"
+          } >> "$GITHUB_ENV"
+          echo "new $new -> ghcr.io/engram-app/engram:${new::7}"
+          echo "old $old -> ghcr.io/engram-app/engram:${old::7}"
+          echo "shape $SHAPE, checks $CHECKS_DIR, fault $FAULT"
+
+      - name: Pull images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          mkdir -p "$DOCKER_CONFIG"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin >/dev/null
+          docker pull -q "$NEW_IMAGE"
+          docker pull -q "$OLD_IMAGE"
+
+      - name: Prepare stack
+        run: |
+          mkdir -p "$LOGS"
+          : > "$FAILURES"
+          # Bind-then-close: another job could take a port before compose
+          # binds it. Accepted (per-run project name; a clash fails loudly).
+          read -r ENGRAM_PORT PG_PORT <<< "$(python3 -c "import socket; ss=[socket.socket() for _ in range(2)]; [s.bind(('',0)) for s in ss]; print(' '.join(str(s.getsockname()[1]) for s in ss))")"
+          echo "CI_ENGRAM_PORT=$ENGRAM_PORT" >> "$GITHUB_ENV"
+          echo "CI_PG_PORT=$PG_PORT" >> "$GITHUB_ENV"
+          echo "API=http://localhost:$ENGRAM_PORT/api" >> "$GITHUB_ENV"
+          # compose.database.yml plus the first-user setup token and quieter logs.
+          cat > "$OVERRIDE" <<'YAML'
+          services:
+            engram:
+              environment:
+                ENGRAM_SETUP_TOKEN: ${ENGRAM_SETUP_TOKEN}
+                LOG_LEVEL: info
+          YAML
+          if [ "$SHAPE" = prod ]; then
+            # Prod's three logins (entrypoint.sh): the migrator runs
+            # prepare/migrate, the BEAM runs as engram_app (no BYPASSRLS, so
+            # FORCE RLS applies), cross-tenant ledger walks use
+            # engram_maintenance. Throwaway passwords for a throwaway DB.
+            cat >> "$OVERRIDE" <<'YAML'
+                MIGRATOR_DATABASE_URL: postgresql://engram:engram@postgres:5432/engram
+                DATABASE_URL: postgresql://engram_app:rbc-app@postgres:5432/engram
+                MAINTENANCE_DATABASE_URL: postgresql://engram_maintenance:rbc-maint@postgres:5432/engram
+                ENGRAM_APP_DB_PASSWORD: rbc-app
+                ENGRAM_MAINTENANCE_DB_PASSWORD: rbc-maint
+          YAML
+          fi
+          python3 -m pip install --user --quiet --break-system-packages "requests>=2.33.0"
+          # Every helper below reads these; one definition.
+          cat > "$RUNNER_TEMP/rbc-lib.sh" <<'SH'
+          dc() { docker compose -f ci/compose.database.yml -f "$OVERRIDE" -p "$CI_PROJECT" "$@"; }
+          # Every helper that execs into a container takes stdin from /dev/null:
+          # `exec -T` forwards stdin, so inside a `while read` loop it swallowed
+          # the loop's input and cut the loop short (delta review 6).
+          sql() { dc exec -T postgres psql -U engram -d engram -v ON_ERROR_STOP=1 -Atc "$1" </dev/null; }
+          fail() { echo "::error::$1"; echo "$1" >> "$FAILURES"; }
+          # Run a checks snippet on the running node; `mode` and `fault` are bound for it.
+          # Its Logger lines come back on the rpc's stdout, not the container
+          # log, so every rpc output is kept for the phase's error scan.
+          rpc() { dc exec -T engram /app/bin/engram rpc "mode = \"$SHAPE\"
+          fault = \"$FAULT\"
+          _ = {mode, fault}
+          $(cat "$CHECKS_DIR/$1")" </dev/null | tee -a "$LOGS/rpc-${RPC_LOG:-misc}.log"; }
+          # Value of a KEY=value line in rpc output.
+          val() { grep -oE "^$1=.*" <<<"$2" | tail -1 | cut -d= -f2-; }
+          # Boot IMAGE as the engram service (recreates the container; Postgres stays).
+          boot() { ENGRAM_CI_IMAGE="$1" dc up -d --no-build --wait engram; }
+          # Save the running engram container's log as PHASE, then stop it.
+          halt() {
+            dc logs --no-color engram > "$LOGS/$1.log" 2>&1 || true
+            dc stop engram
+          }
+          rls_forced() {
+            for t in folders notes; do
+              f=$(sql "SELECT relforcerowsecurity FROM pg_class WHERE oid = 'public.$t'::regclass")
+              echo "FORCE RLS on $t: $f"
+              [ "$f" = t ] || fail "FORCE ROW LEVEL SECURITY is off on $t after $1"
+            done
+          }
+          # Shared probes, then the pair's checks (hook_* functions).
+          . ci/rollback-compat/ddl-log.sh
+          . ci/rollback-compat/judge-migrations.sh
+          . "$CHECKS_DIR/hooks.sh"
+          SH
+
+      - name: "Phase 1: OLD on a fresh DB, seed, close its ledgers"
+        run: |
+          . "$RUNNER_TEMP/rbc-lib.sh"
+          ENGRAM_CI_IMAGE="$OLD_IMAGE" dc up -d --no-build --wait
+          if [ "$SHAPE" = prod ]; then
+            # The app's login must be the restricted role, so RLS binds it.
+            sql "SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname IN ('engram_app', 'engram_maintenance') ORDER BY 1" | tee "$RUNNER_TEMP/roles.txt"
+            grep -qx 'engram_app|f|f' "$RUNNER_TEMP/roles.txt" || fail "engram_app is superuser or BYPASSRLS"
+            app=$(sql "SELECT count(*) FROM pg_stat_activity WHERE usename = 'engram_app'")
+            echo "engram_app sessions: $app"
+            [ "$app" -ge 1 ] || fail "prod shape: the app is not connected as engram_app"
+          fi
+          hook_seed_old
+          halt old-seed
+          hook_before_new
+
+      - name: "Phase 2: NEW migrates (Release.migrate + boot migrations) and seeds"
+        run: |
+          . "$RUNNER_TEMP/rbc-lib.sh"
+          boot "$NEW_IMAGE"
+          rls_forced "NEW's boot"
+          hook_after_new_boot
+          halt new
+          hook_snapshot > "$RUNNER_TEMP/snapshot-before.txt"
+
+      - name: "Phase 3: rollback, every OLD data migration, then the pair's reconcile"
+        env:
+          RPC_LOG: old-rollback
+        run: |
+          . "$RUNNER_TEMP/rbc-lib.sh"
+          since=$(sql "SELECT now()")
+          echo "$since" > "$RUNNER_TEMP/phase3-since.txt"
+          boot "$OLD_IMAGE"
+          # OLD's @reboot DataMigrationsRunner job: wait for Oban to insert it
+          # and for it to finish, so it cannot race the passes below.
+          for _ in $(seq 1 180); do
+            st=$(sql "SELECT string_agg(state::text, ',') FROM oban_jobs WHERE worker = 'Engram.Workers.DataMigrationsRunner' AND inserted_at > '$since'")
+            case "$st" in *available*|*executing*|*retryable*|*scheduled*|"") sleep 1 ;; *) break ;; esac
+          done
+          rls_forced "OLD's rollback boot"
+          echo "OLD's @reboot DataMigrationsRunner jobs: ${st:-none}"
+          grep -q completed <<<"$st" || fail "OLD's @reboot DataMigrationsRunner did not complete (states: ${st:-none})"
+          # Let the jobs OLD's boot started finish first. A pass that starts
+          # a job chain answers :more while the chain is in flight (name_terms
+          # backfills through paced BackfillNameTerms hops), so a forced pass
+          # racing it reads as not done. Due work only: a job scheduled far
+          # ahead (an hourly cron) or waiting out a retry does not count.
+          due="SELECT count(*) FROM oban_jobs WHERE state IN ('available', 'executing') OR (state = 'scheduled' AND scheduled_at < now() + interval '60 seconds')"
+          for _ in $(seq 1 300); do
+            [ "$(sql "$due")" -eq 0 ] && break
+            sleep 1
+          done
+          if [ "$(sql "$due")" -ne 0 ]; then
+            sql "SELECT worker || ' ' || state FROM oban_jobs WHERE state IN ('available', 'executing', 'scheduled') ORDER BY 1" | sort | uniq -c | sed 's/^/  pending: /'
+            fail "OLD's jobs did not drain within 300 s, so the forced passes would race them"
+          fi
+          echo "OLD's due jobs drained; retrying jobs left: $(sql "SELECT coalesce(string_agg(DISTINCT worker, ' '), 'none') FROM oban_jobs WHERE state = 'retryable'")"
+          if [ "$FAULT" = vault-lock ]; then
+            # Hold every vault row FOR UPDATE through OLD's forced passes.
+            dc exec -T postgres psql -U engram -d engram -c "BEGIN; SELECT count(*) FROM (SELECT id FROM vaults FOR UPDATE) v; SELECT pg_sleep(600); COMMIT;" </dev/null >/dev/null 2>&1 &
+            # Held means: vaults exist and none can be locked from here.
+            held=false
+            for _ in $(seq 1 30); do
+              free=$(sql "SELECT count(*) FROM (SELECT id FROM vaults FOR UPDATE SKIP LOCKED) v")
+              [ "$(sql "SELECT count(*) FROM vaults")" -ge 1 ] && [ "$free" -eq 0 ] && { held=true; break; }
+              sleep 1
+            done
+            if [ "$held" = true ]; then
+              echo "fault vault-lock: every vault row held FOR UPDATE"
+            else
+              fail "fault vault-lock: the lock never landed"; exit 1
+            fi
+          fi
+          # Every OLD data migration once through the runner's entry point,
+          # re-verify forced.
+          out=$(dc exec -T engram /app/bin/engram rpc "$(cat ci/rollback-compat/run-migrations.exs)" </dev/null | tee -a "$LOGS/rpc-old-rollback.log")
+          echo "$out" > "$RUNNER_TEMP/migrations-rpc.txt"
+          total=$(val MIGRATIONS_TOTAL "$out")
+          ran=$(grep -c '^MIGRATION ' <<<"$out" || true)
+          echo "OLD data migrations: $ran of ${total:-?} ran"
+          grep -q '^MIGRATIONS_END$' <<<"$out" && [ "$ran" -eq "${total:-0}" ] && [ "$ran" -ge 1 ] \
+            || fail "OLD's runner loop ran $ran of ${total:-?} migrations"
+          grep '^MIGRATION ' <<<"$out" | awk '{print $3}' | sort | uniq -c | sed 's/^/  results: /'
+          judge_migrations "$out" "$CHECKS_DIR/migrations-allow.txt" "$SHAPE"
+          hook_old_checks
+          if [ "$FAULT" = vault-lock ]; then
+            sql "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE query LIKE '%pg_sleep(600)%' AND pid <> pg_backend_pid()" >/dev/null
+            wait || true
+          fi
+          hook_snapshot > "$RUNNER_TEMP/snapshot-after.txt"
+          [ -s "$RUNNER_TEMP/snapshot-before.txt" ] || fail "the pair's snapshot is empty, so a lost row cannot show"
+          lost=$(comm -23 "$RUNNER_TEMP/snapshot-before.txt" "$RUNNER_TEMP/snapshot-after.txt" | wc -l)
+          echo "snapshot rows before: $(wc -l < "$RUNNER_TEMP/snapshot-before.txt"), after: $(wc -l < "$RUNNER_TEMP/snapshot-after.txt"), lost: $lost"
+          [ "$lost" -eq 0 ] || fail "OLD's data migrations lost $lost rows of the snapshot: $(comm -23 "$RUNNER_TEMP/snapshot-before.txt" "$RUNNER_TEMP/snapshot-after.txt" | tr '\n' ' ')"
+
+      - name: "Phase 3: OLD serves the data"
+        env:
+          RPC_LOG: old-rollback
+        run: |
+          . "$RUNNER_TEMP/rbc-lib.sh"
+          hook_verify_old
+
+      - name: "Phase 3: OLD logged no errors"
+        run: |
+          . "$RUNNER_TEMP/rbc-lib.sh"
+          halt old-rollback
+          # The container log and every phase-3 rpc output (where the
+          # runner's own Logger lines land).
+          logs=("$LOGS/old-rollback.log" "$LOGS/rpc-old-rollback.log")
+          # LoggerJSON severity, plain-text [error] (boot evals, crash
+          # reports, rpc output), and the runner's warning-level failures.
+          pat='"severity":"(error|critical|alert|emergency)"|\[error\]|data migration (pass failed|summary failed|stuck)|vault skipped by the re-verify walk|job failed'
+          # prod shape: the app must not be on a role that bypasses RLS.
+          if [ "$SHAPE" = prod ]; then pat="$pat|RLS NOT enforced"; fi
+          errors=$(cat "${logs[@]}" | grep -cE "$pat" || true)
+          echo "error lines in OLD's log and rpc output after the rollback: $errors"
+          if [ "$errors" -ne 0 ]; then
+            cat "${logs[@]}" | grep -E "$pat" | head -20
+            fail "OLD logged $errors error lines after the rollback"
+          fi
+          # OLD's background jobs that errored in phase 3, by worker and error
+          # kind against the pair's jobs-allow.txt; also every `Oban job
+          # attempt failed` / `discarded` warning line (check-jobs.py).
+          since=$(cat "$RUNNER_TEMP/phase3-since.txt")
+          sql "SELECT coalesce(json_agg(json_build_object('id', id, 'worker', worker, 'state', state, 'args', args, 'error', errors[array_length(errors, 1)]->>'error', 'all_errors', array_to_string(ARRAY(SELECT e->>'error' FROM unnest(errors) e), E'\\n'))), '[]') FROM oban_jobs WHERE (array_length(errors, 1) > 0 OR state IN ('discarded', 'cancelled')) AND greatest(attempted_at, cancelled_at, discarded_at, inserted_at) > '$since'" > "$RUNNER_TEMP/failed-jobs.json"
+          python3 ci/rollback-compat/check-jobs.py "$RUNNER_TEMP/failed-jobs.json" "$CHECKS_DIR/jobs-allow.txt" "$SHAPE" "${logs[@]}" \
+            || fail "OLD background jobs failed on NEW's data (see the errors above)"
+          # The runner's own log, from the migrations rpc alone (not the
+          # pair's reconcile rpc): a pass that ends :done always logs
+          # `data migration pass`.
+          want=$(grep -cE '^MIGRATION [^ ]+ done( |$)' "$RUNNER_TEMP/migrations-rpc.txt" || true)
+          got=$(grep -cE '\[info\] data migration pass$|"message":"data migration pass"' "$RUNNER_TEMP/migrations-rpc.txt" || true)
+          echo "runner: $want done results, $got 'data migration pass' log lines"
+          [ "$want" -ge 1 ] || fail "OLD's runner returned no done pass"
+          [ "$got" -ge "$want" ] || fail "OLD's runner logged $got passes for $want done results"
+
+      - name: Verdict
+        run: |
+          if [ -s "$FAILURES" ]; then
+            echo "::error::rollback-compat FAILED ($(wc -l < "$FAILURES") checks):"
+            sed 's/^/  /' "$FAILURES"
+            exit 1
+          fi
+          echo "rollback-compat OK ($SHAPE): $OLD_REF serves and keeps its data after $NEW_REF"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rollback-compat-logs-${{ github.run_id }}
+          path: ${{ env.LOGS }}
+          if-no-files-found: ignore
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose -f ci/compose.database.yml -f "$OVERRIDE" -p "$CI_PROJECT" down -v --remove-orphans || true
+          docker image rm "$NEW_IMAGE" "$OLD_IMAGE" || true
+          rm -rf "$STATE" "$DOCKER_CONFIG"
