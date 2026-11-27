@@ -223,6 +223,21 @@ jobs:
           rls_forced "OLD's rollback boot"
           echo "OLD's @reboot DataMigrationsRunner jobs: ${st:-none}"
           grep -q completed <<<"$st" || fail "OLD's @reboot DataMigrationsRunner did not complete (states: ${st:-none})"
+          # Let the jobs OLD's boot started finish first. A pass that starts
+          # a job chain answers :more while the chain is in flight (name_terms
+          # backfills through paced BackfillNameTerms hops), so a forced pass
+          # racing it reads as not done. Due work only: a job scheduled far
+          # ahead (an hourly cron) or waiting out a retry does not count.
+          due="SELECT count(*) FROM oban_jobs WHERE state IN ('available', 'executing') OR (state = 'scheduled' AND scheduled_at < now() + interval '60 seconds')"
+          for _ in $(seq 1 300); do
+            [ "$(sql "$due")" -eq 0 ] && break
+            sleep 1
+          done
+          if [ "$(sql "$due")" -ne 0 ]; then
+            sql "SELECT worker || ' ' || state FROM oban_jobs WHERE state IN ('available', 'executing', 'scheduled') ORDER BY 1" | sort | uniq -c | sed 's/^/  pending: /'
+            fail "OLD's jobs did not drain within 300 s, so the forced passes would race them"
+          fi
+          echo "OLD's due jobs drained; retrying jobs left: $(sql "SELECT coalesce(string_agg(DISTINCT worker, ' '), 'none') FROM oban_jobs WHERE state = 'retryable'")"
           if [ "$FAULT" = vault-lock ]; then
             # Hold every vault row FOR UPDATE through OLD's forced passes.
             dc exec -T postgres psql -U engram -d engram -c "BEGIN; SELECT count(*) FROM (SELECT id FROM vaults FOR UPDATE) v; SELECT pg_sleep(600); COMMIT;" >/dev/null 2>&1 &

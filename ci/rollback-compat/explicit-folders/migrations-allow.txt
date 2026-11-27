@@ -21,7 +21,7 @@
 * note_folder_hash_null skipped-done-noreverify closed in phase 3 by OLD's @reboot walk over NEW's notes (asserted in hooks.sh); it nulls a note hash only when it equals the row's full_path_hmac, and J's NULL or stale hashes never do (the safe direction, per its moduledoc)
 * note_effective_dates skipped-done-noreverify done; note date columns, no folder hash
 * note_name skipped-done-noreverify done; note name columns, no folder hash
-* name_terms skipped-done-noreverify done before the forced loop when OLD's @reboot runner closed it first in this phase (timing decides; otherwise the loop runs it to done); it indexes folder and note name terms by name, never by full_path_hmac
+* name_terms skipped-done-noreverify closed in this phase by OLD's @reboot runner and its BackfillNameTerms chain (the workflow waits for that chain to drain) or already done; it indexes folder and note name terms by name, never by full_path_hmac
 selfhost folder_marker_delete skipped-disabled ships off on self-host (kill switch defaults off); on self-host the markers stay, which is the case NEW's boot stamp covers
 * key_aliases skipped-disabled runs only while the vector rebuild mode is on; touches note key aliases only, no folder table, so running it after a rollback meets nothing J changed
 * person_origin_backfill skipped-disabled needs the analytics keys (set in prod, not here); it only enqueues PersonOriginSync jobs (oban_jobs) and touches no folder or note table, so running it after a rollback meets nothing J changed
