@@ -59,6 +59,15 @@ export class CrdtOpError extends Error {
 	}
 }
 
+/** crdt_create refused because another note holds the path. `id_conflict` is
+ *  the server's precise reply; `create_failed` is what older servers (and the
+ *  client-side adopt guard in channel.ts) send for the same case. */
+export function isNameTaken(err: unknown): err is CrdtOpError {
+	return (
+		err instanceof CrdtOpError && (err.reason === "id_conflict" || err.reason === "create_failed")
+	);
+}
+
 export function isPermanentJoinRefusal(resp: unknown): resp is { reason: string } {
 	return (
 		typeof resp === "object" &&

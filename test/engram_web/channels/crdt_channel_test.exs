@@ -122,6 +122,76 @@ defmodule EngramWeb.CrdtChannelTest do
       assert got == note.id
     end
 
+    # A tombstoned id resurrecting onto a path a DIFFERENT live note holds is a
+    # name conflict, refused before the write (the path unique constraint used
+    # to abort the transaction and crash the channel). A client that says it
+    # handles a taken name gets `id_conflict`; a released plugin, which drops
+    # an `id_conflict` create silently, keeps the retryable `create_failed`.
+    for {label, join} <- [
+          {"an old plugin gets create_failed", :old},
+          {"a caps=name_taken plugin gets id_conflict", :caps},
+          {"an old web bundle (no caps) gets create_failed", :web},
+          {"a caps=name_taken web bundle gets id_conflict", :web_caps}
+        ] do
+      test "tombstoned id resurrected onto an OCCUPIED path: #{label}", %{
+        user: user,
+        vault: vault
+      } do
+        socket = join_as(user, vault, unquote(join))
+
+        {:ok, gone} =
+          Notes.upsert_note(user, vault, %{"path" => "Notes/was.md", "content" => "old"},
+            actor: "api"
+          )
+
+        :ok = Notes.delete_note_by_id(user, vault, gone.id)
+
+        {:ok, holder} =
+          Notes.upsert_note(user, vault, %{"path" => "Notes/taken.md", "content" => "live"},
+            actor: "api"
+          )
+
+        id = gone.id
+        ref = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/taken.md"})
+
+        if unquote(join) in [:old, :web] do
+          assert_reply ref, :error, %{reason: "create_failed"}
+        else
+          assert_reply ref, :error, %{reason: "id_conflict", doc_id: ^id}
+        end
+
+        {:ok, still} = Notes.get_note(user, vault, "Notes/taken.md")
+        assert still.id == holder.id
+      end
+    end
+
+    # A rename onto a path only a just-DELETED note's index entry still names
+    # (ReleaseIndexEntries has not run yet) is refused by the claim, but a
+    # retry succeeds once the entry is released. It must stay retryable, never
+    # the final id_conflict, or the rename is dropped for good.
+    test "a claim refused by a deleted note's stale entry is not id_conflict", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, old} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/old.md", "content" => "old"},
+          actor: "api"
+        )
+
+      {:ok, draft} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/draft.md", "content" => "d"},
+          actor: "api"
+        )
+
+      :ok = Notes.delete_note_by_id(user, vault, old.id)
+      seed_index(user, vault, [{"Notes/old.md", %{"note_id" => old.id}}])
+
+      ref = push(socket, "crdt_create", %{"doc_id" => draft.id, "path" => "Notes/old.md"})
+      assert_reply ref, reply, %{} = body
+      refute {reply, body[:reason]} == {:error, "id_conflict"}
+    end
+
     test "nil path replies bad_path without crashing the channel", %{socket: socket} do
       ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => nil})
       assert_reply ref, :error, %{reason: "bad_path"}
@@ -4320,5 +4390,51 @@ defmodule EngramWeb.CrdtChannelTest do
     racer = spawn(fn -> Process.sleep(:infinity) end)
     :yes = :global.register_name({:crdt_doc, id}, racer)
     racer
+  end
+
+  # Write index entries the way a client does. If nothing else observes the
+  # room it stops on unobserve and persists, so a claim reads the snapshot;
+  # if the channel observes it, the claim reads the live room. Same map.
+  defp seed_index(user, vault, entries) do
+    {:ok, room} = Engram.Notes.CrdtIndexRegistry.ensure_observed(user.id, vault.id)
+
+    :ok =
+      SharedDoc.update_doc(room, fn doc ->
+        map = Yex.Doc.get_map(doc, Engram.Notes.CrdtIndexDoc.map_name())
+        Enum.each(entries, fn {path, value} -> Yex.Map.set(map, path, value) end)
+      end)
+
+    ref = Process.monitor(room)
+    :ok = SharedDoc.unobserve(room)
+
+    receive do
+      {:DOWN, ^ref, :process, ^room, _} -> :ok
+    after
+      2_000 -> Process.demonitor(ref, [:flush])
+    end
+  end
+
+  # A second crdt join for `user`: `:old` (a released plugin, no caps),
+  # `:caps` (connected with caps=name_taken), `:web` (the web app's
+  # client_type, an older bundle with no caps) or `:web_caps` (a bundle that
+  # sends caps=name_taken).
+  defp join_as(user, vault, kind) do
+    assigns = %{
+      current_user: user,
+      current_api_key: nil,
+      name_taken_terminal: kind in [:caps, :web_caps]
+    }
+
+    params =
+      if kind in [:web, :web_caps],
+        do: %{"crdt_proto" => 2, "client_type" => "web"},
+        else: %{"crdt_proto" => 2}
+
+    {:ok, _, joined} =
+      socket(EngramWeb.UserSocket, "user_#{user.id}_#{kind}", assigns)
+      |> subscribe_and_join(EngramWeb.CrdtChannel, "crdt:#{user.id}:#{vault.id}", params)
+
+    Sandbox.allow(Repo, self(), joined.channel_pid)
+    joined
   end
 end

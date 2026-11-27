@@ -59,7 +59,7 @@ describe("token refresh on reconnect", () => {
 		});
 
 		expect(typeof sockets[0]!.opts.params).toBe("function");
-		expect(sockets[0]!.opts.params()).toEqual({ token: "tok-A" });
+		expect(sockets[0]!.opts.params()).toMatchObject({ token: "tok-A" });
 	});
 
 	it("refreshes the token the params function returns, on the SAME socket", async () => {
@@ -75,7 +75,7 @@ describe("token refresh on reconnect", () => {
 		await reconnectWithFreshToken(async () => "tok-B");
 
 		expect(sockets).toHaveLength(1); // no new socket — session preserved
-		expect(socket.opts.params()).toEqual({ token: "tok-B" });
+		expect(socket.opts.params()).toMatchObject({ token: "tok-B" });
 	});
 
 	it("reconnects the transport in place (disconnect + connect on the same socket)", async () => {

@@ -1661,7 +1661,7 @@ defmodule Engram.Notes do
                 # (its name keys are stale or untrusted): the path is taken.
                 # The same changeset error as a path index refusal, so every
                 # surface answers it as it answers that one (the wire's
-                # `create_failed`, which the web app name-bumps on).
+                # `id_conflict`, which the web app name-bumps on).
                 name_taken?(changeset, note_id) ->
                   {:error,
                    Ecto.Changeset.add_error(changeset, :user_id, "has already been taken",
@@ -1868,6 +1868,7 @@ defmodule Engram.Notes do
           | {:error, :invalid_id}
           | {:error, :recently_deleted}
           | {:error, :id_conflict, Note.t()}
+          | {:error, :path_taken, Note.t()}
           | {:error, :version_conflict, Note.t()}
           | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
           | {:error, Ecto.Changeset.t()}
@@ -2584,23 +2585,70 @@ defmodule Engram.Notes do
     end
   end
 
-  # A live note SHOWN at the target (by name under a moved folder, which no
-  # unique key holds) is a conflict, as a keyed holder is. Run by `move_note`
-  # right after its `next_seq!` takes the vault seq lock, so no uncascaded
-  # move (S5) lands between check and write, and the merge, encrypt and
-  # NoteCommitted insert stay outside the lock (#1710). `moved?` (read with
-  # the row) can be a stale `false`: the vault's FIRST move may commit before
-  # the lock, so the bit is re-read here. One index probe
-  # (`folders_moved_live`) in a vault that never moved a folder.
+  # A live note at the target, SHOWN there (by name under a moved folder, which
+  # no unique key holds, `:conflict`) or KEYED there (`:taken`), is refused.
+  # The keyed holder must be checked here: left to the path unique constraint,
+  # the write aborts the transaction and the job discard after it raises,
+  # crashing the channel. The two stay distinct because old plugins were told
+  # `id_conflict` only for the first; the channel picks the wire reason. Run
+  # by `move_note` right after its `next_seq!` takes the vault seq lock, so
+  # no uncascaded move (S5) lands between check and write, and the merge,
+  # encrypt and NoteCommitted insert stay outside the lock (#1710). `moved?`
+  # (read with the row) can be a stale `false`: the vault's FIRST move may
+  # commit before the lock, so the bit is re-read here, in the SAME statement as
+  # the keyed-holder probe: an unmoved vault pays one statement, as it did
+  # before the keyed check existed. In a moved vault the stored key alone proves
+  # nothing: a note whose own folder moved keeps its stale key, which is no
+  # holder (`ids_at/3` drops it and `move_note` frees it). There
+  # `shown_by_other?/4` decides: a key that is still `here()`, or a name match.
   defp shown_check(moved?, user, vault, path, id) do
     fn ->
-      moved? = moved? or Location.named?(user.id, vault.id)
+      {moved?, keyed?} =
+        if moved?, do: {true, false}, else: moved_or_keyed(user, vault, path, id)
 
       cond do
-        not moved? -> {:ok, false}
-        shown_by_other?(user, vault, path, id) -> :conflict
-        true -> {:ok, true}
+        keyed? and not moved? -> :taken
+        moved? and shown_by_other?(user, vault, path, id) -> :conflict
+        true -> {:ok, moved?}
       end
+    end
+  end
+
+  # One statement: has the vault a folder moved without a cascade
+  # (`Location.named?/2`'s probe), and does another live note hold `path`'s
+  # key (`notes_path_live`)? Unnamed like every keyed lookup
+  # (`Keys.lookup?/1` cannot see a keyed read inside a SELECT expression):
+  # a reused generic plan would read the whole vault under RLS
+  # (notes-generic-plan-mis-pick.md).
+  defp moved_or_keyed(user, vault, path, id) do
+    case Crypto.dek_filter_key(user) do
+      {:ok, fk} ->
+        ids? = Keys.ids?()
+
+        # `notes_path_live` is partial on `NOT is_folder`, which
+        # `live_notes/3` adds when `ids?` (with `kind = 'note'`); without it
+        # the probe reads the vault's notes instead.
+        keyed =
+          from(n in live_notes(user, vault, ids?),
+            where: ^Keys.eq(:path, Crypto.hmac_field(fk, path), ids?),
+            where: n.id != type(^id, Ecto.UUID),
+            select: 1
+          )
+
+        Repo.with_tenant!(user.id, fn ->
+          Repo.one(
+            from(_ in fragment("(SELECT)"),
+              select:
+                {fragment(WalkSql.moved(), type(^vault.id, Ecto.UUID)),
+                 fragment("EXISTS ?", subquery(keyed))}
+            ),
+            prepare: :unnamed
+          )
+        end)
+
+      # No filter key: no holder can be proven, as `located_ids_at/3` answers.
+      {:error, _} ->
+        {Location.named?(user.id, vault.id), false}
     end
   end
 
@@ -2649,8 +2697,9 @@ defmodule Engram.Notes do
       {:error, _} = err ->
         err
 
-      # `shown_check/5` under the lock: a note is shown at the target.
-      {:error, :id_conflict, _} = err ->
+      # `shown_check/5` under the lock: a note is shown (or keyed) at the
+      # target.
+      {:error, reason, _} = err when reason in [:id_conflict, :path_taken] ->
         err
 
       # See genesis_relocate_live: move_note can now lose its snapshot fence.
@@ -3086,6 +3135,12 @@ defmodule Engram.Notes do
           :conflict ->
             :ok = discard_job(job)
             {:error, :id_conflict, prior}
+
+          # A live note KEYED at the target (`shown_check/5`): refused before
+          # the write, which the path unique constraint would abort.
+          :taken ->
+            :ok = discard_job(job)
+            {:error, :path_taken, prior}
 
           {:ok, moved_now?} ->
             write_moved(

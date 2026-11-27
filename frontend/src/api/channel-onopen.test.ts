@@ -67,3 +67,23 @@ describe("connectChannel onOpen — structural backfill", () => {
 		// the tree too, so it converges with it.
 	});
 });
+
+describe("connectChannel socket params", () => {
+	// The SPA opts in to a final reply for a taken name (`id_conflict`), as the
+	// plugin does: the backend answers it only to a socket that says it handles
+	// it (`caps=name_taken`). An older bundle, which bumps names only on
+	// `create_failed`, sends no caps and keeps that reply.
+	it("connects with caps=name_taken alongside the token", async () => {
+		await connectChannel({
+			userId: "u1",
+			vaultId: "v1",
+			getToken: async () => "t",
+			queryClient: { invalidateQueries: vi.fn() } as never,
+			t: englishT,
+		});
+
+		const call = socketCtor.mock.calls[0] as unknown[];
+		const opts = call[1] as { params: () => Record<string, string> };
+		expect(opts.params()).toEqual({ token: "t", caps: "name_taken" });
+	});
+});

@@ -55,6 +55,36 @@ defmodule Engram.Folders.ResurrectRaceTest do
     assert id == shown.id
   end
 
+  # The same race, resurrecting at the folder's OLD path. C/x.md's note keeps
+  # its stored key there after the move, but is shown at D/x.md: the stale key
+  # is no holder (move_note frees it), so the resurrect must land.
+  test "the vault's first move landing before the lock frees the old path", ctx do
+    %{user: u, vault: v} = ctx
+    shown = put!(u, v, "C/x.md")
+    put!(u, v, "C/y.md")
+    dead = put!(u, v, "T/t.md")
+    :ok = Notes.delete_note(u, v, "T/t.md")
+
+    me = self()
+
+    Application.put_env(:engram, :checkpoint_interleave_hook, fn
+      :resurrect_before_lock when self() == me ->
+        unless Process.get(:moved_once) do
+          Process.put(:moved_once, true)
+          {:ok, _} = Folders.rename(u, v, "C", "D")
+        end
+
+      _ ->
+        :ok
+    end)
+
+    assert {:ok, %{id: id}} = Notes.genesis_crdt_note(u, v, dead.id, "C/x.md")
+    assert id == dead.id
+    assert {:ok, %{id: ^id}} = Notes.get_note(u, v, "C/x.md")
+    assert {:ok, %{id: shown_id}} = Notes.get_note(u, v, "D/x.md")
+    assert shown_id == shown.id
+  end
+
   # The occupancy probe runs after `move_note` takes the vault seq lock, and
   # only it: the CRDT merge, encrypt and NoteCommitted insert stay before the
   # lock (#1710). The insert is the last of them, so it must precede the

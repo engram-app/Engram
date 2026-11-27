@@ -249,6 +249,32 @@ defmodule Engram.Notes.LocationRlsPlanTest do
       assert custom =~ "notes_name_key_live", custom
     end
 
+    # A deleted note's id asking for a path another live note holds: the
+    # keyed-holder probe rides the moved-folder probe's statement and must
+    # read `notes_path_live`, never the vault, and never go generic.
+    test "a resurrect onto a held path probes notes_path_live, unnamed", ctx do
+      {:ok, gone} =
+        Notes.upsert_note(ctx.user, ctx.vault, %{"path" => "gone.md", "content" => "g"},
+          actor: "api"
+        )
+
+      :deleted = Notes.delete_note_reporting(ctx.user, ctx.vault, "gone.md")
+
+      plans =
+        plans(ctx.user, fn ->
+          assert {:error, :path_taken, _} =
+                   Notes.genesis_crdt_note(ctx.user, ctx.vault, gone.id, "top.md")
+        end)
+
+      assert [{_sql, probe}] = Enum.filter(plans, fn {sql, _} -> sql =~ "FROM (SELECT)" end)
+      refute Map.has_key?(probe, :generic)
+      assert probe.custom =~ "notes_path_live", probe.custom
+      # The statement's other half: the moved-folder probe.
+      assert probe.custom =~ "folders_moved_live", probe.custom
+      refute_vault_scan!(%{"probe" => probe})
+      assert QueryPlan.buffers(probe.custom) <= @lookup_buffers + 2, probe.custom
+    end
+
     test "a moved folder, a held path: the stale-holder check walks up on an id key",
          ctx do
       mark_moved!(ctx.user, ctx.vault)
@@ -259,8 +285,9 @@ defmodule Engram.Notes.LocationRlsPlanTest do
       refute_vault_scan!(plans)
       assert [%{custom: custom}] = lookup_plans(plans)
       assert custom =~ "notes_path_live", custom
-      # The walk up, one probe of the `(vault_id, id)` key per level.
-      assert custom =~ "folders_vault_id_id_key", custom
+      # The walk up, one probe of a folder id key per level. Either unique
+      # key on the folder id is fine (a planner tie seen on CI), never a scan.
+      assert custom =~ ~r/folders_(pkey|vault_id_id_key)/, custom
       # Measured 35 (the name arm's walk and probe, the holder, and the walk
       # up a two-level chain for the matched row, the holder and the name
       # match), flat in the vault's size.

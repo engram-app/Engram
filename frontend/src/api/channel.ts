@@ -525,7 +525,10 @@ export async function connectChannel({
 	latestGetToken = getToken;
 	lastForcedMintAt = Number.NEGATIVE_INFINITY;
 	socket = new Socket(joinWsUrl(getWsBase(), "/socket"), {
-		params: () => ({ token: latestToken ?? "" }),
+		// `caps=name_taken`: this bundle reads `id_conflict` as a taken name
+		// (`isNameTaken`), so the backend may send it. An older bundle sends no
+		// caps and keeps `create_failed`, the reply its name bump keys on.
+		params: () => ({ token: latestToken ?? "", caps: "name_taken" }),
 		reconnectAfterMs: (tries: number) => computeReconnectMs(tries, serverJitterMs),
 	});
 
