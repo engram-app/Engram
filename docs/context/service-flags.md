@@ -24,8 +24,11 @@ as a DB override (`Overrides.validate/2`).
 The owner-run boot steps' kill switches (booleans, default on, flags-only: a
 DB override is refused) are read once per boot for every pending step, before
 the reader starts, by `Engram.Release.BootStep.run_all/3` through
-`Flags.read_once/2` (3 s budget; unreachable or timed out = on). `false` stops
-that step; it takes effect at the next boot. Each pending step logs
+`Flags.read_once/2` (3 s budget; unreachable or timed out = the step's
+default: on, except `notes_name_unique_build`, which ships off). `false` stops that step; it takes effect at
+the next boot. A step that ships `default: false` (`BootStep`) runs only once
+its key says `true`. All steps share one 30 s budget per boot; what does not
+fit defers to the next boot. Each pending step logs
 `<step> flags read source=<appconfig|file|none> value=<true|false|absent>`
 (`:boot` info, ships to Loki):
 
@@ -33,7 +36,7 @@ that step; it takes effect at the next boot. Each pending step logs
 |---|---|
 | `folder_path_hash_drop` | release K's drop of `folders.full_path_hmac` (`Engram.Release.FolderHashDrop`) |
 | `notes_shape_relax` | release L's relax of `notes_kind_shape_v4_check` (`Engram.Release.NotesPathExpand`) |
-| `notes_name_unique_build` | release L's build of `notes_name_live` |
+| `notes_name_unique_build` | release L's build of `notes_name_live`; default OFF, `true` builds it (only once S5 drift is retired) |
 | `notes_manifest_name_build` | release L's build of `notes_manifest_name` |
 
 `paused_accounts` is flags-only: `[{"id": <uuid>, "until": <UTC ISO 8601, ends Z>}]`,

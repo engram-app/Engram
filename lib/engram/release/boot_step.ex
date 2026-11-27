@@ -3,22 +3,32 @@ defmodule Engram.Release.BootStep do
   The owner-run boot steps `Engram.Release.migrate/0` runs after the
   migrations, on the migrator connection and inside the migration lock
   (release K's `Engram.Release.FolderHashDrop`, release L's
-  `Engram.Release.NotesPathExpand`). The shared shape lives here once:
+  `Engram.Release.NotesPathExpand`; the list is `Engram.Release.boot_steps/0`).
+  The shared shape lives here once:
 
     * a completion ledger per step (`Engram.DataMigrations`): a done step
       costs one read and runs nothing;
-    * a kill switch per step, a flags-only boolean key (default on), read
-      from the flags source ONCE per boot for all steps
-      (`Engram.ServiceConfig.Flags.read_once/2`, 3 s budget: the reader has
-      not started in the migrate eval), and only when some step is pending.
-      Each pending step logs `<step> flags read source=<appconfig|file|none>
-      value=<true|false|absent>` at info in the `:boot` category, which ships
-      to Loki, so prod can prove the switch was read. An unreadable source is
-      a warning and the step runs (default on);
-    * a session (`in_session/2`) with a short `lock_timeout` and a
-      `statement_timeout`, so a statement waits on a lock for seconds, never
-      queues writers behind it for longer, and never runs unbounded;
-    * never fails boot: an error, a lock timeout, a raise or an exit is a
+    * a kill switch per step, a flags-only boolean key, read from the flags
+      source ONCE per boot for all steps (`Engram.ServiceConfig.Flags.read_once/2`,
+      3 s budget: the reader has not started in the migrate eval), and only
+      when some step is pending. Absent means the step's `default` (on unless
+      the step says otherwise). Each pending step logs `<step> flags read
+      source=<appconfig|file|none> value=<true|false|absent>` at info in the
+      `:boot` category, which ships to Loki, so prod can prove the switch was
+      read. An unreadable source is a warning and the default applies;
+    * one pinned session per step holding a session advisory lock on the
+      step's name (`pg_try_advisory_lock`): a step another session holds (an
+      orphaned build of a killed task still running) is skipped this boot;
+    * ONE time budget for all steps of a boot (#{30_000} ms by default): each
+      statement's `statement_timeout` is what is left of it (at most
+      #{30_000} ms), and a step that starts with under #{1_000} ms left defers
+      without running, so the boot steps never hold up boot for long whatever
+      they meet (the ECS health-check grace is 120 s);
+    * lock waits: ALTER TABLE statements (which queue writers behind them)
+      run under a 5 s `lock_timeout`; CONCURRENTLY statements (which block no
+      DML, and whose waits for older transactions are lock waits) run with no
+      `lock_timeout`, bounded by the budget alone;
+    * never fails boot: an error, a timeout, a raise or an exit is a
       `<step> deferred` warning, the ledger row stays open and the next boot
       retries. Each step is idempotent, so a rerun from any point is safe.
   """
@@ -30,55 +40,67 @@ defmodule Engram.Release.BootStep do
   require Logger
 
   @enforce_keys [:name, :version, :flag, :apply]
-  defstruct @enforce_keys
+  defstruct @enforce_keys ++ [default: true]
 
   @typedoc """
-  `apply` runs the step on the repo: `:ok` (done, the ledger closes) or
-  `{:defer, reason}` (left for the next boot). It may raise.
+  `apply` runs the step in its session (`t:session/0`): `:ok` (done, the
+  ledger closes) or `{:defer, reason}` (left for the next boot). It may
+  raise. `default` is the kill switch's value when the flag is absent.
   """
   @type t :: %__MODULE__{
           name: String.t(),
           version: pos_integer(),
           flag: atom(),
-          apply: (module() -> :ok | {:defer, term()})
+          apply: (session() -> :ok | {:defer, term()}),
+          default: boolean()
         }
 
-  @type result :: :skipped | :disabled | :done | :deferred
+  @typedoc "A step's pinned connection and the boot's deadline (monotonic ms)."
+  @type session :: %{repo: module(), deadline: integer()}
+
+  @type result :: :skipped | :disabled | :done | :deferred | :busy
 
   @flags_timeout_ms 3_000
   # LockTimeoutRetry's value (priv/repo/migrations/lock_timeout_retry.exs).
   @lock_timeout "5s"
-  @statement_timeout_ms 30_000
-
-  @doc "The per-statement server-side bound `in_session/2` sets."
-  def statement_timeout_ms, do: @statement_timeout_ms
+  @budget_ms 30_000
+  @max_statement_ms 30_000
+  @min_statement_ms 1_000
+  # A failed build's INVALID leftover is dropped even with the budget spent:
+  # an invalid UNIQUE index still enforces uniqueness on writes.
+  @cleanup_ms 10_000
 
   @doc """
   Runs `steps` in order on `repo` (a migrator-credential repo) and returns
   `[{name, result}]`. One step's failure never stops the next. Never raises.
-  `opts`: `:flags_timeout_ms`.
+  `opts`: `:flags_timeout_ms`, `:budget_ms` (all steps together).
   """
   @spec run_all(module(), [t()], keyword()) :: [{String.t(), result()}]
   def run_all(repo, steps, opts \\ []) do
     timeout = Keyword.get(opts, :flags_timeout_ms, @flags_timeout_ms)
+    deadline = now() + Keyword.get(opts, :budget_ms, @budget_ms)
 
     {results, _flags} =
       Enum.map_reduce(steps, :unread, fn step, flags ->
-        {result, flags} = run_one(repo, step, flags, timeout)
+        {result, flags} = run_one(repo, step, flags, timeout, deadline)
         {{step.name, result}, flags}
       end)
 
     results
   end
 
-  defp run_one(repo, step, flags, timeout) do
+  defp run_one(repo, step, flags, timeout, deadline) do
     if DataMigrations.done?(step.name, step.version) do
       {:skipped, flags}
     else
       flags = if flags == :unread, do: read_flags(timeout), else: flags
 
       result =
-        if enabled?(step, flags), do: apply_step(repo, step), else: :disabled
+        cond do
+          not enabled?(step, flags) -> :disabled
+          deadline - now() < @min_statement_ms -> deferred(step, :boot_budget_spent)
+          true -> apply_step(repo, step, deadline)
+        end
 
       {result, flags}
     end
@@ -88,8 +110,8 @@ defmodule Engram.Release.BootStep do
     kind, reason -> {deferred(step, {kind, reason}), flags}
   end
 
-  defp apply_step(repo, step) do
-    case step.apply.(repo) do
+  defp apply_step(repo, step, deadline) do
+    case in_session(repo, step, %{repo: repo, deadline: deadline}) do
       :ok ->
         :ok = DataMigrations.mark_done(step.name, step.version)
 
@@ -100,12 +122,52 @@ defmodule Engram.Release.BootStep do
 
         :done
 
+      :busy ->
+        Logger.info(
+          "#{step.name} held by another session; the next boot retries",
+          Metadata.with_category(:info, :boot, migration: step.name)
+        )
+
+        :busy
+
       {:defer, reason} ->
         deferred(step, reason)
     end
   end
 
-  # {:ok, source label, flags} | {:none} | {:error, source label, reason}
+  # One pinned connection: the advisory lock, then the session's lock and
+  # statement bounds, reset afterwards. No checkout deadline: each statement
+  # carries its own bound, and DBConnection's default would cover the block.
+  defp in_session(repo, step, session) do
+    repo.checkout(
+      fn ->
+        key = lock_key(step.name)
+
+        case repo.query!("SELECT pg_try_advisory_lock($1)", [key], log: false) do
+          %{rows: [[true]]} ->
+            repo.query!("SET lock_timeout = '#{@lock_timeout}'")
+
+            try do
+              step.apply.(session)
+            after
+              repo.query!("RESET lock_timeout")
+              repo.query!("RESET statement_timeout")
+              repo.query!("SELECT pg_advisory_unlock($1)", [key], log: false)
+            end
+
+          _ ->
+            :busy
+        end
+      end,
+      timeout: :infinity
+    )
+  end
+
+  @doc "The session advisory lock key of the step `name` (int4 range)."
+  @spec lock_key(String.t()) :: integer()
+  def lock_key(name), do: :erlang.phash2({__MODULE__, name}, 2_147_483_647)
+
+  # {:ok, source label, flags} | :none | {:error, source label, reason}
   defp read_flags(timeout_ms) do
     case Application.get_env(:engram, :service_flags) do
       nil ->
@@ -138,11 +200,11 @@ defmodule Engram.Release.BootStep do
 
   defp enabled?(step, {:error, _source, reason}) do
     Logger.warning(
-      "#{step.name} flags unreadable; running with the default (on)",
+      "#{step.name} flags unreadable; running with the default (#{on_off(step.default)})",
       Metadata.with_category(:warning, :boot, migration: step.name, reason: safe(reason))
     )
 
-    true
+    step.default
   end
 
   # The positive proof the kill switch was read. Values are a boolean or
@@ -153,59 +215,63 @@ defmodule Engram.Release.BootStep do
       Metadata.with_category(:info, :boot, migration: step.name)
     )
 
-    value != false
+    if value == :absent, do: step.default, else: value
   end
 
-  @doc """
-  Runs `fun` on one pinned connection of `repo` under a #{@lock_timeout}
-  `lock_timeout` and a #{@statement_timeout_ms} ms `statement_timeout`,
-  reset afterwards. No checkout deadline: each statement carries its own
-  bound (a client timeout a little past the server's), and DBConnection's
-  default deadline would cover the whole block.
-  """
-  @spec in_session(module(), (-> result)) :: result when result: term()
-  def in_session(repo, fun) do
-    repo.checkout(
-      fn ->
-        repo.query!("SET lock_timeout = '#{@lock_timeout}'")
-        repo.query!("SET statement_timeout = #{@statement_timeout_ms}")
-
-        try do
-          fun.()
-        after
-          repo.query!("RESET lock_timeout")
-          repo.query!("RESET statement_timeout")
-        end
-      end,
-      timeout: :infinity
-    )
-  end
+  defp on_off(true), do: "on"
+  defp on_off(false), do: "off"
 
   @doc """
-  Runs `statements` in order inside `in_session/2`; the first error stops
-  the rest and comes back as `{:defer, error}`.
+  Runs `statements` in order in the session; the first error stops the rest
+  and comes back as `{:defer, error}`. `opts` as `query/4`.
   """
-  @spec exec(module(), [String.t()]) :: :ok | {:defer, term()}
-  def exec(repo, statements) do
+  @spec exec(session(), [String.t()], keyword()) :: :ok | {:defer, term()}
+  def exec(session, statements, opts \\ []) do
     Enum.reduce_while(statements, :ok, fn sql, :ok ->
-      case query(repo, sql) do
+      case query(session, sql, [], opts) do
         {:ok, _} -> {:cont, :ok}
         {:error, e} -> {:halt, {:defer, e}}
       end
     end)
   end
 
-  @doc "One statement under the session's bounds: `{:ok, result} | {:error, e}`."
-  @spec query(module(), String.t(), list()) :: {:ok, term()} | {:error, term()}
-  def query(repo, sql, params \\ []),
-    do: repo.query(sql, params, timeout: @statement_timeout_ms + 5_000)
+  @doc """
+  One statement under the session's bounds: `statement_timeout` is what is
+  left of the boot budget (at most #{@max_statement_ms} ms); under
+  #{@min_statement_ms} ms left it is not sent (`{:error, :boot_budget_spent}`).
+  A CONCURRENTLY statement runs with no `lock_timeout` (it blocks no DML,
+  and its waits for older transactions are lock waits a 5 s bound would turn
+  into chronic deferrals); `cleanup: true` bounds it by #{@cleanup_ms} ms
+  instead of the budget.
+  """
+  @spec query(session(), String.t(), list(), keyword()) :: {:ok, term()} | {:error, term()}
+  def query(%{repo: repo} = session, sql, params \\ [], opts \\ []) do
+    left =
+      if Keyword.get(opts, :cleanup, false),
+        do: @cleanup_ms,
+        else: min(session.deadline - now(), @max_statement_ms)
+
+    if left < @min_statement_ms do
+      {:error, :boot_budget_spent}
+    else
+      concurrent = Regex.match?(~r/\bCONCURRENTLY\b/i, sql)
+      repo.query!("SET statement_timeout = #{left}")
+      if concurrent, do: repo.query!("SET lock_timeout = 0")
+
+      try do
+        repo.query(sql, params, timeout: left + 5_000)
+      after
+        if concurrent, do: repo.query!("SET lock_timeout = '#{@lock_timeout}'")
+      end
+    end
+  end
 
   @doc """
   `:valid`, `:invalid` (a failed or killed CONCURRENTLY build: never done)
   or `:absent`, for the index `name` in the public schema.
   """
-  @spec index_state(module(), String.t()) :: :valid | :invalid | :absent
-  def index_state(repo, name) do
+  @spec index_state(session(), String.t()) :: :valid | :invalid | :absent
+  def index_state(%{repo: repo}, name) do
     %{rows: rows} =
       repo.query!(
         "SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid " <>
@@ -224,15 +290,15 @@ defmodule Engram.Release.BootStep do
 
   @doc """
   Builds the index `name` (`create` is its `CREATE [UNIQUE] INDEX
-  CONCURRENTLY IF NOT EXISTS` statement) inside `in_session/2`: a valid one
-  is done; an INVALID one is dropped first; after the build it must read
-  valid. A failed build's INVALID leftover is dropped at once (an invalid
-  UNIQUE index still enforces uniqueness on writes); if that drop fails
-  too, the next attempt drops it before building.
+  CONCURRENTLY IF NOT EXISTS` statement): a valid one is done; an INVALID
+  one is dropped first; after the build it must read valid. A failed or
+  timed-out build's INVALID leftover is dropped at once (an invalid UNIQUE
+  index still enforces uniqueness on writes); if that drop fails too, the
+  next attempt drops it before building.
   """
-  @spec build_index(module(), String.t(), String.t()) :: :ok | {:defer, term()}
-  def build_index(repo, name, create) do
-    case index_state(repo, name) do
+  @spec build_index(session(), String.t(), String.t()) :: :ok | {:defer, term()}
+  def build_index(session, name, create) do
+    case index_state(session, name) do
       :valid ->
         :ok
 
@@ -240,22 +306,27 @@ defmodule Engram.Release.BootStep do
         drop = "DROP INDEX CONCURRENTLY IF EXISTS #{name}"
         pre = if state == :invalid, do: [drop], else: []
 
-        with :ok <- exec(repo, pre),
-             :ok <- built(repo, name, exec(repo, [create])) do
+        with :ok <- exec(session, pre),
+             :ok <- built(session, name, exec(session, [create])) do
           :ok
         else
           {:defer, _} = defer ->
-            _ = if index_state(repo, name) == :invalid, do: exec(repo, [drop])
+            _ =
+              if index_state(session, name) == :invalid,
+                do: exec(session, [drop], cleanup: true)
+
             defer
         end
     end
   end
 
-  defp built(repo, name, :ok) do
-    if index_state(repo, name) == :valid, do: :ok, else: {:defer, :index_invalid_after_build}
+  defp built(session, name, :ok) do
+    if index_state(session, name) == :valid,
+      do: :ok,
+      else: {:defer, :index_invalid_after_build}
   end
 
-  defp built(_repo, _name, defer), do: defer
+  defp built(_session, _name, defer), do: defer
 
   defp deferred(step, reason) do
     Logger.warning(
@@ -275,6 +346,8 @@ defmodule Engram.Release.BootStep do
   catch
     _, _ -> :error
   end
+
+  defp now, do: System.monotonic_time(:millisecond)
 
   defp safe(%{__exception__: true} = e), do: Metadata.safe_reason(e)
   defp safe(reason) when is_atom(reason) or is_binary(reason), do: to_string(reason)

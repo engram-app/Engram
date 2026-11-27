@@ -10,8 +10,9 @@ defmodule Engram.Release.FolderHashDrop do
 
   It never fails or blocks boot (`Engram.Release.BootStep`, the shared shape:
   ledger, kill switch, bounded session). Each statement gets one try per boot
-  under a 5 s `lock_timeout` (no in-boot retries, so a contended table queues
-  reads behind it for at most 5 s per statement). A lock timeout or any error
+  (the index drop with no `lock_timeout`, CONCURRENTLY blocks no DML; the
+  column drop under a 5 s one, so a contended table queues reads behind it
+  for at most 5 s). A lock timeout or any error
   is a `folder_path_hash_drop deferred` warning: the ledger row stays open and
   the next boot retries. Both statements are
   IF EXISTS, so a rerun is safe, and a cancelled concurrent index drop
@@ -38,7 +39,7 @@ defmodule Engram.Release.FolderHashDrop do
       name: "folder_path_hash_drop",
       version: 1,
       flag: :folder_path_hash_drop,
-      apply: fn repo -> BootStep.in_session(repo, fn -> BootStep.exec(repo, statements()) end) end
+      apply: &BootStep.exec(&1, statements())
     }
   end
 
