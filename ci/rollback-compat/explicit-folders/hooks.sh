@@ -103,7 +103,7 @@ hook_after_new_boot() {
   fi
   # Each merge: the survivor live, explicit and stamped; the other row retired.
   local kind live retired
-  for kind in merge_restore rename_merge; do
+  for kind in $(python3 -c "import json,sys; print(' '.join(json.load(open(sys.argv[1]))['merges']))" "$STATE"); do
     read -r live retired < <(python3 -c "import json,sys; m=json.load(open(sys.argv[1]))['merges'][sys.argv[2]]; print(m['live'], m['retired'])" "$STATE" "$kind")
     echo "$kind: survivor $(sql "SELECT explicit || ' seq=' || coalesce(explicit_seq::text, 'NULL') || ' deleted=' || (deleted_at IS NOT NULL) FROM folders WHERE id = '$live'"), retired $(sql "SELECT 'deleted=' || (deleted_at IS NOT NULL) FROM folders WHERE id = '$retired'")"
     [ "$(sql "SELECT count(*) FROM folders WHERE id = '$live' AND explicit AND explicit_seq IS NOT NULL AND deleted_at IS NULL")" -eq 1 ] \

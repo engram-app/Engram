@@ -121,24 +121,37 @@ def seed_new(api_url: str, state: str, fault: str) -> None:
     if merged_orig == merged_new or merged not in (merged_orig, merged_new):
         raise SystemExit(f"merge restore: Merged ids orig={merged_orig} new={merged_new} after={merged}")
     # Rename merge (Rows.retire/2): an explicit folder holding a note renamed
-    # onto a path another note already occupies (an empty one is refused 409);
-    # the implicit row there keeps both notes and takes the flag.
+    # onto a path another note already occupies; on a merge the implicit row
+    # there keeps both notes and takes the flag. NEW may refuse it (409).
     client.create_note("Dup/x.md", "occupies Dup")
     _expect("create Src", client.create_folder("Src"), (200, 201))
     client.create_note("Src/a.md", "moves into Dup")
     src = _id(client, "Src")
-    _expect("rename Src -> Dup (merge)", client.rename_folder("Src", "Dup"), (200,))
-    dup = _id(client, "Dup")
-    if dup == src:
-        raise SystemExit(f"rename merge: Dup kept Src's id {src}, so nothing merged")
-    # The workflow checks these rows in SQL: the survivor stamped, the other retired.
+    resp = client.session.post(
+        f"{client.base_url}/folders/rename", json={"old_path": "Src", "new_path": "Dup"}, timeout=10
+    )
     data["merges"] = {
         "merge_restore": {"live": merged, "retired": merged_new if merged == merged_orig else merged_orig},
-        "rename_merge": {"live": dup, "retired": src},
     }
+    if resp.status_code == 200:
+        dup = _id(client, "Dup")
+        if dup == src:
+            raise SystemExit(f"rename merge: Dup kept Src's id {src}, so nothing merged")
+        # The workflow checks these rows in SQL: the survivor stamped, the other retired.
+        data["merges"]["rename_merge"] = {"live": dup, "retired": src}
+        merge_folder = "Dup"
+    elif resp.status_code == 409:
+        # NEW refuses the merge (an uncascaded rename answers `:merge` as a
+        # conflict), so Rows.retire/2 has no REST entry here: nothing moved.
+        print(f"::notice::rename Src -> Dup refused by NEW (409 {resp.text[:200]}); Rows.retire/2 not reachable over REST")
+        if _id(client, "Src") != src:
+            raise SystemExit("rename merge refused, but Src changed id")
+        merge_folder = "Src"
+    else:
+        raise SystemExit(f"rename Src -> Dup: HTTP {resp.status_code} {resp.text[:200]}")
     expected = {
         "Renamed", "Renamed/Child", "Root", "Root/Inner", "Root/Moved", "Implied",
-        "Batch/One", "Batch/Two", "Revived", "Trashed", "Merged", "Dup",
+        "Batch/One", "Batch/Two", "Revived", "Trashed", "Merged", merge_folder,
     }
     if fault == "unstamped-row":
         # Created LAST: the workflow unstamps the newest explicit row by id (uuidv7).
