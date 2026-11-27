@@ -6,10 +6,18 @@ the new paths live and sees old paths cleaned up via the tombstone delete
 signals — no manual pull backstop.
 """
 
+import uuid
+
 import pytest
 
+from helpers import folder_ops
 from helpers.log_oracle import wait_for_delivery
-from helpers.vault import wait_for_file_gone, write_note
+from helpers.vault import (
+    wait_for_file_gone,
+    wait_for_folder,
+    wait_for_folder_gone,
+    write_note,
+)
 
 
 @pytest.mark.asyncio
@@ -46,7 +54,9 @@ async def test_folder_rename_new_paths(vault_a, vault_b, cdp_a, cdp_b, api_sync)
 
 
 @pytest.mark.asyncio
-async def test_folder_rename_old_paths_cleaned(vault_a, vault_b, cdp_a, cdp_b, api_sync):
+async def test_folder_rename_old_paths_cleaned(
+    vault_a, vault_b, cdp_a, cdp_b, api_sync
+):
     """After folder rename, old paths should be removed from B's vault live."""
     old_folder = "E2E/RenameCleanup34"
     new_folder = "E2E/RenamedCleanup34"
@@ -62,3 +72,35 @@ async def test_folder_rename_old_paths_cleaned(vault_a, vault_b, cdp_a, cdp_b, a
 
     # B removes the old path live — tombstone delete signal, no manual pull
     wait_for_file_gone(vault_b, note)
+
+
+@pytest.mark.asyncio
+async def test_folder_rename_only_empty_subfolder(
+    vault_a, vault_b, cdp_a, cdp_b, api_sync
+):
+    """A folder whose only content is an explicit empty subfolder: after a
+    server-side rename (web app / MCP, folder_ops off, so folders.batch
+    "rename" is the only folder signal) B has the new folder and the old one
+    is gone. Before the plugin fix B kept the emptied old folder.
+
+    `old` is explicit too (the staging AR6 shape). Renaming an IMPLICIT parent
+    whose only content is an explicit bare subfolder moves nothing and answers
+    404: a known server gap, tracked separately (red test parked on branch
+    claude/implicit-parent-rename-red).
+    """
+    # With folder_ops on, folder_changed would carry the rename instead and
+    # this would not exercise the folders.batch path.
+    assert folder_ops.switch_reads() is False, "precondition: folder_ops must be off"
+
+    root = f"E2E/EmptySub34-{uuid.uuid4().hex[:12]}"
+    old_folder, new_folder = f"{root}/old", f"{root}/new"
+
+    assert api_sync.create_folder(old_folder) in (200, 201)
+    assert api_sync.create_folder(f"{old_folder}/sub") in (200, 201)
+    wait_for_folder(vault_b, f"{old_folder}/sub")
+
+    status = api_sync.rename_folder(old_folder, new_folder)
+    assert status == 200, f"Folder rename should succeed, got {status}"
+
+    wait_for_folder(vault_b, f"{new_folder}/sub")
+    wait_for_folder_gone(vault_b, old_folder)

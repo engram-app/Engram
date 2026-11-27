@@ -287,12 +287,12 @@ defmodule EngramWeb.FoldersController do
     case Folders.delete(user, vault, folder, recursive: true) do
       # Broadcast on every success, including 0/0. `Folders.delete/4` reports
       # content counts only, so 0/0 cannot distinguish "nothing was there" from
-      # "a nested empty marker was cleared" — and a broadcast on the former
-      # costs nothing. The plugin's `folders.batch` handler ignores the payload
-      # entirely: it re-polls GET /folders/explicit and trashes only a folder
-      # the server no longer lists AND that is empty on disk (see
-      # `syncExplicitFolders` in plugin/src/sync.ts). A phantom event is one
-      # extra GET, not a lost local folder.
+      # "a nested empty marker was cleared", and a broadcast on the former
+      # costs nothing. The plugin's `folders.batch` handler reads only a
+      # rename's `from` and `folder`, so for a delete it re-polls GET /folders/explicit and
+      # trashes only a folder the server no longer lists AND that is empty on
+      # disk (see `syncExplicitFolders` in plugin/src/sync.ts). A phantom
+      # event is one extra GET, not a lost local folder.
       {:ok, _counts} ->
         Folders.broadcast_batch(user, vault, %{op: "delete", folder: folder})
         send_resp(conn, 204, "")

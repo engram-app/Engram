@@ -251,9 +251,9 @@ defmodule Engram.Folders do
 
   @doc """
   Emits `folders.batch` on the vault's sync topic: the one event that tells
-  every client to re-read the explicit-folder list (the plugin ignores the
-  payload; the web app patches its tree from a create's `markers`, else
-  re-fetches it). Through `Sync.Broadcast.emit/3`, so inside `atomic/2` or a
+  every client to re-read the explicit-folder list (the plugin reads only a
+  rename's `from` and `folder`, to remove the emptied old folder; the web app patches its
+  tree from a create's `markers`, else re-fetches it). Through `Sync.Broadcast.emit/3`, so inside `atomic/2` or a
   tenant transaction it fires only after commit, and never on rollback.
   `payload` carries `op` plus that op's fields.
   """
