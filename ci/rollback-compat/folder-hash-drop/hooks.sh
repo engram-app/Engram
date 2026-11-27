@@ -10,7 +10,9 @@
 # gone; J, rolled back onto K's schema, reads the column only to fail with
 # undefined_column, keeps every folder's id, parent, explicit flag and every
 # note's folder (the snapshot), and lists /folders/explicit and the vault tree
-# with K's ids and parents before and after a rename + delete through J.
+# with K's ids and parents before and after a rename + delete through J,
+# then J creates a folder, writes and reads a note, and finds it through MCP
+# list_folder and search_notes.
 # Fault hash-read: J's process reading the column crashes, and the workflow's
 # error scan must go red on it.
 #
@@ -38,8 +40,12 @@ hook_before_new() { ddl_log_arm; }
 # Phase 2, NEW (K) booted: its DDL and ledger, then K's writers.
 hook_after_new_boot() {
   ddl_log_read
-  printf '%s\n' 'ALTER TABLE public.folders' 'DROP index public.folders_full_path' \
-    'DROP table column public.folders.full_path_hmac' | sort > "$RUNNER_TEMP/ddl-want.txt"
+  # The boot's own baseline counted too: prepare_database's 4 ALTER DEFAULT
+  # PRIVILEGES and 5 GRANTs (an extra GRANT from K would show here).
+  { printf '%s\n' 'ALTER TABLE public.folders' 'DROP index public.folders_full_path' \
+      'DROP table column public.folders.full_path_hmac'
+    for _ in 1 2 3 4; do echo 'ALTER DEFAULT PRIVILEGES -'; done
+    for _ in 1 2 3 4 5; do echo 'GRANT -'; done; } | sort > "$RUNNER_TEMP/ddl-want.txt"
   diff "$RUNNER_TEMP/ddl-want.txt" "$RUNNER_TEMP/ddl.txt" \
     || fail "K's boot DDL is not exactly the folder hash drop (diff above: < want, > got)"
   [ "$(sql "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'folders' AND column_name = 'full_path_hmac'")" -eq 0 ] \
@@ -90,6 +96,6 @@ hook_verify_old() {
   out=$(rpc old-probe.exs)
   echo "$out"
   [ "$(val EXPLICIT_READS "$out")" = true ] || fail "J lists explicit folders from markers, not the flag"
-  python3 e2e/scripts/rollback_compat.py verify-old --api-url "$API" --state "$STATE" \
+  python3 e2e/scripts/rollback_compat.py verify-old --api-url "$API" --state "$STATE" --writes \
     || fail "J's listings after the rollback do not match the seeded folders"
 }

@@ -24,11 +24,11 @@ ddl_log_arm() {
     CREATE EVENT TRIGGER rbc_drop ON sql_drop EXECUTE FUNCTION rbc_drop();" >/dev/null
 }
 
-# Prints the log (also to $RUNNER_TEMP/ddl.txt, one "tag obj" per line, the
-# boot's GRANT / ALTER DEFAULT PRIVILEGES baseline left out of the file) and
-# drops the triggers.
+# Prints the log (also to $RUNNER_TEMP/ddl.txt, sorted, one "tag obj" per
+# line, duplicates kept, the boot's GRANT / ALTER DEFAULT PRIVILEGES baseline
+# included so a pair can count it) and drops the triggers.
 ddl_log_read() {
   sql "SELECT tag || ' ' || coalesce(obj, '-') FROM rbc_ddl_log" | sort | uniq -c | sed 's/^/DDL during NEW boot: /'
-  sql "SELECT tag || ' ' || coalesce(obj, '-') FROM rbc_ddl_log WHERE tag NOT IN ('GRANT', 'ALTER DEFAULT PRIVILEGES')" | sort > "$RUNNER_TEMP/ddl.txt"
+  sql "SELECT tag || ' ' || coalesce(obj, '-') FROM rbc_ddl_log" | sort > "$RUNNER_TEMP/ddl.txt"
   sql "DROP EVENT TRIGGER rbc_ddl; DROP EVENT TRIGGER rbc_drop; DROP FUNCTION rbc_ddl(); DROP FUNCTION rbc_drop(); DROP TABLE rbc_ddl_log" >/dev/null
 }

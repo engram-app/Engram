@@ -36,8 +36,13 @@ def main() -> int:
     bad, ok_ids = [], set()
     for job in jobs:
         values = [str(v) for v in (job.get("args") or {}).values() if isinstance(v, (str, int)) and len(str(v)) >= 8]
-        evidence = (job.get("error") or "") + "".join(ln for ln in lines if any(v in ln for v in values))
-        hit = next((a for a in allow if a["worker"] == job["worker"] and a["kind"] in evidence), None)
+        last = job.get("error") or ""
+        evidence = last + "".join(ln for ln in lines if any(v in ln for v in values))
+        # A database error in the LAST attempt is never allowed, whatever an
+        # earlier attempt logged: it is the failure a rollback causes.
+        hit = None if "Postgrex.Error" in last else next(
+            (a for a in allow if a["worker"] == job["worker"] and a["kind"] in evidence), None
+        )
         first = (job.get("error") or "").strip().splitlines()[:1]
         if hit:
             hit["used"] += 1

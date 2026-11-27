@@ -323,7 +323,7 @@ jobs:
           # kind against the pair's jobs-allow.txt; also every `Oban job
           # attempt failed` / `discarded` warning line (check-jobs.py).
           since=$(cat "$RUNNER_TEMP/phase3-since.txt")
-          sql "SELECT coalesce(json_agg(json_build_object('id', id, 'worker', worker, 'state', state, 'args', args, 'error', errors[array_length(errors, 1)]->>'error')), '[]') FROM oban_jobs WHERE array_length(errors, 1) > 0 AND attempted_at > '$since'" > "$RUNNER_TEMP/failed-jobs.json"
+          sql "SELECT coalesce(json_agg(json_build_object('id', id, 'worker', worker, 'state', state, 'args', args, 'error', errors[array_length(errors, 1)]->>'error')), '[]') FROM oban_jobs WHERE (array_length(errors, 1) > 0 OR state IN ('discarded', 'cancelled')) AND coalesce(attempted_at, cancelled_at, discarded_at, inserted_at) > '$since'" > "$RUNNER_TEMP/failed-jobs.json"
           python3 ci/rollback-compat/check-jobs.py "$RUNNER_TEMP/failed-jobs.json" "$CHECKS_DIR/jobs-allow.txt" "$SHAPE" "${logs[@]}" \
             || fail "OLD background jobs failed on NEW's data (see the errors above)"
           # The runner's own log, from the migrations rpc alone (not the

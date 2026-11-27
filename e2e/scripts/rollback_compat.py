@@ -212,7 +212,31 @@ def _check(client: ApiClient, expected: set[str], label: str, rows: dict | None 
     return errors
 
 
-def verify_old(api_url: str, state: str) -> None:
+def _smoke_writes(client: ApiClient, data: dict) -> list[str]:
+    """OLD's write and read paths on NEW's schema: folder create, note
+    write and read, MCP list_folder and a (recent-mode) MCP search."""
+    errors = []
+    path, body = "PostRollback/n.md", "written by OLD after the rollback"
+    if client.create_folder("PostRollback") not in (200, 201):
+        errors.append("create PostRollback on OLD failed")
+    try:
+        client.create_note(path, body)
+        note = client.get_note(path) or {}
+        if body not in (note.get("content") or ""):
+            errors.append(f"read back {path} on OLD: content {str(note.get('content'))[:80]!r}")
+        listed = json.dumps(_mcp(client, data, "list_folder", {"folder": "PostRollback"}))
+        if path not in listed and "n.md" not in listed:
+            errors.append(f"MCP list_folder PostRollback on OLD does not list {path}: {listed[:200]}")
+        found = json.dumps(_mcp(client, data, "search_notes", {"folder": "PostRollback", "limit": 5}))
+        if path not in found:
+            errors.append(f"MCP search_notes on OLD does not find {path}: {found[:200]}")
+    except Exception as e:  # any failure is a finding, reported with the rest (not swallowed)
+        errors.append(f"OLD note/MCP smoke raised {type(e).__name__}: {str(e)[:200]}")
+    print(f"OLD write smoke: {len(errors)} errors")
+    return errors
+
+
+def verify_old(api_url: str, state: str, writes: bool = False) -> None:
     data = _load(state)
     client = _client(api_url, data)
     expected = set(data["expected"])
@@ -230,6 +254,9 @@ def verify_old(api_url: str, state: str) -> None:
     rows = {k: v for k, v in rows.items() if k not in ("Root/Inner", "Root/Moved")}
     rows["Root/Inner2"] = data["tree"].get("Root/Inner")
     errors += _check(client, expected, "after OLD rename + delete", rows)
+    if writes:
+        errors += _smoke_writes(client, data)
+        errors += _check(client, expected | {"PostRollback"}, "after OLD writes", rows)
 
     for e in errors:
         print(f"::error::{e}")
@@ -245,13 +272,14 @@ def main() -> None:
     p.add_argument("--state", required=True, help="0600 JSON state file")
     p.add_argument("--fault", choices=["none", "unstamped-row", "vault-lock", "hash-read"], default="none")
     p.add_argument("--with-notes", action="store_true", help="seed-old: notes too, nested")
+    p.add_argument("--writes", action="store_true", help="verify-old: also folder create, note write/read, MCP list_folder and search")
     a = p.parse_args()
     if a.phase == "seed-old":
         seed_old(a.api_url, a.state, a.with_notes)
     elif a.phase == "seed-new":
         seed_new(a.api_url, a.state, a.fault)
     else:
-        verify_old(a.api_url, a.state)
+        verify_old(a.api_url, a.state, a.writes)
 
 
 if __name__ == "__main__":
