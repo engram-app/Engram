@@ -99,6 +99,43 @@ defmodule Engram.EntrypointTest do
            """
   end
 
+  # Runs the real script, with `/app/bin/engram` rewritten to a stub that
+  # records the DATABASE_URL each eval saw. The final command prints the env
+  # the BEAM would inherit. A source regex cannot catch this leak: ECS already
+  # exports MIGRATOR_DATABASE_URL into the container, so the script never has
+  # to `export` it for `exec` to pass it on.
+  @tag :tmp_dir
+  test "the exec target never sees MIGRATOR_DATABASE_URL", %{tmp_dir: dir} do
+    stub = Path.join(dir, "engram")
+    log = Path.join(dir, "evals.log")
+    script = Path.join(dir, "entrypoint.sh")
+
+    File.write!(stub, ~s(#!/bin/sh\necho "$DATABASE_URL" >> "#{log}"\n))
+    File.write!(script, String.replace(File.read!(@entrypoint), "/app/bin/engram", stub))
+    File.chmod!(stub, 0o755)
+
+    {out, 0} =
+      System.cmd("sh", [script, "env"],
+        env: [
+          {"DATABASE_URL", "postgres://app@db/engram"},
+          {"MIGRATOR_DATABASE_URL", "postgres://admin@db/engram"}
+        ]
+      )
+
+    refute out =~ "MIGRATOR_DATABASE_URL",
+           """
+           The exec'd BEAM inherited MIGRATOR_DATABASE_URL, i.e. the master DB
+           credential sits in the long-lived app's /proc/<pid>/environ.
+           `unset` it right before `exec "$@"`.
+           """
+
+    assert out =~ "DATABASE_URL=postgres://app@db/engram"
+
+    assert File.read!(log) |> String.split("\n", trim: true) ==
+             List.duplicate("postgres://admin@db/engram", 3),
+           "prepare_database, migrate and verify_schema_baseline must run as the migrator"
+  end
+
   test "the migrator login is never exported globally", %{src: src} do
     refute src =~ ~r/^\s*export\s+MIGRATOR_DATABASE_URL/m,
            """
