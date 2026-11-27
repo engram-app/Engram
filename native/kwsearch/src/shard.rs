@@ -184,7 +184,10 @@ pub struct State {
     pub writer: Option<Writer>,
     pub meta: Meta,
     pub dirty: bool,
-    markers: HashMap<Uuid, Marker>,
+    /// Keyed by (user, note): a note id names a marker only within its user,
+    /// so a row or a bulk body naming another tenant's note reads and sets
+    /// nothing of theirs (review M6).
+    markers: HashMap<(Uuid, Uuid), Marker>,
     pending: HashMap<Uuid, Pending>,
     /// Committed (searcher-visible) chunk docs deleted this round.
     gone: HashSet<Uuid>,
@@ -217,6 +220,9 @@ pub struct BulkNote {
     pub xmax: u64,
     pub keep: Vec<Uuid>,
     pub docs: Vec<(Uuid, Vec<u8>)>,
+    /// A later part of a note sent in several requests: it carries no point
+    /// set and applies only on top of its first part (same stamp applied).
+    pub cont: bool,
 }
 
 pub struct Shard {
@@ -224,6 +230,10 @@ pub struct Shard {
     pub reader: IndexReader,
     pub f: F,
     pub state: Mutex<State>,
+    /// Test hook: runs inside `commit`, after the commit and before the
+    /// reader reload (the window review H1 found).
+    #[cfg(test)]
+    pub after_commit: Mutex<Option<Box<dyn Fn() + Send>>>,
 }
 
 #[derive(Default, Debug, PartialEq)]
@@ -297,7 +307,16 @@ impl Shard {
                 purge_now: false,
                 now: 0,
             }),
+            #[cfg(test)]
+            after_commit: Mutex::new(None),
         })
+    }
+
+    #[cfg(test)]
+    fn hook(&self) {
+        if let Some(h) = self.after_commit.lock().unwrap().as_ref() {
+            h();
+        }
     }
 
     pub fn cursor(&self) -> (u64, i64) {
@@ -423,10 +442,11 @@ impl Shard {
         out: &mut Applied,
     ) -> tantivy::Result<bool> {
         let stamp = r.stamp.max(0) as u64;
-        if let std::collections::hash_map::Entry::Vacant(e) = st.markers.entry(note) {
-            e.insert(self.committed_marker(&note));
+        let key = (r.user, note);
+        if let std::collections::hash_map::Entry::Vacant(e) = st.markers.entry(key) {
+            e.insert(self.committed_marker(&r.user, &note));
         }
-        let have = st.markers[&note].stamp;
+        let have = st.markers[&key].stamp;
         if stamp < have {
             // Stale: a newer pass for this note was applied first (lower
             // xid, later commit). Its keep set says which points survive;
@@ -435,8 +455,8 @@ impl Shard {
             // indexed point already holds this content. Everything else is
             // a no-op.
             let p = r.point.filter(|_| op == kwfeed::UPSERT);
-            let fill = p
-                .is_some_and(|p| self.kept(&st.markers[&note], &note, &p) && !self.indexed(st, &p));
+            let fill =
+                p.is_some_and(|p| self.kept(&st.markers[&key], &key, &p) && !self.indexed(st, &p));
             if !fill {
                 out.skipped_stale += 1;
                 return Ok(false);
@@ -462,8 +482,8 @@ impl Shard {
                 // at the marker's stamp naming a point outside it came from a
                 // keep set read too early (review #1): drop it rather than
                 // bring back a point the note no longer has.
-                let m = &st.markers[&note];
-                if stamp == m.stamp && (m.keep.is_some() || m.committed) && !self.kept(m, &note, &p)
+                let m = &st.markers[&key];
+                if stamp == m.stamp && (m.keep.is_some() || m.committed) && !self.kept(m, &key, &p)
                 {
                     out.skipped_stale += 1;
                     return Ok(false);
@@ -473,7 +493,7 @@ impl Shard {
             kwfeed::DELETE_POINTS => {
                 let Some(p) = r.point else { return Ok(false) };
                 self.remove(st, &r.user, Scope::Point(p))?;
-                if let Some(k) = st.markers.get_mut(&note).and_then(|m| m.keep.as_mut()) {
+                if let Some(k) = st.markers.get_mut(&key).and_then(|m| m.keep.as_mut()) {
                     k.remove(&p);
                 }
             }
@@ -532,7 +552,7 @@ impl Shard {
         w.add_document(m)?;
         let keep = keep.map(|k| k.iter().copied().collect());
         st.markers.insert(
-            note,
+            (r.user, note),
             Marker {
                 stamp,
                 keep,
@@ -741,12 +761,17 @@ impl Shard {
         prepared.set_payload(&payload);
         prepared.commit()?;
         w.used = Instant::now();
+        #[cfg(test)]
+        self.hook();
+        // Reload BEFORE the in-memory state goes and before the lock drops:
+        // a bulk call on an HTTP thread that took the lock in between would
+        // read markers from the old searcher (review H1).
+        self.reader.reload()?;
         st.dirty = false;
         st.markers.clear();
         st.pending.clear();
         st.gone.clear();
         drop(guard);
-        self.reader.reload()?;
         self.compact()?;
         Ok(true)
     }
@@ -772,8 +797,8 @@ impl Shard {
         for c in candidates {
             w.merge(&c.0).wait()?;
         }
-        drop(guard);
         self.reader.reload()?;
+        drop(guard);
         Ok(())
     }
 
@@ -816,10 +841,8 @@ impl Shard {
         // reader drop the old segments before their files are collected.
         st.meta.first_delete_at = None;
         st.dirty = true;
-        drop(guard);
         self.reader.reload()?;
-        let g = self.state.lock().unwrap();
-        g.writer
+        st.writer
             .as_ref()
             .unwrap()
             .w
@@ -903,9 +926,13 @@ impl Shard {
     ///   apply) is above the batch's: dropped, so a batch read before an
     ///   edit or a delete never brings back older content.
     ///
-    /// The batch's age bound (`BULK_MAX_AGE_S`, checked by the caller) is
-    /// what makes a missing marker safe: every op applied after the batch was
-    /// read is younger than the hold. Commit with `commit_here`.
+    /// The batch's age bound is what makes a missing marker safe: every op
+    /// applied after the batch was read is younger than the hold. `fresh`
+    /// says whether the batch is still inside `BULK_MAX_AGE_S`; it is asked
+    /// HERE, under the shard lock, after any wait for it, and measured on
+    /// this node's clock plus the app's monotonic age of the read (review
+    /// M3: no app wall clock). `None`: too old, nothing applied. Commit with
+    /// `commit_here`.
     pub fn bulk(
         &self,
         user: &Uuid,
@@ -913,8 +940,12 @@ impl Shard {
         notes: &[BulkNote],
         writer_mb: usize,
         now: u64,
-    ) -> tantivy::Result<Applied> {
+        fresh: impl Fn() -> bool,
+    ) -> tantivy::Result<Option<Applied>> {
         let mut guard = self.state.lock().unwrap();
+        if !fresh() {
+            return Ok(None);
+        }
         let st = &mut *guard;
         st.now = now;
         let mut out = Applied::default();
@@ -927,15 +958,18 @@ impl Shard {
                 out.skipped_malformed += 1;
                 continue;
             }
-            if let std::collections::hash_map::Entry::Vacant(e) = st.markers.entry(n.note) {
-                e.insert(self.committed_marker(&n.note));
+            let key = (*user, n.note);
+            if let std::collections::hash_map::Entry::Vacant(e) = st.markers.entry(key) {
+                e.insert(self.committed_marker(user, &n.note));
             }
             // Stamps are unique per note op, so an equal one is this same
             // batch note again: the rest of a note too big for one request,
             // or a retry. Its point set is already applied; its docs still
             // go through the marker's keep check.
-            let have = st.markers[&n.note].stamp;
-            if (n.stamp as u64) < have {
+            let have = st.markers[&key].stamp;
+            // A later part whose first part never landed would otherwise
+            // read as a fresh pass with an empty point set.
+            if (n.stamp as u64) < have || (n.cont && n.stamp as u64 != have) {
                 out.skipped_stale += 1;
                 continue;
             }
@@ -958,7 +992,7 @@ impl Shard {
             }
             for (p, terms) in &n.docs {
                 // Only points of the note's set at this stamp.
-                if !self.kept(&st.markers[&n.note], &n.note, p) {
+                if !self.kept(&st.markers[&key], &key, p) {
                     out.skipped_stale += 1;
                     continue;
                 }
@@ -973,7 +1007,7 @@ impl Shard {
             st.dirty = true;
             st.meta.first_delete_at.get_or_insert(now);
         }
-        Ok(out)
+        Ok(Some(out))
     }
 
     /// Commits at the shard's own cursor (a bulk batch moves no cursor).
@@ -996,12 +1030,14 @@ impl Shard {
     }
 
     /// `user`'s committed chunk docs per note as (note, vault, count), notes
-    /// after `after` in id order, at most `limit` (the reconcile's drift
-    /// check and orphan pass). One pass over the user's docs (fast fields).
+    /// after `after` and up to `until` (inclusive) in id order, at most
+    /// `limit` (the reconcile's drift check and orphan pass, one page of the
+    /// app's notes at a time). One pass over the user's docs (fast fields).
     pub fn notes(
         &self,
         user: &Uuid,
         after: Option<Uuid>,
+        until: Option<Uuid>,
         limit: usize,
     ) -> tantivy::Result<Vec<(Uuid, Uuid, u64)>> {
         let mut counts: BTreeMap<Uuid, (Uuid, u64)> = BTreeMap::new();
@@ -1032,42 +1068,43 @@ impl Shard {
         }
         Ok(counts
             .into_iter()
-            .filter(|(n, _)| after.is_none_or(|a| *n > a))
+            .filter(|(n, _)| after.is_none_or(|a| *n > a) && until.is_none_or(|u| *n <= u))
             .take(limit)
             .map(|(n, (v, c))| (n, v, c))
             .collect())
     }
 
-    fn committed_marker(&self, note: &Uuid) -> Marker {
+    fn committed_marker(&self, user: &Uuid, note: &Uuid) -> Marker {
         let s = self.reader.searcher();
         let mut m = Marker {
             stamp: 0,
             keep: None,
             committed: false,
         };
-        for_each_doc(
-            &s,
-            &Term::from_field_text(self.f.mnote, &id(note)),
-            |seg, doc| {
-                let ff = seg.fast_fields();
-                m.stamp = m
-                    .stamp
-                    .max(ff.u64("stamp").unwrap().first(doc).unwrap_or(0));
-                m.committed = ff.u64("mhaskeep").unwrap().first(doc) == Some(1);
-            },
-        );
+        let q = BooleanQuery::new(vec![must(self.f.mnote, note), must(self.f.muser, user)]);
+        for a in s.search(&q, &DocSetCollector).unwrap_or_default() {
+            let ff = s.segment_reader(a.segment_ord).fast_fields();
+            m.stamp = m
+                .stamp
+                .max(ff.u64("stamp").unwrap().first(a.doc_id).unwrap_or(0));
+            m.committed = ff.u64("mhaskeep").unwrap().first(a.doc_id) == Some(1);
+        }
         m
     }
 
     /// Is `p` in the note's point set as of its marker?
-    fn kept(&self, m: &Marker, note: &Uuid, p: &Uuid) -> bool {
+    fn kept(&self, m: &Marker, (user, note): &(Uuid, Uuid), p: &Uuid) -> bool {
         if let Some(k) = &m.keep {
             return k.contains(p);
         }
         if !m.committed {
             return false;
         }
-        let q = BooleanQuery::new(vec![must(self.f.mnote, note), must(self.f.mkeep, p)]);
+        let q = BooleanQuery::new(vec![
+            must(self.f.mnote, note),
+            must(self.f.muser, user),
+            must(self.f.mkeep, p),
+        ]);
         self.reader
             .searcher()
             .search(&q, &tantivy::collector::Count)

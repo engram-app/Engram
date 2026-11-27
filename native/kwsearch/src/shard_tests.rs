@@ -1138,6 +1138,7 @@ fn run_property(seed: u64) {
                         xmax: 0,
                         docs: keep.iter().map(|p| (*p, terms_of(p))).collect(),
                         keep,
+                        cont: false,
                     };
                     b.xmax = txns.len() as u64; // fixed up to an xid below
                     bulks.push((txns.len() - 1, bu, b));
@@ -1221,7 +1222,7 @@ fn run_property(seed: u64) {
                     n.stamp
                 );
             }
-            s.bulk(&user, 1, &[n], MB, NOW).unwrap();
+            s.bulk(&user, 1, &[n], MB, NOW, || true).unwrap();
             s.commit_here(NOW, TTL).unwrap();
         }
     };
@@ -1385,11 +1386,12 @@ fn bulk_note(vault: Uuid, note: Uuid, stamp: i64, keep: &[Uuid]) -> BulkNote {
         xmax: 1,
         keep: keep.to_vec(),
         docs: keep.iter().map(|p| (*p, terms_of(p))).collect(),
+        cont: false,
     }
 }
 
 fn push_bulk(s: &Shard, user: &Uuid, notes: &[BulkNote], now: u64) -> Applied {
-    let a = s.bulk(user, 1, notes, MB, now).unwrap();
+    let a = s.bulk(user, 1, notes, MB, now, || true).unwrap().unwrap();
     s.commit_here(now, TTL).unwrap();
     a
 }
@@ -1619,13 +1621,22 @@ fn a_bulk_note_split_across_requests_lands_whole() {
     let (user, vault, note, a, b, x) = (u(1), u(2), u(3), u(10), u(11), u(19));
     let mut first = bulk_note(vault, note, 4, &[a, b]);
     first.docs.truncate(1);
-    let mut second = bulk_note(vault, note, 4, &[a, b]);
+    let mut second = bulk_note(vault, note, 4, &[]);
+    second.cont = true;
     second.docs = vec![(b, terms_of(&b)), (x, terms_of(&x))];
+    // A later part whose first part never landed applies nothing.
+    let mut orphan = bulk_note(vault, u(4), 4, &[]);
+    orphan.cont = true;
+    orphan.docs = vec![(u(20), terms_of(&u(20)))];
+    assert_eq!(push_bulk(&s, &user, &[orphan], NOW).skipped_stale, 1);
     push_bulk(&s, &user, &[first], NOW);
     let got = push_bulk(&s, &user, &[second], NOW);
     assert_eq!(got.applied, 1);
     assert_eq!(points(&s), HashSet::from([a, b]));
-    assert_eq!(s.notes(&user, None, 10).unwrap(), vec![(note, vault, 2)]);
+    assert_eq!(
+        s.notes(&user, None, None, 10).unwrap(),
+        vec![(note, vault, 2)]
+    );
 }
 
 #[test]
@@ -1645,11 +1656,18 @@ fn notes_lists_a_users_doc_counts_by_note_id_in_pages() {
     );
     push_bulk(&s, &other, &[bulk_note(u(4), u(5), 1, &[u(13)])], NOW);
     assert_eq!(
-        s.notes(&user, None, 10).unwrap(),
+        s.notes(&user, None, None, 10).unwrap(),
         vec![(n1, vault, 1), (n2, vault, 2)]
     );
-    assert_eq!(s.notes(&user, Some(n1), 10).unwrap(), vec![(n2, vault, 2)]);
-    assert_eq!(s.notes(&user, None, 1).unwrap(), vec![(n1, vault, 1)]);
+    assert_eq!(
+        s.notes(&user, Some(n1), None, 10).unwrap(),
+        vec![(n2, vault, 2)]
+    );
+    assert_eq!(s.notes(&user, None, None, 1).unwrap(), vec![(n1, vault, 1)]);
+    assert_eq!(
+        s.notes(&user, None, Some(n1), 10).unwrap(),
+        vec![(n1, vault, 1)]
+    );
 }
 
 // Security F5: a re-keyed upsert (same point, other terms: a DEK rotation's
@@ -1713,4 +1731,106 @@ fn a_rekey_purges_old_key_terms_from_disk() {
         !has_old(dir.path()),
         "an old-key term is still in a segment"
     );
+}
+
+// Review H1: `/bulk` runs on HTTP threads against the same shard as the
+// feed thread. A bulk call that took the lock between a commit and the
+// reader reload read markers from the OLD searcher: a stale batch then
+// brought back a point a just-committed pass removed. The reload now
+// happens under the lock, so the bulk call waits and sees the new marker.
+#[test]
+fn a_bulk_call_in_the_commit_to_reload_gap_sees_the_new_marker() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
+    let dir = tmp();
+    let s = Arc::new(Shard::open(dir.path()).unwrap());
+    let (user, vault, note, a, b) = (u(1), u(2), u(3), u(10), u(11));
+    let mut r = Rows::new();
+    pass(&mut r, 4, user, vault, note, 5, &[a, b], &[a, b]);
+    apply_all(&s, &r.out);
+    // A removal-only pass at stamp 10, applied, about to commit.
+    let mut r = Rows {
+        seq: 10,
+        out: vec![],
+    };
+    pass(&mut r, 6, user, vault, note, 10, &[b], &[]);
+    let refs: Vec<&Row> = r.out.iter().collect();
+    s.apply(&refs, MB, NOW).unwrap();
+    // A batch read at stamp 9 (A and B) is released inside the commit.
+    let (tx, rx) = mpsc::channel::<()>();
+    let s2 = s.clone();
+    let bulk = std::thread::spawn(move || {
+        rx.recv().unwrap();
+        s2.bulk(
+            &user,
+            1,
+            &[bulk_note(vault, note, 9, &[a, b])],
+            MB,
+            NOW,
+            || true,
+        )
+        .unwrap()
+        .unwrap()
+    });
+    let fired = AtomicBool::new(false);
+    *s.after_commit.lock().unwrap() = Some(Box::new(move || {
+        if !fired.swap(true, Ordering::SeqCst) {
+            tx.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+    }));
+    s.commit((6, r.seq), 0, NOW, TTL).unwrap();
+    let got = bulk.join().unwrap();
+    *s.after_commit.lock().unwrap() = None;
+    s.commit_here(NOW, TTL).unwrap();
+    assert_eq!(points(&s), HashSet::from([b]), "a removed point came back");
+    assert_eq!(got.skipped_stale, 1);
+}
+
+// Review M6: markers are per (user, note). A bulk body for user B naming
+// user A's note id (both in one shard) used to set THE note's marker, so
+// A's next fresh pass looked stale and was dropped.
+#[test]
+fn a_bulk_body_naming_another_users_note_touches_nothing_of_theirs() {
+    let dir = tmp();
+    let s = Shard::open(dir.path()).unwrap();
+    let (ua, ub, vault, note, a, c) = (u(1), u(2), u(3), u(4), u(10), u(12));
+    let mut r = Rows::new();
+    pass(&mut r, 4, ua, vault, note, 1, &[a], &[a]);
+    apply_all(&s, &r.out);
+    // B's token, A's note id, a high stamp and an empty point set.
+    push_bulk(&s, &ub, &[bulk_note(vault, note, 100, &[])], NOW);
+    let mut r = Rows {
+        seq: 10,
+        out: vec![],
+    };
+    pass(&mut r, 6, ua, vault, note, 2, &[a, c], &[c]);
+    apply_all(&s, &r.out);
+    assert_eq!(
+        points(&s),
+        HashSet::from([a, c]),
+        "A's fresh pass was dropped"
+    );
+}
+
+// Review M3: the age bound is asked under the shard lock; a batch that
+// went stale while it waited applies nothing.
+#[test]
+fn a_batch_that_aged_out_before_the_lock_applies_nothing() {
+    let dir = tmp();
+    let s = Shard::open(dir.path()).unwrap();
+    let (user, vault, note, a) = (u(1), u(2), u(3), u(10));
+    let got = s
+        .bulk(
+            &user,
+            1,
+            &[bulk_note(vault, note, 1, &[a])],
+            MB,
+            NOW,
+            || false,
+        )
+        .unwrap();
+    assert!(got.is_none());
+    s.commit_here(NOW, TTL).unwrap();
+    assert!(points(&s).is_empty());
 }

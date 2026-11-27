@@ -30,10 +30,10 @@ pub const MAX_TERMS: usize = 1_024;
 /// Notes per bulk request, and per `/notes` page.
 pub const MAX_BULK_NOTES: usize = 1_000;
 pub const MAX_NOTES_PAGE: usize = 10_000;
-/// A bulk body (the app sends ~2 MB batches; one huge note may go alone).
-pub const MAX_BULK_BYTES: usize = 16 << 20;
-/// A bulk batch's read time may run this far ahead of this node's clock.
-pub const CLOCK_SKEW_S: u64 = 300;
+/// A bulk body. The app sends ~2 MB batches, but a note's first part
+/// carries its whole point set (16 B per point, base64): 64 MiB fits a note
+/// of ~3M chunks (review L7: 16 MiB refused one of ~800k).
+pub const MAX_BULK_BYTES: usize = 64 << 20;
 
 #[derive(Clone)]
 pub struct App {
@@ -43,6 +43,8 @@ pub struct App {
     pub metrics_token: Arc<String>,
     pub writer_mb: usize,
     pub tomb_ttl_s: u64,
+    /// `KW_READ_ONLY`: no feed loop, so no writes either (review L6).
+    pub read_only: bool,
 }
 
 #[derive(Deserialize)]
@@ -68,8 +70,10 @@ fn one() -> i16 {
 pub struct BulkReq {
     #[serde(default = "one")]
     gen: i16,
-    /// Unix seconds the app read the batch's rows (under the note locks).
-    read_at: u64,
+    /// Milliseconds since the app read the batch's rows (under the note
+    /// locks), on its monotonic clock, as it sent the request. Ages only:
+    /// the two hosts' wall clocks are never compared (review M3).
+    age_ms: u64,
     notes: Vec<BulkNoteReq>,
 }
 
@@ -83,6 +87,9 @@ pub struct BulkNoteReq {
     /// The note's full point set: base64 of the raw 16-byte ids.
     keep_b64: String,
     docs: Vec<BulkDocReq>,
+    /// A later part of a split note (`BulkNote::cont`).
+    #[serde(default)]
+    cont: bool,
 }
 
 #[derive(Deserialize)]
@@ -100,6 +107,8 @@ pub struct NotesReq {
     gen: i16,
     #[serde(default)]
     after: Option<Uuid>,
+    #[serde(default)]
+    until: Option<Uuid>,
     limit: usize,
 }
 
@@ -218,14 +227,21 @@ async fn bulk(State(app): State<App>, h: HeaderMap, body: axum::body::Bytes) -> 
     let Some(user) = bulk_user(&app, &h) else {
         return err(StatusCode::UNAUTHORIZED, "unauthorized");
     };
+    if app.read_only {
+        return err(StatusCode::FORBIDDEN, "read_only");
+    }
     let Ok(r) = serde_json::from_slice::<BulkReq>(&body) else {
         return err(StatusCode::BAD_REQUEST, "bad_request");
     };
+    let received = std::time::Instant::now();
     let now = now();
-    if r.notes.len() > MAX_BULK_NOTES || r.read_at > now + CLOCK_SKEW_S {
+    if r.notes.len() > MAX_BULK_NOTES {
         return err(StatusCode::BAD_REQUEST, "bad_request");
     }
-    if r.read_at + BULK_MAX_AGE_S < now {
+    let age_s = r.age_ms / 1000;
+    // Re-asked under the shard lock, after any wait for it.
+    let fresh = move || age_s + received.elapsed().as_secs() <= BULK_MAX_AGE_S;
+    if !fresh() {
         return err(StatusCode::CONFLICT, "stale_batch");
     }
     if !app.index.gens.contains_key(&r.gen) {
@@ -251,19 +267,23 @@ async fn bulk(State(app): State<App>, h: HeaderMap, body: axum::body::Bytes) -> 
             xmax: n.xmax,
             keep,
             docs,
+            cont: n.cont,
         });
     }
     let index = app.index.clone();
     let ttl = app.tomb_ttl_s;
     let res = tokio::task::spawn_blocking(move || {
         let s = index.gens[&r.gen].of(&user);
-        let a = s.bulk(&user, r.gen, &notes, app.writer_mb, now)?;
+        let Some(a) = s.bulk(&user, r.gen, &notes, app.writer_mb, now, fresh)? else {
+            return Ok(None);
+        };
         s.commit_here(now, ttl)?;
-        Ok::<_, tantivy::TantivyError>(a)
+        Ok::<_, tantivy::TantivyError>(Some(a))
     })
     .await;
     match res {
-        Ok(Ok(a)) => {
+        Ok(Ok(None)) => err(StatusCode::CONFLICT, "stale_batch"),
+        Ok(Ok(Some(a))) => {
             app.stats.skipped_stale.fetch_add(a.skipped_stale, Relaxed);
             app.stats.skipped_tomb.fetch_add(a.skipped_tomb, Relaxed);
             app.stats
@@ -296,7 +316,9 @@ async fn notes(State(app): State<App>, h: HeaderMap, body: axum::body::Bytes) ->
     }
     let index = app.index.clone();
     let res = tokio::task::spawn_blocking(move || {
-        index.gens[&r.gen].of(&user).notes(&user, r.after, r.limit)
+        index.gens[&r.gen]
+            .of(&user)
+            .notes(&user, r.after, r.until, r.limit)
     })
     .await;
     match res {
@@ -316,6 +338,9 @@ async fn rebuilt(State(app): State<App>, h: HeaderMap, body: axum::body::Bytes) 
         Some(Claims::Ops { .. })
     ) {
         return err(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    if app.read_only {
+        return err(StatusCode::FORBIDDEN, "read_only");
     }
     let Ok(r) = serde_json::from_slice::<RebuiltReq>(&body) else {
         return err(StatusCode::BAD_REQUEST, "bad_request");
@@ -413,6 +438,7 @@ mod tests {
             metrics_token: Arc::new(METRICS.into()),
             writer_mb: 15,
             tomb_ttl_s: 86_400,
+            read_only: false,
         };
         (a.clone(), router(a))
     }
@@ -603,8 +629,8 @@ mod tests {
         base64::engine::general_purpose::STANDARD.encode(bytes)
     }
 
-    fn bulk_body(read_at: u64, vault: Uuid, note: Uuid, point: Uuid) -> serde_json::Value {
-        json!({"read_at": read_at, "notes": [{
+    fn bulk_body(age_ms: u64, vault: Uuid, note: Uuid, point: Uuid) -> serde_json::Value {
+        json!({"age_ms": age_ms, "notes": [{
             "vault": vault, "note": note, "stamp": 1, "xmax": 2,
             "keep_b64": b64(point.as_bytes()),
             "docs": [{"point": point, "terms_b64": b64(&kwfeed::pack([(7, 1)]))}]
@@ -618,7 +644,7 @@ mod tests {
         let (a, r) = app(dir.path());
         a.stats.ready.store(true, Relaxed);
         let (ua, va, note, point) = (uid(1), uid(3), uid(10), uid(20));
-        let body = bulk_body(now(), va, note, point);
+        let body = bulk_body(1_000, va, note, point);
         let search = tok(json!({"s": "search", "u": ua, "v": [va]}));
         assert_eq!(
             call(&r, post("/bulk", &search, body.clone())).await.0,
@@ -626,15 +652,10 @@ mod tests {
             "a search token cannot write"
         );
         let bulk = tok(json!({"s": "bulk", "u": ua}));
-        let old = bulk_body(now() - BULK_MAX_AGE_S - 1, va, note, point);
+        let old = bulk_body((BULK_MAX_AGE_S + 1) * 1000, va, note, point);
         assert_eq!(
             call(&r, post("/bulk", &bulk, old)).await,
             (StatusCode::CONFLICT, r#"{"error":"stale_batch"}"#.into())
-        );
-        let ahead = bulk_body(now() + CLOCK_SKEW_S + 60, va, note, point);
-        assert_eq!(
-            call(&r, post("/bulk", &bulk, ahead)).await.0,
-            StatusCode::BAD_REQUEST
         );
         let mut widened = body.clone();
         widened["user"] = json!(uid(2));

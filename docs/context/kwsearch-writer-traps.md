@@ -26,6 +26,12 @@ Working. Built in PR #2713 (P2 part 1 of the search storage roadmap). Each trap 
 11. **`ready` needs a finished epoch.** A new index and any feed gap start a new epoch with `rebuilding: true` (`<data>/epoch`); `/health` stays down until the app's reconcile has bulk-loaded every user and posted `/rebuilt` with THAT epoch id. A restart keeps the state. An older epoch's `/rebuilt` is refused (409).
 12. **A re-keyed upsert purges the shard once it settles (F5).** Same point id, different terms crc = a DEK rotation or tokenizer change; `rekey_at` is set and `purge_old` force-merges the shard after `REKEY_SETTLE_S` (10 min) with no further re-key.
 
+13. **Reload the reader under the shard lock, before the in-memory markers go.** `/bulk` runs on HTTP threads against the same shard as the feed thread. A bulk call that took the lock between a commit and its reader reload read markers from the OLD searcher and brought back a point the just-committed pass removed (review H1). `commit`, `compact` and `purge` now reload while holding the lock. Test: `a_bulk_call_in_the_commit_to_reload_gap_sees_the_new_marker` (a hook pauses inside the commit).
+14. **Markers are keyed by (user, note), in memory and in the index queries.** Keyed by note alone, a bulk body under user B's token naming user A's note set THE note's marker and made A's next fresh pass look stale (review M6).
+15. **No wall clock crosses hosts.** A bulk batch carries `age_ms` from the app's monotonic clock; kwsearch adds its own wait since receipt and re-checks the bound under the shard lock (review M3).
+16. **A split note's later parts are `cont`.** Only the first part carries the point set; a `cont` part applies only when its first part's stamp is the note's applied stamp, so a lost first part can never act as a fresh pass with an empty set.
+17. **A gap moves the cursor to the horizon.** Without it an idle feed (no row above the horizon) re-detected the same gap after every `/rebuilt` and looped through full reloads (review M5).
+
 ## How to check a change
 
 - `cargo test -p kwsearch` (on SlowRaid, not the dev box). Widen the property test with `KW_SEEDS=5000`; isolate with `KW_SEED`, `KW_TRACE`, `KW_NOCRASH`, `KW_NOPURGE`, `KW_BIG`.

@@ -371,9 +371,17 @@ pub fn run(index: Arc<Index>, cfg: Cfg, stats: Arc<Stats>) -> ! {
     eprintln!("feed resume at {cursor:?}");
     // Serve only once the horizon is known: a restored node must not answer
     // before its gap is detected.
-    while !check_horizon(&mut db, &index, &cfg, cursor, &stats) {
-        std::thread::sleep(Duration::from_secs(2));
-        db = connect_retry(&cfg);
+    loop {
+        match check_horizon(&mut db, &index, &cfg, cursor, &stats) {
+            Some(c) => {
+                cursor = c;
+                break;
+            }
+            None => {
+                std::thread::sleep(Duration::from_secs(2));
+                db = connect_retry(&cfg);
+            }
+        }
     }
     // Not ready yet: a node restored from a snapshot still inside the feed
     // window must replay up to the feed head (its deletes included) before
@@ -432,7 +440,9 @@ pub fn run(index: Arc<Index>, cfg: Cfg, stats: Arc<Stats>) -> ! {
                 eprintln!("feed caught up: serving");
             }
         }
-        check_horizon(&mut db, &index, &cfg, cursor, &stats);
+        if let Some(c) = check_horizon(&mut db, &index, &cfg, cursor, &stats) {
+            cursor = c;
+        }
         if last_purge_check.elapsed() > Duration::from_secs(60) {
             purge_old(&index, &cfg, &stats);
             last_purge_check = Instant::now();
@@ -484,18 +494,19 @@ fn apply_round(
                     );
                     std::process::abort();
                 }
-                // delete_user / delete_vault: their docs leave the disk now (F1).
-                if shard.state.lock().unwrap().purge_now
-                    && shard.purge(cfg.writer_mb).expect("purge")
-                {
-                    shard
-                        .commit(cursor, watermark, now, cfg.tomb_ttl_s)
-                        .expect("commit after purge");
-                    stats.purges.fetch_add(1, Relaxed);
-                }
                 if open_writers(index) > cfg.max_writers {
                     close_lru(index, cfg.max_writers);
                 }
+            }
+            // delete_user / delete_vault: their docs leave the disk now (F1).
+            // Whatever `commit` returned: a bulk `commit_here` may already
+            // have committed this round's rows, leaving nothing dirty here
+            // (review L1).
+            if shard.state.lock().unwrap().purge_now && shard.purge(cfg.writer_mb).expect("purge") {
+                shard
+                    .commit(cursor, watermark, now, cfg.tomb_ttl_s)
+                    .expect("commit after purge");
+                stats.purges.fetch_add(1, Relaxed);
             }
         }
     }
@@ -527,15 +538,20 @@ pub fn purge_old(index: &Index, cfg: &Cfg, stats: &Stats) {
 }
 
 /// A trim horizon above our cursor means rows are gone that this node never
-/// applied: apply the deletion log, then stop serving until a rebuild.
-/// Returns false when the horizon could not be read (try next round).
+/// applied: apply the deletion log, start a new epoch (not serving until the
+/// app's reload posts `/rebuilt`), and move the cursor up to the horizon and
+/// persist it. Rows at or below it are gone anyway and the reload covers
+/// them; without the move an idle feed (no row above the horizon to carry
+/// the cursor past it) re-detected the same gap after every `/rebuilt` and
+/// looped through full reloads (review M5). Returns the cursor to continue
+/// from, or None when the horizon could not be read (try next round).
 fn check_horizon(
     db: &mut Client,
     index: &Index,
     cfg: &Cfg,
     cursor: (u64, i64),
     stats: &Stats,
-) -> bool {
+) -> Option<(u64, i64)> {
     let h = match db.query_opt(HORIZON, &[]) {
         Ok(Some(r)) => (
             r.get::<_, String>(0).parse().unwrap_or(0),
@@ -546,24 +562,27 @@ fn check_horizon(
         Ok(None) => {
             eprintln!("feed horizon row missing: not serving");
             stats.ready.store(false, Relaxed);
-            return false;
+            return None;
         }
         Err(e) => {
             eprintln!("feed horizon read failed: {e}");
-            return false;
+            return None;
         }
     };
-    if h > cursor && !stats.gap.swap(true, Relaxed) {
-        stats.ready.store(false, Relaxed);
-        let e = index.begin_rebuild().expect("save epoch");
-        eprintln!(
-            "feed gap: rows up to {h:?} were trimmed before this node applied them; rebuilding as epoch {}",
-            e.id
-        );
-        let n = restore(db, index, cfg, stats).expect("deletion log restore");
-        eprintln!("{n} deletion-log deletes applied");
+    if h <= cursor {
+        return Some(cursor);
     }
-    true
+    stats.gap.store(true, Relaxed);
+    stats.ready.store(false, Relaxed);
+    let e = index.begin_rebuild().expect("save epoch");
+    eprintln!(
+        "feed gap: rows up to {h:?} were trimmed before this node applied them; rebuilding as epoch {}",
+        e.id
+    );
+    let n = restore(db, index, cfg, stats).expect("deletion log restore");
+    eprintln!("{n} deletion-log deletes applied");
+    index.save_round(h).expect("save round cursor");
+    Some(h)
 }
 
 fn open_writers(index: &Index) -> usize {
