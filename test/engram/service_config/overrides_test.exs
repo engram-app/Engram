@@ -248,6 +248,20 @@ defmodule Engram.ServiceConfig.OverridesTest do
       assert Engram.Rebuild.mode() == :dry_run
     end
 
+    # The kwsearch reconcile's kill switch and the shadow compare's rate move
+    # without a deploy, and without turning the feed off (review M1).
+    test "the kwsearch reconcile switch and the shadow rate are overridable and range-checked" do
+      assert Engram.Workers.ReconcileKeywordIndex.enabled?()
+      assert :ok = ServiceConfig.override(:keyword_reconcile, false, by: "t")
+      refute Engram.Workers.ReconcileKeywordIndex.enabled?()
+      assert :ok = ServiceConfig.override(:keyword_shadow_permille, 5, by: "t")
+      assert ServiceConfig.get(:keyword_shadow_permille, 0) == 5
+
+      for {key, bad} <- [keyword_shadow_permille: 1001, keyword_reconcile: "off"] do
+        assert {:error, _} = ServiceConfig.override(key, bad, by: "t")
+      end
+    end
+
     # The keyword sweep's brake and its two tuning knobs move without a deploy.
     test "the keyword sweep knobs are overridable and range-checked" do
       assert :ok = ServiceConfig.override(:keyword_refresh, false, by: "t")

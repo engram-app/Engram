@@ -36,11 +36,16 @@ defmodule Engram.KeywordStore.Tantivy do
   @doc "Term counts per new chunk (before the transaction); `in_commit/3` writes them."
   @spec feed_terms([map()], FeedKey.t()) :: [{String.t(), binary()}]
   def feed_terms([], _key), do: []
+  # The unedited Welcome note (security F3): no terms.
+  def feed_terms(_entries, %FeedKey{index?: false}), do: []
 
+  # An entry the sparse encode already counted carries `:terms` (one
+  # tokenizing pass, review #13); only the rest are tokenized here.
   def feed_terms(entries, %FeedKey{filter_key: filter_key, language: language}) do
-    texts = Enum.map(entries, &Map.fetch!(&1, :text))
-    packed = Native.keyword_feed_terms(texts, filter_key, language)
-    Enum.zip_with(entries, packed, fn e, t -> {e.id, t} end)
+    {counted, todo} = Enum.split_with(entries, &Map.has_key?(&1, :terms))
+    texts = Enum.map(todo, &Map.fetch!(&1, :text))
+    packed = if texts == [], do: [], else: Native.keyword_feed_terms(texts, filter_key, language)
+    Enum.map(counted, &{&1.id, &1.terms}) ++ Enum.zip_with(todo, packed, &{&1.id, &2})
   end
 
   @doc "The index pass's rows, in its chunk-row transaction: `keep` is authoritative."
@@ -133,6 +138,13 @@ defmodule Engram.KeywordStore.Tantivy do
       Qdrant.fuse(nil, legs, limit, search_opts)
     end
   end
+
+  @doc """
+  The keyword leg alone, with no fallback accounting: the shadow compare's
+  read (`Engram.KeywordStore.Shadow`), whose failures are its own metric.
+  """
+  @spec keyword_hits(map(), keyword()) :: {:ok, [map()]} | {:error, term()}
+  def keyword_hits(sparse, search_opts), do: keyword_leg(sparse, search_opts)
 
   defp keyword_leg(sparse, search_opts) do
     user_id = Keyword.fetch!(search_opts, :user_id)

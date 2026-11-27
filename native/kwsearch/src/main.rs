@@ -108,6 +108,9 @@ fn serve() {
         stats: stats.clone(),
         keys: Arc::new(keys),
         metrics_token: Arc::new(metrics_token),
+        writer_mb: cfg.writer_mb,
+        tomb_ttl_s: cfg.tomb_ttl_s,
+        read_only,
     };
     if read_only {
         stats

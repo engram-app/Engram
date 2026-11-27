@@ -46,6 +46,7 @@ defmodule Engram.KeywordStore do
 
   alias Engram.KeywordIndex
   alias Engram.KeywordStore.FeedKey
+  alias Engram.KeywordStore.Shadow
   alias Engram.KeywordStore.Tantivy
   alias Engram.ServiceConfig
 
@@ -159,6 +160,19 @@ defmodule Engram.KeywordStore do
         Tantivy.delete_points(str(user_id), ids)
       end)
 
+  @doc """
+  An index pass's own stale points: the sparse store sees them like any
+  point delete; the feed writes nothing, because the pass's
+  `delete_note_except` (`in_commit/3`), written in its chunk-row transaction
+  under the note lock with its stamp, already removes them. A second,
+  unstamped delete in a transaction of its own could take a higher xid than
+  a NEWER pass that re-minted the same content-derived id, and delete it
+  (review #16).
+  """
+  @spec delete_pass_points(user_id(), [point_id()]) :: result()
+  def delete_pass_points(_user_id, []), do: :ok
+  def delete_pass_points(user_id, ids), do: impl().delete_points(str(user_id), ids)
+
   @spec delete_note(user_id(), term(), term(), [point_id()], note_reason()) :: result()
   def delete_note(user_id, vault_id, note_id, keep, reason) do
     {u, v} = {str(user_id), str(vault_id)}
@@ -181,13 +195,21 @@ defmodule Engram.KeywordStore do
         Tantivy.delete_user(str(user_id), kind)
       end)
 
+  # A sampled search also runs the kwsearch leg in the background and
+  # records how its top 10 compares (`Shadow`, off by default); the reply
+  # never waits for it.
   @spec search(KeywordIndex.sparse(), keyword()) :: {:ok, [map()]} | {:error, term()}
-  def search(sparse, search_opts), do: reader().search(sparse, search_opts)
+  def search(sparse, search_opts) do
+    :ok = Shadow.maybe_compare(sparse, search_opts)
+    reader().search(sparse, search_opts)
+  end
 
   @spec hybrid_search(term(), KeywordIndex.sparse(), keyword()) ::
           {:ok, [map()]} | {:error, term()}
-  def hybrid_search(dense, sparse, search_opts),
-    do: reader().hybrid_search(dense, sparse, search_opts)
+  def hybrid_search(dense, sparse, search_opts) do
+    :ok = Shadow.maybe_compare(sparse, search_opts)
+    reader().hybrid_search(dense, sparse, search_opts)
+  end
 
   defp reader, do: if(read() == :tantivy, do: Tantivy, else: impl())
 

@@ -28,7 +28,8 @@ defmodule Engram.PromEx.Search do
       Postgres resolving a search's filter (`[:engram, :search,
       :filter_resolve]`).
     * `engram_prom_ex_search_gate_total` (tags `[:outcome, :gate,
-      :upstream]`: `ok` or `busy`; `admission`, `qdrant` or `pool`) and `engram_prom_ex_search_gate_wait_milliseconds`: every
+      :upstream]`: `ok` or `busy`; `admission`, `qdrant`, `pool` or `shadow`, the keyword shadow
+      sample, never live traffic) and `engram_prom_ex_search_gate_wait_milliseconds`: every
       search through `Engram.Search.Gate`, `[:engram, :search, :gate]`.
     * `engram_prom_ex_search_hits_dropped_total`: sum of `count` from
       `[:engram, :search, :hit_dropped]`, tag `[:reason]`.
@@ -65,9 +66,14 @@ defmodule Engram.PromEx.Search do
 
   use PromEx.Plugin
 
+  alias Engram.PromEx.Buckets
+  alias Engram.PromEx.Search.{FilterResolveBuckets, GateWaitBuckets, OverlapBuckets}
+
   @stop_event [:engram, :search, :request, :stop]
   @degraded_event [:engram, :search, :degraded]
   @keyword_fallback_event [:engram, :search, :keyword_fallback]
+  @keyword_shadow_event [:engram, :search, :keyword_shadow]
+  @keyword_reconcile_event [:engram, :keyword_reconcile, :run]
   @feed_trim_event [:engram, :keyword_feed, :trim]
   @hit_dropped_event [:engram, :search, :hit_dropped]
   @text_missing_event [:engram, :search, :text_missing]
@@ -131,7 +137,7 @@ defmodule Engram.PromEx.Search do
           event_name: @filter_resolve_event,
           measurement: :duration,
           description: "Time Postgres took to resolve a search's filter, by scope.",
-          reporter_options: Engram.PromEx.Buckets.opts(Engram.PromEx.Search.FilterResolveBuckets),
+          reporter_options: Buckets.opts(FilterResolveBuckets),
           tags: [:scope],
           unit: {:native, :millisecond}
         ),
@@ -152,7 +158,7 @@ defmodule Engram.PromEx.Search do
           event_name: @gate_event,
           measurement: :wait,
           description: "Time a search waited for a concurrency slot (or until refused).",
-          reporter_options: Engram.PromEx.Buckets.opts(Engram.PromEx.Search.GateWaitBuckets),
+          reporter_options: Buckets.opts(GateWaitBuckets),
           # A pool-busy refusal never waited on a gate.
           keep: &(&1[:gate] != :pool),
           tags: [:outcome, :gate],
@@ -177,6 +183,54 @@ defmodule Engram.PromEx.Search do
           event_name: @keyword_fallback_event,
           description: "Searches whose kwsearch keyword leg failed, by outcome and reason.",
           tags: [:outcome, :reason]
+        ),
+        # Shadow compare (roadmap P2 task 8, `KeywordStore.Shadow`): sampled
+        # searches whose keyword leg also ran on kwsearch, never served. The
+        # parity gate reads the overlap percent; outcome `error` counts a
+        # kwsearch that was down or rebuilding.
+        counter(
+          metric_prefix ++ [:keyword_shadow, :total],
+          event_name: @keyword_shadow_event,
+          description: "Shadow compares of the kwsearch keyword leg, by outcome.",
+          tags: [:outcome]
+        ),
+        # The kwsearch reconcile (`ReconcileKeywordIndex`): runs by outcome
+        # (`halted` is a walk stopped on an error, rotation or kwsearch), and
+        # notes pushed and skipped. A walk that skips notes never tells
+        # kwsearch it is rebuilt: alert on skipped > 0 and on halted runs.
+        counter(
+          metric_prefix ++ [:keyword_reconcile_runs, :total],
+          event_name: @keyword_reconcile_event,
+          description: "kwsearch reconcile runs, by outcome and walk mode.",
+          tags: [:outcome, :mode]
+        ),
+        sum(
+          metric_prefix ++ [:keyword_reconcile_pushed, :total],
+          event_name: @keyword_reconcile_event,
+          measurement: :pushed,
+          description: "Notes the kwsearch reconcile pushed through /bulk."
+        ),
+        sum(
+          metric_prefix ++ [:keyword_reconcile_skipped, :total],
+          event_name: @keyword_reconcile_event,
+          measurement: :skipped,
+          description: "Notes the kwsearch reconcile skipped (unreadable or over the body cap)."
+        ),
+        distribution(
+          metric_prefix ++ [:keyword_shadow_overlap, :percent],
+          event_name: @keyword_shadow_event,
+          measurement: :overlap_pct,
+          description: "Share of the sparse top 10 kwsearch also returned, percent.",
+          reporter_options: Buckets.opts(OverlapBuckets),
+          keep: &(&1[:outcome] == :ok)
+        ),
+        distribution(
+          metric_prefix ++ [:keyword_shadow_tantivy, :milliseconds],
+          event_name: @keyword_shadow_event,
+          measurement: :tantivy_ms,
+          description: "kwsearch keyword leg latency in shadow compares.",
+          reporter_options: Buckets.opts(FilterResolveBuckets),
+          keep: &(&1[:outcome] == :ok)
         ),
         # keyword_feed trim (security F2): rows trimmed, those trimmed before
         # kwsearch applied them (a gap the index must rebuild past), and the
@@ -293,6 +347,11 @@ end
 defmodule Engram.PromEx.Search.GateWaitBuckets do
   @moduledoc false
   use Engram.PromEx.Buckets, [1, 10, 50, 100, 250, 500, 1_000, 2_500, 5_000]
+end
+
+defmodule Engram.PromEx.Search.OverlapBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [50, 80, 90, 95, 99, 100]
 end
 
 defmodule Engram.PromEx.Search.FilterResolveBuckets do

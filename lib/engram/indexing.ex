@@ -1432,7 +1432,13 @@ defmodule Engram.Indexing do
          do: delete_note_points_except(note, Enum.map(points, & &1.id) ++ reused, :replaced)
   end
 
-  defp delete_point_ids(note, ids), do: delete_points(note.user_id, ids)
+  # An index pass's own stale points (`KeywordStore.delete_pass_points/2`:
+  # the feed's rows for them are the pass's in-commit `delete_note_except`).
+  defp delete_point_ids(note, ids) do
+    both_legs(Qdrant.delete_points(collection(), ids), fn ->
+      KeywordStore.delete_pass_points(note.user_id, ids)
+    end)
+  end
 
   # Every index delete goes through `delete_points/2`, `delete_user_points/2`,
   # `delete_vault_points/2` and this one, so the keyword store
@@ -3152,10 +3158,15 @@ defmodule Engram.Indexing do
   # One encode call per distinct `sparse_opts/1` (plain chunks, merged
   # groups, floor points), results back in `chunks` order. The plain group
   # calls the /4 arity: test doubles implement only that one.
-  defp encode_sparse(chunks, filter_key, avgdl, language) do
+  # `key` (a `FeedKey` while the kwsearch feed is written) asks the encoder
+  # for each chunk's feed terms from the same tokenizing pass (review #13):
+  # the elements are then `{sparse, doc_len, terms}`.
+  defp encode_sparse(chunks, filter_key, avgdl, language, key) do
+    feed = if match?(%FeedKey{index?: true}, key), do: [feed: true], else: []
+
     chunks
     |> Enum.with_index()
-    |> Enum.group_by(fn {chunk, _i} -> sparse_opts(chunk) end)
+    |> Enum.group_by(fn {chunk, _i} -> sparse_opts(chunk) ++ feed end)
     |> Enum.flat_map(fn {opts, group} ->
       texts = Enum.map(group, fn {chunk, _i} -> chunk.context_text end)
 
@@ -3445,10 +3456,7 @@ defmodule Engram.Indexing do
     with {:ok, content_key} <- Crypto.dek_content_hash_key(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       rows = stored_rows(note)
-
-      chunks =
-        (length(rows) < length(chunks) and merged_like(chunks, length(rows))) ||
-          chunks
+      chunks = stored_shape(rows, chunks)
 
       case match_stored_points(rows, chunks, content_key, note) do
         {[], unmatched} ->
@@ -3457,12 +3465,16 @@ defmodule Engram.Indexing do
         {matched, unmatched} ->
           avgdl = avgdl(note.user_id, note.vault_id)
           language = note_language(chunks)
-          sparse = encode_sparse(Enum.map(matched, &elem(&1, 0)), filter_key, avgdl, language)
-          key = FeedKey.new(filter_key, language)
+          key = FeedKey.for_note(note, filter_key, language)
+
+          sparse =
+            encode_sparse(Enum.map(matched, &elem(&1, 0)), filter_key, avgdl, language, key)
 
           {points, lengths} =
-            Enum.zip_with(matched, sparse, fn {chunk, point_id}, {vector, doc_len} ->
-              {feed_entry(%{id: point_id, sparse: vector}, chunk, key),
+            Enum.zip_with(matched, sparse, fn {chunk, point_id}, encoded ->
+              {vector, doc_len, terms} = with_terms(encoded)
+
+              {feed_entry(%{id: point_id, sparse: vector}, chunk, key, terms),
                {point_id, if(capped_length?(chunk), do: nil, else: doc_len)}}
             end)
             |> Enum.unzip()
@@ -3474,6 +3486,42 @@ defmodule Engram.Indexing do
                :ok <- if(lengths == [], do: :ok, else: persist_token_counts(note, lengths)),
                do: {:ok, length(points), unmatched}
       end
+    end
+  end
+
+  # The chunks `rows` were built from: a merged note as its merge (by the
+  # stored row count, see `resparse/3`).
+  defp stored_shape(rows, chunks),
+    do: (length(rows) < length(chunks) and merged_like(chunks, length(rows))) || chunks
+
+  @doc """
+  The kwsearch docs of `note` (decrypted) for a bulk load
+  (`Engram.KeywordStore.Tantivy.Bulk`), matched to `rows` (its
+  `stored_rows/1`, read under the note's lock) the way `resparse_note/2`
+  matches them; a floored note's rows by its floor plan's offsets. Returns
+  `{:ok, docs, key}`: `[%{id: point_id, text: context_text}]` for every row
+  this content still matches, and the note's `FeedKey`. Writes nothing.
+  """
+  @spec keyword_docs(map(), map(), list()) ::
+          {:ok, [%{id: String.t(), text: iodata()}], FeedKey.t() | nil} | {:error, term()}
+  def keyword_docs(note, user, rows) do
+    chunks = Markdown.parse(note.content || "", note.path)
+
+    {chunks, language} =
+      if floor_tier(note) do
+        plan = floor_plan(note, chunks)
+        {for({:embed, c} <- plan.entries, do: c), plan.language}
+      else
+        chunks = stored_shape(rows, chunks)
+        {chunks, note_language(chunks)}
+      end
+
+    with {:ok, content_key} <- Crypto.dek_content_hash_key(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      {matched, _unmatched} = match_stored_points(rows, chunks, content_key, note)
+
+      {:ok, for({chunk, id} <- matched, do: %{id: id, text: chunk.context_text}),
+       FeedKey.for_note(note, filter_key, language)}
     end
   end
 
@@ -3520,20 +3568,30 @@ defmodule Engram.Indexing do
     :ok
   end
 
-  defp stored_rows(note) do
+  defp stored_rows(note),
+    do: note.user_id |> stored_rows_by_note([note.id]) |> Map.get(note.id, [])
+
+  @doc """
+  The stored point rows of `note_ids` (one tenant), by note id: what
+  `resparse_note/2` and `keyword_docs/3` match chunks against. One query.
+  """
+  @spec stored_rows_by_note(term(), [term()]) :: %{term() => list()}
+  def stored_rows_by_note(user_id, note_ids) do
     {:ok, rows} =
-      Repo.with_tenant(note.user_id, fn ->
+      Repo.with_tenant(user_id, fn ->
         Chunk
         |> join(:left, [c], p in ChunkPoint, on: p.point_id == c.qdrant_point_id)
-        |> where([c], c.note_id == ^note.id and not is_nil(c.qdrant_point_id))
+        |> where([c], c.note_id in ^note_ids and not is_nil(c.qdrant_point_id))
         |> select(
           [c, p],
-          {c.context_hmac, c.qdrant_point_id, {c.position, c.char_start, c.char_end}, p.slice_sum}
+          {c.note_id,
+           {c.context_hmac, c.qdrant_point_id, {c.position, c.char_start, c.char_end},
+            p.slice_sum}}
         )
         |> Repo.all()
       end)
 
-    rows
+    Enum.group_by(rows, &elem(&1, 0), &elem(&1, 1))
   end
 
   defp match_stored_points(rows, chunks, content_key, note) do
@@ -3773,8 +3831,16 @@ defmodule Engram.Indexing do
     # (dirty CPU scheduler) tokenizes all of it, unbounded by `@docs_per_call`.
     # Fine for notes of a few MB; split the text and merge term counts if a
     # floor encode ever shows up as a long dirty-scheduler hold.
+    key = FeedKey.for_note(note, filter_key, language)
+
     sparse =
-      encode_sparse(for({:embed, chunk} <- plan.entries, do: chunk), filter_key, avgdl, language)
+      encode_sparse(
+        for({:embed, chunk} <- plan.entries, do: chunk),
+        filter_key,
+        avgdl,
+        language,
+        key
+      )
 
     {built, _spent} =
       plan.entries
@@ -3785,7 +3851,7 @@ defmodule Engram.Indexing do
       )
 
     with {:ok, built, pending} <-
-           keyword_index(note, built, FeedKey.new(filter_key, language)),
+           keyword_index(note, built, key),
          {:ok, prepared} <- prepared_map(note, plan, built, dek, note_payload, rebuild?, flat),
          do: {:ok, Map.put(prepared, :keyword_pending, pending)}
   end
@@ -3798,8 +3864,8 @@ defmodule Engram.Indexing do
   # re-tokenizes the text under the same key. In memory only, never logged.
   defp keyword_index(note, built, key) do
     entries =
-      for %{point: %{id: id}, sparse: s, chunk: c} <- built,
-          do: feed_entry(%{id: id, sparse: s}, c, key)
+      for %{point: %{id: id}, sparse: s, chunk: c} = b <- built,
+          do: feed_entry(%{id: id, sparse: s}, c, key, Map.get(b, :terms))
 
     with {:ok, vectors, pending} <- KeywordStore.index(keyword_scope(note), entries, key) do
       {:ok, Enum.map(built, &merge_keyword_vectors(&1, vectors)), pending}
@@ -3809,10 +3875,18 @@ defmodule Engram.Indexing do
   defp keyword_scope(note),
     do: %{user_id: note.user_id, vault_id: note.vault_id, note_id: note.id}
 
-  # The chunk's plaintext rides in an entry only while the feed is written
-  # (`key` non-nil), which re-counts it; the sparse store never sees it.
-  defp feed_entry(entry, _chunk, nil), do: entry
-  defp feed_entry(entry, chunk, _key), do: Map.put(entry, :text, chunk.context_text)
+  # While the feed is written (`key` non-nil) an entry carries the chunk's
+  # feed terms, from the sparse encode's own pass; the sparse store never
+  # sees them. Plaintext only where no pass made terms (the Welcome guard).
+  defp feed_entry(entry, _chunk, nil, _terms), do: entry
+
+  defp feed_entry(entry, _chunk, _key, terms) when is_binary(terms),
+    do: Map.put(entry, :terms, terms)
+
+  defp feed_entry(entry, chunk, _key, nil), do: Map.put(entry, :text, chunk.context_text)
+
+  defp with_terms({sparse, doc_len, terms}), do: {sparse, doc_len, terms}
+  defp with_terms({sparse, doc_len}), do: {sparse, doc_len, nil}
 
   defp merge_keyword_vectors(%{point: %{id: id} = p} = built, vectors),
     do: %{built | point: %{p | vector: Map.merge(p.vector, Map.get(vectors, id, %{}))}}
@@ -3943,8 +4017,9 @@ defmodule Engram.Indexing do
 
   # `doc_len` is the raw token count from the same tokenization pass as the
   # sparse vector, also persisted as `chunks.token_count`.
-  defp build_entry({:embed, chunk}, {ctx, point_id}, [{vector, {sparse, doc_len}} | rest]) do
+  defp build_entry({:embed, chunk}, {ctx, point_id}, [{vector, encoded} | rest]) do
     {note, note_payload} = ctx
+    {sparse, doc_len, terms} = with_terms(encoded)
 
     # A point carries its note's identity only (`identity_payload/1`): its
     # text, title and heading live in Postgres (Task 11) and so do its
@@ -3967,6 +4042,7 @@ defmodule Engram.Indexing do
       kind: metric_kind(note.path, chunk.kind),
       dense?: vector != nil,
       sparse: sparse,
+      terms: terms,
       chunk: chunk
     }
 

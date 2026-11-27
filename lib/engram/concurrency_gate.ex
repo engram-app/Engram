@@ -78,6 +78,21 @@ defmodule Engram.ConcurrencyGate do
       :busy
   end
 
+  @doc """
+  Take one slot for the calling process under `key` only if it is free right
+  now and taking it still leaves `spare` slots free, with nobody queued:
+  `:ok`, else `:busy`. Never waits and never queues, so it can only use
+  capacity no waiting caller wants (a background sample beside live
+  traffic). Same re-entrancy rule as `acquire/3`.
+  """
+  @spec try_acquire(gate(), term(), non_neg_integer()) :: :ok | :busy
+  def try_acquire(gate, key, spare) do
+    case call(gate, {:try_acquire, key, spare}, 1_000) do
+      :reentrant -> raise ArgumentError, "#{inspect(self())} already holds a slot of this gate"
+      status -> status
+    end
+  end
+
   @doc "Give back the calling process's slot."
   @spec release(gate()) :: :ok
   def release(gate), do: cast(gate, {:release, self()})
@@ -125,6 +140,20 @@ defmodule Engram.ConcurrencyGate do
              waiters: Map.put(state.waiters, pid, Process.monitor(pid)),
              queued: bump(state.queued, key, 1)
          }}
+    end
+  end
+
+  def handle_call({:try_acquire, key, spare}, {pid, _}, state) do
+    cond do
+      Map.has_key?(state.active, pid) or Map.has_key?(state.waiters, pid) ->
+        {:reply, :reentrant, state}
+
+      :queue.is_empty(state.waiting) and map_size(state.active) + 1 + spare <= state.limit and
+          grantable?(state, key) ->
+        {:reply, :ok, grant(state, pid, key)}
+
+      true ->
+        {:reply, :busy, state}
     end
   end
 

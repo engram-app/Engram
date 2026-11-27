@@ -37,7 +37,9 @@ defmodule Engram.KeywordIndex do
   `encode_documents/4` with options. `cap_doc_len: true` length-normalizes
   each document as if it were at most 3 x `avgdl` long (floor points and
   capped groups). `b:` (default 0.75) is the BM25 length weight; merged v5
-  chunks use a smaller one (`Engram.Indexing.sparse_opts/1`).
+  chunks use a smaller one (`Engram.Indexing.sparse_opts/1`). `feed: true`
+  adds each document's kwsearch feed terms from the same tokenizing pass, as
+  a third element.
   """
   @callback encode_documents(
               texts :: [iodata()],
@@ -45,7 +47,9 @@ defmodule Engram.KeywordIndex do
               avgdl :: float(),
               language :: atom() | nil,
               opts :: keyword()
-            ) :: [{packed_sparse(), doc_len :: non_neg_integer()}]
+            ) ::
+              [{packed_sparse(), doc_len :: non_neg_integer()}]
+              | [{packed_sparse(), doc_len :: non_neg_integer(), feed_terms :: binary()}]
 
   @doc "Encode a query string into a sparse query vector (unit values)."
   @callback encode_query(query :: String.t(), filter_key :: binary(), language :: atom() | nil) ::

@@ -134,6 +134,19 @@ defmodule Engram.PromEx.FixedBucketsTest do
       1_000,
       2_500
     ],
+    "engram_prom_ex_search_keyword_shadow_overlap_percent" => [50, 80, 90, 95, 99, 100],
+    "engram_prom_ex_search_keyword_shadow_tantivy_milliseconds" => [
+      1,
+      5,
+      10,
+      25,
+      50,
+      100,
+      250,
+      500,
+      1_000,
+      2_500
+    ],
     "engram_prom_ex_search_gate_wait_milliseconds" => [
       1,
       10,

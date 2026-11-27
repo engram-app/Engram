@@ -86,22 +86,29 @@ defmodule Engram.KeywordIndex.QdrantSparse do
     lang = Tokenizer.lang(language)
     b = Keyword.get(opts, :b, 0.75)
     cap = if Keyword.get(opts, :cap_doc_len, false), do: @cap_len_avgdls
+    feed = Keyword.get(opts, :feed, false)
 
     texts
     |> calls()
     |> Enum.flat_map(fn batch ->
-      for {indices, values, doc_len} <-
+      for encoded <-
             Engram.Native.encode_documents(
               Enum.map(batch, &IO.iodata_to_binary/1),
               filter_key,
               avgdl / 1,
               lang,
               b: b,
-              cap: cap
+              cap: cap,
+              feed: feed
             ),
-          do: {%{indices: indices, values: values}, doc_len}
+          do: packed(encoded)
     end)
   end
+
+  defp packed({indices, values, doc_len}), do: {%{indices: indices, values: values}, doc_len}
+
+  defp packed({indices, values, doc_len, terms}),
+    do: {%{indices: indices, values: values}, doc_len, terms}
 
   # Batches of at most `@docs_per_call` texts and `@bytes_per_call` bytes;
   # a text over the byte budget goes alone.

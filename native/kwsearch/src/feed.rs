@@ -9,14 +9,14 @@
 //! and the server's host name (security F6: `verify-full`).
 
 use crate::row::Row;
-use crate::shard::{shard_of, Shard, SHARDS};
+use crate::shard::{shard_of, Shard, REKEY_SETTLE_S, SHARDS};
 use postgres::config::SslMode;
 use postgres::Client;
 use std::collections::BTreeMap;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -129,9 +129,22 @@ impl Shards {
     }
 }
 
+/// Which copy of the index this is. A new epoch starts with an empty index
+/// and after a feed gap: either way rows the feed no longer holds are
+/// missing, so the node is `rebuilding` (not ready) until the app's
+/// reconcile has pushed every user through the bulk endpoint for THIS epoch
+/// and said so (`POST /rebuilt`). The app keys its "loaded" state by epoch,
+/// so a new epoch is a full reload with no operator step.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+pub struct Epoch {
+    pub id: String,
+    pub rebuilding: bool,
+}
+
 pub struct Index {
     pub dir: PathBuf,
     pub gens: BTreeMap<i16, Shards>,
+    pub epoch: Mutex<Epoch>,
 }
 
 impl Index {
@@ -140,10 +153,51 @@ impl Index {
             .iter()
             .map(|g| Ok((*g, Shards::open(&dir.join(format!("g{g}")))?)))
             .collect::<tantivy::Result<_>>()?;
+        let epoch = match std::fs::read_to_string(dir.join("epoch")) {
+            Ok(s) => serde_json::from_str(&s).map_err(|e| {
+                tantivy::TantivyError::InvalidArgument(format!("unreadable epoch file: {e}"))
+            })?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let e = new_epoch();
+                save_epoch(dir, &e)?;
+                e
+            }
+            Err(e) => return Err(e.into()),
+        };
         Ok(Index {
             dir: dir.to_path_buf(),
             gens,
+            epoch: Mutex::new(epoch),
         })
+    }
+
+    pub fn epoch(&self) -> Epoch {
+        self.epoch.lock().unwrap().clone()
+    }
+
+    /// A feed gap: data is missing, so a new epoch, rebuilding.
+    pub fn begin_rebuild(&self) -> std::io::Result<Epoch> {
+        let mut e = self.epoch.lock().unwrap();
+        let next = new_epoch();
+        save_epoch(&self.dir, &next)?;
+        *e = next.clone();
+        Ok(next)
+    }
+
+    /// The reconcile finished a full load of `id`. False when `id` is not
+    /// the current epoch (a load that began before a newer gap).
+    pub fn finish_rebuild(&self, id: &str) -> std::io::Result<bool> {
+        let mut e = self.epoch.lock().unwrap();
+        if e.id != id {
+            return Ok(false);
+        }
+        let done = Epoch {
+            id: e.id.clone(),
+            rebuilding: false,
+        };
+        save_epoch(&self.dir, &done)?;
+        *e = done;
+        Ok(true)
     }
 
     pub fn all(&self) -> impl Iterator<Item = &Shard> {
@@ -161,11 +215,32 @@ impl Index {
     }
 
     pub fn save_round(&self, cursor: (u64, i64)) -> std::io::Result<()> {
-        let tmp = self.dir.join("round.tmp");
-        std::fs::write(&tmp, serde_json::to_string(&cursor).unwrap())?;
-        std::fs::File::open(&tmp)?.sync_all()?;
-        std::fs::rename(tmp, self.dir.join("round"))
+        save_file(&self.dir, "round", &serde_json::to_string(&cursor).unwrap())
     }
+}
+
+fn new_epoch() -> Epoch {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    Epoch {
+        id: format!("{nanos:x}"),
+        rebuilding: true,
+    }
+}
+
+fn save_epoch(dir: &Path, e: &Epoch) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    save_file(dir, "epoch", &serde_json::to_string(e).unwrap())
+}
+
+/// Write-then-rename, fsynced: a crash leaves the old file or the new one.
+fn save_file(dir: &Path, name: &str, body: &str) -> std::io::Result<()> {
+    let tmp = dir.join(format!("{name}.tmp"));
+    std::fs::write(&tmp, body)?;
+    std::fs::File::open(&tmp)?.sync_all()?;
+    std::fs::rename(tmp, dir.join(name))
 }
 
 #[derive(Default)]
@@ -194,6 +269,8 @@ pub struct Stats {
     pub search_errors: AtomicU64,
     pub unauthorized: AtomicU64,
     pub window: AtomicU64,
+    /// Notes applied through POST /bulk.
+    pub bulk_notes: AtomicU64,
 }
 
 impl Stats {
@@ -294,9 +371,17 @@ pub fn run(index: Arc<Index>, cfg: Cfg, stats: Arc<Stats>) -> ! {
     eprintln!("feed resume at {cursor:?}");
     // Serve only once the horizon is known: a restored node must not answer
     // before its gap is detected.
-    while !check_horizon(&mut db, &index, &cfg, cursor, &stats) {
-        std::thread::sleep(Duration::from_secs(2));
-        db = connect_retry(&cfg);
+    loop {
+        match check_horizon(&mut db, &index, &cfg, cursor, &stats) {
+            Some(c) => {
+                cursor = c;
+                break;
+            }
+            None => {
+                std::thread::sleep(Duration::from_secs(2));
+                db = connect_retry(&cfg);
+            }
+        }
     }
     // Not ready yet: a node restored from a snapshot still inside the feed
     // window must replay up to the feed head (its deletes included) before
@@ -351,11 +436,13 @@ pub fn run(index: Arc<Index>, cfg: Cfg, stats: Arc<Stats>) -> ! {
         let n = stats.rounds.fetch_add(1, Relaxed) + 1;
         if drained {
             stats.drained_at.store(now(), Relaxed);
-            if !stats.gap.load(Relaxed) && !stats.ready.swap(true, Relaxed) {
+            if !index.epoch().rebuilding && !stats.ready.swap(true, Relaxed) {
                 eprintln!("feed caught up: serving");
             }
         }
-        check_horizon(&mut db, &index, &cfg, cursor, &stats);
+        if let Some(c) = check_horizon(&mut db, &index, &cfg, cursor, &stats) {
+            cursor = c;
+        }
         if last_purge_check.elapsed() > Duration::from_secs(60) {
             purge_old(&index, &cfg, &stats);
             last_purge_check = Instant::now();
@@ -407,18 +494,19 @@ fn apply_round(
                     );
                     std::process::abort();
                 }
-                // delete_user / delete_vault: their docs leave the disk now (F1).
-                if shard.state.lock().unwrap().purge_now
-                    && shard.purge(cfg.writer_mb).expect("purge")
-                {
-                    shard
-                        .commit(cursor, watermark, now, cfg.tomb_ttl_s)
-                        .expect("commit after purge");
-                    stats.purges.fetch_add(1, Relaxed);
-                }
                 if open_writers(index) > cfg.max_writers {
                     close_lru(index, cfg.max_writers);
                 }
+            }
+            // delete_user / delete_vault: their docs leave the disk now (F1).
+            // Whatever `commit` returned: a bulk `commit_here` may already
+            // have committed this round's rows, leaving nothing dirty here
+            // (review L1).
+            if shard.state.lock().unwrap().purge_now && shard.purge(cfg.writer_mb).expect("purge") {
+                shard
+                    .commit(cursor, watermark, now, cfg.tomb_ttl_s)
+                    .expect("commit after purge");
+                stats.purges.fetch_add(1, Relaxed);
             }
         }
     }
@@ -431,12 +519,15 @@ fn apply_round(
 /// Scheduled purge: any shard whose oldest unpurged delete is older than
 /// `purge_after_s` is force-merged (F1: deleted docs leave the disk within
 /// that bound even when the merge policy never picks their segment).
-fn purge_old(index: &Index, cfg: &Cfg, stats: &Stats) {
+/// Also any shard whose last re-keyed upsert is `REKEY_SETTLE_S` old: a DEK
+/// rotation's old-key docs leave the disk once its re-key settles (F5).
+pub fn purge_old(index: &Index, cfg: &Cfg, stats: &Stats) {
     let cutoff = now().saturating_sub(cfg.purge_after_s);
+    let rekeyed = now().saturating_sub(REKEY_SETTLE_S);
     for s in index.all() {
-        if s.first_delete_at().is_some_and(|t| t <= cutoff)
-            && s.purge(cfg.writer_mb).expect("purge")
-        {
+        let due = s.first_delete_at().is_some_and(|t| t <= cutoff)
+            || s.rekey_at().is_some_and(|t| t <= rekeyed);
+        if due && s.purge(cfg.writer_mb).expect("purge") {
             let c = s.cursor();
             s.commit(c, 0, now(), cfg.tomb_ttl_s)
                 .expect("commit after purge");
@@ -447,15 +538,20 @@ fn purge_old(index: &Index, cfg: &Cfg, stats: &Stats) {
 }
 
 /// A trim horizon above our cursor means rows are gone that this node never
-/// applied: apply the deletion log, then stop serving until a rebuild.
-/// Returns false when the horizon could not be read (try next round).
+/// applied: apply the deletion log, start a new epoch (not serving until the
+/// app's reload posts `/rebuilt`), and move the cursor up to the horizon and
+/// persist it. Rows at or below it are gone anyway and the reload covers
+/// them; without the move an idle feed (no row above the horizon to carry
+/// the cursor past it) re-detected the same gap after every `/rebuilt` and
+/// looped through full reloads (review M5). Returns the cursor to continue
+/// from, or None when the horizon could not be read (try next round).
 fn check_horizon(
     db: &mut Client,
     index: &Index,
     cfg: &Cfg,
     cursor: (u64, i64),
     stats: &Stats,
-) -> bool {
+) -> Option<(u64, i64)> {
     let h = match db.query_opt(HORIZON, &[]) {
         Ok(Some(r)) => (
             r.get::<_, String>(0).parse().unwrap_or(0),
@@ -466,22 +562,27 @@ fn check_horizon(
         Ok(None) => {
             eprintln!("feed horizon row missing: not serving");
             stats.ready.store(false, Relaxed);
-            return false;
+            return None;
         }
         Err(e) => {
             eprintln!("feed horizon read failed: {e}");
-            return false;
+            return None;
         }
     };
-    if h > cursor && !stats.gap.swap(true, Relaxed) {
-        stats.ready.store(false, Relaxed);
-        eprintln!(
-            "feed gap: rows up to {h:?} were trimmed before this node applied them; rebuild needed"
-        );
-        let n = restore(db, index, cfg, stats).expect("deletion log restore");
-        eprintln!("{n} deletion-log deletes applied");
+    if h <= cursor {
+        return Some(cursor);
     }
-    true
+    stats.gap.store(true, Relaxed);
+    stats.ready.store(false, Relaxed);
+    let e = index.begin_rebuild().expect("save epoch");
+    eprintln!(
+        "feed gap: rows up to {h:?} were trimmed before this node applied them; rebuilding as epoch {}",
+        e.id
+    );
+    let n = restore(db, index, cfg, stats).expect("deletion log restore");
+    eprintln!("{n} deletion-log deletes applied");
+    index.save_round(h).expect("save round cursor");
+    Some(h)
 }
 
 fn open_writers(index: &Index) -> usize {

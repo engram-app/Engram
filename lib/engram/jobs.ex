@@ -99,6 +99,14 @@ defmodule Engram.Jobs do
     # One trim chain: each run schedules the next 5 min out, the hourly cron
     # restarts a lost one.
     Engram.Workers.TrimKeywordFeed => [period: 240, states: [:available, :scheduled]],
+    # One reconcile walk queued at a time, whatever its args (a hop inserts
+    # its own successor while executing; a second running copy exits on the
+    # worker's advisory lock). Review M7.
+    Engram.Workers.ReconcileKeywordIndex => [
+      fields: [:worker],
+      period: :infinity,
+      states: [:available, :scheduled, :retryable]
+    ],
     Engram.Workers.EmbedNote => [period: 60, keys: [:note_id], states: :incomplete],
     # Period is the caller's settle window (`EmbedNote.job/3`).
     {Engram.Workers.EmbedNote, :debounced} => [keys: [:note_id], states: @embed_pending],

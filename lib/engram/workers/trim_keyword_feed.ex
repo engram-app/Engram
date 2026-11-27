@@ -18,10 +18,10 @@ defmodule Engram.Workers.TrimKeywordFeed do
        plus 7 days go (a restored snapshot needs every delete since it);
     4. the age of the oldest feed row is emitted (alert at half the maximum).
 
-  `:feed_max_age_h` defaults to 48. That horizon is the roadmap's
-  RECOMMENDED F2 design and is NOT yet confirmed by the owner: it is a config
-  value so the decision changes no code. A restore older than it rebuilds
-  through the bulk path (P2 part 2), never through the feed.
+  `:feed_max_age_h` defaults to 48, the F2 horizon Todd confirmed on
+  2026-11-26 (applied rows go after `:feed_trim_grace_min`, 10). A node or
+  restore older than it rebuilds through the bulk path
+  (`Engram.Workers.ReconcileKeywordIndex`), never through the feed.
 
   Runs whenever the feed is written or `keyword_feed` still holds rows,
   whatever the configured stores: a feed rolled back to off leaves its rows

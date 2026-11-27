@@ -40,7 +40,8 @@ defmodule Engram.Search.Gate do
 
   Each `run/2` and `admit/2` emits `[:engram, :search, :gate]` with
   `%{wait: native}` (time to a slot or to the refusal) and `%{outcome: :ok |
-  :busy, gate: :qdrant | :admission, upstream: :none}`; a `pool_busy/2`
+  :busy, gate: :qdrant | :admission, upstream: :none}` (`gate: :shadow` from
+  `try_run/1`: a sample, never a live search); a `pool_busy/2`
   refusal emits it with `gate: :pool`, its `upstream` and `wait: 0`. No user
   id.
 
@@ -107,6 +108,25 @@ defmodule Engram.Search.Gate do
   @doc "Run ONE Qdrant request of a search in a slot (see the moduledoc)."
   @spec run(term(), (-> result)) :: result | {:error, :search_busy} when result: var
   def run(user_id, fun), do: through(:qdrant, :gate, __MODULE__, user_id, fun)
+
+  @doc """
+  Run `fun` in a slot of the same per-request gate, but only if one is free
+  RIGHT NOW with one more left over and nobody queued; else
+  `{:error, :search_busy}` at once. For background samples beside live
+  searches (`Engram.KeywordStore.Shadow`): it never waits, never queues
+  ahead of a live search, and holds its own key (`:keyword_shadow`), so it
+  never uses a user's per-user slots. Emits `[:engram, :search, :gate]` with
+  `gate: :shadow`, so it never counts as live traffic.
+  """
+  @spec try_run((-> result)) :: result | {:error, :search_busy} when result: var
+  def try_run(fun) do
+    config = config()
+    gate = Keyword.get(config, :gate, __MODULE__)
+    status = ConcurrencyGate.try_acquire(gate, :keyword_shadow, 1)
+
+    :telemetry.execute(@event, %{wait: 0}, %{outcome: status, gate: :shadow, upstream: :none})
+    hold(status, gate, fun)
+  end
 
   @doc """
   Admit one WHOLE search (query embed, Postgres reads, every Qdrant request)

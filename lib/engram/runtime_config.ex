@@ -142,11 +142,12 @@ defmodule Engram.RuntimeConfig do
       plus `:kwsearch`, which then needs `KWSEARCH_URL`, `KWSEARCH_TOKEN_KEYS`
       as `current` or `current,next` (security F14) and optionally
       `KWSEARCH_CA_FILE`, `KWSEARCH_TIMEOUT_MS`, `KWSEARCH_FEED_MAX_AGE_H`
-      (default 48: the recommended F2 horizon, not yet confirmed by the owner),
-      `KWSEARCH_SNAPSHOT_RETENTION_DAYS` (30));
-    * `KEYWORD_READ=tantivy`: refused until the backfill ships (P2 part 2);
-      then searches read kwsearch, and `KEYWORD_READ=sparse` (or unset)
-      rolls reads back.
+      (default 48, the F2 horizon Todd confirmed 2026-11-26),
+      `KWSEARCH_SNAPSHOT_RETENTION_DAYS` (30), and `KEYWORD_SHADOW_RATE`
+      (0 to 1, default 0) for the shadow compare);
+    * `KEYWORD_READ=tantivy`: refused until the shadow compare and the
+      coverage gate pass; then searches read kwsearch, and
+      `KEYWORD_READ=sparse` (or unset) rolls reads back.
 
   Raises on anything else, including the old `KEYWORD_STORE=tantivy` (it
   stopped sparse writes) and `KEYWORD_READ=tantivy` without the feed (an
@@ -172,12 +173,12 @@ defmodule Engram.RuntimeConfig do
         v when v in [nil, "", "sparse"] ->
           :sparse
 
-        # ponytail: refused outright until the P2 part 2 backfill exists. A
-        # feed holds only chunks indexed after it was turned on, so reading it
-        # would silently lose every reused chunk. Part 2 lifts this behind a
-        # completed-backfill check.
+        # Refused until the shadow compare and the coverage gate pass on
+        # staging and the owner says yes (Todd 2026-11-26: the sparse store
+        # stays the live keyword path until then). Lifting it is this one
+        # clause.
         "tantivy" when feed? ->
-          raise "KEYWORD_READ=tantivy needs the keyword backfill (P2 part 2)"
+          raise "KEYWORD_READ=tantivy is blocked until the shadow compare and coverage gate pass"
 
         "tantivy" ->
           raise "KEYWORD_READ=tantivy needs KEYWORD_FEED=on"
@@ -187,8 +188,23 @@ defmodule Engram.RuntimeConfig do
       end
 
     if feed?,
-      do: [keyword_feed: true, keyword_read: read, kwsearch: kwsearch(getenv)],
+      do: [
+        keyword_feed: true,
+        keyword_read: read,
+        keyword_shadow_permille: shadow_permille(getenv.("KEYWORD_SHADOW_RATE")),
+        kwsearch: kwsearch(getenv)
+      ],
       else: []
+  end
+
+  # Share of searches whose keyword leg also runs on kwsearch, compared and
+  # never served (P2 task 8), as per mille (the runtime override's type,
+  # `:keyword_shadow_permille`). 0 (unset) is off.
+  defp shadow_permille(raw) do
+    case Float.parse(raw || "0") do
+      {rate, ""} when rate >= 0 and rate <= 1 -> round(rate * 1000)
+      _ -> raise "KEYWORD_SHADOW_RATE must be a number from 0 to 1, got: #{inspect(raw)}"
+    end
   end
 
   # Same rules as kwsearch's `Keys::parse`: each key trimmed, one or two
