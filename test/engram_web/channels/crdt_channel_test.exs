@@ -351,6 +351,26 @@ defmodule EngramWeb.CrdtChannelTest do
       assert_receive {:genesis_reply, %{outcome: :occupied, client: :obsidian_sync}, %{count: 1}}
     end
 
+    test "a rival frame of the row's own text counts as rival_lineage, occupied on the wire",
+         %{socket: socket, user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/reply-rival.md", "content" => "x"},
+          actor: "api"
+        )
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => note.id,
+          "path" => "Notes/reply-rival.md",
+          "b64" => frame_for_content("x")
+        })
+
+      assert_reply ref, :ok, %{seeded: false, genesis: "occupied"}
+
+      assert_receive {:genesis_reply, %{outcome: :rival_lineage, client: :obsidian_sync},
+                      %{count: 1}}
+    end
+
     # genesis_reply_tags/0 is hand-kept and seeds the 0 series. Every pair a
     # real create path emits must be in it, or that pair skips the seed and
     # its first increment after a deploy is invisible to increase().
@@ -390,6 +410,12 @@ defmodule EngramWeb.CrdtChannelTest do
           %{"doc_id" => Ecto.UUID.generate(), "path" => "Notes/#{client}-a.md"},
           # occupied: duplicate create over a row that holds a body
           %{"doc_id" => held.id, "path" => "Notes/#{client}-held.md"},
+          # rival_lineage: the row's own text under another lineage
+          %{
+            "doc_id" => held.id,
+            "path" => "Notes/#{client}-held.md",
+            "b64" => frame_for_content("x")
+          },
           # occupied: ADOPT, path owned by another note
           %{
             "doc_id" => Ecto.UUID.generate(),
@@ -631,9 +657,86 @@ defmodule EngramWeb.CrdtChannelTest do
 
       rest_id = rest.id
       assert_reply ref, :ok, %{doc_id: ^rest_id, seeded: false, genesis: "occupied"}
-      refute_receive %Phoenix.Socket.Broadcast{}, 300
       assert stored_row(user, vault, rest.id) == before
       assert CrdtRegistry.lookup(rest.id) == nil
+
+      # Barrier, not a timeout: a create that DOES write fans out through the
+      # same after-commit path and pacer. Once its broadcast is here, any the
+      # rival had triggered would already be in the mailbox.
+      barrier = Ecto.UUID.generate()
+
+      ref2 =
+        push(socket, "crdt_create", %{
+          "doc_id" => barrier,
+          "path" => "Notes/barrier.md",
+          "b64" => frame_for_content("barrier")
+        })
+
+      assert_reply ref2, :ok, %{doc_id: ^barrier, genesis: "stored"}
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "note_yjs_update",
+                       payload: %{"note_id" => ^barrier}
+                     },
+                     2_000
+
+      refute_received %Phoenix.Socket.Broadcast{payload: %{"note_id" => ^rest_id}}
+      refute_received %Phoenix.Socket.Broadcast{payload: %{"doc_id" => ^rest_id}}
+    end
+
+    test "a lineage-less row (the 2026-07 state wipe) takes the FIRST frame as its lineage",
+         %{socket: socket, user: user, vault: vault} do
+      # A note untouched since migration 20260706210000 has content but no
+      # crdt_state. The fold applies nothing, so there is nothing to tell a
+      # rival from. The first frame BECOMES the row's lineage (one real write,
+      # through the normal checkpoint and fan-out), so `stored` is true.
+      body = "# Wiped\n\nlegacy body\n"
+      id = wiped_note!(user, vault, "Notes/wiped.md", body)
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      drain_broadcasts()
+
+      frame = frame_for_content(body)
+
+      ref =
+        push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/wiped.md", "b64" => frame})
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true, genesis: "stored"}
+
+      {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == body
+      {:ok, state} = Engram.Crypto.decrypt_crdt_state(note, user)
+      {:ok, {:sync, {:sync_update, update}}} = Yex.Sync.message_decode(Base.decode64!(frame))
+      {:ok, stored} = CrdtBridge.doc_from_state(state)
+      {:ok, sent} = CrdtBridge.doc_from_state(update)
+      assert Yex.encode_state_vector(stored) == Yex.encode_state_vector(sent)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "note_yjs_update",
+                       payload: %{"note_id" => ^id}
+                     },
+                     2_000
+    end
+
+    test "a lineage-less row: a second, different frame after the first is occupied",
+         %{socket: socket, user: user, vault: vault} do
+      # Two devices racing the same wiped note. Before the claim both were told
+      # `stored` with different lineages, and the first room both bound to
+      # unioned them: the doubling this path prevents.
+      body = "# Wiped\n\nlegacy body\n"
+      id = wiped_note!(user, vault, "Notes/wiped2.md", body)
+      payload = %{"doc_id" => id, "path" => "Notes/wiped2.md"}
+
+      ref1 = push(socket, "crdt_create", Map.put(payload, "b64", frame_for_content(body)))
+      assert_reply ref1, :ok, %{doc_id: ^id, genesis: "stored"}
+
+      ref2 = push(socket, "crdt_create", Map.put(payload, "b64", frame_for_content(body)))
+      assert_reply ref2, :ok, %{doc_id: ^id, seeded: false, genesis: "occupied"}
+
+      {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == body
+      {:ok, state} = Engram.Crypto.decrypt_crdt_state(note, user)
+      {:ok, stored} = CrdtBridge.doc_from_state(state)
+      assert CrdtBridge.text_of(stored) == body
     end
 
     test "naturally repeated text is judged by lineage, never by shape", %{
@@ -3754,6 +3857,22 @@ defmodule EngramWeb.CrdtChannelTest do
   # A base64 Yjs update that, applied to a fresh empty doc, ingests `content`
   # as full note plaintext — i.e. the frame a client sends as `crdt_create`'s
   # `b64` genesis payload for a brand-new note.
+  # A note as migration 20260706210000 left it: content, no crdt_state, no tail.
+  defp wiped_note!(user, vault, path, body) do
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => body}, actor: "api")
+
+    Repo.with_tenant!(user.id, fn ->
+      Fixtures.write_note_body!(note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil)
+      Repo.delete_all(from(l in CrdtUpdateLog, where: l.note_id == ^note.id))
+    end)
+
+    assert {:ok, %{content: ^body, crdt_state_nonce: nil}} =
+             Notes.get_note_by_id(user, vault, note.id)
+
+    note.id
+  end
+
   defp drain_broadcasts do
     receive do
       %Phoenix.Socket.Broadcast{} -> drain_broadcasts()
@@ -3763,7 +3882,8 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   # Everything a write could move: the decrypted state bytes and content, the
-  # nonce a re-encrypt rotates, version, seq, and the vault's change_seq.
+  # nonce a re-encrypt rotates, version, seq, the vault's change_seq, the
+  # note's tail rows, and every enqueued Oban job (embed, links, checkpoint).
   defp stored_row(user, vault, id) do
     {:ok, note} = Notes.get_note_by_id(user, vault, id)
     {:ok, state} = Engram.Crypto.decrypt_crdt_state(note, user)
@@ -3771,8 +3891,15 @@ defmodule EngramWeb.CrdtChannelTest do
     {:ok, change_seq} =
       Repo.with_tenant(user.id, fn -> Repo.get!(Engram.Vaults.Vault, vault.id).change_seq end)
 
+    {:ok, tail} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.aggregate(from(l in CrdtUpdateLog, where: l.note_id == ^id), :count)
+      end)
+
+    jobs = Repo.aggregate(Oban.Job, :count, skip_tenant_check: true)
+
     {state, note.content, note.crdt_state_nonce, note.version, note.seq, note.updated_at,
-     change_seq}
+     change_seq, tail, jobs}
   end
 
   defp frame_for_content(content) do

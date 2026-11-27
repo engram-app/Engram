@@ -39,7 +39,7 @@ defmodule Engram.PromEx.Crdt do
     * `engram_prom_ex_crdt_room_drain_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_genesis_reply_total`, tags `[:outcome, :client]`.
       One per SUCCESSFUL `crdt_create` reply (error replies are not
-      counted): `outcome` is `stored | absent | occupied`,
+      counted): `outcome` is `stored | absent | occupied | rival_lineage`,
       `client` is `web | obsidian_sync`. `occupied` on a duplicate create is
       the reply engram-app/Engram-obsidian#645 loses an edit on.
     * `engram_prom_ex_crdt_index_checkpoint_total` — tags `[:phase]`.
@@ -158,10 +158,12 @@ defmodule Engram.PromEx.Crdt do
   Every `{outcome, client}` tag pair `EngramWeb.CrdtChannel` emits on
   `[:engram, :crdt, :genesis_reply]`. `Engram.PromEx.ZeroInit` seeds each at 0
   so the first `occupied` after a deploy shows in `increase()`. A channel test
-  asserts every emitted pair is listed here.
+  asserts every emitted pair is listed here. `rival_lineage` is answered
+  `occupied` on the wire: a create whose frame matched the row's text under
+  another lineage (the create-race doubling it now prevents).
   """
   def genesis_reply_tags do
-    for outcome <- [:stored, :absent, :occupied],
+    for outcome <- [:stored, :absent, :occupied, :rival_lineage],
         client <- [:web, :obsidian_sync],
         do: %{outcome: outcome, client: client}
   end

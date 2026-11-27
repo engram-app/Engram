@@ -37,12 +37,13 @@ defmodule EngramWeb.CrdtSeedInterleaveTest do
   """
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Engram.Factory
   import Phoenix.ChannelTest
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.{CheckpointInterleave, Crypto, Notes, Repo, Vaults}
-  alias Engram.Notes.CrdtBridge
+  alias Engram.Notes.{CrdtBridge, CrdtUpdateLog}
 
   @endpoint EngramWeb.Endpoint
 
@@ -184,6 +185,71 @@ defmodule EngramWeb.CrdtSeedInterleaveTest do
     # client union a second lineage over exactly this.
     {:ok, stored} = Notes.get_note_by_id(user, vault, id)
     assert stored.content == "the concurrent body that won the fence"
+  end
+
+  test "two concurrent creates claiming a lineage-less row: exactly one lineage wins", ctx do
+    %{socket: socket, user: user, vault: vault} = ctx
+
+    # A note left with content but no crdt_state by the 2026-07 wipe. Two
+    # devices race their creates, each with its own fresh-doc frame of the same
+    # text. Both fold the row and see no lineage; the first to write claims it.
+    # The other must lose at the WRITE, not at the fold: park the first inside
+    # its checkpoint (row read, state still null), let the second claim the
+    # lineage on its own connection, then release the first. Its fenced write
+    # must match zero rows (`crdt_state_nonce IS NULL` no longer holds), and the
+    # re-fold onto the winner's state must call it a rival.
+    body = "# Wiped\n\nlegacy body\n"
+    path = "Notes/claim.md"
+
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => body}, actor: "api")
+
+    Repo.with_tenant!(user.id, fn ->
+      Engram.Fixtures.write_note_body!(note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil)
+      Repo.delete_all(from(l in CrdtUpdateLog, where: l.note_id == ^note.id))
+    end)
+
+    {:ok, _, second} =
+      subscribe_and_join(
+        socket(EngramWeb.UserSocket, "user_#{user.id}_b", %{
+          current_user: user,
+          current_api_key: nil
+        }),
+        EngramWeb.CrdtChannel,
+        "crdt:#{user.id}:#{vault.id}",
+        %{"crdt_proto" => 2}
+      )
+
+    on_exit(CheckpointInterleave.arm(:after_row_read))
+    id = note.id
+
+    ref1 =
+      push(socket, "crdt_create", %{
+        "doc_id" => id,
+        "path" => path,
+        "b64" => frame_for_content(body)
+      })
+
+    parked = CheckpointInterleave.await_parked(:after_row_read, socket.channel_pid)
+
+    ref2 =
+      push(second, "crdt_create", %{
+        "doc_id" => id,
+        "path" => path,
+        "b64" => frame_for_content(body)
+      })
+
+    assert_reply ref2, :ok, %{doc_id: ^id, seeded: true, genesis: "stored"}, 15_000
+
+    CheckpointInterleave.release(:after_row_read, parked)
+    assert_reply ref1, :ok, %{doc_id: ^id, seeded: false, genesis: "occupied"}, 15_000
+
+    # One lineage, projecting the body once.
+    {:ok, stored} = Notes.get_note_by_id(user, vault, id)
+    assert stored.content == body
+    {:ok, state} = Crypto.decrypt_crdt_state(stored, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(state)
+    assert CrdtBridge.text_of(doc) == body
   end
 
   # A base64 Yjs update that, applied to a fresh empty doc, ingests `content` as

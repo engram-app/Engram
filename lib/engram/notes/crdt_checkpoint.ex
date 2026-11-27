@@ -529,7 +529,17 @@ defmodule Engram.Notes.CrdtCheckpoint do
     raise ArgumentError, "crdt checkpoint old body unreadable note_id=#{note_id}"
   end
 
+  # `expect_no_state: true` (a genesis claiming a lineage-less row): the row
+  # must still have no state when read here, or another writer already gave it
+  # a lineage and the union below would fold ours in as a rival. A miss writes
+  # nothing and reports `:stale`, so the caller re-reads and judges again.
   defp do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user) do
+    if Keyword.get(opts, :expect_no_state, false) and not is_nil(note.crdt_state_nonce),
+      do: fence_missed(note, note_id),
+      else: do_markdown_checkpoint_union(note, vault_id, note_id, live_state, prune, opts, user)
+  end
+
+  defp do_markdown_checkpoint_union(note, vault_id, note_id, live_state, prune, opts, user) do
     with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
          text = CrdtBridge.text_of(union_doc),
          :ok <- ensure_projection_safe(note, text),
@@ -1040,9 +1050,12 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # keeping a TOASTed KB-to-MB bytea out of the bind parameters of every
   # compaction checkpoint.
   #
-  # Compared only when non-nil: `= NULL` is never true, so a never-checkpointed
-  # row would otherwise be fenced out of every write forever. Such a row has no
-  # snapshot to lose, and its seq still guards the writers that bump it.
+  # A stateless pre-image is fenced with `IS NULL`, never `= NULL` (never true,
+  # which would fence a never-checkpointed row out of every write forever). The
+  # `IS NULL` matters: a compaction write sets state WITHOUT bumping seq, so seq
+  # alone let a second writer that read the same stateless row overwrite the
+  # first one's lineage. Two genesis creates racing a lineage-less row are
+  # exactly that pair; with the fence, the loser matches zero rows.
   #
   # On a miss we skip WITHOUT pruning. That is the whole safety property: the
   # tail is the only durable copy of anything this doc holds that the newer row
@@ -1054,7 +1067,9 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # materialize, bump seq and enqueue jobs for the trashed note.
   defp snapshot_fence(note_id, %Note{crdt_state_nonce: nil, seq: seq}) do
     from(n in Note,
-      where: n.id == ^note_id and n.kind == "note" and n.seq == ^seq and is_nil(n.deleted_at)
+      where:
+        n.id == ^note_id and n.kind == "note" and n.seq == ^seq and
+          is_nil(n.crdt_state_nonce) and is_nil(n.deleted_at)
     )
   end
 

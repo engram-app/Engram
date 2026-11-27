@@ -1165,7 +1165,7 @@ defmodule EngramWeb.CrdtChannel do
       client: activity_surface(socket.assigns[:client_type])
     })
 
-    reply = %{doc_id: note.id, seeded: genesis == :stored, genesis: Atom.to_string(genesis)}
+    reply = %{doc_id: note.id, seeded: genesis == :stored, genesis: wire_genesis(genesis)}
 
     {:reply,
      {:ok,
@@ -1173,7 +1173,13 @@ defmodule EngramWeb.CrdtChannel do
      socket}
   end
 
+  # A rival lineage is `occupied` on the wire (released plugins adopt on it) and
+  # its own value on the metric, so the doublings avoided show on the dashboard.
+  defp wire_genesis(:rival_lineage), do: "occupied"
+  defp wire_genesis(genesis), do: Atom.to_string(genesis)
+
   defp reconcile_with_row(:stored, _note), do: :stored
+  defp reconcile_with_row(:rival_lineage, _note), do: :rival_lineage
 
   # Authoritative: both read something fresher than the caller's note snapshot.
   defp reconcile_with_row(:room_busy, _note), do: :occupied
@@ -1385,46 +1391,7 @@ defmodule EngramWeb.CrdtChannel do
     # load-bearing (#1409).
     genesis_text = CrdtBridge.text_of(doc)
 
-    {row_state, wrote?, row} =
-      case fold_row_and_tail(user, vault, note_id, doc) do
-        # The row already projects exactly the frame's text: nothing to write.
-        # Which answer depends on LINEAGE, not text, because the client acts on
-        # `:stored` by applying THIS frame to its own doc as the server's state.
-        #
-        # `doc` is now the frame folded with the row and tail. The frame's
-        # lineage is already in the row (an identical frame re-sent) exactly when
-        # that union still projects the frame's text once. A frame built in a
-        # fresh doc (a lost-ack retry that rebuilt it, or a create racing a REST
-        # write of the same text) is a RIVAL: under YATA the union projects the
-        # body TWICE, and a client told `:stored` would hold that union after the
-        # server's next update reached it (e2e test_84, doubled on the racing
-        # device only). So a rival reports `:occupied`, which released plugins
-        # (checked: 1.36.0, the floor, and 1.40.0) answer by adopting the row's
-        # lineage over `crdt_doc_state`: one round trip, no room, no rival.
-        {:ok, ^genesis_text, _prune_ids} ->
-          if CrdtBridge.text_of(doc) == genesis_text,
-            do: {:stored, false, nil},
-            else: {:occupied, false, nil}
-
-        {:ok, row_content, prune_ids} ->
-          # The union is read AFTER the fold: with the stored snapshot and any
-          # tail rows folded in, THIS is what `checkpoint/5` commits and what
-          # `row_state_after_write/4` must compare the row against.
-          seed_against(
-            user,
-            vault,
-            note_id,
-            doc,
-            CrdtBridge.text_of(doc),
-            row_content,
-            prune_ids
-          )
-
-        # Could not READ the row (note gone, snapshot undecryptable, DEK/KMS
-        # down). Not a decline — we learned nothing about what the row holds.
-        :error ->
-          {:unreadable, false, nil}
-      end
+    {row_state, wrote?, row} = classify_genesis(user, vault, note_id, doc, genesis_text, 1)
 
     # A CONFIRMED write, not merely an attempted one (#1409 M2). `wrote?` alone
     # is "we took the write clause" — `checkpoint/5` can still silently no-op
@@ -1495,6 +1462,12 @@ defmodule EngramWeb.CrdtChannel do
       :occupied ->
         :declined
 
+      # The row projects the frame's text under ANOTHER lineage. Its own
+      # outcome (not `:declined`) so the dashboard counts the doublings this
+      # avoids; the reply still says `occupied`, which released plugins read.
+      :rival ->
+        :rival_lineage
+
       # We never managed to read the row at all.
       :unreadable ->
         :unreadable
@@ -1520,6 +1493,72 @@ defmodule EngramWeb.CrdtChannel do
       # guessing. Guessing `:occupied` here meant a transient fault told the
       # client its body was unnecessary, permanently.
       :unreadable
+  end
+
+  # Fold the row and tail into the frame's doc and decide what the create is.
+  # Returns `{row_state, wrote?, row}` for seed_detached/4.
+  #
+  # The row already projecting exactly the frame's text is the case that needs
+  # care, because the client acts on `:stored` by applying THIS frame to its
+  # own doc as the server's state. The answer depends on LINEAGE, not text:
+  #
+  #   * The fold applied nothing (no snapshot, no tail: a note untouched since
+  #     the 2026-07 crdt_state wipe). The row has no lineage yet, so the frame
+  #     may BECOME it. First writer wins: the write is conditional on the row
+  #     still having no state, so of two concurrent creates exactly one lands
+  #     and the other re-folds onto the winner's state below.
+  #   * The union still projects the frame's text, exactly: the frame's lineage
+  #     is the row's own (an identical frame re-sent). `:stored`, nothing to do.
+  #   * Otherwise the frame is a RIVAL, built in a fresh doc (a lost-ack retry
+  #     that rebuilt it, or a create racing a REST write of the same text):
+  #     under YATA the union projects the body twice, and a client told
+  #     `:stored` would hold that union after the server's next update reached
+  #     it (e2e test_84). Nothing is written; the reply is `occupied`, which
+  #     released plugins (checked: 1.36.0, the floor, and 1.40.0) answer by
+  #     adopting the row's lineage over `crdt_doc_state`.
+  #
+  # `retries` bounds the re-fold after a lost first-writer race to one.
+  defp classify_genesis(user, vault, note_id, doc, genesis_text, retries) do
+    case fold_row_and_tail(user, vault, note_id, doc) do
+      {:ok, ^genesis_text, prune_ids, false} ->
+        case seed_write(user, vault, note_id, doc, genesis_text, prune_ids, expect_no_state: true) do
+          {:stale, _, _} when retries > 0 ->
+            # Another create claimed the lineage first. Nothing of ours landed
+            # and the fold applied nothing, so `doc` is still the bare frame:
+            # re-fold it onto the winner's state and judge it like any other.
+            classify_genesis(user, vault, note_id, doc, genesis_text, retries - 1)
+
+          {:stale, _, _} ->
+            {:rival, false, nil}
+
+          written ->
+            written
+        end
+
+      {:ok, ^genesis_text, _prune_ids, _lineage?} ->
+        if CrdtBridge.text_of(doc) == genesis_text,
+          do: {:stored, false, nil},
+          else: {:rival, false, nil}
+
+      {:ok, row_content, prune_ids, _lineage?} ->
+        # The union is read AFTER the fold: with the stored snapshot and any
+        # tail rows folded in, THIS is what `checkpoint/5` commits and what
+        # `row_state_after_write/4` must compare the row against.
+        seed_against(
+          user,
+          vault,
+          note_id,
+          doc,
+          CrdtBridge.text_of(doc),
+          row_content,
+          prune_ids
+        )
+
+      # Could not READ the row (note gone, snapshot undecryptable, DEK/KMS
+      # down). Not a decline — we learned nothing about what the row holds.
+      :error ->
+        {:unreadable, false, nil}
+    end
   end
 
   # ONE short tenant transaction: read the clause selector and fold the durable
@@ -1572,7 +1611,10 @@ defmodule EngramWeb.CrdtChannel do
 
           # replay_tail/3 must run inside this with_tenant — it queries
           # CrdtUpdateLog, which is RLS-scoped.
-          {:ok, note.content, CrdtPersistence.replay_tail(doc, user, note_id, vault.id)}
+          prune_ids = CrdtPersistence.replay_tail(doc, user, note_id, vault.id)
+          # Whether the fold applied ANY lineage (a snapshot or a tail row).
+          # False means the row has none for the frame to be judged against.
+          {:ok, note.content, prune_ids, is_binary(snapshot) or prune_ids != []}
         else
           _ -> :error
         end
@@ -1665,9 +1707,9 @@ defmodule EngramWeb.CrdtChannel do
   # instead of only whether it matched, and that read is the freshest thing
   # anyone here has.
   #
-  # The "row already holds exactly this body" case does NOT live here: it is
-  # answered against the frame's own pre-fold projection by seed_detached/4,
-  # which is the only place `genesis_text` is meaningful. Both clauses below
+  # The "row already projects exactly this body" case does NOT live here: it is
+  # judged by classify_genesis/6 against the frame's own pre-fold projection
+  # (`genesis_text`) AND the post-fold union (lineage). Both clauses below
   # therefore take `union_text` — the post-fold projection — and use it only as
   # the value a write is checked against, never as an identity test.
   #
@@ -1675,30 +1717,57 @@ defmodule EngramWeb.CrdtChannel do
   # catch-all, because an empty row is the ONE row state the catch-all's
   # "declined" `false` may not be returned for — it is exactly what a genesis
   # seed is for.
-  defp seed_against(user, vault, note_id, doc, union_text, "", prune_ids) do
-    captured_version = CrdtCheckpoint.current_version(user.id, note_id)
-
-    _ =
-      CrdtCheckpoint.checkpoint(user.id, vault.id, note_id, doc,
-        captured_version: captured_version,
-        # We are a DETACHED caller, exactly like CheckpointNote.finalize/1:
-        # prune EXACTLY the tail rows `fold_row_and_tail/4` folded into `doc`,
-        # never a range. Omitting this takes checkpoint/5's LIVE-ROOM watermark
-        # fallback, which deletes every tail row up to now — including one a
-        # room appended after our fold, which our snapshot does not contain
-        # (#285's exact failure mode, reached from a new caller). #1409.
-        prune_ids: prune_ids
-      )
-
-    {row_state, row} = row_state_after_write(user, vault, note_id, union_text)
-    {row_state, true, row}
-  end
+  defp seed_against(user, vault, note_id, doc, union_text, "", prune_ids),
+    do: seed_write(user, vault, note_id, doc, union_text, prune_ids, [])
 
   # The row already carries a DIFFERENT body — a concurrent write landed between
   # genesis and here. Merging two lineages is exactly what a room is for; decline
   # and let the client's crdt_msg seed go through one.
   defp seed_against(_user, _vault, _note_id, _doc, _union_text, _row_content, _prune_ids),
     do: {:occupied, false, nil}
+
+  # The one genesis write: checkpoint `doc` as the row's state, then read the
+  # row back. `{row_state, true, row}`, or `{:stale, false, nil}` when the
+  # checkpoint lost its fence and wrote nothing (only `expect_no_state:`
+  # callers branch on that; for the rest the read-back already reflects it).
+  defp seed_write(user, vault, note_id, doc, union_text, prune_ids, opts) do
+    captured_version = CrdtCheckpoint.current_version(user.id, note_id)
+
+    result =
+      CrdtCheckpoint.checkpoint_pruning(
+        user.id,
+        vault.id,
+        note_id,
+        doc,
+        [
+          captured_version: captured_version,
+          # We are a DETACHED caller, exactly like CheckpointNote.finalize/1:
+          # prune EXACTLY the tail rows `fold_row_and_tail/4` folded into `doc`,
+          # never a range. Omitting this takes checkpoint/5's LIVE-ROOM watermark
+          # fallback, which deletes every tail row up to now — including one a
+          # room appended after our fold, which our snapshot does not contain
+          # (#285's exact failure mode, reached from a new caller). #1409.
+          prune_ids: prune_ids
+        ] ++ opts
+      )
+
+    expect_no_state? = Keyword.get(opts, :expect_no_state, false)
+
+    cond do
+      expect_no_state? and result == :stale ->
+        {:stale, false, nil}
+
+      # Skipped (a legacy row awaiting rebind, a DEK rotation): the row still
+      # has no lineage, so `stored` would be the very lie this write exists to
+      # end. `occupied` costs the client one adopt round trip.
+      expect_no_state? and result == :skipped ->
+        {:occupied, false, nil}
+
+      true ->
+        {row_state, row} = row_state_after_write(user, vault, note_id, union_text)
+        {row_state, true, row}
+    end
+  end
 
   # Same convention as CrdtCheckpoint.interleave_hook/1 and
   # Notes.interleave_hook/1 (SAME `:checkpoint_interleave_hook` app env key —
