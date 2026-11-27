@@ -130,7 +130,6 @@ defmodule Engram.Release.BootStep do
 
   defp source_label({:appconfig, _}), do: "appconfig"
   defp source_label({:file, _}), do: "file"
-  defp source_label(_), do: "unknown"
 
   defp enabled?(step, :none), do: flags_read(step, "none", :absent)
 

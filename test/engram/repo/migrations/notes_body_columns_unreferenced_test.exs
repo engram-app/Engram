@@ -99,7 +99,13 @@ defmodule Engram.Repo.Migrations.NotesBodyColumnsUnreferencedTest do
                mode: :savepoint
              )
 
-    for set <- ["path_hmac = NULL", "title_ciphertext = NULL", "tags_ciphertext = NULL"] do
+    # Release L's v5 lets a LIVE note drop `path_hmac`; a tombstone keeps
+    # its frozen path, so it still needs one.
+    for set <- [
+          "title_ciphertext = NULL",
+          "tags_ciphertext = NULL",
+          "path_hmac = NULL, deleted_at = now()"
+        ] do
       assert {:error, %Postgrex.Error{postgres: %{code: :check_violation}}} =
                Repo.query("UPDATE notes SET #{set} WHERE id = $1", [ctx.id], mode: :savepoint),
              set
