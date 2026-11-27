@@ -444,12 +444,19 @@ defmodule EngramWeb.CrdtChannel do
           # copy on this reply instead of wedging on a resurrect forever.
           {:reply, {:error, %{reason: "recently_deleted"}}, socket}
 
+        {:error, :conflict} ->
+          reply_name_taken(socket, note_id)
+
         {:error, %Ecto.Changeset{} = cs} ->
-          # Covers the unique-constraint case (resurrecting a tombstoned id
-          # onto a path already owned by a different live note) as well as
-          # any other changeset validation failure — a clean reply either way.
-          log_create_failed(socket, note_id, "changeset: #{inspect(cs.errors)}")
-          {:reply, {:error, %{reason: "create_failed"}}, socket}
+          # The path unique constraint fires when a tombstoned id resurrects
+          # onto a path another live note holds. Any other changeset failure
+          # stays a clean create_failed.
+          if path_taken?(cs) do
+            reply_name_taken(socket, note_id)
+          else
+            log_create_failed(socket, note_id, "changeset: #{inspect(cs.errors)}")
+            {:reply, {:error, %{reason: "create_failed"}}, socket}
+          end
 
         {:error, reason} ->
           # Catch-all for the crypto/KMS error class (a first-write user whose
@@ -2116,6 +2123,23 @@ defmodule EngramWeb.CrdtChannel do
   # nil (e.g. a test restoring a previously-unset override) would feed `nil` to
   # GenServer.call/3 and crash the channel. Same reason as EngramWeb.SyncRateLimit's limits.
   defp room_probe_ms, do: Application.get_env(:engram, :crdt_room_probe_ms) || @room_probe_ms
+
+  # A crdt_create refused because another live note holds the path (an index
+  # claim's `:conflict`, or the path unique constraint). A name conflict, not a
+  # server failure: reply the reason clients already treat as final, never the
+  # retryable create_failed, which made the plugin re-send it forever and pause
+  # every create in the vault.
+  defp reply_name_taken(socket, note_id) do
+    sync_error(socket, :id_conflict)
+    {:reply, {:error, %{reason: "id_conflict", doc_id: note_id}}, socket}
+  end
+
+  defp path_taken?(%Ecto.Changeset{errors: errors}) do
+    case errors[:path_hmac] do
+      {_msg, opts} -> opts[:constraint] == :unique
+      nil -> false
+    end
+  end
 
   # A note_id is a non-sensitive UUID and is REQUIRED to diagnose which note
   # lost a dropped edit (redacting it under :path blocked the 2026-07-06
