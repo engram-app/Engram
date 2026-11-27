@@ -157,6 +157,10 @@ defmodule EngramWeb.UserSocket do
       device_id: device_id,
       vault_id_param: vault_id,
       plugin_version: plugin_version,
+      # compat(plugin): name_taken - remove when plugin floor includes Engram-obsidian#727 (#2722)
+      # The client handles a taken name as final (`CrdtChannel` then replies
+      # `id_conflict` instead of `create_failed`).
+      name_taken_terminal: "name_taken" in caps(params["caps"]),
       obsidian_client: params["obsidian_client"] == true,
       # Product analytics only (forwarded on surface_active). An enum, so a
       # client can never put free text into an event.
@@ -210,6 +214,15 @@ defmodule EngramWeb.UserSocket do
   # the assign honest against its `String.t() | nil` spec.
   defp bounded_version(v) when is_binary(v) and byte_size(v) <= 32, do: v
   defp bounded_version(_), do: nil
+
+  # Capabilities the client opts into, `caps=a,b`. Known names only, so no
+  # free text reaches an assign; a non-string (`caps[]=x`) or over-long value
+  # is ignored whole, for `bounded_version/1`'s reasons.
+  @caps ~w(name_taken)
+  defp caps(v) when is_binary(v) and byte_size(v) <= 64,
+    do: v |> String.split(",") |> Enum.filter(&(&1 in @caps))
+
+  defp caps(_), do: []
 
   @impl true
   def id(socket), do: "user_socket:#{socket.assigns.current_user.id}"

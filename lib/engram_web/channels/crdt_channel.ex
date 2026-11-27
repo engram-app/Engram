@@ -446,12 +446,17 @@ defmodule EngramWeb.CrdtChannel do
           # copy on this reply instead of wedging on a resurrect forever.
           {:reply, {:error, %{reason: "recently_deleted"}}, socket}
 
+        # A live note KEYED at the path a resurrect asked for
+        # (`Notes.shown_check/5`), refused before the write.
+        {:error, :path_taken, note} ->
+          reply_name_taken(socket, note.id, "keyed_holder")
+
         {:error, :conflict} ->
           # The index refused the claim. Final only when a LIVE note holds the
           # path: a just-deleted note's entry is released by
           # ReleaseIndexEntries, so a retry succeeds and must stay retryable.
           if live_at?(user, vault, path) do
-            reply_name_taken(socket, note_id)
+            reply_name_taken(socket, note_id, "index_claim")
           else
             log_create_failed(socket, note_id, "index claim conflict, no live holder")
             {:reply, {:error, %{reason: "create_failed"}}, socket}
@@ -461,11 +466,13 @@ defmodule EngramWeb.CrdtChannel do
           # A "target taken" index (`PathUniques`, e.g. a stale name key
           # holding `notes_name_live`) is a taken name; any other changeset
           # failure stays a clean create_failed.
-          if path_taken?(cs) do
-            reply_name_taken(socket, note_id)
-          else
-            log_create_failed(socket, note_id, "changeset: #{inspect(cs.errors)}")
-            {:reply, {:error, %{reason: "create_failed"}}, socket}
+          case taken_by(cs) do
+            nil ->
+              log_create_failed(socket, note_id, "changeset: #{inspect(cs.errors)}")
+              {:reply, {:error, %{reason: "create_failed"}}, socket}
+
+            constraint ->
+              reply_name_taken(socket, note_id, constraint)
           end
 
         {:error, reason} ->
@@ -2134,25 +2141,41 @@ defmodule EngramWeb.CrdtChannel do
   # GenServer.call/3 and crash the channel. Same reason as EngramWeb.SyncRateLimit's limits.
   defp room_probe_ms, do: Application.get_env(:engram, :crdt_room_probe_ms) || @room_probe_ms
 
-  # A crdt_create refused because another live note holds the path. A name
-  # conflict, not a
-  # server failure: reply the reason clients already treat as final, never the
-  # retryable create_failed, which made the plugin re-send it forever and pause
-  # every create in the vault.
-  defp reply_name_taken(socket, note_id) do
-    sync_error(socket, :id_conflict)
-    {:reply, {:error, %{reason: "id_conflict", doc_id: note_id}}, socket}
+  # A crdt_create refused because another live note holds the path: a name
+  # conflict, not a server failure. `why` (a constraint or check name, never a
+  # path) is logged on every refusal, so stale name keys show in Loki.
+  defp reply_name_taken(socket, note_id, why) do
+    log_create_failed(socket, note_id, "name taken: #{why}")
+
+    if name_taken_terminal?(socket) do
+      sync_error(socket, :id_conflict)
+      {:reply, {:error, %{reason: "id_conflict", doc_id: note_id}}, socket}
+    else
+      {:reply, {:error, %{reason: "create_failed"}}, socket}
+    end
   end
+
+  # compat(plugin): name_taken - remove when plugin floor includes Engram-obsidian#727 (#2722)
+  # Plugins 1.36.0 to 1.40.0 drop a create refused with `id_conflict` with only
+  # a log line, a silent loss, while `create_failed` keeps retrying it. Only a
+  # client that says it handles a taken name (`caps=name_taken` at connect,
+  # `EngramWeb.UserSocket`) gets `id_conflict` for one; the web app reads
+  # both replies alike (`isNameTaken`), so it counts as capable.
+  defp name_taken_terminal?(socket),
+    do: socket.assigns[:name_taken_terminal] == true or socket.assigns[:client_type] == "web"
 
   # Ecto files a unique-constraint error under the constraint's FIRST field
   # (`user_id`), so match the constraint by NAME, against the one list of
   # "target taken" indexes.
   @doc false
-  def path_taken?(%Ecto.Changeset{errors: errors}) do
+  def path_taken?(%Ecto.Changeset{} = cs), do: taken_by(cs) != nil
+
+  defp taken_by(%Ecto.Changeset{errors: errors}) do
     names = PathUniques.names()
 
-    Enum.any?(errors, fn {_field, {_msg, opts}} ->
-      opts[:constraint] == :unique and to_string(opts[:constraint_name]) in names
+    Enum.find_value(errors, fn {_field, {_msg, opts}} ->
+      name = to_string(opts[:constraint_name])
+      if opts[:constraint] == :unique and name in names, do: name
     end)
   end
 

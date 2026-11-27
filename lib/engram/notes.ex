@@ -1868,6 +1868,7 @@ defmodule Engram.Notes do
           | {:error, :invalid_id}
           | {:error, :recently_deleted}
           | {:error, :id_conflict, Note.t()}
+          | {:error, :path_taken, Note.t()}
           | {:error, :version_conflict, Note.t()}
           | {:error, {:notes_cap_reached, non_neg_integer(), non_neg_integer()}}
           | {:error, Ecto.Changeset.t()}
@@ -2585,10 +2586,11 @@ defmodule Engram.Notes do
   end
 
   # A live note at the target, SHOWN there (by name under a moved folder, which
-  # no unique key holds) or KEYED there, is a conflict. The keyed holder must be
-  # checked here: left to the path unique constraint, the write aborts the
-  # transaction and the job discard after it raises, crashing the channel
-  # instead of replying `id_conflict`. Run by `move_note` right after its
+  # no unique key holds, `:conflict`) or KEYED there (`:taken`), is refused.
+  # The keyed holder must be checked here: left to the path unique constraint,
+  # the write aborts the transaction and the job discard after it raises,
+  # crashing the channel. The two stay distinct because old plugins were told
+  # `id_conflict` only for the first; the channel picks the wire reason. Run by `move_note` right after its
   # `next_seq!` takes the vault seq lock, so no uncascaded move (S5) lands
   # between check and write, and the merge, encrypt and NoteCommitted insert
   # stay outside the lock (#1710). `moved?` (read with the row) can be a stale
@@ -2605,7 +2607,7 @@ defmodule Engram.Notes do
         if moved?, do: {true, false}, else: moved_or_keyed(user, vault, path, id)
 
       cond do
-        keyed? and not moved? -> :conflict
+        keyed? and not moved? -> :taken
         moved? and shown_by_other?(user, vault, path, id) -> :conflict
         true -> {:ok, moved?}
       end
@@ -2695,8 +2697,9 @@ defmodule Engram.Notes do
       {:error, _} = err ->
         err
 
-      # `shown_check/5` under the lock: a note is shown at the target.
-      {:error, :id_conflict, _} = err ->
+      # `shown_check/5` under the lock: a note is shown (or keyed) at the
+      # target.
+      {:error, reason, _} = err when reason in [:id_conflict, :path_taken] ->
         err
 
       # See genesis_relocate_live: move_note can now lose its snapshot fence.
@@ -3132,6 +3135,12 @@ defmodule Engram.Notes do
           :conflict ->
             :ok = discard_job(job)
             {:error, :id_conflict, prior}
+
+          # A live note KEYED at the target (`shown_check/5`): refused before
+          # the write, which the path unique constraint would abort.
+          :taken ->
+            :ok = discard_job(job)
+            {:error, :path_taken, prior}
 
           {:ok, moved_now?} ->
             write_moved(
