@@ -59,7 +59,7 @@ def _expect(what: str, status: int, ok: tuple[int, ...]) -> None:
         raise SystemExit(f"{what}: HTTP {status}, want one of {ok}")
 
 
-def seed_old(api_url: str, state: str) -> None:
+def seed_old(api_url: str, state: str, notes: bool = False) -> None:
     email = f"rollback-compat-{uuid.uuid4().hex[:12]}@example.com"
     _, api_key = LocalAuthProvider(api_url).provision_user(email, uuid.uuid4().hex)
     vault, status = ApiClient(api_url, api_key).register_vault("rollback-compat", uuid.uuid4().hex)
@@ -68,6 +68,10 @@ def seed_old(api_url: str, state: str) -> None:
     client = _client(api_url, data)
     for folder in LEGACY:
         _expect(f"create {folder}", client.create_folder(folder), (200, 201))
+    if notes:
+        # Notes at the root, in an explicit folder, and deep under one.
+        for path in ("root-note.md", "Legacy/note.md", "Legacy/Child/deep/note.md"):
+            client.create_note(path, f"seeded on OLD: {path}")
     data["expected"] = sorted(LEGACY)
     _save(state, data)
     print(f"seed-old: created {LEGACY}")
@@ -235,10 +239,11 @@ def main() -> None:
     p.add_argument("phase", choices=["seed-old", "seed-new", "verify-old"])
     p.add_argument("--api-url", required=True, help="e.g. http://localhost:8110/api")
     p.add_argument("--state", required=True, help="0600 JSON state file")
-    p.add_argument("--fault", choices=["none", "unstamped-row", "vault-lock"], default="none")
+    p.add_argument("--fault", choices=["none", "unstamped-row", "vault-lock", "hash-read"], default="none")
+    p.add_argument("--with-notes", action="store_true", help="seed-old: notes too, nested")
     a = p.parse_args()
     if a.phase == "seed-old":
-        seed_old(a.api_url, a.state)
+        seed_old(a.api_url, a.state, a.with_notes)
     elif a.phase == "seed-new":
         seed_new(a.api_url, a.state, a.fault)
     else:

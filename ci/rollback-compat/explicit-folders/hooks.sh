@@ -49,19 +49,9 @@ hook_seed_old() {
   fi
 }
 
-# Phase 1, nothing running: arm a DDL log for NEW's boot. Event triggers fire
-# inside DO blocks too; pg_class xmin cannot tell (prepare_database re-GRANTs
-# on every boot).
+# Phase 1, nothing running: arm the DDL log for NEW's boot.
 hook_before_new() {
-  sql "CREATE TABLE rbc_ddl_log (tag text, obj text);
-    CREATE FUNCTION rbc_ddl() RETURNS event_trigger LANGUAGE plpgsql AS \$\$
-    DECLARE r record;
-    BEGIN
-      FOR r IN SELECT * FROM pg_event_trigger_ddl_commands() LOOP
-        INSERT INTO rbc_ddl_log VALUES (r.command_tag, r.object_identity);
-      END LOOP;
-    END \$\$;
-    CREATE EVENT TRIGGER rbc_ddl ON ddl_command_end EXECUTE FUNCTION rbc_ddl();"
+  ddl_log_arm
   # J's 20261125100100 returns early exactly when both ledgers are done.
   echo "ledgers done before NEW boots: $(sql "SELECT string_agg(name, ' ' ORDER BY name) FROM data_migrations WHERE name IN ('explicit_folder_reconcile', 'folder_marker_delete') AND completed_at IS NOT NULL")"
 }
@@ -76,9 +66,8 @@ hook_after_new_boot() {
     echo "unstamped explicit rows after NEW's boot (selfhost: NEW's boot stamp ran): $n"
   fi
   [ "$n" -eq 0 ] || fail "NEW's boot left $n explicit rows unstamped"
-  sql "SELECT tag || ' ' || coalesce(obj, '-') FROM rbc_ddl_log" | sort | uniq -c | sed 's/^/DDL during NEW boot: /'
-  alter=$(sql "SELECT count(*) FROM rbc_ddl_log WHERE tag = 'ALTER TABLE' AND obj = 'public.folders'")
-  sql "DROP EVENT TRIGGER rbc_ddl; DROP FUNCTION rbc_ddl(); DROP TABLE rbc_ddl_log"
+  ddl_log_read
+  alter=$(grep -cx 'ALTER TABLE public.folders' "$RUNNER_TEMP/ddl.txt" || true)
   out=$(rpc new-probe.exs)
   echo "$out"
   if [ "$SHAPE" = prod ]; then
@@ -91,14 +80,14 @@ hook_after_new_boot() {
   python3 e2e/scripts/rollback_compat.py seed-new --api-url "$API" --state "$STATE" --fault "$FAULT"
   # vault-lock needs a stale row too: the walk reports a skipped vault only
   # when that vault holds one (the lock then keeps it from being cleared).
-  if [ "$FAULT" != none ]; then
+  if [ "$FAULT" = unstamped-row ] || [ "$FAULT" = vault-lock ]; then
     # The row seed-new created last ("Unstamped"; folder ids are uuidv7).
     sql "UPDATE folders SET explicit_seq = NULL WHERE id = (SELECT id FROM folders WHERE explicit AND deleted_at IS NULL ORDER BY id DESC LIMIT 1) RETURNING id"
   fi
   local left
   left=$(unstamped)
   echo "explicit rows: $(explicit_ids | wc -l), unstamped: $left"
-  if [ "$FAULT" != none ]; then
+  if [ "$FAULT" = unstamped-row ] || [ "$FAULT" = vault-lock ]; then
     [ "$left" -eq 1 ] || fail "fault $FAULT: want exactly 1 unstamped row, got $left"
   else
     [ "$left" -eq 0 ] || fail "NEW's writers left $left explicit rows unstamped"
@@ -123,7 +112,7 @@ hook_snapshot() { explicit_ids; }
 
 # Phase 3, OLD running, after every OLD data migration ran once: its
 # reconcile through the runner's entry point.
-hook_old_reconcile() {
+hook_old_checks() {
   local out result want
   echo "explicit_folder_reconcile ledger before the forced pass: $(sql "SELECT CASE WHEN completed_at IS NULL THEN 'open' ELSE 'closed (re-verify walk)' END FROM data_migrations WHERE name = 'explicit_folder_reconcile'")"
   out=$(rpc old-reconcile.exs)

@@ -60,9 +60,9 @@ on:
         description: Per-pair rpc snippets under ci/rollback-compat/
         default: explicit-folders
       fault:
-        description: Red-path proof. unstamped-row leaves one explicit row unstamped; vault-lock holds every vault during OLD's passes
+        description: "Red-path proof. explicit-folders: unstamped-row, vault-lock. folder-hash-drop: hash-read"
         type: choice
-        options: [none, unstamped-row, vault-lock]
+        options: [none, unstamped-row, vault-lock, hash-read]
         default: none
 
 permissions:
@@ -157,10 +157,12 @@ jobs:
           dc() { docker compose -f ci/compose.database.yml -f "$OVERRIDE" -p "$CI_PROJECT" "$@"; }
           sql() { dc exec -T postgres psql -U engram -d engram -v ON_ERROR_STOP=1 -Atc "$1"; }
           fail() { echo "::error::$1"; echo "$1" >> "$FAILURES"; }
-          # Run a checks snippet on the running node; `mode` is bound for it.
+          # Run a checks snippet on the running node; `mode` and `fault` are bound for it.
           # Its Logger lines come back on the rpc's stdout, not the container
           # log, so every rpc output is kept for the phase's error scan.
           rpc() { dc exec -T engram /app/bin/engram rpc "mode = \"$SHAPE\"
+          fault = \"$FAULT\"
+          _ = {mode, fault}
           $(cat "$CHECKS_DIR/$1")" | tee -a "$LOGS/rpc-${RPC_LOG:-misc}.log"; }
           # Value of a KEY=value line in rpc output.
           val() { grep -oE "^$1=.*" <<<"$2" | tail -1 | cut -d= -f2-; }
@@ -178,7 +180,8 @@ jobs:
               [ "$f" = t ] || fail "FORCE ROW LEVEL SECURITY is off on $t after $1"
             done
           }
-          # The pair's checks (hook_* functions).
+          # Shared probes, then the pair's checks (hook_* functions).
+          . ci/rollback-compat/ddl-log.sh
           . "$CHECKS_DIR/hooks.sh"
           SH
 
@@ -275,7 +278,7 @@ jobs:
               fail "OLD data migration $short ended $class, not done and not on $allow"
             fi
           done < <(grep '^MIGRATION ' <<<"$out")
-          hook_old_reconcile
+          hook_old_checks
           if [ "$FAULT" = vault-lock ]; then
             sql "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE query LIKE '%pg_sleep(600)%' AND pid <> pg_backend_pid()" >/dev/null
             wait || true
