@@ -334,6 +334,9 @@ defmodule Engram.Notes.Note do
     # both names map to the same error.
     |> unique_constraint([:user_id, :vault_id, :path_hmac], name: :notes_path_live)
     |> unique_constraint([:user_id, :vault_id, :folder_hmac], name: :notes_folder_marker)
+    # Release L's name collision guard (`Engram.Notes.PathUniques`): a second
+    # live note at a folder row and exact name is the same "path taken".
+    |> unique_constraint([:user_id, :vault_id, :path_hmac], name: :notes_name_live)
   end
 
   # The stored effective dates, from the frontmatter dates and file times

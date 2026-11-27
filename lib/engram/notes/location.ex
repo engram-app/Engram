@@ -628,7 +628,7 @@ defmodule Engram.Notes.Location do
   @spec derivable?(map()) :: boolean()
   def derivable?(row) do
     is_nil(row.deleted_at) and is_binary(row.folder_ref_id) and is_binary(row.name_ciphertext) and
-      NameKeys.current?(row.name_stamp, row.path_nonce, Map.get(row, :name_nonce))
+      NameKeys.current?(row.name_stamp, row.path_nonce, row.name_nonce)
   end
 
   # `rows`' folder paths (`folder_paths`, given their folder ids) joined

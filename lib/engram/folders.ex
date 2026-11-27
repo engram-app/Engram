@@ -49,6 +49,7 @@ defmodule Engram.Folders do
   alias Engram.Logger.Metadata
   alias Engram.Notes
   alias Engram.Notes.PathSanitizer
+  alias Engram.Notes.PathUniques
   alias Engram.Repo
   alias Engram.Sync.Broadcast
   alias Engram.Vaults
@@ -120,42 +121,16 @@ defmodule Engram.Folders do
     end)
   end
 
-  # The path and folder-marker unique indexes, legacy and current
-  # (20260605000353, 20261021110300): the only 23505s that mean "the target is
-  # taken". Any other one is a bug and is re-raised.
-  @path_uniques ~w(notes_user_vault_folder_marker notes_user_vault_path_v2
-                   notes_folder_marker notes_path_live)
-
   # Read by the schema test that keeps this list to real indexes.
   @doc false
-  def path_uniques, do: @path_uniques
+  def path_uniques, do: PathUniques.names()
 
-  # The race backstop. The cascade refuses a note collision and merges a
-  # marker one before it writes (`Notes.claim_or_consume/4`,
-  # `merge_landed_markers!/5`), but a row that lands after those reads still
-  # trips the unique index from `BulkRename.update!`. That is the same refusal
-  # as the pre-checked `:conflict`, so every caller answers it (REST 409, MCP
-  # `path_conflict`, the wire's `conflict`) instead of a 500 or a crashed crdt
-  # channel (e2e run 44283703701). Rescued only here, OUTSIDE the transaction:
-  # the raise already rolled it back whole. Inside it, the next statement would
-  # fail with 25P02 (docs/context/rls-enforcement-testing-traps.md, trap 8).
-  defp conflict_on_unique(fun) do
-    fun.()
-  rescue
-    e in Postgrex.Error ->
-      constraint = e.postgres[:constraint]
-
-      if e.postgres[:code] == :unique_violation and constraint in @path_uniques do
-        Logger.warning(
-          "folder op: path taken at write, answered conflict",
-          Metadata.with_category(:warning, :sync, constraint: constraint)
-        )
-
-        {:error, :conflict}
-      else
-        reraise e, __STACKTRACE__
-      end
-  end
+  # The race backstop (`PathUniques.conflict/2`): the cascade refuses a note
+  # collision and merges a marker one before it writes
+  # (`Notes.claim_or_consume/4`, `merge_landed_markers!/5`), but a row that
+  # lands after those reads still trips a unique index from
+  # `BulkRename.update!`.
+  defp conflict_on_unique(fun), do: PathUniques.conflict(fun, "folder op")
 
   @doc """
   The ids of the live folder `root_id` and all its live descendants, for a
