@@ -51,7 +51,7 @@ defmodule Engram.ServiceConfig.Overrides do
   (prod, staging) a flag key reads flag, then env: a DB row for it is ignored
   (one warning per key per node) and `put/3` and `delete/2` refuse it with
   `{:error, :managed_by_flags}`. Every other key, and every key on self-host,
-  reads DB row, then env. `paused_accounts` is flags-only everywhere.
+  reads DB row, then env. `paused_accounts` and `folder_path_hash_drop` are flags-only everywhere.
   """
 
   import Ecto.Query
@@ -129,6 +129,10 @@ defmodule Engram.ServiceConfig.Overrides do
     # rows; lines still ship to Loki. Default off. CI and self-host always
     # write, whatever this says.
     client_logs_stop_writes: :boolean,
+    # Release K's owner-run boot drop of the folder path hash
+    # (`Engram.Release.FolderHashDrop`), default on. Flag-owned: the step reads
+    # the flags source once at boot, before the reader starts.
+    folder_path_hash_drop: :boolean,
     # Flags-only (`Engram.ServiceConfig.Flags.paused?/1`, `Engram.ClientGate`):
     # `[%{"id" => uuid, "until" => UTC ISO 8601}]`. Never a DB row.
     paused_accounts: :paused_accounts
@@ -136,9 +140,11 @@ defmodule Engram.ServiceConfig.Overrides do
 
   # The keys the reviewed flags file owns: exactly the `properties` of
   # engram-infra `service_flags/schema.json`. Change both together.
-  @flag_keys ~w(folder_marker_delete folder_marker_delete_max_fixed folder_ops
-                client_logs_stop_writes plugin_floor_enabled plugin_floor paused_accounts)a
-  @flags_only [:paused_accounts]
+  @flag_keys ~w(folder_ops client_logs_stop_writes plugin_floor_enabled plugin_floor
+                paused_accounts folder_path_hash_drop)a
+  # Never a DB row: `paused_accounts`, and `folder_path_hash_drop`, which its
+  # boot step reads from the flags source only.
+  @flags_only [:paused_accounts, :folder_path_hash_drop]
 
   @by_name Map.new(Map.keys(@types), &{Atom.to_string(&1), &1})
 

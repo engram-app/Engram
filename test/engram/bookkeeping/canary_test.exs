@@ -103,21 +103,6 @@ defmodule Engram.Bookkeeping.CanaryTest do
       assert drift_of(report) == %{}
     end
 
-    # S6 step 3: the folder check compares chain paths. Red before: it
-    # compared the row's stored hash, which a rename can leave stale.
-    test "a row whose stored path hash is stale is not drift", ctx do
-      %{user: u, vault: v} = ctx
-      {:ok, fk} = Engram.Crypto.dek_filter_key(u)
-      {:ok, _} = Notes.upsert_note(u, v, %{"path" => "C/B/n.md", "content" => "x"}, actor: "api")
-
-      Repo.query!("UPDATE folders SET full_path_hmac = $1 WHERE id = $2", [
-        Engram.Folders.Rows.path_hmac(fk, "A/B"),
-        Ecto.UUID.dump!(folder_id(u, "C/B"))
-      ])
-
-      assert drift_of(Canary.run()) == %{}
-    end
-
     test "a note whose reference names another folder's row", ctx do
       %{user: u, vault: v} = ctx
       {:ok, n} = Notes.upsert_note(u, v, %{"path" => "F/n.md", "content" => "x"}, actor: "api")

@@ -119,31 +119,12 @@ defmodule Engram.Folders.ChainReadsTest do
   end
 
   describe "rows other writers left behind" do
-    test "a row with no full_path_hmac (an older writer) is found by its chain", %{
-      user: u,
-      vault: v
-    } do
-      d = by_path(u, v, ["A/B/C/D"])["A/B/C/D"]
-      sql!("UPDATE folders SET full_path_hmac = NULL WHERE id = $1", [Ecto.UUID.dump!(d)])
-
-      assert by_path(u, v, ["A/B/C/D"]) == %{"A/B/C/D" => d}
-      assert at(u, v, ["A/B/C/D"]) == [d]
-      assert d in sub(u, v, ["A/B/C/D"])
-    end
-
-    test "a stale hash naming the new parent's ANCESTOR does not steer the move",
-         %{user: u, vault: v} do
-      # A/B carries a stale hash equal to "X". Until S6 step 3 the writer
-      # resolved X by that hash to A/B, inside the subtree being moved, so the
-      # move had to be refused. The writer now walks the chain: X does not
-      # exist, so it is created and A moves under it.
-      {:ok, fk} = Crypto.dek_filter_key(u)
+    test "a move under a new parent chain creates the chain", %{user: u, vault: v} do
+      # Until S6 step 3 the writer resolved X by a stale hash on A/B, inside
+      # the subtree being moved, so the move had to be refused. The writer
+      # walks the chain: X does not exist, so it is created and A moves under
+      # it.
       t = FolderRows.tree(u)
-
-      sql!("UPDATE folders SET full_path_hmac = $1 WHERE id = $2", [
-        Rows.path_hmac(fk, "X"),
-        Ecto.UUID.dump!(t["A/B"].id)
-      ])
 
       assert {:ok, _} = Notes.rename_folder(u, v, "A", "X/Y/Z")
       tree = FolderRows.tree(u)
@@ -172,7 +153,6 @@ defmodule Engram.Folders.ChainReadsTest do
       assert map_size(got) == length(paths)
       assert [walk] = for(%{sql: s, pid: ^me} <- queries, s =~ ~r/\bfolders\b/, do: s)
       assert walk =~ "WITH RECURSIVE q"
-      refute walk =~ "full_path_hmac"
     end
 
     test "the walk is sent unnamed, so a generic plan never replaces the tenant's estimate",
@@ -225,7 +205,6 @@ defmodule Engram.Folders.ChainReadsTest do
       # ties them, `WalkIndexCondTest`); never a parent-only key.
       assert plan =~ ~r/folders_(live_name|parent_name_ids)/, plan
       refute plan =~ "Seq Scan on folders", plan
-      refute plan =~ "folders_full_path", plan
       refute plan =~ ~r/folders_parent(?!_name_ids)/, plan
       refute plan =~ "folders_user", plan
       # 2-3 index pages per probe; a scan of the tenant's 170 folders is more.

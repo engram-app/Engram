@@ -96,7 +96,10 @@ defmodule Engram.DataMigrationsTest do
       :ok = DataMigrations.mark_done("m", 1)
       :ok = DataMigrations.mark_done("m", 2)
       assert DataMigrations.done?("m", 2)
-      assert Repo.aggregate(Engram.DataMigrations.Entry, :count) == 1
+      # Scoped to "m": the test DB setup (`mix engram.migrate`) writes its own
+      # ledger rows, as boot does in prod, so the table is not empty.
+      assert Repo.aggregate(from(e in Engram.DataMigrations.Entry, where: e.name == "m"), :count) ==
+               1
     end
 
     test "a cached true survives without a DB read, and reset_cache clears it" do

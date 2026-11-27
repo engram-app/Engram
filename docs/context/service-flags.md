@@ -15,9 +15,15 @@ endpoint and no write path for it.
 Exactly the schema's properties (`Overrides.flag_keys/0`; change both
 together): `folder_marker_delete`, `folder_marker_delete_max_fixed`,
 `folder_ops`, `client_logs_stop_writes`, `plugin_floor_enabled`,
-`plugin_floor`, `paused_accounts`. Every key is optional; absent means the
+`plugin_floor`, `paused_accounts`, `folder_path_hash_drop`. Every key is optional; absent means the
 env value (app config / runtime.exs), then the caller's code default. Values are checked with the same validator
 as a DB override (`Overrides.validate/2`).
+
+`folder_path_hash_drop` (boolean, default on, flags-only: a DB override is
+refused) is read once at boot, before the
+reader starts, by `Engram.Release.FolderHashDrop` through `Flags.read_once/2`
+(3 s budget; unreachable or timed out = on). `false` stops release K's
+owner-run drop of `folders.full_path_hmac`; it takes effect at the next boot.
 
 `paused_accounts` is flags-only: `[{"id": <uuid>, "until": <UTC ISO 8601, ends Z>}]`,
 at most 1000, `until` at most 30 days ahead (`ClientLocks.max_expiry_s/0`;

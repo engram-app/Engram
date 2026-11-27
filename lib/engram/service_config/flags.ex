@@ -160,17 +160,13 @@ defmodule Engram.ServiceConfig.Flags do
   # document already found bad is not re-reported.
   defp load(state, body, _version) when body == "" or body == state.last_body, do: state
 
-  # A reviewed file is a few KB; anything this big is not one.
-  defp load(state, body, _version) when byte_size(body) > @max_body,
-    do: %{state | last_body: body, doc_status: :invalid}
-
   defp load(state, body, version) do
     state = %{state | last_body: body}
 
-    case decode(body) do
-      {:ok, doc} when is_map(doc) ->
+    case parse(body) do
+      {:ok, flags} ->
         first? = not state.loaded?
-        state = install(state, build(doc, current()))
+        state = install(state, flags)
 
         Logger.info(
           "service_flags_loaded source=#{kind(state)} keys=#{map_size(current())} " <>
@@ -180,9 +176,53 @@ defmodule Engram.ServiceConfig.Flags do
 
         %{state | doc_status: :ok}
 
-      _ ->
+      :error ->
         %{state | doc_status: :invalid}
     end
+  end
+
+  # The document's valid flag keys (`build/2`), or `:error` for a bad one. A
+  # reviewed file is a few KB; anything over the cap is not one.
+  defp parse(body) when byte_size(body) > @max_body, do: :error
+
+  defp parse(body) do
+    case decode(body) do
+      {:ok, doc} when is_map(doc) -> {:ok, build(doc, current())}
+      _ -> :error
+    end
+  end
+
+  @doc """
+  One read of `source`, outside the reader, for a caller that runs before it
+  starts (the boot step `Engram.Release.FolderHashDrop`, in the migrate
+  eval): the reader's own source read and parse, bounded by `timeout_ms`.
+  `{:ok, flags}` (an empty body is no flags), or `{:error, reason}` for an
+  unreachable source, a bad document or a timeout. Installs nothing.
+  """
+  @spec read_once({:file, String.t()} | {:appconfig, map()}, pos_integer()) ::
+          {:ok, map()} | {:error, term()}
+  def read_once(source, timeout_ms) do
+    task = Task.async(fn -> once(source) end)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      {:exit, reason} -> {:error, Metadata.safe_exit_reason(reason)}
+      nil -> {:error, :timeout}
+    end
+  end
+
+  # Never raises or exits: the task is linked to the caller, so an exit here
+  # would kill it before `Task.yield/2` could report one.
+  defp once(source) do
+    case read(%{source: source, token: nil}) do
+      {:ok, "", _version, _state} -> {:ok, %{}}
+      {:ok, body, _version, _state} -> with :error <- parse(body), do: {:error, :invalid_document}
+      {:error, reason, _state} -> {:error, reason}
+    end
+  rescue
+    e -> {:error, Metadata.safe_reason(e)}
+  catch
+    :exit, reason -> {:error, Metadata.safe_exit_reason(reason)}
   end
 
   defp status(state, reason), do: status(state, state.doc_status, reason)

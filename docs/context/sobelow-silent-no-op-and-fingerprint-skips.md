@@ -63,13 +63,15 @@ MIME (strip parameters, trim, downcase) before matching, because an exact-string
 
 `spa_controller` injects zero request data.
 
-### `Traversal.FileModule` x4
+### `Traversal.FileModule` x5
 
-`legal/seeder.ex`, `release/preflight.ex`, `spa_controller.ex`,
-`spa_integrity.ex`. All resolve through `Application.app_dir(:engram, "priv/...")`
+`legal/seeder.ex`, `release/preflight.ex`, `release/folder_hash_drop.ex`,
+`spa_controller.ex`, `spa_integrity.ex`. All resolve through `Application.app_dir(:engram, "priv/...")`
 with literal suffixes. The one dynamic case (`release/preflight.ex`) derives
 filenames from `File.ls!` filtered by an anchored `^\d{14}_.+\.exs$` regex.
 `spa_controller.ex` is HTTP-reachable but `index/2` discards params entirely.
+`release/folder_hash_drop.ex` reads one fixed migration file and only parses
+it (`Code.string_to_quoted!`), so loading it never evaluates code.
 
 ### `Traversal.FileModule` in `service_config/flags/file_source.ex` x1
 

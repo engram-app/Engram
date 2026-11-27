@@ -157,22 +157,16 @@ defmodule Engram.Folders.RootRowReadTest do
 
   # Audit gap (snapshot.ex:408/:420). The setup's vault mixes both kinds,
   # which hides the join: two more vaults, one whose only root note names
-  # the root row, one mixing both kinds under a root row with a path hash.
-  test "the daily snapshot counts a root-row-only root and a hashed root row once",
+  # the root row, one mixing both kinds under a root row.
+  test "the daily snapshot counts a root-row-only root and a mixed root row once",
        %{user: u} do
-    {:ok, fk} = Crypto.dek_filter_key(u)
     only = insert(:vault, user: u)
     r = put!(u, only, "r.md")
     FolderRows.insert_root!(u, only, [r.id])
     mixed = insert(:vault, user: u)
     a = put!(u, mixed, "a.md")
     _ = put!(u, mixed, "b.md")
-    root = FolderRows.insert_root!(u, mixed, [a.id])
-
-    Repo.query!("UPDATE folders SET full_path_hmac = $2 WHERE id = $1", [
-      Ecto.UUID.dump!(root),
-      Rows.path_hmac(fk, "")
-    ])
+    FolderRows.insert_root!(u, mixed, [a.id])
 
     day = Date.add(Date.utc_today(), -1)
     Snapshot.run(day: day)

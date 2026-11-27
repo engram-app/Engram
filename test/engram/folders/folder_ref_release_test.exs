@@ -363,7 +363,7 @@ defmodule Engram.Folders.FolderRefReleaseTest do
       # The folder row holds only history: 2,000 trashed notes and 200
       # deleted attachments, which keep their reference.
       h = :crypto.strong_rand_bytes(32)
-      row = FolderRows.insert!(u, v, :crypto.strong_rand_bytes(32), full_path_hmac: h)
+      row = FolderRows.insert!(u, v, :crypto.strong_rand_bytes(32))
       others = for i <- 1..60, do: note!(u, v, "Other#{rem(i, 3)}/n#{i}.md")
       atts = for i <- 1..20, do: attachment!(u, v, "Other#{rem(i, 3)}/a#{i}.png")
       clone_deleted!("notes", hd(others).id, 2_000, %{"folder_hmac" => h})
