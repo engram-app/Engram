@@ -3130,6 +3130,15 @@ defmodule Engram.Notes do
     # transaction that runs no savepoint (CRDT relocate, resurrect).
     _ = if free_slot?, do: free_stale_slot(user, prior.vault_id, sanitized_path, prior.id)
 
+    # `mode: :savepoint` for every caller: a live note still holding the
+    # target (a resurrect onto a taken path, a race past the pre-checks) trips
+    # a `PathUniques` index. Without the savepoint that aborts the caller's
+    # tenant transaction and the next statement raises 25P02; with it the
+    # write rolls back alone and returns the changeset's "has already been
+    # taken", which every surface answers as a path-taken refusal
+    # (docs/context/rls-enforcement-testing-traps.md, trap 8).
+    db_opts = Keyword.put_new(db_opts, :mode, :savepoint)
+
     case fenced_update(snapshot_fenced(changeset, prior), db_opts) do
       {:ok, updated} ->
         _ =
@@ -10468,9 +10477,8 @@ defmodule Engram.Notes do
 
     folder = Helpers.extract_folder(prior.path)
 
-    # `mode: :savepoint`: a unique violation (a live note took the path after
-    # the plan) rolls back this row only. Without it Postgres aborts the whole
-    # chunk transaction and the next statement raises 25P02.
+    # A unique violation (a live note took the path after the plan) rolls
+    # back this row only: `write_moved/3` writes under a savepoint.
     case move_note(
            prior,
            base_attrs,
@@ -10479,7 +10487,6 @@ defmodule Engram.Notes do
            folder,
            "restore",
            false,
-           mode: :savepoint,
            folder_refs: refs,
            # In a moved vault the plan counts a stale key as free (the
            # shown-path rule), so the free re-paths its holder first.
