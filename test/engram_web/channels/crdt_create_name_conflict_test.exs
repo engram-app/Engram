@@ -5,6 +5,8 @@ defmodule EngramWeb.CrdtCreateNameConflictTest do
   # crashed channel or a re-mint.
   use EngramWeb.ChannelCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.{Crypto, Notes, Repo, Vaults}
 
@@ -36,10 +38,14 @@ defmodule EngramWeb.CrdtCreateNameConflictTest do
 
     Sandbox.allow(Repo, self(), socket.channel_pid)
 
-    ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "F/x.md"})
-    # Every changeset refusal of a create (a path index's included) replies
-    # `create_failed`; the name refusal is that changeset
-    # (name_live_conflict_test.exs compares it to a path index's).
-    assert_reply ref, :error, %{reason: "create_failed"}
+    log =
+      capture_log(fn ->
+        ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "F/x.md"})
+        assert_reply ref, :error, %{reason: "create_failed"}
+      end)
+
+    # The reply is the same for any changeset refusal (an id one too): the
+    # log line says which index refused it.
+    assert log =~ "notes_name_live"
   end
 end

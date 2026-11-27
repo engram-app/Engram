@@ -135,8 +135,9 @@ defmodule Engram.ServiceConfig.Overrides do
     # the flags source once at boot, before the reader starts.
     folder_path_hash_drop: :boolean,
     # Release L's owner-run boot steps (`Engram.Release.NotesPathExpand`),
-    # each default on, flag-owned the same way: the shape check relax, the
-    # name collision guard build, the manifest name index build.
+    # flag-owned the same way: the shape check relax and the manifest name
+    # index build (default on), the name collision guard build (default OFF,
+    # it ships dark; `true` builds it).
     notes_shape_relax: :boolean,
     notes_name_unique_build: :boolean,
     notes_manifest_name_build: :boolean,

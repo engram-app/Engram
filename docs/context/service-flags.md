@@ -27,7 +27,7 @@ the reader starts, by `Engram.Release.BootStep.run_all/3` through
 `Flags.read_once/2` (3 s budget; unreachable or timed out = the step's
 default: on, except `notes_name_unique_build`, which ships off). `false` stops that step; it takes effect at
 the next boot. A step that ships `default: false` (`BootStep`) runs only once
-its key says `true`. All steps share one 30 s budget per boot; what does not
+its key says `true`. All steps share one 15 s budget per boot; what does not
 fit defers to the next boot. Each pending step logs
 `<step> flags read source=<appconfig|file|none> value=<true|false|absent>`
 (`:boot` info, ships to Loki):

@@ -39,8 +39,10 @@ defmodule Engram.Release.NotesPathExpand do
       this vault-led index carrying `folder_ref_id` won the moved-folder
       feed's per-folder legs as an index-only scan of the whole vault
       (`MovedFolderFeedPlanTest`), the tie class of
-      docs/context/notes-generic-plan-mis-pick.md. Unstamped rows (no name
-      yet) need their stored path anyway.
+      docs/context/notes-generic-plan-mis-pick.md. Rows with a NULL
+      `name_stamp` are not in it: the release that serves the manifest from
+      names needs a second leg serving them by path (`notes_manifest`); they
+      never fall back by themselves.
 
   Measured on a throwaway Postgres 18 at prod size (220k rows, 430 MB heap,
   OS cache warm, 2026-11-27): VALIDATE 0.4 s, probe 0.6-1.3 s, unique build

@@ -19,11 +19,13 @@ defmodule Engram.Release.BootStep do
     * one pinned session per step holding a session advisory lock on the
       step's name (`pg_try_advisory_lock`): a step another session holds (an
       orphaned build of a killed task still running) is skipped this boot;
-    * ONE time budget for all steps of a boot (#{30_000} ms by default): each
+    * ONE time budget for all steps of a boot (#{15_000} ms by default): each
       statement's `statement_timeout` is what is left of it (at most
-      #{30_000} ms), and a step that starts with under #{1_000} ms left defers
-      without running, so the boot steps never hold up boot for long whatever
-      they meet (the ECS health-check grace is 120 s);
+      #{15_000} ms), and a step that starts with under #{1_000} ms left defers
+      without running. The migration lock serializes a deploy's tasks and a
+      step that keeps deferring is redone by each, so the last of three waits
+      for both others: 3 x `worst_case_ms/0` (about 69 s) must fit the ECS
+      web health-check grace (120 s);
     * lock waits: ALTER TABLE statements (which queue writers behind them)
       run under a 5 s `lock_timeout`; CONCURRENTLY statements (which block no
       DML, and whose waits for older transactions are lock waits) run with no
@@ -63,12 +65,20 @@ defmodule Engram.Release.BootStep do
   @flags_timeout_ms 3_000
   # LockTimeoutRetry's value (priv/repo/migrations/lock_timeout_retry.exs).
   @lock_timeout "5s"
-  @budget_ms 30_000
-  @max_statement_ms 30_000
+  @budget_ms 15_000
+  @max_statement_ms 15_000
   @min_statement_ms 1_000
   # A failed build's INVALID leftover is dropped even with the budget spent:
   # an invalid UNIQUE index still enforces uniqueness on writes.
-  @cleanup_ms 10_000
+  @cleanup_ms 5_000
+
+  @doc """
+  One task's longest boot-step time: the flags read, the budget, and one
+  cleanup drop past it. The migration lock serializes a deploy's tasks, so
+  the last of three can wait for two others before its own.
+  """
+  # No @spec: dialyzer's :underspecs flags `pos_integer()` against the literal.
+  def worst_case_ms, do: @flags_timeout_ms + @budget_ms + @cleanup_ms
 
   @doc """
   Runs `steps` in order on `repo` (a migrator-credential repo) and returns

@@ -319,6 +319,37 @@ defmodule Engram.Release.NotesPathExpandTest do
       assert index("notes_name_live") == :absent
     end
 
+    # The migrate eval starts no app, so no named pool runs: the probe opens
+    # a one-connection pool from the pool's config and stops it after.
+    test "in the eval (no running pool) the probe opens its own and counts", ctx do
+      config =
+        Repo.config()
+        |> Keyword.drop([:pool, :name])
+        |> Keyword.merge(
+          pool_size: 1,
+          after_connect: {Postgrex, :query!, ["SET SESSION AUTHORIZATION engram_maintenance", []]}
+        )
+
+      Application.put_env(:engram, Engram.Repo.Maintenance, config)
+      Application.put_env(:engram, :maintenance_repo_enabled, true)
+
+      on_exit(fn ->
+        Application.delete_env(:engram, Engram.Repo.Maintenance)
+        Application.delete_env(:engram, :maintenance_repo_enabled)
+      end)
+
+      refute Process.whereis(Engram.Repo.Maintenance)
+      dup!(ctx)
+
+      log =
+        capture_log(fn ->
+          assert run_one("notes_name_unique_build", repo: Engram.RlsMigratorRepo) == :deferred
+        end)
+
+      assert log =~ ~r/\[error\].*notes_name_unique_build duplicates=1/
+      refute Process.whereis(Engram.Repo.Maintenance)
+    end
+
     # A duplicate the probe did not see: the build's own unique check finds it. Its INVALID leftover
     # would still refuse writes, so it is dropped at once.
     test "a duplicate the probe missed: the failed build defers and leaves no index", ctx do
@@ -482,6 +513,14 @@ defmodule Engram.Release.NotesPathExpandTest do
       refute_received :ran
       assert log =~ "budget_next deferred"
       assert log =~ "boot_budget_spent"
+    end
+
+    # The migration lock serializes a deploy's tasks (2 web + 1 worker), and
+    # a step that keeps deferring is redone by each in turn, so the LAST task
+    # waits for both others. Its boot must still fit ECS's 120 s web grace.
+    test "three tasks' worst case fits the health-check grace" do
+      assert BootStep.worst_case_ms() <= 23_000
+      assert 3 * BootStep.worst_case_ms() <= 70_000
     end
 
     test "a step another session holds is skipped this boot" do
