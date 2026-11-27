@@ -15,13 +15,14 @@ API and puts the op in the REAL plugin's durable CRDT op queue, so the
 plugin's own dispatch and the server's reply are both under test.
 
 Oracles, scoped to a per-test uuid folder:
-1. the plugin sends the create ONCE over a window long enough for several
-   retries (base backoff 500 ms, doubling), and the op leaves the queue;
-2. the vault-wide create backoff never closes;
+1. the op leaves the queue, then a quiet window passes with no re-send: the
+   create was sent exactly once;
+2. the vault-wide create pause (`NotesCapGate.backoff`) is never tripped;
 3. a fresh note written afterwards still reaches the server.
 """
 
 import asyncio
+import time
 import uuid
 
 import pytest
@@ -29,9 +30,11 @@ import pytest
 from helpers.cdp import ENGINE_PATH, PLUGIN_PATH
 from helpers.vault import write_note
 
-# Long enough for the old behaviour to retry several times (500 ms base
-# backoff, doubling, on a 5 s queue tick) and short enough for the session.
-WINDOW_S = 40
+# The op must settle within a few queue ticks (5 s each). The old behaviour
+# never settles: it stays queued, retrying on a 500 ms doubling backoff.
+SETTLE_S = 30
+# After it settles, nothing may re-send it: one more queue tick plus margin.
+QUIET_S = 8
 
 
 @pytest.mark.asyncio
@@ -50,15 +53,23 @@ async def test_name_taken_create_is_not_retried(obsidian_b, cdp_b, api_sync):
     api_sync.create_note(taken_path, "# taken")
     holder_id = api_sync.wait_for_note_id(taken_path)
 
-    # Count every crdt_create the plugin sends for X on the live channel.
+    # Count every crdt_create the plugin sends for X on the live channel, and
+    # every trip of the vault-wide create pause.
     await cdp_b.evaluate(
         f"""(() => {{
             const ch = {PLUGIN_PATH}.noteStream;
-            if (!ch) throw new Error('no noteStream');
-            window.__e2e109 = {{ ch, orig: ch.crdtCreate, calls: 0 }};
+            const gate = {ENGINE_PATH}.notesCapGate;
+            if (!ch || !gate) throw new Error('no noteStream or notesCapGate');
+            const s = {{ ch, gate, create: ch.crdtCreate, backoff: gate.backoff,
+                        calls: 0, pauses: 0 }};
+            window.__e2e109 = s;
             ch.crdtCreate = function (docId, ...rest) {{
-                if (docId === '{gone_id}') window.__e2e109.calls++;
-                return window.__e2e109.orig.call(this, docId, ...rest);
+                if (docId === '{gone_id}') s.calls++;
+                return s.create.call(this, docId, ...rest);
+            }};
+            gate.backoff = function (...args) {{
+                s.pauses++;
+                return s.backoff.apply(this, args);
             }};
         }})()"""
     )
@@ -76,22 +87,35 @@ async def test_name_taken_create_is_not_retried(obsidian_b, cdp_b, api_sync):
             await_promise=True,
         )
 
-        await asyncio.sleep(WINDOW_S)
+        async def queued() -> list:
+            return [
+                o for o in await cdp_b.get_crdt_queue_ops() if o.get("docId") == gone_id
+            ]
+
+        deadline = time.monotonic() + SETTLE_S
+        ops = await queued()
+        while ops and time.monotonic() < deadline:
+            await asyncio.sleep(0.5)
+            ops = await queued()
+        assert not ops, f"a taken-name create must leave the queue; still queued: {ops}"
+
+        await asyncio.sleep(QUIET_S)
         calls = await cdp_b.evaluate("window.__e2e109.calls")
-        ops = [o for o in await cdp_b.get_crdt_queue_ops() if o.get("docId") == gone_id]
-        gate_closed = await cdp_b.evaluate(f"!!{ENGINE_PATH}.notesCapGate?.isClosed()")
+        pauses = await cdp_b.evaluate("window.__e2e109.pauses")
+        requeued = await queued()
     finally:
         await cdp_b.evaluate(
-            "(() => { const s = window.__e2e109; if (s) s.ch.crdtCreate = s.orig;"
+            "(() => { const s = window.__e2e109; if (s) {"
+            " s.ch.crdtCreate = s.create; s.gate.backoff = s.backoff; }"
             " delete window.__e2e109; })()"
         )
 
     assert calls == 1, (
         f"a taken-name create must be sent once, not retried; sent {calls}x"
     )
-    assert not ops, f"a taken-name create must leave the queue; still queued: {ops}"
-    assert not gate_closed, (
-        "a taken-name create must not pause every create in the vault"
+    assert not requeued, f"a taken-name create must not come back: {requeued}"
+    assert pauses == 0, (
+        f"a taken-name create must not pause every create ({pauses} pauses)"
     )
 
     # The holder is untouched, and creates elsewhere are not blocked.
