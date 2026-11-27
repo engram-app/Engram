@@ -1387,22 +1387,24 @@ defmodule EngramWeb.CrdtChannel do
 
     {row_state, wrote?, row} =
       case fold_row_and_tail(user, vault, note_id, doc) do
-        # Already exactly this body: an idempotent retry with nothing to write.
-        # Report `:stored` — the client's file IS synced — and take no room.
+        # The row already projects exactly the frame's text: nothing to write.
+        # Which answer depends on LINEAGE, not text, because the client acts on
+        # `:stored` by applying THIS frame to its own doc as the server's state.
         #
-        # Asked against `genesis_text`, NOT the post-fold union, and that is the
-        # whole point. The realistic retry (a lost ack) rebuilds the frame with a
-        # FRESH Yjs clientID, so folding the stored snapshot in yields two
-        # concurrent inserts of the same text: under YATA the union projects the
-        # body TWICE. Comparing the union here would decline every such retry
-        # (as `:occupied`) and push the client onto its crdt_msg fallback, which
-        # is safe but spends a room per retry — precisely what this change exists
-        # to stop, in precisely the bulk-import conditions where acks get lost.
-        #
-        # The union is not the right question for "is the client synced": it is
-        # what a WRITE would commit, and it is used for exactly that below.
+        # `doc` is now the frame folded with the row and tail. The frame's
+        # lineage is already in the row (an identical frame re-sent) exactly when
+        # that union still projects the frame's text once. A frame built in a
+        # fresh doc (a lost-ack retry that rebuilt it, or a create racing a REST
+        # write of the same text) is a RIVAL: under YATA the union projects the
+        # body TWICE, and a client told `:stored` would hold that union after the
+        # server's next update reached it (e2e test_84, doubled on the racing
+        # device only). So a rival reports `:occupied`, which released plugins
+        # (checked: 1.36.0, the floor, and 1.40.0) answer by adopting the row's
+        # lineage over `crdt_doc_state`: one round trip, no room, no rival.
         {:ok, ^genesis_text, _prune_ids} ->
-          {:stored, false, nil}
+          if CrdtBridge.text_of(doc) == genesis_text,
+            do: {:stored, false, nil},
+            else: {:occupied, false, nil}
 
         {:ok, row_content, prune_ids} ->
           # The union is read AFTER the fold: with the stored snapshot and any
