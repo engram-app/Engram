@@ -1,8 +1,27 @@
-# Phase-3 data migration results this pair accepts other than `done` (and
-# `skipped-done-noreverify`, accepted for every pair: a done ledger that does
-# not re-verify never runs again after a rollback in prod either).
+# Phase-3 data migration results this pair (J rolled back to I) accepts
+# other than `done`. Every other result fails, including a done ledger that
+# does not re-verify (`skipped-done-noreverify`): each such skip is reviewed
+# here, per pair, because after a rollback in prod it never runs on NEW's
+# data either.
+#
+# What J changes that I's migrations could meet: J stops writing
+# folders.full_path_hmac (new rows NULL, renamed rows keep a stale hash) and
+# drops the notes_folder_name_live index (no column). Checked by grepping each
+# I module (24adf10f7) for full_path_hmac and folder_name_live.
+#
 # Format: <shape|*> <name before any ':'> <class> <reason>
-selfhost folder_marker_delete skipped-disabled ships off on self-host (its kill switch defaults off)
-* key_aliases skipped-disabled runs only while the vector rebuild mode is on (Engram.Rebuild.mode/0), never in this stack
-* person_origin_backfill skipped-disabled needs the product-analytics keys, which this stack does not set
-* note_meta skipped-disabled the note_meta_backfill override defaults off and is not on in prod at release I
+* index_versions skipped-done-noreverify done; reads chunk/index version stamps on notes, neither full_path_hmac nor the dropped index
+* crdt_state_seed skipped-done-noreverify done; seeds CRDT state from note content, no folder hash
+* envelope_format skipped-done-noreverify done; rewrites encryption envelopes of note content, no folder hash
+* link_resolution_keys skipped-done-noreverify done; link key stamps on notes, no folder hash
+* note_split skipped-done-noreverify done; note row split, no folder hash
+* note_index_state skipped-done-noreverify done; note index-state rows, no folder hash
+* note_sizes skipped-done-noreverify done; note size columns, no folder hash
+* folder_table skipped-done-noreverify done in prod since release D; never re-runs, so it does not revisit J's NULL or stale full_path_hmac rows, and I places folders by parent chain, not by that hash (rows.ex at 24adf10f7)
+* note_folder_hash_null skipped-done-noreverify closed in phase 3 by OLD's @reboot walk over NEW's notes (asserted in hooks.sh); it nulls a note hash only when it equals the row's full_path_hmac, and J's NULL or stale hashes never do (the safe direction, per its moduledoc)
+* note_effective_dates skipped-done-noreverify done; note date columns, no folder hash
+* note_name skipped-done-noreverify done; note name columns, no folder hash
+selfhost folder_marker_delete skipped-disabled ships off on self-host (kill switch defaults off); on self-host the markers stay, which is the case NEW's boot stamp covers
+* key_aliases skipped-disabled runs only while the vector rebuild mode is on; touches note key aliases only, no folder table, so running it after a rollback meets nothing J changed
+* person_origin_backfill skipped-disabled needs the analytics keys (set in prod, not here); it only enqueues PersonOriginSync jobs (oban_jobs) and touches no folder or note table, so running it after a rollback meets nothing J changed
+* note_meta skipped-disabled note_meta_backfill override defaults off; prod's value NOT verified (a DB override, not in engram-infra); it reads notes, users and CRDT logs, no folder hash, so either value is safe for this pair
