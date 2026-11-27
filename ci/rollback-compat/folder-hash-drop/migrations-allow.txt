@@ -6,7 +6,8 @@
 # What K changes that J's migrations could meet: K drops folders.full_path_hmac
 # and its folders_full_path index (Engram.Release.FolderHashDrop). J stopped
 # every read and write of both (Engram.Folders.FullPathHmacRetiredTest at
-# 27d714512); none of J's DataMigrationsRunner modules names the column.
+# 27d714512); `git grep full_path_hmac 27d714512 -- lib` finds nothing, so no
+# J code at all (modules and the helpers they call) names the column.
 #
 # Format: <shape|*> <name before any ':'> <class> <reason>
 * index_versions skipped-done-noreverify done; reads chunk/index version stamps on notes, never the dropped column

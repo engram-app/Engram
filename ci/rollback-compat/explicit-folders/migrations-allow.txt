@@ -6,8 +6,9 @@
 #
 # What J changes that I's migrations could meet: J stops writing
 # folders.full_path_hmac (new rows NULL, renamed rows keep a stale hash) and
-# drops the notes_folder_name_live index (no column). Checked by grepping each
-# I module (24adf10f7) for full_path_hmac and folder_name_live.
+# drops the notes_folder_name_live index (no column). Checked by grepping the
+# text of each I module file (24adf10f7) for full_path_hmac and
+# folder_name_live; the helpers they call (Notes, Rows, ...) were NOT traced.
 #
 # Format: <shape|*> <name before any ':'> <class> <reason>
 * index_versions skipped-done-noreverify done; reads chunk/index version stamps on notes, neither full_path_hmac nor the dropped index

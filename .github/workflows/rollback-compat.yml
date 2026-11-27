@@ -216,6 +216,7 @@ jobs:
         run: |
           . "$RUNNER_TEMP/rbc-lib.sh"
           since=$(sql "SELECT now()")
+          echo "$since" > "$RUNNER_TEMP/phase3-since.txt"
           boot "$OLD_IMAGE"
           # OLD's @reboot DataMigrationsRunner job: wait for Oban to insert it
           # and for it to finish, so it cannot race the passes below.
@@ -254,7 +255,7 @@ jobs:
             if [ "$held" = true ]; then
               echo "fault vault-lock: every vault row held FOR UPDATE"
             else
-              echo "::error::fault vault-lock: the lock never landed"; exit 1
+              fail "fault vault-lock: the lock never landed"; exit 1
             fi
           fi
           # Every OLD data migration once through the runner's entry point,
@@ -278,6 +279,10 @@ jobs:
               fail "OLD data migration $short ended $class, not done and not on $allow"
             fi
           done < <(grep '^MIGRATION ' <<<"$out")
+          # Allowlist lines no result used: dead reasons must not carry forward.
+          awk -v s="$SHAPE" '$1 !~ /^#/ && NF >= 3 && ($1 == s || $1 == "*") {print $2, $3}' "$allow" | while read -r n c; do
+            grep -qE "^MIGRATION ${n//./\\.}(:[^ ]*)? $c$" <<<"$out" || echo "::warning::unused migrations-allow line: $n $c"
+          done
           hook_old_checks
           if [ "$FAULT" = vault-lock ]; then
             sql "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE query LIKE '%pg_sleep(600)%' AND pid <> pg_backend_pid()" >/dev/null
@@ -305,7 +310,7 @@ jobs:
           logs=("$LOGS/old-rollback.log" "$LOGS/rpc-old-rollback.log")
           # LoggerJSON severity, plain-text [error] (boot evals, crash
           # reports, rpc output), and the runner's warning-level failures.
-          pat='"severity":"(error|critical|alert|emergency)"|\[error\]|data migration (pass failed|summary failed|stuck)|vault skipped by the re-verify walk'
+          pat='"severity":"(error|critical|alert|emergency)"|\[error\]|data migration (pass failed|summary failed|stuck)|vault skipped by the re-verify walk|job failed'
           # prod shape: the app must not be on a role that bypasses RLS.
           if [ "$SHAPE" = prod ]; then pat="$pat|RLS NOT enforced"; fi
           errors=$(cat "${logs[@]}" | grep -cE "$pat" || true)
@@ -314,6 +319,13 @@ jobs:
             cat "${logs[@]}" | grep -E "$pat" | head -20
             fail "OLD logged $errors error lines after the rollback"
           fi
+          # OLD's background jobs that errored in phase 3, by worker and error
+          # kind against the pair's jobs-allow.txt; also every `Oban job
+          # attempt failed` / `discarded` warning line (check-jobs.py).
+          since=$(cat "$RUNNER_TEMP/phase3-since.txt")
+          sql "SELECT coalesce(json_agg(json_build_object('id', id, 'worker', worker, 'state', state, 'args', args, 'error', errors[array_length(errors, 1)]->>'error')), '[]') FROM oban_jobs WHERE array_length(errors, 1) > 0 AND attempted_at > '$since'" > "$RUNNER_TEMP/failed-jobs.json"
+          python3 ci/rollback-compat/check-jobs.py "$RUNNER_TEMP/failed-jobs.json" "$CHECKS_DIR/jobs-allow.txt" "$SHAPE" "${logs[@]}" \
+            || fail "OLD background jobs failed on NEW's data (see the errors above)"
           # The runner's own log, from the migrations rpc alone (not the
           # pair's reconcile rpc): a pass that ends :done always logs
           # `data migration pass`.

@@ -124,17 +124,21 @@ def seed_new(api_url: str, state: str, fault: str) -> None:
     merged = _id(client, "Merged")
     if merged_orig == merged_new or merged not in (merged_orig, merged_new):
         raise SystemExit(f"merge restore: Merged ids orig={merged_orig} new={merged_new} after={merged}")
-    # Rename merge (Rows.retire/2): an explicit folder renamed onto a path
-    # only a NESTED note occupies (a note directly in Dup makes the rename
-    # gate answer 409): Rows.rename/4 merges the subtree, and the implicit
-    # Dup row keeps it and takes the explicit flag.
+    # Rename merge (Rows.retire/2): an explicit folder holding a note renamed
+    # onto a path only a NESTED note occupies (a note directly in Dup makes
+    # the rename gate answer 409): Rows.rename/4 merges the subtree, its note
+    # moves under Dup, and the implicit Dup row takes the explicit flag.
     client.create_note("Dup/inner/x.md", "occupies Dup only below it")
     _expect("create Src", client.create_folder("Src"), (200, 201))
+    client.create_note("Src/a.md", "moves into Dup with the merge")
     src = _id(client, "Src")
     _expect("rename Src -> Dup (merge)", client.rename_folder("Src", "Dup"), (200,))
     dup = _id(client, "Dup")
     if dup == src:
         raise SystemExit(f"rename merge: Dup kept Src's id {src}, so nothing merged")
+    paths = {r["path"] for r in client.get_vault_tree().get("notes") or []}
+    if "Dup/a.md" not in paths or "Src/a.md" in paths:
+        raise SystemExit(f"rename merge: Src/a.md did not move under Dup ({sorted(p for p in paths if 'a.md' in p)})")
     # The workflow checks these rows in SQL: the survivor stamped, the other retired.
     data["merges"] = {
         "merge_restore": {"live": merged, "retired": merged_new if merged == merged_orig else merged_orig},
