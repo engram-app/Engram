@@ -35,7 +35,7 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 # Parse options match mdex_native 0.2.9 (the parser Sections used before
 # md_outline), so section boundaries did not move in the port. Pinned exactly:
 # check each bump's changelog for changes to the default (non-extension) parse.
-comrak = { version = "=0.59.0", default-features = false }
+comrak = { version = "=1.2.0", default-features = false }
 # Per-document keyword encode on a pool sized from the CPU quota (lib.rs
 # workers()); one worker, the sequential path, on prod's 0.5 vCPU task.
 rayon = "1"
