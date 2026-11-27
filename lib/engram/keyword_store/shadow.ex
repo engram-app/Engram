@@ -6,40 +6,82 @@ defmodule Engram.KeywordStore.Shadow do
   the search does not wait for it (a supervised task after the reply path).
 
   Runs only while reads stay on the sparse store (`KeywordStore.read/0`),
-  the feed is written, and `:keyword_shadow_rate` (`KEYWORD_SHADOW_RATE`,
-  0 to 1, default 0: off) picks the search. Each sample costs one extra
-  keyword-only query on each store.
+  the feed is written, and `:keyword_shadow_permille` (`KEYWORD_SHADOW_RATE`
+  at boot, a runtime override after; default 0: off) picks the search. Each
+  sample costs one extra keyword-only query on each store: at most
+  #{4} run at once (else the sample is dropped), and the sparse one goes
+  through the same concurrency gate and pool check as a live search
+  (`Engram.Search.Gate`), so a busy pool drops the sample (outcome `busy`)
+  rather than queueing behind live traffic (review M2).
 
   Emits `[:engram, :search, :keyword_shadow]` with `overlap` (share of the
   sparse top 10 that kwsearch also returned, 1.0 when both are empty; also
   as a whole percent, `overlap_pct`, for `Engram.PromEx.Search`),
-  `tantivy_ms` and `sparse_ms`, tagged `outcome`: `ok`, or `error` when
-  either leg failed (kwsearch down or rebuilding counts here, not in the
+  `tantivy_ms` and `sparse_ms`, tagged `outcome`: `ok`, `busy` (the sparse
+  leg was refused by the gate), or `error` when either leg failed (kwsearch down or rebuilding counts here, not in the
   live fallback counter).
   """
 
   alias Engram.KeywordStore
   alias Engram.KeywordStore.Tantivy
+  alias Engram.Search.Gate
   alias Engram.ServiceConfig
 
   @top 10
+  @max_in_flight 4
+  @slots {__MODULE__, :in_flight}
 
   @doc "Starts a compare for this search when sampled; never blocks or fails it."
   @spec maybe_compare(map(), keyword()) :: :ok
   def maybe_compare(sparse, search_opts) do
-    rate = ServiceConfig.get(:keyword_shadow_rate, 0.0)
+    permille = ServiceConfig.get(:keyword_shadow_permille, 0)
 
-    if rate > 0 and KeywordStore.read() == :sparse and KeywordStore.feed?() and
-         :rand.uniform() <= rate,
+    if permille > 0 and KeywordStore.read() == :sparse and KeywordStore.feed?() and
+         :rand.uniform(1000) <= permille,
        do: start(sparse, search_opts),
        else: :ok
   end
 
+  # A slot, then a supervised task that gives it back. No slot, or no task
+  # (the supervisor shutting down): the sample is dropped, never a raise
+  # inside the live search.
   defp start(sparse, search_opts) do
-    {:ok, _pid} =
-      Task.Supervisor.start_child(Engram.TaskSupervisor, fn -> compare(sparse, search_opts) end)
+    slots = slots()
 
+    if :atomics.add_get(slots, 1, 1) <= @max_in_flight do
+      case Task.Supervisor.start_child(Engram.TaskSupervisor, fn ->
+             try do
+               compare(sparse, search_opts)
+             after
+               :atomics.sub(slots, 1, 1)
+             end
+           end) do
+        {:ok, _pid} -> :ok
+        _ -> release(slots)
+      end
+    else
+      release(slots)
+    end
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp release(slots) do
+    :atomics.sub(slots, 1, 1)
     :ok
+  end
+
+  @doc false
+  def slots do
+    case :persistent_term.get(@slots, nil) do
+      nil ->
+        ref = :atomics.new(1, [])
+        :persistent_term.put(@slots, ref)
+        ref
+
+      ref ->
+        ref
+    end
   end
 
   @doc "Runs both keyword legs for one search and emits the compare."
@@ -47,11 +89,19 @@ defmodule Engram.KeywordStore.Shadow do
   def compare(sparse, search_opts) do
     opts = Keyword.put(search_opts, :limit, @top)
     {t_us, tantivy} = :timer.tc(fn -> Tantivy.keyword_hits(sparse, opts) end)
-    {s_us, qdrant} = :timer.tc(fn -> KeywordStore.impl().search(sparse, opts) end)
+    user_id = Keyword.fetch!(opts, :user_id)
+
+    {s_us, sparse_hits} =
+      :timer.tc(fn ->
+        Gate.run(user_id, fn ->
+          Gate.pool_busy(:qdrant, fn -> KeywordStore.impl().search(sparse, opts) end)
+        end)
+      end)
 
     {outcome, overlap} =
-      case {tantivy, qdrant} do
+      case {tantivy, sparse_hits} do
         {{:ok, t}, {:ok, q}} -> {:ok, overlap(ids(t), ids(q))}
+        {_, {:error, :search_busy}} -> {:busy, 0.0}
         _ -> {:error, 0.0}
       end
 

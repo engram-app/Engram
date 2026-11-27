@@ -19,8 +19,10 @@ defmodule Engram.KeywordStore.Tantivy.Bulk do
       note, and kwsearch drops a batch note older than the note's applied
       stamp (`Shard::bulk`), deletes included.
     * the batch carries `xmax` of the reading snapshot (feed marker expiry)
-      and its read time: kwsearch refuses a batch older than an hour, the
-      time it keeps a note's applied stamp after the feed no longer needs it.
+      and its age on this node's monotonic clock (no wall clock crosses
+      hosts): kwsearch refuses a batch older than an hour, the time it keeps
+      a note's applied stamp after the feed no longer needs it, and asks
+      again under its shard lock.
     * a user or vault deleted after the read is dropped against its
       tombstone in kwsearch.
 
@@ -41,7 +43,7 @@ defmodule Engram.KeywordStore.Tantivy.Bulk do
 
   require Logger
 
-  # One request's body budget and note count (kwsearch caps at 16 MiB and
+  # One request's body budget and note count (kwsearch caps at 64 MiB and
   # 1,000 notes); a note bigger than the budget goes alone, in parts.
   @batch_bytes 2_000_000
   @batch_notes 500
@@ -66,7 +68,7 @@ defmodule Engram.KeywordStore.Tantivy.Bulk do
 
   def push(user, note_ids, vaults) do
     user_id = to_string(user.id)
-    read_at = System.system_time(:second)
+    read_at = System.monotonic_time(:millisecond)
     read = read(user_id, note_ids)
 
     {notes, skipped} =
@@ -83,9 +85,18 @@ defmodule Engram.KeywordStore.Tantivy.Bulk do
     |> batches()
     |> Enum.reduce_while({:ok, %{applied: 0, stale: 0, tomb: 0, skipped: skipped}}, fn batch,
                                                                                        {:ok, acc} ->
-      case Client.bulk(user_id, read_at, batch) do
-        {:ok, got} -> {:cont, {:ok, add(acc, got)}}
-        {:error, _} = error -> {:halt, error}
+      case Client.bulk(user_id, System.monotonic_time(:millisecond) - read_at, batch) do
+        {:ok, got} ->
+          {:cont, {:ok, add(acc, got)}}
+
+        # Over kwsearch's body cap (a note of millions of chunks): its notes
+        # are skipped and counted, never a halt of the user's walk; a later
+        # part of a skipped note applies nothing (`cont`).
+        {:error, {:kwsearch_status, 413}} ->
+          {:cont, {:ok, %{acc | skipped: acc.skipped + length(batch)}}}
+
+        {:error, _} = error ->
+          {:halt, error}
       end
     end)
   end
@@ -167,9 +178,9 @@ defmodule Engram.KeywordStore.Tantivy.Bulk do
     end
   end
 
-  # A note as request parts at one stamp: every part names the full point
-  # set, so kwsearch applies the first and treats the rest as its
-  # continuation (equal stamp).
+  # A note as request parts at one stamp: the first names the full point
+  # set, the rest (`cont`) only add docs on top of it, so a huge note's point
+  # set is sent once (review L7).
   defp parts(%{docs: docs} = n) do
     head = %{
       vault: n.vault,
@@ -192,7 +203,11 @@ defmodule Engram.KeywordStore.Tantivy.Bulk do
       end,
       fn {acc, _} -> {:cont, Enum.reverse(acc), nil} end
     )
-    |> Enum.map(&Map.put(head, :docs, &1))
+    |> Enum.with_index(fn docs, i ->
+      if i == 0,
+        do: Map.put(head, :docs, docs),
+        else: %{head | keep_b64: ""} |> Map.merge(%{docs: docs, cont: true})
+    end)
   end
 
   defp batches(parts) do

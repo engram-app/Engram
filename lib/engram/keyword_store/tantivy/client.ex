@@ -91,18 +91,19 @@ defmodule Engram.KeywordStore.Tantivy.Client do
   end
 
   @doc """
-  One user's bulk batch (`Engram.KeywordStore.Tantivy.Bulk`): `read_at` is
-  the unix second the rows were read under their note locks; kwsearch refuses
-  a batch older than an hour (`{:error, {:kwsearch_status, 409}}`).
+  One user's bulk batch (`Engram.KeywordStore.Tantivy.Bulk`): `age_ms` is
+  how long ago (this node's monotonic clock) the rows were read under their
+  note locks; kwsearch refuses a batch older than an hour
+  (`{:error, {:kwsearch_status, 409}}`).
   """
-  @spec bulk(String.t(), integer(), [map()]) :: {:ok, map()} | {:error, term()}
-  def bulk(user_id, read_at, notes) do
+  @spec bulk(String.t(), non_neg_integer(), [map()]) :: {:ok, map()} | {:error, term()}
+  def bulk(user_id, age_ms, notes) do
     with :ok <- configured(),
          {:ok, req} <- req() do
       req
       |> Req.post(
         url: "/bulk",
-        json: %{gen: @gen, read_at: read_at, notes: notes},
+        json: %{gen: @gen, age_ms: age_ms, notes: notes},
         auth: {:bearer, Token.bulk(user_id, signing_key())},
         receive_timeout: 60_000
       )
@@ -112,15 +113,15 @@ defmodule Engram.KeywordStore.Tantivy.Client do
 
   @doc """
   One page of the user's indexed notes: `[{note_id, vault_id, doc_count}]`
-  by note id, after `after` (nil: from the start).
+  by note id, after `after_id` and up to `until_id` (inclusive; nil: no
+  bound).
   """
-  @spec notes(String.t(), String.t() | nil, pos_integer()) ::
+  @spec notes(String.t(), String.t() | nil, String.t() | nil, pos_integer()) ::
           {:ok, [{String.t(), String.t(), non_neg_integer()}]} | {:error, term()}
-  def notes(user_id, after_id, limit) do
+  def notes(user_id, after_id, until_id, limit) do
     body =
-      if after_id,
-        do: %{gen: @gen, after: after_id, limit: limit},
-        else: %{gen: @gen, limit: limit}
+      %{gen: @gen, after: after_id, until: until_id, limit: limit}
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
     with :ok <- configured(),
          {:ok, req} <- req(),

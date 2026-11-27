@@ -19,13 +19,13 @@ defmodule Engram.RuntimeConfigTest do
       assert cfg[:keyword_feed] == true and cfg[:keyword_read] == :sparse
       assert cfg[:kwsearch][:token_keys] == [@cur, @next], "keys are trimmed"
       assert cfg[:kwsearch][:feed_max_age_h] == 48, "the F2 horizon (Todd 2026-11-26)"
-      assert cfg[:keyword_shadow_rate] == 0.0, "the shadow compare is off by default"
+      assert cfg[:keyword_shadow_permille] == 0, "the shadow compare is off by default"
     end
 
     test "KEYWORD_SHADOW_RATE: a share from 0 to 1, anything else refuses to boot" do
       on = Map.put(@kw, "KEYWORD_FEED", "on")
       cfg = RuntimeConfig.keyword_store(getenv(Map.put(on, "KEYWORD_SHADOW_RATE", "0.05")))
-      assert cfg[:keyword_shadow_rate] == 0.05
+      assert cfg[:keyword_shadow_permille] == 50
 
       for bad <- ~w(1.5 -0.1 lots) do
         assert_raise RuntimeError, ~r/KEYWORD_SHADOW_RATE/, fn ->

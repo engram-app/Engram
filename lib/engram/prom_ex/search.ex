@@ -72,6 +72,7 @@ defmodule Engram.PromEx.Search do
   @degraded_event [:engram, :search, :degraded]
   @keyword_fallback_event [:engram, :search, :keyword_fallback]
   @keyword_shadow_event [:engram, :search, :keyword_shadow]
+  @keyword_reconcile_event [:engram, :keyword_reconcile, :run]
   @feed_trim_event [:engram, :keyword_feed, :trim]
   @hit_dropped_event [:engram, :search, :hit_dropped]
   @text_missing_event [:engram, :search, :text_missing]
@@ -191,6 +192,28 @@ defmodule Engram.PromEx.Search do
           event_name: @keyword_shadow_event,
           description: "Shadow compares of the kwsearch keyword leg, by outcome.",
           tags: [:outcome]
+        ),
+        # The kwsearch reconcile (`ReconcileKeywordIndex`): runs by outcome
+        # (`halted` is a walk stopped on an error, rotation or kwsearch), and
+        # notes pushed and skipped. A walk that skips notes never tells
+        # kwsearch it is rebuilt: alert on skipped > 0 and on halted runs.
+        counter(
+          metric_prefix ++ [:keyword_reconcile_runs, :total],
+          event_name: @keyword_reconcile_event,
+          description: "kwsearch reconcile runs, by outcome and walk mode.",
+          tags: [:outcome, :mode]
+        ),
+        sum(
+          metric_prefix ++ [:keyword_reconcile_pushed, :total],
+          event_name: @keyword_reconcile_event,
+          measurement: :pushed,
+          description: "Notes the kwsearch reconcile pushed through /bulk."
+        ),
+        sum(
+          metric_prefix ++ [:keyword_reconcile_skipped, :total],
+          event_name: @keyword_reconcile_event,
+          measurement: :skipped,
+          description: "Notes the kwsearch reconcile skipped (unreadable or over the body cap)."
         ),
         distribution(
           metric_prefix ++ [:keyword_shadow_overlap, :percent],

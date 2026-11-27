@@ -191,17 +191,18 @@ defmodule Engram.RuntimeConfig do
       do: [
         keyword_feed: true,
         keyword_read: read,
-        keyword_shadow_rate: shadow_rate(getenv.("KEYWORD_SHADOW_RATE")),
+        keyword_shadow_permille: shadow_permille(getenv.("KEYWORD_SHADOW_RATE")),
         kwsearch: kwsearch(getenv)
       ],
       else: []
   end
 
   # Share of searches whose keyword leg also runs on kwsearch, compared and
-  # never served (P2 task 8). 0 (unset) is off.
-  defp shadow_rate(raw) do
+  # never served (P2 task 8), as per mille (the runtime override's type,
+  # `:keyword_shadow_permille`). 0 (unset) is off.
+  defp shadow_permille(raw) do
     case Float.parse(raw || "0") do
-      {rate, ""} when rate >= 0 and rate <= 1 -> rate
+      {rate, ""} when rate >= 0 and rate <= 1 -> round(rate * 1000)
       _ -> raise "KEYWORD_SHADOW_RATE must be a number from 0 to 1, got: #{inspect(raw)}"
     end
   end

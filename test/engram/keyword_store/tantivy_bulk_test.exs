@@ -10,6 +10,8 @@ defmodule Engram.KeywordStore.TantivyBulkTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  import Bitwise
+
   import Engram.RlsCase
   import Mox
 
@@ -66,7 +68,12 @@ defmodule Engram.KeywordStore.TantivyBulkTest do
 
   # kwsearch stub: `/notes` answers `listing` (`[[note, vault, count]]`),
   # `/bulk` records each request body, `/cursor` reports `epoch`.
-  defp kwsearch(kw, listing \\ [], epoch \\ %{"epoch" => "e1", "rebuilding" => true}) do
+  defp kwsearch(
+         kw,
+         listing \\ [],
+         epoch \\ %{"epoch" => "e1", "rebuilding" => true},
+         status \\ 200
+       ) do
     test_pid = self()
 
     Bypass.stub(kw, :any, :any, fn conn ->
@@ -75,6 +82,9 @@ defmodule Engram.KeywordStore.TantivyBulkTest do
       body = if raw == "", do: nil, else: Jason.decode!(raw)
 
       case conn.request_path do
+        "/bulk" when status != 200 ->
+          json(conn, status, %{"error" => "too_large"})
+
         "/bulk" ->
           send(test_pid, {:bulk, token, body})
           notes = length(body["notes"])
@@ -173,6 +183,18 @@ defmodule Engram.KeywordStore.TantivyBulkTest do
       assert {:returned, read} = as_prod_role(fn -> Bulk.read(to_string(user.id), [note.id]) end)
       assert Map.has_key?(read.notes, note.id)
       assert length(Map.fetch!(read.rows, note.id)) == length(chunk_points(note))
+    end
+
+    test "CONTROL: another user's read of this user's note sees no note and no rows (M6)", %{
+      user: user,
+      vault: vault
+    } do
+      note = indexed_note!(user, vault, "Iron.md", "# Iron\n\nFerritin levels are low.")
+      assert chunk_points(note) != [], "precondition: the note has rows"
+      {:ok, other} = insert(:user) |> Engram.Crypto.ensure_user_dek()
+
+      assert {:returned, read} = as_prod_role(fn -> Bulk.read(to_string(other.id), [note.id]) end)
+      assert read.notes == %{} and read.rows == %{}
     end
 
     test "CONTROL: engram_app with no tenant sees zero chunk and note rows", %{
@@ -279,6 +301,62 @@ defmodule Engram.KeywordStore.TantivyBulkTest do
       # A day later: a diff walk.
       assert ReconcileKeywordIndex.run(%{id: "e2", rebuilding: false}, 3_000 + 86_400) == :done
       refute_received {:rebuilt, _}
+    end
+
+    test "kwsearch still rebuilding after a finished walk gets a new full walk, not a bare rebuilt (M4)",
+         %{kw: kw, user: user, vault: vault} do
+      _ = indexed_note!(user, vault, "A.md", "# A\n\nFerritin.")
+      kwsearch(kw)
+      assert ReconcileKeywordIndex.run(%{id: "e1", rebuilding: true}, 1_000) == :done
+      assert_received {:rebuilt, "e1"}
+      assert [_ | _] = pushed_notes()
+
+      # A snapshot from before the load ended: same epoch, rebuilding again.
+      assert ReconcileKeywordIndex.run(%{id: "e1", rebuilding: true}, 1_100) == :done
+      assert [_ | _] = pushed_notes(), "the reload pushed nothing"
+      assert_received {:rebuilt, "e1"}
+    end
+
+    test "a walk that skipped notes never says rebuilt (L2)", %{kw: kw, user: user, vault: vault} do
+      _ = indexed_note!(user, vault, "A.md", "# A\n\nFerritin.")
+      kwsearch(kw, [], %{"epoch" => "e1", "rebuilding" => true}, 413)
+      assert ReconcileKeywordIndex.run(%{id: "e1", rebuilding: true}, 1_000) == :done
+      refute_received {:rebuilt, _}
+      assert %{"skipped" => 1} = Cursor.get("keyword_reconcile")
+      # Not straight again (it waits a day), then a full walk.
+      assert ReconcileKeywordIndex.run(%{id: "e1", rebuilding: true}, 1_100) == :idle
+    end
+
+    test "a page resumes mid user once the job budget is spent (H2)", %{
+      kw: kw,
+      user: user,
+      vault: vault
+    } do
+      notes =
+        for n <- ~w(A B C), do: indexed_note!(user, vault, "#{n}.md", "# #{n}\n\nFerritin #{n}.")
+
+      kwsearch(kw)
+      [first | rest] = notes |> Enum.map(& &1.id) |> Enum.sort()
+      # One note per read group, and the budget is spent after the first.
+      budget = %{bytes: 1, until: System.monotonic_time(:millisecond) + 60_000, read_bytes: 1}
+
+      assert {:ok, ^first, _budget, %{pushed: 1}} =
+               ReconcileKeywordIndex.sync_page(to_string(user.id), "full", nil, budget)
+
+      assert [%{"note" => ^first}] = pushed_notes()
+      budget = %{budget | bytes: 1 <<< 40}
+
+      assert {:ok, :end, _budget, %{pushed: 2}} =
+               ReconcileKeywordIndex.sync_page(to_string(user.id), "full", first, budget)
+
+      assert Enum.sort(Enum.map(pushed_notes(), & &1["note"])) == rest
+    end
+
+    test "one queued walk at a time, whatever its args (M7)" do
+      assert {:ok, %Oban.Job{conflict?: false}} = Oban.insert(ReconcileKeywordIndex.new(%{}))
+
+      assert {:ok, %Oban.Job{conflict?: true}} =
+               Oban.insert(ReconcileKeywordIndex.new(%{"hop" => 2}))
     end
 
     test "a user mid DEK rotation halts the walk before it can report done", %{
@@ -393,7 +471,7 @@ defmodule Engram.KeywordStore.TantivyBulkTest do
     end
 
     test "off by default: no compare runs, the search is unchanged", %{opts: opts} do
-      assert ServiceConfig.get(:keyword_shadow_rate, 0.0) == 0.0
+      assert ServiceConfig.get(:keyword_shadow_permille, 0) == 0
       assert :ok = Shadow.maybe_compare(%{indices: [1], values: [1.0]}, opts)
       refute_receive {:shadow, _, _}, 50
     end

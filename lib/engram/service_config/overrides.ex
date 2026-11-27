@@ -67,6 +67,10 @@ defmodule Engram.ServiceConfig.Overrides do
     tenant_idf: :boolean,
     index_rebuild: {:enum, ~w(off dry_run on)},
     keyword_refresh: :boolean,
+    # The kwsearch reconcile's kill switch, and the shadow compare's sample
+    # rate in per mille (search storage roadmap P2; review M1).
+    keyword_reconcile: :boolean,
+    keyword_shadow_permille: {:integer, 0..1000},
     keyword_refresh_backlog: {:integer, 0..1_000_000},
     # The `n` backfill (`ReconcileNotePayloads`): kill switch and pace.
     payload_backfill: :boolean,
