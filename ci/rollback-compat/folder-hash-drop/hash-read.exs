@@ -6,7 +6,14 @@
 sql = "SELECT full_path_hmac FROM folders LIMIT 1"
 
 if fault == "hash-read" do
-  pid = spawn(fn -> Engram.Repo.query!(sql) end)
+  # The node's own group leader: with the rpc caller's, logger forwards the
+  # crash report to the short-lived rpc node and the app log never shows it
+  # (run 45931519107 went green that way).
+  pid =
+    spawn(fn ->
+      Process.group_leader(self(), Process.whereis(:user))
+      Engram.Repo.query!(sql)
+    end)
   ref = Process.monitor(pid)
   receive do
     {:DOWN, ^ref, _, _, :normal} -> IO.puts("HASH_READ_PROCESS=normal")
