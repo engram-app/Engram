@@ -29,7 +29,7 @@ for m <- ms do
       other -> "other:#{inspect(other)}"
     end
 
-  IO.puts("MIGRATION #{m.name()} #{class}")
+  IO.puts("MIGRATION #{m.name()} #{class} v#{m.version()}")
 end
 
 IO.puts("MIGRATIONS_END")

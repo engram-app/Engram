@@ -269,9 +269,16 @@ jobs:
             || fail "OLD's runner loop ran $ran of ${total:-?} migrations"
           grep '^MIGRATION ' <<<"$out" | awk '{print $3}' | sort | uniq -c | sed 's/^/  results: /'
           allow="$CHECKS_DIR/migrations-allow.txt"
-          while read -r _ name class; do
+          while read -r _ name class ver; do
             short=${name%%:*}
             if [ "$class" = done ]; then echo "  $short: done"; continue; fi
+            # A skip is benign only on a closed ledger: read the row itself,
+            # not the runner's cached view.
+            if [ "$class" = skipped-done-noreverify ] && \
+               [ "$(sql "SELECT count(*) FROM data_migrations WHERE name = '$name' AND version >= ${ver#v} AND completed_at IS NOT NULL")" -lt 1 ]; then
+              fail "OLD data migration $short was skipped as done, but its ledger row is not closed"
+              continue
+            fi
             reason=$(awk -v s="$SHAPE" -v n="$short" -v c="$class" '$1 !~ /^#/ && ($1 == s || $1 == "*") && $2 == n && $3 == c {$1=$2=$3=""; sub(/^ +/, ""); print; exit}' "$allow" 2>/dev/null)
             if [ -n "$reason" ]; then
               echo "  $short: $class (allowed: $reason)"
@@ -281,7 +288,7 @@ jobs:
           done < <(grep '^MIGRATION ' <<<"$out")
           # Allowlist lines no result used: dead reasons must not carry forward.
           awk -v s="$SHAPE" '$1 !~ /^#/ && NF >= 3 && ($1 == s || $1 == "*") {print $2, $3}' "$allow" | while read -r n c; do
-            grep -qE "^MIGRATION ${n//./\\.}(:[^ ]*)? $c$" <<<"$out" || echo "::warning::unused migrations-allow line: $n $c"
+            grep -qE "^MIGRATION ${n//./\\.}(:[^ ]*)? $c( |$)" <<<"$out" || echo "::warning::unused migrations-allow line: $n $c"
           done
           hook_old_checks
           if [ "$FAULT" = vault-lock ]; then
@@ -329,7 +336,7 @@ jobs:
           # The runner's own log, from the migrations rpc alone (not the
           # pair's reconcile rpc): a pass that ends :done always logs
           # `data migration pass`.
-          want=$(grep -c '^MIGRATION .* done$' "$RUNNER_TEMP/migrations-rpc.txt" || true)
+          want=$(grep -cE '^MIGRATION [^ ]+ done( |$)' "$RUNNER_TEMP/migrations-rpc.txt" || true)
           got=$(grep -cE '\[info\] data migration pass$|"message":"data migration pass"' "$RUNNER_TEMP/migrations-rpc.txt" || true)
           echo "runner: $want done results, $got 'data migration pass' log lines"
           [ "$want" -ge 1 ] || fail "OLD's runner returned no done pass"
