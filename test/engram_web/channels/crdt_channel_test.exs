@@ -130,7 +130,8 @@ defmodule EngramWeb.CrdtChannelTest do
     for {label, join} <- [
           {"an old plugin gets create_failed", :old},
           {"a caps=name_taken plugin gets id_conflict", :caps},
-          {"the web app gets id_conflict", :web}
+          {"an old web bundle (no caps) gets create_failed", :web},
+          {"a caps=name_taken web bundle gets id_conflict", :web_caps}
         ] do
       test "tombstoned id resurrected onto an OCCUPIED path: #{label}", %{
         user: user,
@@ -153,7 +154,7 @@ defmodule EngramWeb.CrdtChannelTest do
         id = gone.id
         ref = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/taken.md"})
 
-        if unquote(join) == :old do
+        if unquote(join) in [:old, :web] do
           assert_reply ref, :error, %{reason: "create_failed"}
         else
           assert_reply ref, :error, %{reason: "id_conflict", doc_id: ^id}
@@ -4414,13 +4415,18 @@ defmodule EngramWeb.CrdtChannelTest do
   end
 
   # A second crdt join for `user`: `:old` (a released plugin, no caps),
-  # `:caps` (connected with caps=name_taken) or `:web` (the web app's
-  # client_type).
+  # `:caps` (connected with caps=name_taken), `:web` (the web app's
+  # client_type, an older bundle with no caps) or `:web_caps` (a bundle that
+  # sends caps=name_taken).
   defp join_as(user, vault, kind) do
-    assigns = %{current_user: user, current_api_key: nil, name_taken_terminal: kind == :caps}
+    assigns = %{
+      current_user: user,
+      current_api_key: nil,
+      name_taken_terminal: kind in [:caps, :web_caps]
+    }
 
     params =
-      if kind == :web,
+      if kind in [:web, :web_caps],
         do: %{"crdt_proto" => 2, "client_type" => "web"},
         else: %{"crdt_proto" => 2}
 

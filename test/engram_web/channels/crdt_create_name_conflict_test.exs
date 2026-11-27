@@ -2,9 +2,10 @@ defmodule EngramWeb.CrdtCreateNameConflictTest do
   # A crdt_create at a path whose folder row and name another live note holds
   # (`notes_name_live`, a stale name key) is a taken name, never a crashed
   # channel or a re-mint. A client that handles a taken name (caps=name_taken,
-  # or the web app, which name-bumps on either reply) gets `id_conflict`; a
-  # released plugin keeps `create_failed`, as for a path index refusal,
-  # because it drops an `id_conflict` create silently.
+  # plugin or web bundle) gets `id_conflict`; anything else keeps
+  # `create_failed`, as for a path index refusal: a released plugin drops an
+  # `id_conflict` create silently, and an older web bundle name-bumps only on
+  # `create_failed`.
   use EngramWeb.ChannelCase, async: false
 
   import ExUnit.CaptureLog
@@ -29,17 +30,18 @@ defmodule EngramWeb.CrdtCreateNameConflictTest do
   for {label, kind, want} <- [
         {"an old plugin gets create_failed", :old, "create_failed"},
         {"a caps=name_taken plugin gets id_conflict", :caps, "id_conflict"},
-        {"the web app gets id_conflict", :web, "id_conflict"}
+        {"an old web bundle (no caps) gets create_failed", :web, "create_failed"},
+        {"a caps=name_taken web bundle gets id_conflict", :web_caps, "id_conflict"}
       ] do
     test "crdt_create at a notes_name_live holder: #{label}", %{user: user, vault: vault} do
       assigns = %{
         current_user: user,
         current_api_key: nil,
-        name_taken_terminal: unquote(kind) == :caps
+        name_taken_terminal: unquote(kind) in [:caps, :web_caps]
       }
 
       params =
-        if unquote(kind) == :web,
+        if unquote(kind) in [:web, :web_caps],
           do: %{"crdt_proto" => 2, "client_type" => "web"},
           else: %{"crdt_proto" => 2}
 
