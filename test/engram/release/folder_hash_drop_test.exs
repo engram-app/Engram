@@ -121,6 +121,20 @@ defmodule Engram.Release.FolderHashDropTest do
     assert ledger() == true
   end
 
+  # The step reads the migration's DDL by parsing the file. Loading it
+  # would evaluate code (sobelow RCE.Compile) and re-require
+  # lock_timeout_retry.exs, which the migrator already compiled: "redefining
+  # module", fatal under --warnings-as-errors.
+  test "drops without loading the migration module" do
+    mod = Engram.Repo.Migrations.DropFolderPathHashDrops
+    :code.purge(mod)
+    :code.delete(mod)
+
+    assert run() == :done
+    assert present() == {0, 0}
+    refute :code.is_loaded(mod)
+  end
+
   test "a done ledger: later runs skip without touching the table" do
     assert run() == :done
     unboxed(fn -> Repo.query!("ALTER TABLE folders ADD COLUMN full_path_hmac bytea") end)

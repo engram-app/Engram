@@ -3,7 +3,8 @@ defmodule Engram.Release.FolderHashDrop do
   Release K's owner-run boot step (S6 step 3, Engram#2523): drops the
   folder path hash index, then its column, with the statements of migration
   20261126100000 (kept there so the migration-gates reference check sees
-  the drop, and `lib/` never names the column). `Engram.Release.migrate/0`
+  the drop, and `lib/` never names the column; the step parses the file
+  for them, it never loads it). `Engram.Release.migrate/0`
   runs it after the migrations, on the same migrator connection and inside
   the same migration lock.
 
@@ -31,7 +32,7 @@ defmodule Engram.Release.FolderHashDrop do
   @name "folder_path_hash_drop"
   @version 1
   @flag :folder_path_hash_drop
-  @migration_version 20_261_126_100_000
+  @migration_file "priv/repo/migrations/20261126100000_drop_folder_path_hash_drops.exs"
   @flags_timeout_ms 3_000
   @lock_timeout "5s"
   @statement_timeout_ms 30_000
@@ -91,7 +92,7 @@ defmodule Engram.Release.FolderHashDrop do
           repo.query!("SET statement_timeout = #{@statement_timeout_ms}")
 
           try do
-            Enum.reduce_while(statements(repo), :ok, fn sql, :ok ->
+            Enum.reduce_while(statements(), :ok, fn sql, :ok ->
               case repo.query(sql, [], timeout: @statement_timeout_ms + 5_000) do
                 {:ok, _} -> {:cont, :ok}
                 {:error, e} -> {:halt, {:error, e}}
@@ -121,26 +122,33 @@ defmodule Engram.Release.FolderHashDrop do
     end
   end
 
-  # The drops migration's own statements (it is applied by now; once
-  # applied Ecto does not load it again, so load it here).
-  defp statements(repo) do
-    migration = migration()
+  # The drops migration's `@statements` literals, read by parsing the file,
+  # never by evaluating it: loading a migration runs code (sobelow
+  # RCE.Compile) and re-requires its helper `lock_timeout_retry.exs`, which
+  # the migrator has already compiled ("redefining module"). The migration
+  # stays the one source of the DDL, where the migration-gates check reads it.
+  # A fixed path under the app's priv (Ecto.Migrator.migrations_path/1's
+  # default, which the repo keeps): a literal suffix, nothing outside the
+  # release picks the file. Pinned in .sobelow-skips (Traversal.FileModule).
+  defp statements do
+    path = Application.app_dir(:engram, @migration_file)
 
-    unless Code.ensure_loaded?(migration) do
-      [path] =
-        Path.wildcard(
-          Path.join(Ecto.Migrator.migrations_path(repo), "#{@migration_version}_*.exs")
-        )
+    {_, found} =
+      path
+      |> File.read!()
+      |> Code.string_to_quoted!(file: path)
+      |> Macro.prewalk([], fn
+        {:@, _, [{:statements, _, [list]}]} = node, acc when is_list(list) -> {node, [list | acc]}
+        node, acc -> {node, acc}
+      end)
 
-      Code.require_file(path)
+    case found do
+      [[_ | _] = sqls] -> if Enum.all?(sqls, &is_binary/1), do: sqls, else: bad(path)
+      _ -> bad(path)
     end
-
-    migration.statements()
   end
 
-  # A call, not a literal at the call site: the module is a migration file,
-  # not compiled with lib/, so a literal remote call would be an undefined-module warning.
-  defp migration, do: :"Elixir.Engram.Repo.Migrations.DropFolderPathHashDrops"
+  defp bad(path), do: raise("#{path}: expected one @statements list of string literals")
 
   defp deferred(reason) do
     Logger.warning(

@@ -8,7 +8,7 @@ defmodule Engram.Repo.Migrations.DropFolderPathHashDrops do
   `folders.full_path_hmac`. Release J stopped every read and write of both
   (`Engram.Folders.FullPathHmacRetiredTest`) and the rollback floor is J.
 
-  `up` is a no-op guard. The DDL is `statements/0`, run AFTER the migrations
+  `up` is a no-op guard. The DDL is `@statements`, run AFTER the migrations
   by `Engram.Release.FolderHashDrop` (from `Engram.Release.migrate/0`, on the
   same migrator connection), which can never fail or block boot: a lock it
   cannot get in 5 s is a warning, its ledger stays open and the next boot
@@ -20,8 +20,9 @@ defmodule Engram.Repo.Migrations.DropFolderPathHashDrops do
   contract-references check (`mix engram.migration_drops`) reads the string
   literals of a migration's up side, maps `ALTER TABLE folders DROP COLUMN
   IF EXISTS full_path_hmac` to `column folders full_path_hmac`, and fails if
-  `lib/` still names the column. `lib/` stays free of it: the boot step runs
-  these strings by loading this file.
+  `lib/` still names the column. `lib/` stays free of it: the boot step parses
+  this file for the `@statements` literals (it never loads it), so keep them
+  one literal list.
 
   Skip-release safe on a single-node install: J's boot migration
   20261125100100, the last reader of the column, runs in the same batch,
