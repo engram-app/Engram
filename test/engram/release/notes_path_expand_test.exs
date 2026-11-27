@@ -599,6 +599,13 @@ defmodule Engram.Release.NotesPathExpandTest do
       assert log =~ ~r/category=boot loki_ship=true notes_shape_relax flags read source=none/
     end
 
+    # A build creeping toward the budget shows before it starts deferring.
+    test "each step's outcome line carries its elapsed time" do
+      log = capture_log([level: :info], fn -> run() end)
+      assert log =~ ~r/notes_shape_relax done elapsed_ms=\d+/
+      assert log =~ ~r/notes_manifest_name_build done elapsed_ms=\d+/
+    end
+
     test "a done step reads no flags and logs nothing" do
       flags_file!(%{"notes_name_unique_build" => true})
       assert Enum.all?(run(), fn {_, r} -> r == :done end)

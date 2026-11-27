@@ -73,9 +73,14 @@ defmodule Engram.Release.BootStep do
   @cleanup_ms 5_000
 
   @doc """
-  One task's longest boot-step time: the flags read, the budget, and one
-  cleanup drop past it. The migration lock serializes a deploy's tasks, so
-  the last of three can wait for two others before its own.
+  A bound on one task's boot-step time: the budget and one cleanup drop
+  past it (20 s), plus the flags read counted again (it runs inside the
+  budget, so a slow source takes its time from the steps; adding it keeps
+  the bound conservative). The migration lock serializes a deploy's tasks,
+  so the last of three can wait for two others before its own. Accepted
+  slack: each statement's client timeout is 5 s past its server
+  `statement_timeout`, so a Postgres that ignored the latter could run one
+  statement 5 s over.
   """
   # No @spec: dialyzer's :underspecs flags `pos_integer()` against the literal.
   def worst_case_ms, do: @flags_timeout_ms + @budget_ms + @cleanup_ms
@@ -120,13 +125,17 @@ defmodule Engram.Release.BootStep do
     kind, reason -> {deferred(step, {kind, reason}), flags}
   end
 
+  # Each outcome line carries the step's elapsed time, so a build creeping
+  # toward the budget shows in Loki before it starts deferring every boot.
   defp apply_step(repo, step, deadline) do
+    started = now()
+
     case in_session(repo, step, %{repo: repo, deadline: deadline}) do
       :ok ->
         :ok = DataMigrations.mark_done(step.name, step.version)
 
         Logger.info(
-          "#{step.name} done",
+          "#{step.name} done elapsed_ms=#{now() - started}",
           Metadata.with_category(:info, :boot, migration: step.name, version: step.version)
         )
 
@@ -134,14 +143,14 @@ defmodule Engram.Release.BootStep do
 
       :busy ->
         Logger.info(
-          "#{step.name} held by another session; the next boot retries",
+          "#{step.name} held by another session; the next boot retries elapsed_ms=#{now() - started}",
           Metadata.with_category(:info, :boot, migration: step.name)
         )
 
         :busy
 
       {:defer, reason} ->
-        deferred(step, reason)
+        deferred(step, reason, now() - started)
     end
   end
 
@@ -256,10 +265,7 @@ defmodule Engram.Release.BootStep do
   """
   @spec query(session(), String.t(), list(), keyword()) :: {:ok, term()} | {:error, term()}
   def query(%{repo: repo} = session, sql, params \\ [], opts \\ []) do
-    left =
-      if Keyword.get(opts, :cleanup, false),
-        do: @cleanup_ms,
-        else: min(session.deadline - now(), @max_statement_ms)
+    left = if Keyword.get(opts, :cleanup, false), do: @cleanup_ms, else: statement_ms(session)
 
     if left < @min_statement_ms do
       {:error, :boot_budget_spent}
@@ -275,6 +281,13 @@ defmodule Engram.Release.BootStep do
       end
     end
   end
+
+  @doc """
+  The `statement_timeout` a statement of `session` gets: what is left of the
+  boot budget, at most #{@max_statement_ms} ms.
+  """
+  @spec statement_ms(session()) :: number()
+  def statement_ms(session), do: min(session.deadline - now(), @max_statement_ms)
 
   @doc """
   `:valid`, `:invalid` (a failed or killed CONCURRENTLY build: never done)
@@ -338,9 +351,9 @@ defmodule Engram.Release.BootStep do
 
   defp built(_session, _name, defer), do: defer
 
-  defp deferred(step, reason) do
+  defp deferred(step, reason, elapsed_ms \\ 0) do
     Logger.warning(
-      "#{step.name} deferred; the next boot retries",
+      "#{step.name} deferred; the next boot retries elapsed_ms=#{elapsed_ms}",
       Metadata.with_category(:warning, :boot, migration: step.name, reason: safe(reason))
     )
 

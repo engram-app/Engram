@@ -199,12 +199,12 @@ defmodule Engram.Release.NotesPathExpand do
   # pool opened for it (the eval starts no app). Without it (self-host, whose
   # migrator is a superuser) it runs on the migrator session.
   defp duplicates(session) do
-    left = session.deadline - System.monotonic_time(:millisecond)
+    left = BootStep.statement_ms(session)
 
     if Application.get_env(:engram, :maintenance_repo_enabled, false) and left >= 1_000 do
       with_maintenance(fn ->
         Maintenance.transaction(fn ->
-          _ = Maintenance.query!("SET LOCAL statement_timeout = #{min(left, 30_000)}")
+          _ = Maintenance.query!("SET LOCAL statement_timeout = #{left}")
           Maintenance.query!(@duplicates, [], timeout: left + 5_000)
         end)
       end)
