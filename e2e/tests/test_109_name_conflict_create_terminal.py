@@ -9,12 +9,17 @@ the generic `create_failed`, which the plugin must treat as retryable, so it:
 * closed its vault-wide create backoff, pausing EVERY create in the vault for
   30 s, doubling to 10 min.
 
-The server now answers `id_conflict` for a taken path, the reason every plugin
-already treats as final. This test stages that exact server state through the
-API and puts the op in the REAL plugin's durable CRDT op queue, so the
-plugin's own dispatch and the server's reply are both under test.
+The server now answers `id_conflict` for a taken path, but only to a client
+that connected with `caps=name_taken` (plugins 1.36.0 to 1.40.0 drop an
+`id_conflict` create silently, so they keep `create_failed`). The paired
+plugin branch sends that capability. This test stages that exact server state
+through the API and puts the op in the REAL plugin's durable CRDT op queue, so
+the plugin's own dispatch, its capability and the server's reply are all
+under test.
 
 Oracles, scoped to a per-test uuid folder:
+0. the server's reply is `id_conflict` (the capability path, not the old
+   `create_failed`);
 1. the op leaves the queue, then a quiet window passes with no re-send: the
    create was sent exactly once;
 2. the vault-wide create pause (`NotesCapGate.backoff`) is never tripped;
@@ -61,11 +66,15 @@ async def test_name_taken_create_is_not_retried(obsidian_b, cdp_b, api_sync):
             const gate = {ENGINE_PATH}.notesCapGate;
             if (!ch || !gate) throw new Error('no noteStream or notesCapGate');
             const s = {{ ch, gate, create: ch.crdtCreate, backoff: gate.backoff,
-                        calls: 0, pauses: 0 }};
+                        calls: 0, pauses: 0, reasons: [] }};
             window.__e2e109 = s;
             ch.crdtCreate = function (docId, ...rest) {{
-                if (docId === '{gone_id}') s.calls++;
-                return s.create.call(this, docId, ...rest);
+                if (docId !== '{gone_id}') return s.create.call(this, docId, ...rest);
+                s.calls++;
+                return s.create.call(this, docId, ...rest).catch((e) => {{
+                    s.reasons.push(String(e && e.message || e));
+                    throw e;
+                }});
             }};
             gate.backoff = function (...args) {{
                 s.pauses++;
@@ -102,6 +111,7 @@ async def test_name_taken_create_is_not_retried(obsidian_b, cdp_b, api_sync):
         await asyncio.sleep(QUIET_S)
         calls = await cdp_b.evaluate("window.__e2e109.calls")
         pauses = await cdp_b.evaluate("window.__e2e109.pauses")
+        reasons = await cdp_b.evaluate("window.__e2e109.reasons")
         requeued = await queued()
     finally:
         await cdp_b.evaluate(
@@ -110,6 +120,9 @@ async def test_name_taken_create_is_not_retried(obsidian_b, cdp_b, api_sync):
             " delete window.__e2e109; })()"
         )
 
+    assert len(reasons) == 1 and "id_conflict" in reasons[0], (
+        f"the capability path must answer id_conflict; replies: {reasons}"
+    )
     assert calls == 1, (
         f"a taken-name create must be sent once, not retried; sent {calls}x"
     )
