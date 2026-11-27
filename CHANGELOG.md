@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.97.0](https://github.com/engram-app/Engram/compare/0.96.0...0.97.0) (2026-11-27)
+
+
+### Tests
+
+* fix keyword-equivalence deadlock and huge-notes tmp collision ([#2716](https://github.com/engram-app/Engram/issues/2716)) ([ef97474](https://github.com/engram-app/Engram/commit/ef97474fa43e941ba654fce8bde4f631a1d351d4))
+
 ## [0.96.0](https://github.com/engram-app/Engram/compare/0.95.0...0.96.0) (2026-11-26)
 
 
