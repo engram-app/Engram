@@ -1,0 +1,30 @@
+# Phase-3 data migration results this pair (L rolled back to K) accepts
+# other than `done`. Every other result fails, including a done ledger that
+# does not re-verify: each such skip is reviewed here, per pair, because after
+# a rollback in prod it never runs on NEW's data either.
+#
+# What L changes that K's migrations could meet: notes_kind_shape_v5_check
+# replaces v4 (a live note may carry a NULL path_hmac when it has a name
+# address; L itself still writes every path column), the partial index
+# notes_manifest_name, the keyword_feed / keyword_deletions /
+# keyword_feed_horizon tables, and the body of notes_set_name_key (it also
+# accepts a name_nonce anchor). Checked by grepping the text of each K module
+# file (dd71d25ee) for path_hmac, path_ciphertext, notes_kind_shape and
+# keyword_feed: only folder_table names one (path_hmac); the helpers they call
+# were NOT traced.
+#
+# Format: <shape|*> <name before any ':'> <class> <reason>
+* index_versions skipped-done-noreverify done; chunk/index version stamps on notes, no path column, no keyword table
+* crdt_state_seed skipped-done-noreverify done; seeds CRDT state from note content, no path column
+* envelope_format skipped-done-noreverify done; encryption envelopes of note content, no path column
+* link_resolution_keys_unicode_15.1.0 skipped-done-noreverify done; link key stamps on notes, no path column
+* note_split skipped-done-noreverify done; note row split, no path column
+* note_index_state skipped-done-noreverify done; note index-state rows, no path column
+* note_sizes skipped-done-noreverify done; note size columns, no path column
+* folder_table skipped-done-noreverify closed in phase 1 (prod: since release D); it names path_hmac but never re-runs after the rollback, and L writes every path column, so no NULL path_hmac exists for it to meet
+* note_effective_dates skipped-done-noreverify done (by K's @reboot runner or earlier, timing decides); note date columns, no path column
+* note_name skipped-done-noreverify done; note name columns, which L leaves as K wrote them (notes_set_name_key accepts K's path-anchored stamps)
+* name_terms skipped-done-noreverify closed by K's @reboot runner and its BackfillNameTerms chain before the loop (the workflow waits for it) or already done; indexes names, no path column
+* key_aliases skipped-disabled runs only while the vector rebuild mode is on; note key aliases only, no path column
+* person_origin_backfill skipped-disabled needs the analytics keys (set in prod, not here); only enqueues PersonOriginSync jobs, touches no note or folder table
+* note_meta skipped-disabled note_meta_backfill override defaults off; prod's value NOT verified (a DB override, not in engram-infra); reads notes, users and CRDT logs, no path column

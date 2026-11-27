@@ -60,9 +60,9 @@ on:
         description: Per-pair rpc snippets under ci/rollback-compat/
         default: explicit-folders
       fault:
-        description: "Red-path proof. explicit-folders: unstamped-row, vault-lock. folder-hash-drop: hash-read"
+        description: "Red-path proof. explicit-folders: unstamped-row, vault-lock. folder-hash-drop: hash-read. notes-path-expand: path-hash-null. Any pair: verdict-count"
         type: choice
-        options: [none, unstamped-row, vault-lock, hash-read]
+        options: [none, unstamped-row, vault-lock, hash-read, path-hash-null, verdict-count]
         default: none
 
 permissions:
@@ -186,6 +186,7 @@ jobs:
           # Shared probes, then the pair's checks (hook_* functions).
           . ci/rollback-compat/ddl-log.sh
           . ci/rollback-compat/judge-migrations.sh
+          . ci/rollback-compat/folder-checks.sh
           . "$CHECKS_DIR/hooks.sh"
           SH
 
@@ -272,7 +273,15 @@ jobs:
           grep -q '^MIGRATIONS_END$' <<<"$out" && [ "$ran" -eq "${total:-0}" ] && [ "$ran" -ge 1 ] \
             || fail "OLD's runner loop ran $ran of ${total:-?} migrations"
           grep '^MIGRATION ' <<<"$out" | awk '{print $3}' | sort | uniq -c | sed 's/^/  results: /'
-          judge_migrations "$out" "$CHECKS_DIR/migrations-allow.txt" "$SHAPE"
+          judge_in=$out
+          if [ "$FAULT" = verdict-count ]; then
+            # Red proof of the count guard: hide one result from the verdict
+            # loop, as a helper eating the loop's stdin once did.
+            last=$(grep '^MIGRATION ' <<<"$out" | tail -1)
+            judge_in=$(grep -vxF "$last" <<<"$out")
+            echo "fault verdict-count: hid '$last' from the verdict loop"
+          fi
+          judge_migrations "$judge_in" "$CHECKS_DIR/migrations-allow.txt" "$SHAPE"
           hook_old_checks
           if [ "$FAULT" = vault-lock ]; then
             sql "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE query LIKE '%pg_sleep(600)%' AND pid <> pg_backend_pid()" >/dev/null

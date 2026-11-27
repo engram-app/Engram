@@ -230,13 +230,30 @@ def _smoke_writes(client: ApiClient, data: dict) -> list[str]:
         found = json.dumps(_mcp(client, data, "search_notes", {"folder": "PostRollback", "limit": 5}))
         if path not in found:
             errors.append(f"MCP search_notes on OLD does not find {path}: {found[:200]}")
+        moved = "PostRollback/m.md"
+        status = client.rename_note(path, moved)
+        if status != 200 or body not in ((client.get_note(moved) or {}).get("content") or ""):
+            errors.append(f"rename {path} -> {moved} on OLD: HTTP {status}, not readable at the new path")
     except Exception as e:  # any failure is a finding, reported with the rest (not swallowed)
         errors.append(f"OLD note/MCP smoke raised {type(e).__name__}: {str(e)[:200]}")
     print(f"OLD write smoke: {len(errors)} errors")
     return errors
 
 
-def verify_old(api_url: str, state: str, writes: bool = False) -> None:
+def _read_every_note(client: ApiClient) -> list[str]:
+    """Every note OLD's tree lists must read back by its path, as the same id:
+    a path lookup goes through path_hmac, which a later release may leave NULL."""
+    errors = []
+    notes = client.get_vault_tree().get("notes") or []
+    for n in notes:
+        got = client.get_note(n["path"])
+        if not got or str(got.get("id")) != str(n["id"]):
+            errors.append(f"note {n['id']} listed at {n['path']} but OLD does not read it there (got {got and got.get('id')})")
+    print(f"OLD read {len(notes) - len(errors)} of {len(notes)} listed notes back by path")
+    return errors
+
+
+def verify_old(api_url: str, state: str, writes: bool = False, read_notes: bool = False) -> None:
     data = _load(state)
     client = _client(api_url, data)
     expected = set(data["expected"])
@@ -254,6 +271,8 @@ def verify_old(api_url: str, state: str, writes: bool = False) -> None:
     rows = {k: v for k, v in rows.items() if k not in ("Root/Inner", "Root/Moved")}
     rows["Root/Inner2"] = data["tree"].get("Root/Inner")
     errors += _check(client, expected, "after OLD rename + delete", rows)
+    if read_notes:
+        errors += _read_every_note(client)
     if writes:
         errors += _smoke_writes(client, data)
         errors += _check(client, expected | {"PostRollback"}, "after OLD writes", rows)
@@ -270,16 +289,17 @@ def main() -> None:
     p.add_argument("phase", choices=["seed-old", "seed-new", "verify-old"])
     p.add_argument("--api-url", required=True, help="e.g. http://localhost:8110/api")
     p.add_argument("--state", required=True, help="0600 JSON state file")
-    p.add_argument("--fault", choices=["none", "unstamped-row", "vault-lock", "hash-read"], default="none")
+    p.add_argument("--fault", choices=["none", "unstamped-row", "vault-lock", "hash-read", "path-hash-null", "verdict-count"], default="none")
     p.add_argument("--with-notes", action="store_true", help="seed-old: notes too, nested")
-    p.add_argument("--writes", action="store_true", help="verify-old: also folder create, note write/read, MCP list_folder and search")
+    p.add_argument("--writes", action="store_true", help="verify-old: also folder create, note write/read/rename, MCP list_folder and search")
+    p.add_argument("--read-notes", action="store_true", help="verify-old: read every listed note back by path")
     a = p.parse_args()
     if a.phase == "seed-old":
         seed_old(a.api_url, a.state, a.with_notes)
     elif a.phase == "seed-new":
         seed_new(a.api_url, a.state, a.fault)
     else:
-        verify_old(a.api_url, a.state, a.writes)
+        verify_old(a.api_url, a.state, a.writes, a.read_notes)
 
 
 if __name__ == "__main__":

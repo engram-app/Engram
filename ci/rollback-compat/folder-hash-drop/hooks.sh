@@ -16,13 +16,13 @@
 # Fault hash-read: J's process reading the column crashes, and the workflow's
 # error scan must go red on it.
 #
-# Sourced after rbc-lib.sh and ddl-log.sh (dc, sql, rpc, val, fail, SHAPE,
+# Sourced after rbc-lib.sh, ddl-log.sh and folder-checks.sh (dc, sql, rpc, val, fail, SHAPE,
 # FAULT, API, STATE).
 
 # Phase 1, OLD (J) running: close FolderTable, then seed through J's writers.
 hook_seed_old() {
   local out markers
-  out=$(rpc old-ledgers.exs)
+  out=$(rpc ../folder-table-ledgers.exs)
   echo "$out"
   [ "$(val LEDGERS_DONE "$out")" = true ] || fail "J's folder_table ledger did not close in phase 1"
   [ "$(val EXPLICIT_READS "$out")" = true ] || fail "J does not read explicit folders from the flag after phase 1"
@@ -57,26 +57,10 @@ hook_after_new_boot() {
   echo "folder_path_hash_drop ledger done: $ledger"
   [ "$ledger" -eq 1 ] || fail "K's folder_path_hash_drop ledger is not done"
   python3 e2e/scripts/rollback_compat.py seed-new --api-url "$API" --state "$STATE" --fault none
-  # Each merge K's writers made: the survivor live and explicit, the other retired.
-  local kind live retired kinds
-  kinds=$(python3 -c "import json,sys; print(' '.join(json.load(open(sys.argv[1]))['merges']))" "$STATE")
-  [ "$kinds" = "merge_restore rename_merge" ] || fail "seed-new recorded merges '$kinds', want merge_restore rename_merge"
-  for kind in $kinds; do
-    read -r live retired < <(python3 -c "import json,sys; m=json.load(open(sys.argv[1]))['merges'][sys.argv[2]]; print(m['live'], m['retired'])" "$STATE" "$kind")
-    [ "$(sql "SELECT count(*) FROM folders WHERE id = '$live' AND explicit AND deleted_at IS NULL")" -eq 1 ] \
-      || fail "$kind: survivor $live is not a live explicit row"
-    [ "$(sql "SELECT count(*) FROM folders WHERE id = '$retired' AND deleted_at IS NOT NULL")" -eq 1 ] \
-      || fail "$kind: $retired was not retired, so nothing merged"
-  done
+  check_merges
 }
 
-# What J's data migrations and boot must not change: every live folder's
-# parent and explicit flag, every live note's folder.
-hook_snapshot() {
-  sql "SELECT 'folder ' || id || ' parent=' || coalesce(parent_id::text, '-') || ' explicit=' || explicit FROM folders WHERE deleted_at IS NULL
-       UNION ALL
-       SELECT 'note ' || id || ' folder=' || coalesce(folder_ref_id::text, '-') FROM notes WHERE deleted_at IS NULL" | sort
-}
+hook_snapshot() { folder_note_snapshot; }
 
 # Phase 3, OLD (J) running, after every J data migration ran once.
 hook_old_checks() {
@@ -91,11 +75,4 @@ hook_old_checks() {
 }
 
 # Phase 3: what J's REST serves, then a rename and a delete through it.
-hook_verify_old() {
-  local out
-  out=$(rpc old-probe.exs)
-  echo "$out"
-  [ "$(val EXPLICIT_READS "$out")" = true ] || fail "J lists explicit folders from markers, not the flag"
-  python3 e2e/scripts/rollback_compat.py verify-old --api-url "$API" --state "$STATE" --writes \
-    || fail "J's listings after the rollback do not match the seeded folders"
-}
+hook_verify_old() { verify_old_rest; }
