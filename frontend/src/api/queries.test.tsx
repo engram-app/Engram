@@ -523,6 +523,20 @@ describe("useRenameNote", () => {
 			result.current.mutateAsync({ id: "n1", old_path: "a.md", new_path: "b.md" }),
 		).rejects.toMatchObject({ reason: "create_failed" });
 	});
+
+	// The server now replies id_conflict for a taken name (create_failed on
+	// older servers); both must say the name is taken, not "Rename failed."
+	it.each(["id_conflict", "create_failed"])("a %s says the name is taken", async (reason) => {
+		vi.mocked(toast.error).mockClear();
+		crdtCreateNote.mockRejectedValue(new CrdtOpError(reason, "crdt_create"));
+		const { result } = renderHook(() => useRenameNote(), { wrapper });
+		await act(async () => {
+			await result.current
+				.mutateAsync({ id: "n1", old_path: "a.md", new_path: "b.md" })
+				.catch(() => {});
+		});
+		expect(toast.error).toHaveBeenCalledWith("A note with that name already exists.");
+	});
 });
 
 describe("useRenameFolder", () => {

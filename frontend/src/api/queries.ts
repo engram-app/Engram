@@ -31,7 +31,7 @@ import { reconcileActiveVault, useActiveVaultId } from "./active-vault";
 import { crdtCreateNote, crdtCreateNoteWithContent, crdtDeleteNote } from "./channel";
 import { uploadInParts } from "./chunked-upload";
 import { ApiError, api } from "./client";
-import { CrdtOpError, isPermanentJoinRefusal, toastJoinRefused } from "./crdt-ops";
+import { CrdtOpError, isNameTaken, isPermanentJoinRefusal, toastJoinRefused } from "./crdt-ops";
 import { attachmentPartSize } from "./server-features";
 import {
 	type AttachmentEvent,
@@ -133,15 +133,14 @@ function joinRefused(err: unknown, t: Translate): boolean {
 // mutations (and the standalone drop handler) speak the same dialect.
 // Shared by note rename (CRDT → CrdtOpError) and folder/attachment rename
 // (REST → ApiError). A note's target-occupied conflict surfaces as
-// crdt_create's `create_failed`; the REST paths use HTTP 409/404.
+// crdt_create's `id_conflict` (`create_failed` on older servers); the REST
+// paths use HTTP 409/404.
 // "file" is a note (the tree's word for it); "attachment" is any other file.
 function renameErrorToast(err: unknown, kind: "file" | "folder" | "attachment", t: Translate) {
 	if (joinRefused(err, t)) {
 		return;
 	}
-	const conflict =
-		(err instanceof ApiError && err.status === 409) ||
-		(err instanceof CrdtOpError && err.reason === "create_failed");
+	const conflict = (err instanceof ApiError && err.status === 409) || isNameTaken(err);
 	const gone = err instanceof ApiError && err.status === 404;
 	if (conflict) {
 		notify.error(
@@ -1084,12 +1083,12 @@ export function useCreateNote() {
 					await crdtCreateNote(id, path);
 					return { path, id };
 				} catch (err) {
-					// The path is already owned (unique-constraint create_failed) or was
+					// The path is already owned (`isNameTaken`) or was
 					// just deleted (delete-wins window) — bump the name and retry, the
 					// CRDT twin of the old 409 loop. Cap/rate/disconnect propagate.
 					if (
-						err instanceof CrdtOpError &&
-						(err.reason === "create_failed" || err.reason === "recently_deleted")
+						isNameTaken(err) ||
+						(err instanceof CrdtOpError && err.reason === "recently_deleted")
 					) {
 						taken.add(name);
 						continue;
@@ -2435,9 +2434,7 @@ export function useDuplicateNote() {
 		},
 		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
-			const conflict =
-				(err instanceof ApiError && err.status === 409) ||
-				(err instanceof CrdtOpError && err.reason === "create_failed");
+			const conflict = (err instanceof ApiError && err.status === 409) || isNameTaken(err);
 			if (conflict) {
 				notify.error(t("A note with that name already exists."));
 			} else if (!joinRefused(err, t)) {
