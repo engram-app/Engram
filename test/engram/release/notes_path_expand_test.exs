@@ -54,7 +54,15 @@ defmodule Engram.Release.NotesPathExpandTest do
     unboxed(fn -> Repo.query!("DELETE FROM data_migrations WHERE name = ANY($1)", [@names]) end)
 
     Engram.DataMigrations.reset_cache()
-    assert Enum.all?(run(), fn {_, r} -> r == :done end)
+
+    # As release L leaves the schema: the name guard ships dark.
+    assert run() == [
+             {"notes_shape_relax", :done},
+             {"notes_name_unique_build", :disabled},
+             {"notes_manifest_name_build", :done}
+           ]
+
+    unboxed(fn -> Repo.query!("DROP INDEX IF EXISTS notes_name_live") end)
   end
 
   setup do
@@ -73,12 +81,22 @@ defmodule Engram.Release.NotesPathExpandTest do
 
   defp owners, do: Process.get(:owners_agent)
 
-  defp run(opts \\ []),
-    do: unboxed(fn -> BootStep.run_all(Repo, NotesPathExpand.steps(opts), opts) end)
+  defp run(opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+    unboxed(fn -> BootStep.run_all(repo, NotesPathExpand.steps(opts), opts) end)
+  end
 
   defp run_one(name, opts \\ []) do
     {^name, result} = List.keyfind(run(opts), name, 0)
     result
+  end
+
+  # A second session, as another node or an older transaction.
+  defp conn! do
+    {:ok, conn} =
+      Repo.config() |> Keyword.drop([:pool, :pool_size, :parameters]) |> Postgrex.start_link()
+
+    conn
   end
 
   defp constraints do
@@ -91,7 +109,7 @@ defmodule Engram.Release.NotesPathExpandTest do
     end)
   end
 
-  defp index(name), do: unboxed(fn -> BootStep.index_state(Repo, name) end)
+  defp index(name), do: unboxed(fn -> BootStep.index_state(%{repo: Repo}, name) end)
 
   defp ledger(name) do
     unboxed(fn ->
@@ -139,6 +157,12 @@ defmodule Engram.Release.NotesPathExpandTest do
           do: Repo.query!("DELETE FROM #{t} WHERE user_id = ANY($1)", [ids])
 
       Repo.query!("DELETE FROM users WHERE id = ANY($1)", [ids])
+
+      # The committed writes' jobs, or later tests counting enqueued jobs
+      # see them.
+      Repo.query!("DELETE FROM oban_jobs WHERE args->>'user_id' = ANY($1)", [
+        Enum.map(ids, &Ecto.UUID.load!/1)
+      ])
     end)
   end
 
@@ -188,6 +212,22 @@ defmodule Engram.Release.NotesPathExpandTest do
       end)
     end
 
+    # Without a path a live note must still have a name address, or nothing
+    # could find it.
+    test "a live note with no path_hmac still needs its name and folder row" do
+      assert run_one("notes_shape_relax") == :done
+      {user, vault} = committed_owner!()
+      id = Ecto.UUID.dump!(committed_note!(user, vault, "A/x.md").id)
+
+      for set <- ["name_hmac = NULL", "folder_ref_id = NULL"] do
+        assert_raise Postgrex.Error, ~r/notes_kind_shape_v5_check/, fn ->
+          unboxed(fn ->
+            Repo.query!("UPDATE notes SET path_hmac = NULL, #{set} WHERE id = $1", [id])
+          end)
+        end
+      end
+    end
+
     test "a held lock defers it, nothing changes; released, the next run completes" do
       conn = hold_notes_lock!()
       log = capture_log(fn -> assert run_one("notes_shape_relax") == :deferred end)
@@ -216,6 +256,12 @@ defmodule Engram.Release.NotesPathExpandTest do
   end
 
   describe "notes_name_unique_build" do
+    # It ships dark: these turn it on.
+    setup do
+      flags_file!(%{"notes_name_unique_build" => true})
+      :ok
+    end
+
     setup do
       {user, vault} = committed_owner!()
       a = committed_note!(user, vault, "A/x.md")
@@ -248,18 +294,32 @@ defmodule Engram.Release.NotesPathExpandTest do
       assert index("notes_name_live") == :valid
     end
 
-    test "the probe finds a duplicate: deferred and logged, no index", ctx do
+    test "the probe finds a duplicate: deferred, its count logged at error, no index", ctx do
       dup!(ctx)
       log = capture_log(fn -> assert run_one("notes_name_unique_build") == :deferred end)
 
       assert log =~ "notes_name_unique_build deferred"
-      assert log =~ "duplicates=1"
+      assert log =~ ~r/\[error\].*notes_name_unique_build duplicates=1/
       assert index("notes_name_live") == :absent
       assert ledger("notes_name_unique_build") == false
     end
 
-    # Under FORCE RLS the migrator may see no rows, so the probe is blind and
-    # the build's own unique check finds the duplicate. Its INVALID leftover
+    # Prod's migrator owns `notes` but is no superuser: FORCE RLS shows it no
+    # rows. The probe reads through the maintenance credential instead.
+    test "under RLS the probe counts through the maintenance pool", ctx do
+      Engram.Test.MaintenancePool.start!()
+      dup!(ctx)
+
+      log =
+        capture_log(fn ->
+          assert run_one("notes_name_unique_build", repo: Engram.RlsMigratorRepo) == :deferred
+        end)
+
+      assert log =~ ~r/\[error\].*notes_name_unique_build duplicates=1/
+      assert index("notes_name_live") == :absent
+    end
+
+    # A duplicate the probe did not see: the build's own unique check finds it. Its INVALID leftover
     # would still refuse writes, so it is dropped at once.
     test "a duplicate the probe missed: the failed build defers and leaves no index", ctx do
       dup!(ctx)
@@ -269,7 +329,7 @@ defmodule Engram.Release.NotesPathExpandTest do
           assert run_one("notes_name_unique_build", probe: false) == :deferred
         end)
 
-      assert log =~ "duplicates_found_by_build"
+      assert log =~ "duplicates=found_by_build"
       assert index("notes_name_live") == :absent
     end
 
@@ -287,6 +347,11 @@ defmodule Engram.Release.NotesPathExpandTest do
   end
 
   describe "INVALID indexes (a build killed with its task)" do
+    setup do
+      flags_file!(%{"notes_name_unique_build" => true})
+      :ok
+    end
+
     # A real killed build: CONCURRENTLY commits the catalog entry, then waits
     # out an older snapshot; the build is cancelled there, as a SIGKILLed
     # task's would be, and the index is left INVALID.
@@ -357,6 +422,99 @@ defmodule Engram.Release.NotesPathExpandTest do
     end
   end
 
+  describe "boot bounds" do
+    # CONCURRENTLY waits out older transactions; a 5 s lock_timeout made any
+    # transaction older than 5 s (a sweep, an old-release task mid-deploy)
+    # defer it every boot. It waits, bounded by the budget alone.
+    test "a build waits out a transaction older than 5 s and completes" do
+      holder = conn!()
+      Postgrex.query!(holder, "BEGIN ISOLATION LEVEL REPEATABLE READ", [])
+      Postgrex.query!(holder, "SELECT 1 FROM notes LIMIT 1", [])
+
+      release =
+        Task.async(fn ->
+          Process.sleep(6_000)
+          Postgrex.query!(holder, "ROLLBACK", [])
+        end)
+
+      # This step alone: the others would wait on the holder's table lock first.
+      step = Enum.find(NotesPathExpand.steps(), &(&1.name == "notes_manifest_name_build"))
+      assert [{_, :done}] = unboxed(fn -> BootStep.run_all(Repo, [step]) end)
+      Task.await(release)
+      GenServer.stop(holder)
+      assert index("notes_manifest_name") == :valid
+    end
+
+    test "one budget for all steps: a step over it is cancelled, the rest defer unrun" do
+      me = self()
+
+      steps = [
+        %BootStep{
+          name: "budget_slow",
+          version: 1,
+          flag: :budget_slow,
+          apply: fn s ->
+            {:error, _} = BootStep.query(s, "SELECT pg_sleep(5)")
+            {:defer, :slow}
+          end
+        },
+        %BootStep{
+          name: "budget_next",
+          version: 1,
+          flag: :budget_next,
+          apply: fn _ -> send(me, :ran) && :ok end
+        }
+      ]
+
+      on_exit(fn ->
+        unboxed(fn -> Repo.query!("DELETE FROM data_migrations WHERE name LIKE 'budget_%'") end)
+      end)
+
+      started = System.monotonic_time(:millisecond)
+
+      log =
+        capture_log(fn ->
+          assert [{_, :deferred}, {_, :deferred}] =
+                   unboxed(fn -> BootStep.run_all(Repo, steps, budget_ms: 2_000) end)
+        end)
+
+      assert System.monotonic_time(:millisecond) - started < 4_000
+      refute_received :ran
+      assert log =~ "budget_next deferred"
+      assert log =~ "boot_budget_spent"
+    end
+
+    test "a step another session holds is skipped this boot" do
+      holder = conn!()
+      key = BootStep.lock_key("notes_manifest_name_build")
+      Postgrex.query!(holder, "SELECT pg_advisory_lock($1)", [key])
+
+      assert run_one("notes_manifest_name_build") == :busy
+      assert index("notes_manifest_name") == :absent
+
+      GenServer.stop(holder)
+      assert run_one("notes_manifest_name_build") == :done
+    end
+
+    test "a step that defaults off runs only when its flag says true" do
+      step = %BootStep{
+        name: "dark_step",
+        version: 1,
+        flag: :notes_name_unique_build,
+        default: false,
+        apply: fn _ -> :ok end
+      }
+
+      on_exit(fn ->
+        unboxed(fn -> Repo.query!("DELETE FROM data_migrations WHERE name = 'dark_step'") end)
+      end)
+
+      assert [{_, :disabled}] = unboxed(fn -> BootStep.run_all(Repo, [step]) end)
+      flags_file!(%{"notes_name_unique_build" => true})
+      assert [{_, :done}] = unboxed(fn -> BootStep.run_all(Repo, [step]) end)
+    end
+  end
+
   describe "kill switches" do
     # The test config logs warnings and up; these assert info lines.
     setup do
@@ -380,13 +538,14 @@ defmodule Engram.Release.NotesPathExpandTest do
       assert log =~ "notes_manifest_name_build flags read source=file value=absent"
     end
 
-    test "no source (self-host): every step reads none and runs" do
+    test "no source (self-host): every step reads none; all but the dark one run" do
       log = capture_log([level: :info], fn -> run() end)
 
-      for name <- @names do
-        assert log =~ "#{name} flags read source=none value=absent"
-        assert ledger(name) == true
-      end
+      for name <- @names, do: assert(log =~ "#{name} flags read source=none value=absent")
+      assert ledger("notes_shape_relax") == true
+      assert ledger("notes_manifest_name_build") == true
+      assert ledger("notes_name_unique_build") == nil
+      assert index("notes_name_live") == :absent
     end
 
     test "the flags-read line is a :boot info line, which ships to Loki" do
@@ -402,6 +561,7 @@ defmodule Engram.Release.NotesPathExpandTest do
     end
 
     test "a done step reads no flags and logs nothing" do
+      flags_file!(%{"notes_name_unique_build" => true})
       assert Enum.all?(run(), fn {_, r} -> r == :done end)
 
       log =

@@ -166,7 +166,9 @@ defmodule Engram.Folders.NestedCollisionTest do
           "SELECT indexname FROM pg_indexes WHERE tablename = 'notes' AND indexdef LIKE 'CREATE UNIQUE INDEX%'"
         )
 
-      live = List.flatten(rows)
+      # Release L's name guard ships dark (`NotesPathExpand.steps/1`), so the
+      # index exists only where its flag turned it on.
+      live = [Engram.Release.NotesPathExpand.unique_index() | List.flatten(rows)]
       assert Folders.path_uniques() -- live == []
     end
   end

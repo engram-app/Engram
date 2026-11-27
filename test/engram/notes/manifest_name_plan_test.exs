@@ -15,12 +15,13 @@ defmodule Engram.Notes.ManifestNamePlanTest do
          n.name_ciphertext, n.name_nonce, n.name_stamp, n.path_nonce
   FROM notes AS n
   WHERE n.user_id = $1 AND n.vault_id = $2 AND n.deleted_at IS NULL AND n.kind = 'note'
+    AND n.name_stamp IS NOT NULL
   """
 
   test "the manifest's name read is index-only on notes_manifest_name under RLS" do
     user = insert(:user)
     vault = insert(:vault, user: user)
-    for _ <- 1..300, do: insert(:note, user: user, vault: vault)
+    for _ <- 1..300, do: insert(:note, user: user, vault: vault, name_stamp: <<1>>)
     # Other tenants' and trashed rows the index's key and predicate skip.
     other = insert(:user)
     for _ <- 1..100, do: insert(:note, user: other, vault: insert(:vault, user: other))
