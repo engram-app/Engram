@@ -17,8 +17,10 @@ defmodule Engram.Folders.MovedReadsBudgetTest do
   # a new row has no hash, so no statement.
   @relocate 45
   # +1 for the resurrect race fix (#2609): the moved-folder bit read with the
-  # row can be a stale `false`, so it is re-read under the vault seq lock
-  # (`Location.named?/2`, one `folders_moved_live` index probe).
+  # row can be a stale `false`, so it is re-read under the vault seq lock.
+  # That one statement (`moved_or_keyed/4`) also probes `notes_path_live` for
+  # a live note keyed at the target, so a taken path is refused before the
+  # write.
   # The same: +1 per new folder level only while the stop is inert.
   @resurrect 26
   @restore 53

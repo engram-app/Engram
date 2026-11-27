@@ -2595,14 +2595,17 @@ defmodule Engram.Notes do
   # `false`: the vault's FIRST move may commit before the lock, so the bit is
   # re-read here, in the SAME statement as the keyed-holder probe: an unmoved
   # vault pays one statement, as it did before the keyed check existed. In a
-  # moved vault `shown_by_other?/4` resolves keyed and shown holders alike.
+  # moved vault the stored key alone proves nothing: a note whose own folder
+  # moved keeps its stale key, which is no holder (`ids_at/3` drops it and
+  # `move_note` frees it). There `shown_by_other?/4` decides: a key that is
+  # still `here()`, or a name match.
   defp shown_check(moved?, user, vault, path, id) do
     fn ->
       {moved?, keyed?} =
         if moved?, do: {true, false}, else: moved_or_keyed(user, vault, path, id)
 
       cond do
-        keyed? -> :conflict
+        keyed? and not moved? -> :conflict
         moved? and shown_by_other?(user, vault, path, id) -> :conflict
         true -> {:ok, moved?}
       end
@@ -2616,29 +2619,35 @@ defmodule Engram.Notes do
   # a reused generic plan would read the whole vault under RLS
   # (notes-generic-plan-mis-pick.md).
   defp moved_or_keyed(user, vault, path, id) do
-    {:ok, fk} = Crypto.dek_filter_key(user)
+    case Crypto.dek_filter_key(user) do
+      {:ok, fk} ->
+        ids? = Keys.ids?()
 
-    ids? = Keys.ids?()
+        # `notes_path_live` is partial on `NOT is_folder`, which
+        # `live_notes/3` adds when `ids?` (with `kind = 'note'`); without it
+        # the probe reads the vault's notes instead.
+        keyed =
+          from(n in live_notes(user, vault, ids?),
+            where: ^Keys.eq(:path, Crypto.hmac_field(fk, path), ids?),
+            where: n.id != type(^id, Ecto.UUID),
+            select: 1
+          )
 
-    # `live_notes/3` carries `NOT is_folder`, the predicate `notes_path_live`
-    # is partial on; without it the probe reads the vault's notes instead.
-    keyed =
-      from(n in live_notes(user, vault, ids?),
-        where: ^Keys.eq(:path, Crypto.hmac_field(fk, path), ids?),
-        where: n.id != type(^id, Ecto.UUID),
-        select: 1
-      )
+        Repo.with_tenant!(user.id, fn ->
+          Repo.one(
+            from(_ in fragment("(SELECT)"),
+              select:
+                {fragment(WalkSql.moved(), type(^vault.id, Ecto.UUID)),
+                 fragment("EXISTS ?", subquery(keyed))}
+            ),
+            prepare: :unnamed
+          )
+        end)
 
-    Repo.with_tenant!(user.id, fn ->
-      Repo.one(
-        from(_ in fragment("(SELECT)"),
-          select:
-            {fragment(WalkSql.moved(), type(^vault.id, Ecto.UUID)),
-             fragment("EXISTS ?", subquery(keyed))}
-        ),
-        prepare: :unnamed
-      )
-    end)
+      # No filter key: no holder can be proven, as `located_ids_at/3` answers.
+      {:error, _} ->
+        {Location.named?(user.id, vault.id), false}
+    end
   end
 
   defp resurrect_move({prior, moved?}, user, vault, sanitized_path, folder, origin, recording) do

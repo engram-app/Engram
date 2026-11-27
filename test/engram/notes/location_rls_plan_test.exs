@@ -269,7 +269,10 @@ defmodule Engram.Notes.LocationRlsPlanTest do
       assert [{_sql, probe}] = Enum.filter(plans, fn {sql, _} -> sql =~ "FROM (SELECT)" end)
       refute Map.has_key?(probe, :generic)
       assert probe.custom =~ "notes_path_live", probe.custom
+      # The statement's other half: the moved-folder probe.
+      assert probe.custom =~ "folders_moved_live", probe.custom
       refute_vault_scan!(%{"probe" => probe})
+      assert QueryPlan.buffers(probe.custom) <= @lookup_buffers + 2, probe.custom
     end
 
     test "a moved folder, a held path: the stale-holder check walks up on an id key",
@@ -282,8 +285,9 @@ defmodule Engram.Notes.LocationRlsPlanTest do
       refute_vault_scan!(plans)
       assert [%{custom: custom}] = lookup_plans(plans)
       assert custom =~ "notes_path_live", custom
-      # The walk up, one probe of the `(vault_id, id)` key per level.
-      assert custom =~ "folders_vault_id_id_key", custom
+      # The walk up, one probe of a folder id key per level. Either unique
+      # key on the folder id is fine (a planner tie seen on CI), never a scan.
+      assert custom =~ ~r/folders_(pkey|vault_id_id_key)/, custom
       # Measured 35 (the name arm's walk and probe, the holder, and the walk
       # up a two-level chain for the matched row, the holder and the name
       # match), flat in the vault's size.
