@@ -9,7 +9,7 @@ defmodule Engram.SearchKeywordStoreEquivalenceTest do
   use Engram.DataCase, async: true
 
   import Mox
-  import Engram.Fixtures, only: [insert_chunk!: 4, insert_note!: 3]
+  import Engram.Fixtures, only: [insert_chunk!: 4, insert_note!: 3, sorted_point_ids: 1]
 
   alias Engram.QdrantStub
   alias Engram.Search
@@ -35,8 +35,6 @@ defmodule Engram.SearchKeywordStoreEquivalenceTest do
     ]
   }
 
-  @ids for d <- ~w(1 5 9), do: String.duplicate(d, 8) <> "-0000-4000-8000-000000000000"
-
   setup do
     bypass = Bypass.open()
     QdrantStub.stub_retrieve(bypass)
@@ -46,7 +44,7 @@ defmodule Engram.SearchKeywordStoreEquivalenceTest do
     vault = insert(:vault, user: user)
 
     [a, m, z] =
-      for {id, name} <- Enum.zip(@ids, ~w(alpha mid zulu)) do
+      for {id, name} <- Enum.zip(sorted_point_ids(3), ~w(alpha mid zulu)) do
         note = insert_note!(user, vault, %{path: "#{name}.md", title: name})
         insert_chunk!(user, note, id, text: "ferritin #{name}")
         id

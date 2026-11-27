@@ -206,6 +206,13 @@ defmodule Engram.Fixtures do
   end
 
   @doc """
+  `n` fresh point ids, sorted, for a test whose tie-break asserts on id
+  order. Fresh per test: `chunk_points.point_id` is a global primary key, so
+  two async tests inserting the same fixed ids in different orders deadlock.
+  """
+  def sorted_point_ids(n), do: Enum.sort(for _ <- 1..n, do: Ecto.UUID.generate())
+
+  @doc """
   Inserts the `chunks` row search keys a Qdrant hit on: `point_id` must be
   the hit's point id (a UUID); a hit with no row is dropped. The vault and
   the display fields come from `note`.

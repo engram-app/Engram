@@ -108,9 +108,14 @@ defmodule Engram.IndexingHugeNotesTest do
     end)
   end
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "huge-notes-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
+  # ExUnit's per-test dir under the repo, not the host /tmp: CI shards share
+  # /tmp, and `System.unique_integer/1` is only unique within one VM, so two
+  # shards could pick the same name and one's cleanup deleted the other's
+  # files. ExUnit only clears it before a test, and the request recordings of
+  # the big sizes are large, so drop it after.
+  @moduletag :tmp_dir
+
+  setup %{tmp_dir: dir} do
     on_exit(fn -> File.rm_rf!(dir) end)
 
     bypass = Bypass.open()
