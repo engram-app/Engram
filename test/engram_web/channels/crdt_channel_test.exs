@@ -604,6 +604,63 @@ defmodule EngramWeb.CrdtChannelTest do
       assert {:ok, %{content: ^body}} = Notes.get_note_by_id(user, vault, rest.id)
     end
 
+    test "an occupied rival persists nothing: row, state, version, seq and broadcasts unchanged",
+         %{socket: socket, user: user, vault: vault} do
+      # The fold that detects the rival is a DRY merge into the frame's own
+      # in-memory doc. Nothing may reach the row, the tail, the vault's seq
+      # or the vault's devices.
+      body = "# Dry\n\nunchanged body\n"
+
+      {:ok, rest} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/dry.md", "content" => body},
+          actor: "api"
+        )
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      # The REST write's own announce/fan-out lands asynchronously; let it
+      # finish before taking the baseline, so only the create is measured.
+      drain_broadcasts()
+      before = stored_row(user, vault, rest.id)
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => rest.id,
+          "path" => "Notes/dry.md",
+          "b64" => frame_for_content(body)
+        })
+
+      rest_id = rest.id
+      assert_reply ref, :ok, %{doc_id: ^rest_id, seeded: false, genesis: "occupied"}
+      refute_receive %Phoenix.Socket.Broadcast{}, 300
+      assert stored_row(user, vault, rest.id) == before
+      assert CrdtRegistry.lookup(rest.id) == nil
+    end
+
+    test "naturally repeated text is judged by lineage, never by shape", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # A body that legitimately contains itself twice must not read as a
+      # doubled one: the exact frame stays `stored`, a rival goes `occupied`.
+      id = Ecto.UUID.generate()
+      body = "a\na\n"
+      frame = frame_for_content(body)
+      payload = %{"doc_id" => id, "path" => "Notes/repeat.md", "b64" => frame}
+
+      ref1 = push(socket, "crdt_create", payload)
+      assert_reply ref1, :ok, %{doc_id: ^id, seeded: true}
+      assert_note_content_eventually(user, vault, id, body)
+
+      ref2 = push(socket, "crdt_create", payload)
+      assert_reply ref2, :ok, %{doc_id: ^id, seeded: true, genesis: "stored"}
+
+      ref3 = push(socket, "crdt_create", Map.put(payload, "b64", frame_for_content(body)))
+      assert_reply ref3, :ok, %{doc_id: ^id, seeded: false, genesis: "occupied"}
+
+      assert {:ok, %{content: ^body}} = Notes.get_note_by_id(user, vault, id)
+    end
+
     test "folds a tail row written in the seed window instead of stranding it", %{
       socket: socket,
       user: user,
@@ -3697,6 +3754,27 @@ defmodule EngramWeb.CrdtChannelTest do
   # A base64 Yjs update that, applied to a fresh empty doc, ingests `content`
   # as full note plaintext — i.e. the frame a client sends as `crdt_create`'s
   # `b64` genesis payload for a brand-new note.
+  defp drain_broadcasts do
+    receive do
+      %Phoenix.Socket.Broadcast{} -> drain_broadcasts()
+    after
+      300 -> :ok
+    end
+  end
+
+  # Everything a write could move: the decrypted state bytes and content, the
+  # nonce a re-encrypt rotates, version, seq, and the vault's change_seq.
+  defp stored_row(user, vault, id) do
+    {:ok, note} = Notes.get_note_by_id(user, vault, id)
+    {:ok, state} = Engram.Crypto.decrypt_crdt_state(note, user)
+
+    {:ok, change_seq} =
+      Repo.with_tenant(user.id, fn -> Repo.get!(Engram.Vaults.Vault, vault.id).change_seq end)
+
+    {state, note.content, note.crdt_state_nonce, note.version, note.seq, note.updated_at,
+     change_seq}
+  end
+
   defp frame_for_content(content) do
     doc = CrdtBridge.new_doc()
     :ok = CrdtBridge.ingest_plaintext(doc, content)
