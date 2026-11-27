@@ -140,9 +140,8 @@ defmodule Engram.ServiceConfig.Overrides do
 
   # The keys the reviewed flags file owns: exactly the `properties` of
   # engram-infra `service_flags/schema.json`. Change both together.
-  @flag_keys ~w(folder_marker_delete folder_marker_delete_max_fixed folder_ops
-                client_logs_stop_writes plugin_floor_enabled plugin_floor paused_accounts
-                folder_path_hash_drop)a
+  @flag_keys ~w(folder_ops client_logs_stop_writes plugin_floor_enabled plugin_floor
+                paused_accounts folder_path_hash_drop)a
   # Never a DB row: `paused_accounts`, and `folder_path_hash_drop`, which its
   # boot step reads from the flags source only.
   @flags_only [:paused_accounts, :folder_path_hash_drop]
