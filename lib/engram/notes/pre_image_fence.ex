@@ -27,6 +27,7 @@ defmodule Engram.Notes.PreImageFence do
 
   import Ecto.Query, only: [from: 2]
 
+  alias Engram.Crypto.HMAC
   alias Engram.Logger.Metadata
   alias Engram.Notes.{Note, NoteBody}
 
@@ -70,6 +71,66 @@ defmodule Engram.Notes.PreImageFence do
     end
   end
 
+  @typedoc "Which writer missed the fence: the `writer` metric label."
+  @type writer :: :checkpoint | :rest | :move
+
+  @doc """
+  Run `attempt` (a fenced write against a pre-image `pre`); when it misses
+  (`missed?`) on a STATELESS pre-image, try the case A repair and, if it
+  repaired the row, run `attempt` once more. The same pre-image then matches:
+  the body had no state and now `notes` agrees. Call inside the caller's
+  transaction. A row with state, or one that is not case A, returns the first
+  result unchanged.
+  """
+  @spec retry_if_repaired(Note.t(), writer(), (-> result), (result -> boolean())) :: result
+        when result: term()
+  def retry_if_repaired(%{crdt_state_nonce: nil, id: id}, writer, attempt, missed?) do
+    result = attempt.()
+    if missed?.(result) and repair(id, writer), do: attempt.(), else: result
+  end
+
+  def retry_if_repaired(%{}, _writer, attempt, _missed?), do: attempt.()
+
+  @doc """
+  Case A self-repair (`NoteBody.repair_orphan_crdt_nonce/2`): `notes` keeps a
+  CRDT nonce the body has no state for. Before the shared `IS NULL` fence such
+  a row passed a seq-only fence and every write healed it; now it would miss
+  forever, so the miss repairs it in place. Logged at warning with the note's
+  HMAC (never the raw id) and counted on
+  `[:engram, :crdt, :checkpoint_fence_drift]` as `outcome: :repaired_a`. A
+  repair that fails is logged and reads as not repaired, without aborting the
+  caller's transaction.
+  """
+  @spec repair(Ecto.UUID.t(), writer()) :: boolean()
+  def repair(note_id, writer) do
+    repaired? =
+      try do
+        NoteBody.repair_orphan_crdt_nonce(Engram.Repo, note_id)
+      rescue
+        e ->
+          Logger.warning(
+            "crdt fence drift repair failed note=#{HMAC.hash_id(note_id)} case=a",
+            Metadata.with_category(:warning, :sync, error_kind: Engram.Telemetry.error_kind(e))
+          )
+
+          false
+      end
+
+    if repaired? do
+      :telemetry.execute([:engram, :crdt, :checkpoint_fence_drift], %{count: 1}, %{
+        writer: writer,
+        outcome: :repaired_a
+      })
+
+      Logger.warning(
+        "crdt fence drift repaired note=#{HMAC.hash_id(note_id)} case=a writer=#{writer}",
+        Metadata.with_category(:warning, :sync)
+      )
+    end
+
+    repaired?
+  end
+
   @doc """
   After a fence miss: is this row one the fence can NEVER match, because its
   CRDT nonce copies drifted apart (a restore or a hand edit, never an app
@@ -80,7 +141,7 @@ defmodule Engram.Notes.PreImageFence do
   runs in a savepoint, and a probe that fails is logged and reads as no drift
   without aborting that transaction.
   """
-  @spec report_drift(Ecto.UUID.t(), :checkpoint | :rest | :move) :: boolean()
+  @spec report_drift(Ecto.UUID.t(), writer()) :: boolean()
   def report_drift(note_id, writer) do
     drifted? =
       try do
@@ -100,7 +161,8 @@ defmodule Engram.Notes.PreImageFence do
 
     if drifted? do
       :telemetry.execute([:engram, :crdt, :checkpoint_fence_drift], %{count: 1}, %{
-        writer: writer
+        writer: writer,
+        outcome: :unrepaired
       })
 
       Logger.warning(

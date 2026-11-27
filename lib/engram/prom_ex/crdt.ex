@@ -192,11 +192,15 @@ defmodule Engram.PromEx.Crdt do
         # `notes` CRDT nonce copies drifted apart: that row can never be written
         # through the fence until repaired. Expected 0; any increase is a row to
         # fix by hand. `writer` is a closed set: checkpoint | rest | move.
+        # `outcome`: repaired_a (case A, `notes` kept a nonce the body has no
+        # state for: repaired in place, the write went through) or unrepaired
+        # (case B, the nonces differ: still refused).
         counter(
           metric_prefix ++ [:checkpoint_fence_drift, :total],
           event_name: @fence_drift_event,
-          description: "Write fence misses on a row with drifted CRDT nonce copies, by writer.",
-          tags: [:writer]
+          description:
+            "Write fence misses on a row with drifted CRDT nonce copies, by writer and outcome.",
+          tags: [:writer, :outcome]
         ),
         counter(
           metric_prefix ++ [:room_start, :total],

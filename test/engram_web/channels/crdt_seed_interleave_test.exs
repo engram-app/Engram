@@ -287,6 +287,63 @@ defmodule EngramWeb.CrdtSeedInterleaveTest do
     assert CrdtBridge.text_of(doc) == rest_body
   end
 
+  test "two concurrent claims on a case A row (stale notes nonce) stay atomic", ctx do
+    %{socket: socket, user: user, vault: vault} = ctx
+
+    # Case A: `notes` keeps a nonce the body has no state for. The first claim
+    # to write repairs it (clears exactly the stale nonce) and lands; the
+    # other, parked between its row read and its write, then finds a fresh
+    # nonce, repairs nothing, and is judged a rival. One lineage.
+    body = "# Wiped\n\nlegacy body\n"
+    path = "Notes/case-a.md"
+    id = wipe!(user, vault, path, body)
+
+    Repo.update_all(
+      from(n in Engram.Notes.Note, where: n.id == ^id),
+      [set: [crdt_state_nonce: :crypto.strong_rand_bytes(12)]],
+      skip_tenant_check: true
+    )
+
+    {:ok, _, second} =
+      subscribe_and_join(
+        socket(EngramWeb.UserSocket, "user_#{user.id}_b", %{
+          current_user: user,
+          current_api_key: nil
+        }),
+        EngramWeb.CrdtChannel,
+        "crdt:#{user.id}:#{vault.id}",
+        %{"crdt_proto" => 2}
+      )
+
+    on_exit(CheckpointInterleave.arm(:after_row_read))
+
+    ref1 =
+      push(socket, "crdt_create", %{
+        "doc_id" => id,
+        "path" => path,
+        "b64" => frame_for_content(body)
+      })
+
+    parked = CheckpointInterleave.await_parked(:after_row_read, socket.channel_pid)
+
+    ref2 =
+      push(second, "crdt_create", %{
+        "doc_id" => id,
+        "path" => path,
+        "b64" => frame_for_content(body)
+      })
+
+    assert_reply ref2, :ok, %{doc_id: ^id, seeded: true, genesis: "stored"}, 15_000
+
+    CheckpointInterleave.release(:after_row_read, parked)
+    assert_reply ref1, :ok, %{doc_id: ^id, seeded: false, genesis: "occupied"}, 15_000
+
+    {:ok, stored} = Notes.get_note_by_id(user, vault, id)
+    {:ok, state} = Crypto.decrypt_crdt_state(stored, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(state)
+    assert CrdtBridge.text_of(doc) == body
+  end
+
   defp wipe!(user, vault, path, body) do
     {:ok, note} =
       Notes.upsert_note(user, vault, %{"path" => path, "content" => body}, actor: "api")

@@ -228,6 +228,20 @@ defmodule Engram.Notes.NoteBody do
   WHERE n.id = $1 AND n.kind = 'note' AND #{differs.("crdt_ct", "crdt_state_nonce")}
   """
 
+  # Case A drift: `notes` keeps a CRDT nonce whose state the body does not
+  # hold. Read the stale nonce, then clear exactly that value (see
+  # `repair_orphan_crdt_nonce/2`).
+  @case_a_sql """
+  SELECT n.crdt_state_nonce FROM notes n JOIN note_bodies b ON b.note_id = n.id
+  WHERE n.id = $1 AND n.kind = 'note' AND n.crdt_state_nonce IS NOT NULL
+    AND b.crdt_ct IS NULL
+  """
+
+  @case_a_repair_sql """
+  UPDATE notes SET crdt_state_nonce = NULL
+  WHERE id = $1 AND kind = 'note' AND crdt_state_nonce = $2
+  """
+
   @drift_sql """
   SELECT n.id::text FROM notes n JOIN note_bodies b ON b.note_id = n.id
   WHERE n.id = ANY($1) AND n.kind = 'note'
@@ -665,5 +679,32 @@ defmodule Engram.Notes.NoteBody do
     sql = Application.get_env(:engram, :crdt_drift_probe_fault_sql) || @crdt_drift_sql
     %{num_rows: n} = repo.query!(sql, [Ecto.UUID.dump!(id)], mode: :savepoint)
     n > 0
+  end
+
+  @doc """
+  Case A drift repair: `notes.crdt_state_nonce` is set but the body holds no
+  CRDT state, so a loaded note's nonce (taken from the body) is nil and the
+  write fence (`IS NULL` on `notes`) can never match. The body is what every
+  reader sees, so the `notes` copy is the stale one: clear it. True when a row
+  was repaired.
+
+  Two statements, each in a SAVEPOINT (call inside a transaction): read the
+  stale nonce, then clear only THAT value. Keying the clear on the value read
+  is what keeps a concurrent lineage claim atomic: a claim that committed in
+  between wrote a fresh nonce, so the clear matches zero rows instead of
+  erasing the new lineage's nonce.
+  """
+  @spec repair_orphan_crdt_nonce(module(), Ecto.UUID.t()) :: boolean()
+  def repair_orphan_crdt_nonce(repo, id) do
+    uuid = Ecto.UUID.dump!(id)
+
+    case repo.query!(@case_a_sql, [uuid], mode: :savepoint) do
+      %{rows: [[nonce]]} when is_binary(nonce) ->
+        %{num_rows: n} = repo.query!(@case_a_repair_sql, [uuid, nonce], mode: :savepoint)
+        n == 1
+
+      _ ->
+        false
+    end
   end
 end

@@ -607,7 +607,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
     with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
          {:ok, raw_state} <- encode(union_doc),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(raw_state, user, note_id) do
-      case Repo.update_all(snapshot_fence(note_id, note),
+      case fenced_update_all(note_id, note,
              set: [
                crdt_state_nonce: nonce,
                dek_version: Crypto.row_version_aad_bound()
@@ -672,7 +672,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
       prev == content_hash ->
         # Text unchanged: compact the snapshot + prune, but do NOT touch
         # version/seq/content — legacy /changes pullers must not see phantom edits.
-        case Repo.update_all(snapshot_fence(note_id, note),
+        case fenced_update_all(note_id, note,
                set:
                  [
                    crdt_state_nonce: nonce,
@@ -766,7 +766,12 @@ defmodule Engram.Notes.CrdtCheckpoint do
           |> Map.put(:updated_at, DateTime.utc_now())
           |> Map.to_list()
 
-        case Repo.update_all(fenced_query, set: NoteBody.notes_row(set)) do
+        case PreImageFence.retry_if_repaired(
+               note,
+               :checkpoint,
+               fn -> Repo.update_all(fenced_query, set: NoteBody.notes_row(set)) end,
+               &match?({0, _}, &1)
+             ) do
           {1, _} ->
             _ = NoteBody.put!({note_id, set})
             pruned = prune_tail(note_id, vault_id, prune)
@@ -1069,6 +1074,17 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # `deleted_at IS NULL`: a tick in flight when a delete commits reads the row
   # AFTER the delete's seq bump, so seq alone matches and the checkpoint would
   # materialize, bump seq and enqueue jobs for the trashed note.
+  # `Repo.update_all` under the snapshot fence, repairing a case A drifted row
+  # once (`PreImageFence.retry_if_repaired/4`) when it misses.
+  defp fenced_update_all(note_id, note, opts) do
+    PreImageFence.retry_if_repaired(
+      note,
+      :checkpoint,
+      fn -> Repo.update_all(snapshot_fence(note_id, note), opts) end,
+      &match?({0, _}, &1)
+    )
+  end
+
   defp snapshot_fence(note_id, %Note{} = note) do
     from(n in PreImageFence.query(note_id, note), where: is_nil(n.deleted_at))
   end

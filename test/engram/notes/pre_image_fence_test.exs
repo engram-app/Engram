@@ -25,15 +25,34 @@ defmodule Engram.Notes.PreImageFenceTest do
     end)
   end
 
-  # Drift: the body has no state, `notes` keeps a nonce.
+  # Case B drift: the body keeps its state, `notes` holds a DIFFERENT nonce.
+  # No write can pass the fence, and nothing can tell which copy is right.
   defp drift_crdt_nonce!(user, id) do
-    wipe_state!(user, id)
+    assert {:ok, %{crdt_state_nonce: n}} =
+             Repo.with_tenant(user.id, fn -> Fixtures.raw_note!(id) end)
 
+    assert is_binary(n), "case B needs a row with state"
+    set_notes_nonce!(id)
+  end
+
+  # Case A drift: the body has no state, `notes` keeps a nonce. Repairable:
+  # the body is what every reader sees.
+  defp case_a!(user, id) do
+    wipe_state!(user, id)
+    set_notes_nonce!(id)
+  end
+
+  defp set_notes_nonce!(id) do
     Repo.update_all(
       from(n in Note, where: n.id == ^id),
       [set: [crdt_state_nonce: :crypto.strong_rand_bytes(12)]],
       skip_tenant_check: true
     )
+  end
+
+  defp drifted?(user, id) do
+    {:ok, ids} = Repo.with_tenant(user.id, fn -> Engram.Notes.NoteBody.drift_ids(Repo, [id]) end)
+    ids != []
   end
 
   # The fence lock is the only FOR UPDATE that filters on the state nonce
@@ -145,7 +164,7 @@ defmodule Engram.Notes.PreImageFenceTest do
                  )
       end)
 
-    assert_received {:fence_drift, %{count: 1}, %{writer: :rest}}
+    assert_received {:fence_drift, %{count: 1}, %{writer: :rest, outcome: :unrepaired}}
     assert log =~ "crdt fence drift"
   end
 
@@ -199,7 +218,7 @@ defmodule Engram.Notes.PreImageFenceTest do
     attach_drift()
 
     ExUnit.CaptureLog.capture_log(fn -> Notes.rename_note(user, vault, "f.md", "g.md") end)
-    assert_received {:fence_drift, %{count: 1}, %{writer: :move}}
+    assert_received {:fence_drift, %{count: 1}, %{writer: :move, outcome: :unrepaired}}
   end
 
   test "a resurrecting id-keyed move on a drifted row reports drift as a move", ctx do
@@ -218,6 +237,68 @@ defmodule Engram.Notes.PreImageFenceTest do
       )
     end)
 
-    assert_received {:fence_drift, %{count: 1}, %{writer: :move}}
+    assert_received {:fence_drift, %{count: 1}, %{writer: :move, outcome: :unrepaired}}
+  end
+
+  describe "case A (notes keeps a nonce the body has no state for) repairs itself" do
+    test "a REST write succeeds and leaves the row consistent", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      case_a!(user, note.id)
+      assert drifted?(user, note.id)
+      attach_drift()
+
+      assert {:ok, _} =
+               Notes.upsert_note(user, vault, %{"path" => "f.md", "content" => "after"},
+                 actor: "api"
+               )
+
+      assert_received {:fence_drift, %{count: 1}, %{writer: :rest, outcome: :repaired_a}}
+      refute drifted?(user, note.id)
+      assert {:ok, %{content: "after"}} = Notes.get_note_by_id(user, vault, note.id)
+    end
+
+    test "a rename works", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      case_a!(user, note.id)
+      attach_drift()
+
+      assert {:ok, _} = Notes.rename_note(user, vault, "f.md", "g.md")
+      assert_received {:fence_drift, %{count: 1}, %{writer: :move, outcome: :repaired_a}}
+      assert {:ok, %{path: "g.md"}} = Notes.get_note_by_id(user, vault, note.id)
+    end
+
+    test "a resurrecting id-keyed move works", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      :ok = Notes.delete_note(user, vault, "f.md")
+      case_a!(user, note.id)
+      attach_drift()
+
+      assert {:ok, moved} =
+               Notes.upsert_note(
+                 user,
+                 vault,
+                 %{"id" => note.id, "path" => "h.md", "content" => "before"},
+                 actor: "api"
+               )
+
+      assert moved.path == "h.md"
+      assert_received {:fence_drift, %{count: 1}, %{writer: :move, outcome: :repaired_a}}
+    end
+
+    test "the repair log names the note by its HMAC, never the raw id", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      case_a!(user, note.id)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          {:ok, _} =
+            Notes.upsert_note(user, vault, %{"path" => "f.md", "content" => "after"},
+              actor: "api"
+            )
+        end)
+
+      assert log =~ "crdt fence drift repaired note=#{Engram.Crypto.HMAC.hash_id(note.id)} case=a"
+      refute log =~ note.id
+    end
   end
 end

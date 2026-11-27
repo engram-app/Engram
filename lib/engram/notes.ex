@@ -3131,7 +3131,7 @@ defmodule Engram.Notes do
     # transaction that runs no savepoint (CRDT relocate, resurrect).
     _ = if free_slot?, do: free_stale_slot(user, prior.vault_id, sanitized_path, prior.id)
 
-    case fenced_update(snapshot_fenced(changeset, prior), prior, db_opts) do
+    case fenced_update(snapshot_fenced(changeset, prior), prior, :move, db_opts) do
       {:ok, updated} ->
         _ =
           if was_tombstoned do
@@ -3750,7 +3750,7 @@ defmodule Engram.Notes do
       # to exactly the writer it needs to catch: replay_tail finds the pruned
       # rows gone, the merge silently uses the stale snapshot, the version
       # still matches, and the checkpoint's ops are destroyed.
-      case fenced_update(snapshot_fenced(changeset, existing), existing, db_opts) do
+      case fenced_update(snapshot_fenced(changeset, existing), existing, :rest, db_opts) do
         # Thread crdt.content_hash (HMAC of projection) alongside merged_text
         # so callers can include the stored hash in broadcast digests without
         # re-deriving it.
@@ -3881,8 +3881,8 @@ defmodule Engram.Notes do
   # state without bumping it: a genesis claim of a lineage-less row. So such a
   # row is first locked through the shared `PreImageFence` (`IS NULL`); the
   # update then runs on a row that can no longer move under it.
-  defp fenced_update(changeset, %Note{} = pre, db_opts) do
-    with :ok <- lock_stateless(pre, db_opts),
+  defp fenced_update(changeset, %Note{} = pre, writer, db_opts) do
+    with :ok <- lock_stateless(pre, writer, db_opts),
          {:ok, updated} <- Repo.update(changeset, db_opts) do
       _ = NoteBody.put!({updated.id, changeset.changes}, db_opts)
       {:ok, updated}
@@ -3896,11 +3896,18 @@ defmodule Engram.Notes do
 
   # Only a stateless pre-image takes the lock. A row with state is fenced by
   # the update's own `seq` + `crdt_state_nonce` filters (`snapshot_fenced/2`),
-  # atomically, so a normal save pays no extra round trip.
-  defp lock_stateless(%Note{crdt_state_nonce: nil} = pre, db_opts),
-    do: PreImageFence.lock(pre.id, pre, db_opts)
+  # atomically, so a normal save pays no extra round trip. A stateless lock
+  # that misses on a case A drifted row repairs it and locks again.
+  defp lock_stateless(%Note{crdt_state_nonce: nil} = pre, writer, db_opts) do
+    PreImageFence.retry_if_repaired(
+      pre,
+      writer,
+      fn -> PreImageFence.lock(pre.id, pre, db_opts) end,
+      &(&1 == :stale)
+    )
+  end
 
-  defp lock_stateless(%Note{}, _db_opts), do: :ok
+  defp lock_stateless(%Note{}, _writer, _db_opts), do: :ok
 
   # Posture C CRDT bridge — runs INSIDE the caller's Repo.with_tenant txn.
   #
@@ -5667,16 +5674,15 @@ defmodule Engram.Notes do
     # `seq` is the always-present half; `crdt_state_ciphertext` catches the
     # checkpoint branches that rewrite the snapshot without touching seq, and is
     # only compared when non-nil because `= NULL` is never true.
+    set =
+      [updated_at: now, seq: seq, folder_ref_id: folder_ref] ++ NoteBody.notes_row(full_kw)
+
     {count, _} =
-      note
-      |> rename_fence()
-      |> Repo.update_all(
-        set:
-          [
-            updated_at: now,
-            seq: seq,
-            folder_ref_id: folder_ref
-          ] ++ NoteBody.notes_row(full_kw)
+      PreImageFence.retry_if_repaired(
+        note,
+        :move,
+        fn -> note |> rename_fence() |> Repo.update_all(set: set) end,
+        &match?({0, _}, &1)
       )
 
     if count == 1 do

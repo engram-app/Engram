@@ -103,7 +103,8 @@ defmodule Engram.PromEx.ZeroInit do
     # Expected to stay 0 forever, so it must exist at 0 for increase() to see a 1.
     fence_drift_series =
       for writer <- [:checkpoint, :rest, :move],
-          do: {@fence_drift, %{count: 0}, %{writer: writer}}
+          outcome <- [:repaired_a, :unrepaired],
+          do: {@fence_drift, %{count: 0}, %{writer: writer, outcome: outcome}}
 
     bookkeeping_series =
       [{@canary_rows, %{count: 0}, %{}}] ++

@@ -1324,13 +1324,9 @@ defmodule Engram.Notes.CrdtCheckpointTest do
   test "a fence miss on a row whose nonce copies drifted apart is reported, not silent", ctx do
     %{user: user, vault: vault, note: note} = ctx
 
-    # Drift (a restore or a hand edit): the body has no state, `notes` keeps a
-    # nonce. A loaded note takes its nonce from the body, so `PreImageFence`
-    # can never match this row again and every checkpoint misses.
-    Repo.with_tenant!(user.id, fn ->
-      Engram.Fixtures.write_note_body!(note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil)
-    end)
-
+    # Case B drift (a restore or a hand edit): the body keeps its state and
+    # `notes` holds a different nonce. A loaded note takes its nonce from the
+    # body, so `PreImageFence` can never match and every checkpoint misses.
     Repo.update_all(
       from(n in Note, where: n.id == ^note.id),
       [set: [crdt_state_nonce: :crypto.strong_rand_bytes(12)]],
@@ -1357,7 +1353,30 @@ defmodule Engram.Notes.CrdtCheckpointTest do
         assert :stale = CrdtCheckpoint.checkpoint_pruning(user.id, vault.id, note.id, doc)
       end)
 
-    assert_received {:fence_drift, %{count: 1}, %{writer: :checkpoint}}
+    assert_received {:fence_drift, %{count: 1}, %{writer: :checkpoint, outcome: :unrepaired}}
     assert log =~ "crdt fence drift"
+  end
+
+  test "a checkpoint on a case A row (notes nonce, no body state) repairs it and lands", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    Repo.with_tenant!(user.id, fn ->
+      Engram.Fixtures.write_note_body!(note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil)
+    end)
+
+    Repo.update_all(
+      from(n in Note, where: n.id == ^note.id),
+      [set: [crdt_state_nonce: :crypto.strong_rand_bytes(12)]],
+      skip_tenant_check: true
+    )
+
+    doc = CrdtBridge.new_doc()
+    :ok = CrdtBridge.ingest_plaintext(doc, "before and more")
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      assert {:written, _} = CrdtCheckpoint.checkpoint_pruning(user.id, vault.id, note.id, doc)
+    end)
+
+    assert {:ok, %{content: "before and more"}} = Notes.get_note_by_id(user, vault, note.id)
   end
 end
