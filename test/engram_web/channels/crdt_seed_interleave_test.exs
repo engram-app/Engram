@@ -201,13 +201,7 @@ defmodule EngramWeb.CrdtSeedInterleaveTest do
     body = "# Wiped\n\nlegacy body\n"
     path = "Notes/claim.md"
 
-    {:ok, note} =
-      Notes.upsert_note(user, vault, %{"path" => path, "content" => body}, actor: "api")
-
-    Repo.with_tenant!(user.id, fn ->
-      Engram.Fixtures.write_note_body!(note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil)
-      Repo.delete_all(from(l in CrdtUpdateLog, where: l.note_id == ^note.id))
-    end)
+    id = wipe!(user, vault, path, body)
 
     {:ok, _, second} =
       subscribe_and_join(
@@ -221,7 +215,6 @@ defmodule EngramWeb.CrdtSeedInterleaveTest do
       )
 
     on_exit(CheckpointInterleave.arm(:after_row_read))
-    id = note.id
 
     ref1 =
       push(socket, "crdt_create", %{
@@ -250,6 +243,60 @@ defmodule EngramWeb.CrdtSeedInterleaveTest do
     {:ok, state} = Crypto.decrypt_crdt_state(stored, user)
     {:ok, doc} = CrdtBridge.doc_from_state(state)
     assert CrdtBridge.text_of(doc) == body
+  end
+
+  test "a REST write racing a lineage claim merges onto the claimed lineage, never replaces it",
+       ctx do
+    %{socket: socket, user: user, vault: vault} = ctx
+
+    # The claim is a compaction: it sets the state without bumping seq. A REST
+    # write that read the wiped row before the claim committed used to match
+    # its seq-only fence and overwrite the claimed lineage with its own, so the
+    # device just told `stored` later unioned two lineages. The shared
+    # `PreImageFence` makes that write retry against the claimed state.
+    body = "# Wiped\n\nlegacy body\n"
+    rest_body = body <> "a REST line\n"
+    path = "Notes/rest-claim.md"
+    id = wipe!(user, vault, path, body)
+
+    on_exit(CheckpointInterleave.arm(:after_note_read))
+
+    writer =
+      Task.async(fn ->
+        Notes.upsert_note(user, vault, %{"path" => path, "content" => rest_body}, actor: "api")
+      end)
+
+    parked = CheckpointInterleave.await_parked(:after_note_read, writer.pid)
+
+    frame = frame_for_content(body)
+    ref = push(socket, "crdt_create", %{"doc_id" => id, "path" => path, "b64" => frame})
+    assert_reply ref, :ok, %{doc_id: ^id, seeded: true, genesis: "stored"}, 15_000
+
+    CheckpointInterleave.release(:after_note_read, parked)
+    assert {:ok, _} = Task.await(writer, 15_000)
+
+    {:ok, stored} = Notes.get_note_by_id(user, vault, id)
+    assert stored.content == rest_body
+    {:ok, state} = Crypto.decrypt_crdt_state(stored, user)
+    {:ok, doc} = CrdtBridge.doc_from_state(state)
+    assert CrdtBridge.text_of(doc) == rest_body
+
+    # The claimed frame is IN the stored lineage: re-applying it changes nothing.
+    {:ok, {:sync, {:sync_update, update}}} = Yex.Sync.message_decode(Base.decode64!(frame))
+    :ok = Yex.apply_update(doc, update)
+    assert CrdtBridge.text_of(doc) == rest_body
+  end
+
+  defp wipe!(user, vault, path, body) do
+    {:ok, note} =
+      Notes.upsert_note(user, vault, %{"path" => path, "content" => body}, actor: "api")
+
+    Repo.with_tenant!(user.id, fn ->
+      Engram.Fixtures.write_note_body!(note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil)
+      Repo.delete_all(from(l in CrdtUpdateLog, where: l.note_id == ^note.id))
+    end)
+
+    note.id
   end
 
   # A base64 Yjs update that, applied to a fresh empty doc, ingests `content` as

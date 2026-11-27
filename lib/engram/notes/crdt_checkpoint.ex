@@ -32,6 +32,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
     Location,
     Note,
     NoteBody,
+    PreImageFence,
     Revisions
   }
 
@@ -826,8 +827,40 @@ defmodule Engram.Notes.CrdtCheckpoint do
       Metadata.with_category(:info, :sync, note_id: note_id)
     )
 
+    report_fence_drift(note_id)
+
     {note.content_hash, note.content_hash, note.path, nil,
      if(note.deleted_at, do: :deleted, else: :not_written)}
+  end
+
+  # A miss is normally a newer write and retrying fixes it. A row whose body
+  # and `notes` copies of the state nonce disagree (drift: a restore or a hand
+  # edit, never an app writer) can never satisfy `PreImageFence`, so it would
+  # miss every checkpoint forever while its tail grows. One indexed read, only
+  # on a miss, so that case is loud: a warning and
+  # `[:engram, :crdt, :checkpoint_fence_drift]`. Never raises into the write.
+  defp report_fence_drift(note_id) do
+    if NoteBody.drift_ids(Repo, [note_id]) != [] do
+      :telemetry.execute([:engram, :crdt, :checkpoint_fence_drift], %{count: 1}, %{})
+
+      Logger.warning(
+        "crdt checkpoint fence drift note_id=#{note_id}",
+        Metadata.with_category(:warning, :sync, note_id: note_id)
+      )
+    end
+
+    :ok
+  rescue
+    e ->
+      Logger.warning(
+        "crdt checkpoint fence drift check failed note_id=#{note_id}",
+        Metadata.with_category(:warning, :sync,
+          note_id: note_id,
+          error_kind: Engram.Telemetry.error_kind(e)
+        )
+      )
+
+      :ok
   end
 
   defp encode(doc) do
@@ -1050,12 +1083,13 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # keeping a TOASTed KB-to-MB bytea out of the bind parameters of every
   # compaction checkpoint.
   #
-  # A stateless pre-image is fenced with `IS NULL`, never `= NULL` (never true,
-  # which would fence a never-checkpointed row out of every write forever). The
-  # `IS NULL` matters: a compaction write sets state WITHOUT bumping seq, so seq
-  # alone let a second writer that read the same stateless row overwrite the
-  # first one's lineage. Two genesis creates racing a lineage-less row are
-  # exactly that pair; with the fence, the loser matches zero rows.
+  # Both halves come from the ONE shared fence, `PreImageFence` (also the REST,
+  # move and rename writers'): a stateless pre-image is fenced with `IS NULL`,
+  # so a writer of ANY kind that read the row before a lineage claim (a
+  # compaction that sets state without bumping seq) matches zero rows instead
+  # of overwriting the claimed lineage. A row whose body and `notes` nonce have
+  # drifted apart is fenced out in both directions; `fence_missed/2` reports
+  # that case (`crdt checkpoint fence drift`) instead of retrying in silence.
   #
   # On a miss we skip WITHOUT pruning. That is the whole safety property: the
   # tail is the only durable copy of anything this doc holds that the newer row
@@ -1065,19 +1099,9 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # `deleted_at IS NULL`: a tick in flight when a delete commits reads the row
   # AFTER the delete's seq bump, so seq alone matches and the checkpoint would
   # materialize, bump seq and enqueue jobs for the trashed note.
-  defp snapshot_fence(note_id, %Note{crdt_state_nonce: nil, seq: seq}) do
-    from(n in Note,
-      where:
-        n.id == ^note_id and n.kind == "note" and n.seq == ^seq and
-          is_nil(n.crdt_state_nonce) and is_nil(n.deleted_at)
-    )
-  end
-
-  defp snapshot_fence(note_id, %Note{crdt_state_nonce: nonce, seq: seq}) do
-    from(n in Note,
-      where:
-        n.id == ^note_id and n.kind == "note" and n.seq == ^seq and
-          n.crdt_state_nonce == ^nonce and is_nil(n.deleted_at)
+  defp snapshot_fence(note_id, %Note{} = note) do
+    from(n in PreImageFence.query(note_id, note),
+      where: n.kind == "note" and is_nil(n.deleted_at)
     )
   end
 

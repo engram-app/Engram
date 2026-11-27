@@ -717,6 +717,23 @@ defmodule EngramWeb.CrdtChannelTest do
                      2_000
     end
 
+    test "an empty frame on an empty lineage-less row stays stored, with nothing written",
+         %{socket: socket, user: user, vault: vault} do
+      # Doubling "" is "", so there is nothing to claim or protect.
+      id = wiped_note!(user, vault, "Notes/wiped-empty.md", "")
+      before = stored_row(user, vault, id)
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/wiped-empty.md",
+          "b64" => frame_for_content("")
+        })
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true, genesis: "stored"}
+      assert stored_row(user, vault, id) == before
+    end
+
     test "a lineage-less row: a second, different frame after the first is occupied",
          %{socket: socket, user: user, vault: vault} do
       # Two devices racing the same wiped note. Before the claim both were told

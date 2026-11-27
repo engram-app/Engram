@@ -1320,4 +1320,44 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     # flush, and leaving it set would re-arm against a room that is gone.
     assert new_state.first_dirty_at == nil
   end
+
+  test "a fence miss on a row whose nonce copies drifted apart is reported, not silent", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    # Drift (a restore or a hand edit): the body has no state, `notes` keeps a
+    # nonce. A loaded note takes its nonce from the body, so `PreImageFence`
+    # can never match this row again and every checkpoint misses.
+    Repo.with_tenant!(user.id, fn ->
+      Engram.Fixtures.write_note_body!(note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil)
+    end)
+
+    Repo.update_all(
+      from(n in Note, where: n.id == ^note.id),
+      [set: [crdt_state_nonce: :crypto.strong_rand_bytes(12)]],
+      skip_tenant_check: true
+    )
+
+    test_pid = self()
+    handler = "fence-drift-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler,
+      [:engram, :crdt, :checkpoint_fence_drift],
+      fn _, m, _, _ -> send(test_pid, {:fence_drift, m}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    doc = CrdtBridge.new_doc()
+    :ok = CrdtBridge.ingest_plaintext(doc, "before and more")
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :stale = CrdtCheckpoint.checkpoint_pruning(user.id, vault.id, note.id, doc)
+      end)
+
+    assert_received {:fence_drift, %{count: 1}}
+    assert log =~ "crdt checkpoint fence drift"
+  end
 end

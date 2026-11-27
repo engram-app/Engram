@@ -1520,7 +1520,10 @@ defmodule EngramWeb.CrdtChannel do
   # `retries` bounds the re-fold after a lost first-writer race to one.
   defp classify_genesis(user, vault, note_id, doc, genesis_text, retries) do
     case fold_row_and_tail(user, vault, note_id, doc) do
-      {:ok, ^genesis_text, prune_ids, false} ->
+      # An empty frame on an empty lineage-less row has nothing to double, and
+      # the checkpoint would skip a "" projection over a stateless row anyway
+      # (`ensure_projection_safe`): it stays the dry `stored` below.
+      {:ok, ^genesis_text, prune_ids, false} when genesis_text != "" ->
         case seed_write(user, vault, note_id, doc, genesis_text, prune_ids, expect_no_state: true) do
           {:stale, _, _} when retries > 0 ->
             # Another create claimed the lineage first. Nothing of ours landed
