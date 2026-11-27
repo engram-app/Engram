@@ -20,6 +20,7 @@ defmodule Engram.Indexing do
   alias Engram.Indexing.VectorCache
   alias Engram.KeywordIndex
   alias Engram.KeywordStore
+  alias Engram.KeywordStore.FeedKey
   alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
   alias Engram.Notes.ChunkPoint
@@ -1243,6 +1244,15 @@ defmodule Engram.Indexing do
           :ok = ChunkRows.write!(note.id, chunk_rows, @insert_batch)
           _ = ChunkRows.recount!([note.id])
 
+          # The kwsearch feed's rows commit with the chunk rows (a no-op while
+          # the feed is off). `keep` is the note's full point set.
+          :ok =
+            KeywordStore.in_commit(
+              %{user_id: note.user_id, vault_id: note.vault_id, note_id: note.id},
+              for(%{qdrant_point_id: id} <- chunk_rows, id != nil, do: id),
+              Map.get(prepared, :keyword_pending)
+            )
+
           with {:ok, tier} <- Map.fetch(prepared, :index_tier),
                do: stamp_index_tier(note, tier, Map.get(prepared, :chunk_count))
 
@@ -1419,7 +1429,7 @@ defmodule Engram.Indexing do
   # retry (or the next edit) re-floors and finishes the delete.
   defp drop_replaced_points(note, stale, points, reused) do
     with :ok <- delete_point_ids(note, stale),
-         do: delete_note_points_except(note, Enum.map(points, & &1.id) ++ reused)
+         do: delete_note_points_except(note, Enum.map(points, & &1.id) ++ reused, :replaced)
   end
 
   defp delete_point_ids(note, ids), do: delete_points(note.user_id, ids)
@@ -1427,13 +1437,13 @@ defmodule Engram.Indexing do
   # Every index delete goes through `delete_points/2`, `delete_user_points/2`,
   # `delete_vault_points/2` and this one, so the keyword store
   # (`Engram.KeywordStore`) sees each one beside the dense delete.
-  defp delete_note_points_except(note, keep) do
+  defp delete_note_points_except(note, keep, reason) do
     user_id = to_string(note.user_id)
     vault_id = to_string(note.vault_id)
 
     both_legs(
       Qdrant.delete_by_note_except(collection(), user_id, vault_id, note.id, keep),
-      fn -> KeywordStore.delete_note(user_id, vault_id, note.id, keep) end
+      fn -> KeywordStore.delete_note(user_id, vault_id, note.id, keep, reason) end
     )
   end
 
@@ -1556,7 +1566,7 @@ defmodule Engram.Indexing do
   # still follows as the belt.
   defp purge_before_rebuild(note, [], stale_point_ids) do
     with :ok <- delete_point_ids(note, stale_point_ids),
-         do: delete_points_by_filter(note)
+         do: delete_points_by_filter(note, :rebuild)
   end
 
   defp purge_before_rebuild(_note, _reused, _stale), do: :ok
@@ -1611,21 +1621,26 @@ defmodule Engram.Indexing do
     end)
   end
 
-  @doc "Delete every index point of a user, dense then keyword. `purpose` picks the Qdrant retry profile."
-  @spec delete_user_points(term(), atom()) :: :ok | {:error, term()}
-  def delete_user_points(user_id, purpose \\ :indexing) do
+  @doc """
+  Delete every index point of a user, dense then keyword. `purpose` picks the
+  Qdrant retry profile. `kind` (`Engram.KeywordStore.kind/0`): `:purge` for
+  the account hard delete, `:soft` for a reversible drop (inactivity soft
+  delete), which leaves the keyword feed no tombstone.
+  """
+  @spec delete_user_points(term(), atom(), KeywordStore.kind()) :: :ok | {:error, term()}
+  def delete_user_points(user_id, purpose \\ :indexing, kind \\ :purge) do
     both_legs(Qdrant.delete_by_user(nil, user_id, purpose), fn ->
-      KeywordStore.delete_user(user_id)
+      KeywordStore.delete_user(user_id, kind)
     end)
   end
 
-  @doc "Delete every index point of one vault, dense then keyword."
-  @spec delete_vault_points(term(), term()) :: :ok | {:error, term()}
-  def delete_vault_points(user_id, vault_id) do
+  @doc "Delete every index point of one vault, dense then keyword (`kind` as above)."
+  @spec delete_vault_points(term(), term(), KeywordStore.kind()) :: :ok | {:error, term()}
+  def delete_vault_points(user_id, vault_id, kind \\ :purge) do
     {user_id, vault_id} = {to_string(user_id), to_string(vault_id)}
 
     both_legs(Qdrant.delete_by_vault(collection(), user_id, vault_id), fn ->
-      KeywordStore.delete_vault(user_id, vault_id)
+      KeywordStore.delete_vault(user_id, vault_id, kind)
     end)
   end
 
@@ -1667,7 +1682,7 @@ defmodule Engram.Indexing do
   # ponytail: the arg and name go with EmbedNote's `old_path_hmac` arg, once
   # the rename-path cleanup lands (sql-lane, after #2600).
   def delete_points_by_path_hmac(note, _path_hmac) do
-    with :ok <- delete_points_by_filter(note) do
+    with :ok <- delete_points_by_filter(note, :rebuild) do
       forget_chunk_reuse(note)
       :ok
     end
@@ -1861,10 +1876,10 @@ defmodule Engram.Indexing do
   # `n` matches no filter). See `delete_points_for_note/1`. The note-id filter
   # then catches the reverse case: points whose rows are already gone.
   defp delete_note_points(note) do
-    with :ok <- delete_points_for_note(note), do: delete_points_by_filter(note)
+    with :ok <- delete_points_for_note(note), do: delete_points_by_filter(note, :deleted)
   end
 
-  defp delete_points_by_filter(note), do: delete_note_points_except(note, [])
+  defp delete_points_by_filter(note, reason), do: delete_note_points_except(note, [], reason)
 
   # Delete a note's Qdrant points by the ids recorded on its chunk rows.
   #
@@ -3443,10 +3458,11 @@ defmodule Engram.Indexing do
           avgdl = avgdl(note.user_id, note.vault_id)
           language = note_language(chunks)
           sparse = encode_sparse(Enum.map(matched, &elem(&1, 0)), filter_key, avgdl, language)
+          key = FeedKey.new(filter_key, language)
 
           {points, lengths} =
             Enum.zip_with(matched, sparse, fn {chunk, point_id}, {vector, doc_len} ->
-              {%{id: point_id, sparse: vector},
+              {feed_entry(%{id: point_id, sparse: vector}, chunk, key),
                {point_id, if(capped_length?(chunk), do: nil, else: doc_len)}}
             end)
             |> Enum.unzip()
@@ -3454,7 +3470,7 @@ defmodule Engram.Indexing do
           # A merged point's length stays NULL; only unmerged rows write theirs.
           lengths = Enum.reject(lengths, &is_nil(elem(&1, 1)))
 
-          with :ok <- update_vectors_batched(note, points),
+          with :ok <- update_vectors_batched(note, points, key),
                :ok <- if(lengths == [], do: :ok, else: persist_token_counts(note, lengths)),
                do: {:ok, length(points), unmatched}
       end
@@ -3629,13 +3645,13 @@ defmodule Engram.Indexing do
     do: sum == text_sum(content_key, chunk.text)
 
   # Keyword-only rewrite of existing points, through the keyword store.
-  defp update_vectors_batched(note, entries) do
-    scope = %{user_id: note.user_id, vault_id: note.vault_id, note_id: note.id}
+  defp update_vectors_batched(note, entries, key) do
+    scope = keyword_scope(note)
 
     entries
     |> point_batches()
     |> Enum.reduce_while(:ok, fn batch, :ok ->
-      case KeywordStore.upsert(scope, batch) do
+      case KeywordStore.upsert(scope, batch, key) do
         :ok -> {:cont, :ok}
         other -> {:halt, other}
       end
@@ -3768,21 +3784,35 @@ defmodule Engram.Indexing do
         fn {entry, point_id}, pending -> build_entry(entry, {ctx, point_id}, pending) end
       )
 
-    with {:ok, built} <- keyword_index(note, built),
-         do: prepared_map(note, plan, built, dek, note_payload, rebuild?, flat)
+    with {:ok, built, pending} <-
+           keyword_index(note, built, FeedKey.new(filter_key, language)),
+         {:ok, prepared} <- prepared_map(note, plan, built, dek, note_payload, rebuild?, flat),
+         do: {:ok, Map.put(prepared, :keyword_pending, pending)}
   end
 
   # The note's keyword docs go through the keyword store with their note's
   # user, vault and id. A colocated store (QdrantSparse) hands back the named
   # vectors to put on each dense point, so the one upsert writes both as before.
-  defp keyword_index(note, built) do
-    scope = %{user_id: note.user_id, vault_id: note.vault_id, note_id: note.id}
-    entries = for %{point: %{id: id}, sparse: s} <- built, do: %{id: id, sparse: s}
+  #
+  # `keyed` = {filter_key, language}: a store that keeps raw term counts
+  # re-tokenizes the text under the same key. In memory only, never logged.
+  defp keyword_index(note, built, key) do
+    entries =
+      for %{point: %{id: id}, sparse: s, chunk: c} <- built,
+          do: feed_entry(%{id: id, sparse: s}, c, key)
 
-    with {:ok, vectors} <- KeywordStore.index(scope, entries) do
-      {:ok, Enum.map(built, &merge_keyword_vectors(&1, vectors))}
+    with {:ok, vectors, pending} <- KeywordStore.index(keyword_scope(note), entries, key) do
+      {:ok, Enum.map(built, &merge_keyword_vectors(&1, vectors)), pending}
     end
   end
+
+  defp keyword_scope(note),
+    do: %{user_id: note.user_id, vault_id: note.vault_id, note_id: note.id}
+
+  # The chunk's plaintext rides in an entry only while the feed is written
+  # (`key` non-nil), which re-counts it; the sparse store never sees it.
+  defp feed_entry(entry, _chunk, nil), do: entry
+  defp feed_entry(entry, chunk, _key), do: Map.put(entry, :text, chunk.context_text)
 
   defp merge_keyword_vectors(%{point: %{id: id} = p} = built, vectors),
     do: %{built | point: %{p | vector: Map.merge(p.vector, Map.get(vectors, id, %{}))}}
@@ -3936,7 +3966,8 @@ defmodule Engram.Indexing do
       point: %{id: point_id, vector: named_vectors, payload: note_payload},
       kind: metric_kind(note.path, chunk.kind),
       dense?: vector != nil,
-      sparse: sparse
+      sparse: sparse,
+      chunk: chunk
     }
 
     {built, rest}

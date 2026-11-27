@@ -21,7 +21,7 @@ defmodule Engram.Workers.PurgeUserVectorsTest do
 
     Engram.KeywordStoreRecorder.install()
     assert :ok = perform_job(PurgeUserVectors, %{"user_id" => user_id})
-    assert_received {:keyword_store, :delete_user, [^user_id]}
+    assert_received {:keyword_store, :delete_user, [^user_id, :purge]}
 
     expected = Engram.Vector.Qdrant.match_filter(:user, user_id) |> Jason.encode!()
     assert_received {:filter, %{"must" => [filter]}}
@@ -41,7 +41,7 @@ defmodule Engram.Workers.PurgeUserVectorsTest do
     Engram.KeywordStoreRecorder.install()
     assert {:error, _} = perform_job(PurgeUserVectors, %{"user_id" => user_id})
     # The keyword delete does not wait on the dense one.
-    assert_received {:keyword_store, :delete_user, [^user_id]}
+    assert_received {:keyword_store, :delete_user, [^user_id, :purge]}
   end
 
   test "when both deletes fail, the dense error returns and the keyword error is logged", %{

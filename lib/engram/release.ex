@@ -175,6 +175,48 @@ defmodule Engram.Release do
     "GRANT engram_key_lookup TO engram_app WITH INHERIT FALSE, SET TRUE;"
   ]
 
+  # The read-only login the kwsearch service (Tantivy keyword index) reads
+  # `keyword_feed` with (search storage roadmap R3, security F13/F16). Only
+  # where the Tantivy backend is configured: a self-host or a default-config
+  # boot never creates it. NOINHERIT LOGIN, no attributes, no memberships,
+  # out of every ALTER DEFAULT PRIVILEGES rule, so any table it might reach by
+  # mistake answers permission denied. It reads every tenant's feed rows
+  # through a SELECT-only policy scoped TO it (no WITH CHECK, no write
+  # policy), not BYPASSRLS, which RDS cannot grant.
+  #
+  # After `migrate/0`, not before like engram_maintenance: its policies name
+  # tables the migrations create, and no migration names the role.
+  @kwsearch_feed_sql [
+    """
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'kwsearch_feed') THEN
+        CREATE ROLE kwsearch_feed NOINHERIT LOGIN CONNECTION LIMIT 4;
+      END IF;
+    END
+    $$;
+    """,
+    "ALTER ROLE kwsearch_feed SET statement_timeout = '30s';",
+    "GRANT USAGE ON SCHEMA public TO kwsearch_feed;",
+    "GRANT SELECT ON keyword_feed, keyword_deletions, keyword_feed_horizon TO kwsearch_feed;",
+    # Created when missing, never dropped and re-created: a boot-time DROP
+    # would open a window where the reader sees no rows of a live feed.
+    """
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_policies WHERE schemaname = 'public'
+                     AND tablename = 'keyword_feed' AND policyname = 'kwsearch_feed_read') THEN
+        CREATE POLICY kwsearch_feed_read ON keyword_feed FOR SELECT TO kwsearch_feed USING (true);
+      END IF;
+      IF NOT EXISTS (SELECT FROM pg_policies WHERE schemaname = 'public'
+                     AND tablename = 'keyword_deletions' AND policyname = 'kwsearch_feed_read') THEN
+        CREATE POLICY kwsearch_feed_read ON keyword_deletions FOR SELECT TO kwsearch_feed USING (true);
+      END IF;
+    END
+    $$;
+    """
+  ]
+
   @doc """
   Idempotent cluster bootstrap. Run BEFORE `migrate/0`.
 
@@ -230,7 +272,34 @@ defmodule Engram.Release do
   def migrate_and_drop(repo) do
     migrated = Ecto.Migrator.run(repo, :up, all: true)
     _ = Engram.Release.FolderHashDrop.run(repo)
+    _ = prepare_kwsearch_feed(repo)
     migrated
+  end
+
+  @doc """
+  The `kwsearch_feed` role, its grants and its SELECT policies, when the
+  kwsearch feed is written (`Engram.KeywordStore.feed?/0`);
+  otherwise nothing (security F16). Runs after the migrations, every boot:
+  idempotent, and the password is re-applied as a SCRAM verifier from
+  KWSEARCH_FEED_DB_PASSWORD (F13). Public only so it can be tested.
+  """
+  @spec prepare_kwsearch_feed(module()) :: :ok | :skipped
+  def prepare_kwsearch_feed(repo) do
+    if Engram.KeywordStore.feed?() do
+      # One transaction, so a boot sees all of it or none, and a short
+      # lock_timeout: a policy DDL waiting behind an open index transaction
+      # must fail this boot step, not queue every index commit behind it.
+      {:ok, :ok} =
+        repo.transaction(fn ->
+          repo.query!("SET LOCAL lock_timeout = '5s'", [])
+          Enum.each(@kwsearch_feed_sql, &repo.query!(&1, []))
+          set_role_password(repo, "kwsearch_feed", "KWSEARCH_FEED_DB_PASSWORD")
+        end)
+
+      :ok
+    else
+      :skipped
+    end
   end
 
   # Every web and worker task migrates on boot. Ecto's own migration lock

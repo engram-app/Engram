@@ -526,7 +526,9 @@ defmodule Engram.Accounts.Lifecycle do
 
     # A background job with no request to hold, so the patient indexing
     # retries. What a failure leaves is purged after the hard delete.
-    case Indexing.delete_user_points(user.id, :indexing) do
+    # `:soft`: reversible, so the keyword feed gets no user tombstone (that
+    # would refuse every re-index for 30 days); the hard delete purges.
+    case Indexing.delete_user_points(user.id, :indexing, :soft) do
       :ok ->
         :ok
 

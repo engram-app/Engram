@@ -37,6 +37,8 @@ defmodule Engram.Workers.CronScanBoundTest do
     Engram.Workers.PostHogPersonSync =>
       "account facts; note counts and bytes from note_index_state (narrow), small tables otherwise",
     Engram.Workers.ClientLogsPruner => "batched deletes, 20 batches per run",
+    Engram.Workers.TrimKeywordFeed =>
+      "10,000-row deletes on the (xid, seq) and inserted_at indexes, 20 batches per kind per run; one EXISTS and one min(inserted_at) (index)",
     Engram.Workers.IdempotencyPrune => "batched deletes by expiry",
     Engram.Workers.VectorCachePrune => "batched deletes by age",
     Engram.Workers.AnalyticsEventsPrune => "batched deletes by age",

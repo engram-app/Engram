@@ -96,22 +96,21 @@ struct Bm25 {
     cap: Option<f64>,
 }
 
-/// One chunk -> (u32 LE indices sorted ascending, f64 LE values, raw doc_len).
+/// One chunk's tokens as `(dim, occurrences)`, one entry per distinct TOKEN in
+/// first-occurrence order (two tokens on one dim stay separate entries), and
+/// the raw word count. The one counting pass behind both the BM25 encoder
+/// (`encode`) and the keyword feed (`keyword_feed_terms_nif`).
 ///
 /// Work is per DISTINCT word, not per occurrence: each word slice of the
 /// normalized text is looked up once per occurrence, and only the first
-/// sight of it stems and interns its tokens. Token ids follow first
-/// occurrence, so same-dim collisions sum in that order (deterministic; the
-/// HashMap this replaced summed in a randomly seeded order, which only
-/// differs from this for three or more tokens on one dim).
-fn encode(
+/// sight of it stems and interns its tokens.
+fn count_terms(
     text: &str,
     keyed: &Hmac<Sha256>,
-    bm25: Bm25,
     lang: Option<&str>,
     memo: &mut HashMap<String, u32>,
     buf: &mut String,
-) -> (Vec<u8>, Vec<u8>, usize) {
+) -> (Vec<(u32, u32)>, usize) {
     let norm = tokenizer::normalize(text, buf);
     // token -> id, and id -> occurrences (tf).
     let mut ids: HashMap<Cow<str>, u32> = HashMap::new();
@@ -145,6 +144,41 @@ fn encode(
     for (t, &id) in &ids {
         tokens[id as usize] = t;
     }
+    let counts = tokens
+        .iter()
+        .zip(&tf)
+        .map(|(token, &n)| {
+            let d = match memo.get(*token) {
+                Some(d) => *d,
+                None => {
+                    let d = dim(keyed, token);
+                    if memo.len() < MEMO_MAX {
+                        memo.insert(token.to_string(), d);
+                    }
+                    d
+                }
+            };
+            (d, n)
+        })
+        .collect();
+    (counts, doc_len)
+}
+
+/// One chunk -> (u32 LE indices sorted ascending, f64 LE values, raw doc_len).
+///
+/// Token ids follow first occurrence, so same-dim collisions sum in that
+/// order (deterministic; the HashMap this replaced summed in a randomly
+/// seeded order, which only differs from this for three or more tokens on
+/// one dim).
+fn encode(
+    text: &str,
+    keyed: &Hmac<Sha256>,
+    bm25: Bm25,
+    lang: Option<&str>,
+    memo: &mut HashMap<String, u32>,
+    buf: &mut String,
+) -> (Vec<u8>, Vec<u8>, usize) {
+    let (counts, doc_len) = count_terms(text, keyed, lang, memo, buf);
 
     // Uncapped, this is the exact expression the encoder always used, so a
     // b 0.75 uncapped vector is bit-identical to before the options existed.
@@ -155,21 +189,13 @@ fn encode(
     };
     let norm = (1.0 - bm25.b) + bm25.b * len / bm25.avgdl;
 
-    let mut pairs: Vec<(u32, f64)> = Vec::with_capacity(tf.len());
-    for (token, &n) in tokens.iter().zip(&tf) {
-        let d = match memo.get(*token) {
-            Some(d) => *d,
-            None => {
-                let d = dim(keyed, token);
-                if memo.len() < MEMO_MAX {
-                    memo.insert(token.to_string(), d);
-                }
-                d
-            }
-        };
-        let n = n as f64;
-        pairs.push((d, n * (K1 + 1.0) / (n + K1 * norm)));
-    }
+    let mut pairs: Vec<(u32, f64)> = counts
+        .into_iter()
+        .map(|(d, n)| {
+            let n = n as f64;
+            (d, n * (K1 + 1.0) / (n + K1 * norm))
+        })
+        .collect();
     // Stable: tokens on one dim stay in first-occurrence order to be summed.
     pairs.sort_by_key(|p| p.0);
     let mut idx = Vec::with_capacity(pairs.len() * 4);
@@ -187,6 +213,28 @@ fn encode(
         }
     }
     (idx, val, doc_len)
+}
+
+/// Per text, its `keyword_feed.terms` column (kwfeed codec: raw counts per
+/// HMAC dim, no BM25 weighting; kwsearch scores at query time). Same
+/// tokenizer and dims as `encode`, through the same `count_terms` pass.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn keyword_feed_terms_nif<'a>(
+    env: Env<'a>,
+    texts: Vec<Binary<'a>>,
+    key: Binary<'a>,
+    lang: Option<String>,
+) -> Vec<Binary<'a>> {
+    let keyed = keyed(key.as_slice());
+    let (mut memo, mut buf) = (HashMap::new(), String::new());
+    texts
+        .iter()
+        .map(|t| {
+            let text = String::from_utf8_lossy(t.as_slice());
+            let (counts, _) = count_terms(&text, &keyed, lang.as_deref(), &mut memo, &mut buf);
+            to_binary(env, &kwfeed::pack(counts))
+        })
+        .collect()
 }
 
 fn to_binary<'a>(env: Env<'a>, bytes: &[u8]) -> Binary<'a> {
@@ -1454,6 +1502,31 @@ mod tests {
             assert_eq!(got.get(k), Some(v), "{k}");
         }
         assert_eq!(got, want);
+    }
+
+    // The feed column names exactly the dims the BM25 vector has, and its
+    // counts add up to every token the text produced (the golden digests
+    // pin `encode` itself, which now goes through the same `count_terms`).
+    #[test]
+    fn feed_terms_name_the_encoded_dims() {
+        let k = keyed(&KEY);
+        let (mut memo, mut buf) = (HashMap::new(), String::new());
+        let bm25 = Bm25 {
+            avgdl: 50.0,
+            b: 0.75,
+            cap: None,
+        };
+        for text in corpus() {
+            let (idx, _, doc_len) = encode(&text, &k, bm25, Some("en"), &mut memo, &mut buf);
+            let (counts, n) = count_terms(&text, &k, Some("en"), &mut memo, &mut buf);
+            assert_eq!(n, doc_len);
+            let total: u32 = counts.iter().map(|c| c.1).sum();
+            let feed = kwfeed::unpack(&kwfeed::pack(counts)).unwrap();
+            let dims: Vec<u8> = feed.iter().flat_map(|p| p.0.to_le_bytes()).collect();
+            assert_eq!(dims, idx, "{text:?}");
+            assert_eq!(feed.iter().map(|p| p.1).sum::<u32>(), total);
+            assert!(total as usize >= doc_len);
+        }
     }
 
     // A cloned keyed state gives the HMAC a fresh key setup gives, for

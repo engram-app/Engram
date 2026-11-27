@@ -1,0 +1,39 @@
+[package]
+name = "kwsearch"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# The Tantivy keyword service (search storage roadmap P2, R3). Reads
+# `keyword_feed` (commit-safe by xid8) over TLS, keeps 256 Tantivy shards per
+# index generation by hash(user), answers POST /search over HTTPS. Never sees
+# note text or HMAC keys: rows carry hashed term ids (kwfeed codec).
+[dependencies]
+kwfeed = { path = "../kwfeed" }
+tantivy = { version = "0.27", default-features = false, features = ["mmap"] }
+postgres = { version = "0.19", features = ["with-uuid-1"] }
+tokio-postgres-rustls = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2"
+uuid = { version = "1", features = ["serde"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+hmac = "0.13"
+sha2 = "0.11"
+libc = "0.2"
+# Integration harness subcommands only (`--features harness`); the service
+# image builds without them (no NoTls client, no plaintext role password).
+ureq = { version = "2", default-features = false, features = ["tls"], optional = true }
+rand = { version = "0.9", optional = true }
+
+[features]
+harness = ["dep:ureq", "dep:rand"]
+
+[dev-dependencies]
+rand = "0.9"
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

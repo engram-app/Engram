@@ -5,6 +5,70 @@ defmodule Engram.RuntimeConfigTest do
 
   defp getenv(map), do: fn key -> Map.get(map, key) end
 
+  describe "keyword_store/1 (search storage roadmap P2 task 8)" do
+    @cur String.duplicate("c", 32)
+    @next String.duplicate("n", 40)
+    @kw %{"KWSEARCH_URL" => "https://kw:7700", "KWSEARCH_TOKEN_KEYS" => " #{@cur} , #{@next} "}
+
+    test "unset: the sparse store only (self-host, default SaaS)" do
+      assert RuntimeConfig.keyword_store(getenv(%{})) == []
+    end
+
+    test "KEYWORD_FEED=on: dual-write, reads stay on the sparse store" do
+      cfg = RuntimeConfig.keyword_store(getenv(Map.put(@kw, "KEYWORD_FEED", "on")))
+      assert cfg[:keyword_feed] == true and cfg[:keyword_read] == :sparse
+      assert cfg[:kwsearch][:token_keys] == [@cur, @next], "keys are trimmed"
+      assert cfg[:kwsearch][:feed_max_age_h] == 48
+    end
+
+    test "KEYWORD_READ=tantivy is refused until the backfill exists (P2 part 2)" do
+      # A fresh feed holds only chunks indexed after it was turned on, so
+      # reading it would silently lose every reused chunk (delta review).
+      on = Map.put(@kw, "KEYWORD_FEED", "on")
+
+      assert_raise RuntimeError, ~r/backfill/, fn ->
+        RuntimeConfig.keyword_store(getenv(Map.put(on, "KEYWORD_READ", "tantivy")))
+      end
+
+      assert RuntimeConfig.keyword_store(getenv(Map.put(on, "KEYWORD_READ", "sparse")))[
+               :keyword_read
+             ] == :sparse
+    end
+
+    test "refuses anything that would stop sparse writes or read an unwritten index" do
+      assert_raise RuntimeError, ~r/KEYWORD_STORE is gone/, fn ->
+        RuntimeConfig.keyword_store(getenv(%{"KEYWORD_STORE" => "tantivy"}))
+      end
+
+      assert_raise RuntimeError, ~r/needs KEYWORD_FEED=on/, fn ->
+        RuntimeConfig.keyword_store(getenv(%{"KEYWORD_READ" => "tantivy"}))
+      end
+
+      assert_raise RuntimeError, ~r/KEYWORD_FEED must be/, fn ->
+        RuntimeConfig.keyword_store(getenv(%{"KEYWORD_FEED" => "yes"}))
+      end
+
+      assert_raise RuntimeError, ~r/KWSEARCH_TOKEN_KEYS/, fn ->
+        RuntimeConfig.keyword_store(getenv(%{"KEYWORD_FEED" => "on"}))
+      end
+    end
+
+    # Review N5: the same key rules as kwsearch (`Keys::parse`).
+    test "token keys: under 32 bytes or more than two refuse to boot" do
+      on = Map.put(@kw, "KEYWORD_FEED", "on")
+
+      assert_raise RuntimeError, ~r/32\+ bytes/, fn ->
+        RuntimeConfig.keyword_store(getenv(Map.put(on, "KWSEARCH_TOKEN_KEYS", "#{@cur},short")))
+      end
+
+      three = Enum.join([@cur, @next, @cur], ",")
+
+      assert_raise RuntimeError, ~r/at most two/, fn ->
+        RuntimeConfig.keyword_store(getenv(Map.put(on, "KWSEARCH_TOKEN_KEYS", three)))
+      end
+    end
+  end
+
   describe "service_flags/1" do
     @appconfig %{
       "SERVICE_FLAGS_APPCONFIG_APPLICATION" => "a1",

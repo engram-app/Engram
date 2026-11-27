@@ -73,7 +73,7 @@ defmodule Engram.Workers.OrphanSweepTest do
     assert get_in(hd(legacy_view(decoded["filter"]["must"])), ["match", "value"]) == ghost_id
     refute_received {:qdrant_delete, _live_user}
     # Tenant reaping reaches the keyword seam, for the departed tenant only.
-    assert_received {:keyword_store, :delete_user, [^ghost_id]}
+    assert_received {:keyword_store, :delete_user, [^ghost_id, :purge]}
     refute_received {:keyword_store, :delete_user, _live_user}
   end
 

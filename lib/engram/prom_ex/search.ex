@@ -67,6 +67,8 @@ defmodule Engram.PromEx.Search do
 
   @stop_event [:engram, :search, :request, :stop]
   @degraded_event [:engram, :search, :degraded]
+  @keyword_fallback_event [:engram, :search, :keyword_fallback]
+  @feed_trim_event [:engram, :keyword_feed, :trim]
   @hit_dropped_event [:engram, :search, :hit_dropped]
   @text_missing_event [:engram, :search, :text_missing]
   @hits_event [:engram, :search, :hits]
@@ -166,6 +168,37 @@ defmodule Engram.PromEx.Search do
           event_name: @degraded_event,
           description: "Searches that degraded to a single leg (embed failure).",
           tags: [:leg, :reason]
+        ),
+        # The kwsearch keyword leg (`KeywordStore.Tantivy`) failed or timed
+        # out: hybrid went dense-only (`outcome: :dense_only`) or a keyword
+        # search returned an error (`:keyword_degraded`). Bounded reasons.
+        counter(
+          metric_prefix ++ [:keyword_fallback, :total],
+          event_name: @keyword_fallback_event,
+          description: "Searches whose kwsearch keyword leg failed, by outcome and reason.",
+          tags: [:outcome, :reason]
+        ),
+        # keyword_feed trim (security F2): rows trimmed, those trimmed before
+        # kwsearch applied them (a gap the index must rebuild past), and the
+        # oldest row's age. Alert on the age at half `:feed_max_age_h`.
+        sum(
+          metric_prefix ++ [:keyword_feed_trimmed, :total],
+          event_name: @feed_trim_event,
+          measurement: :applied,
+          description: "keyword_feed rows trimmed after kwsearch applied them."
+        ),
+        sum(
+          metric_prefix ++ [:keyword_feed_trimmed_unapplied, :total],
+          event_name: @feed_trim_event,
+          measurement: :unapplied,
+          description:
+            "keyword_feed rows trimmed at the maximum age before kwsearch applied them."
+        ),
+        last_value(
+          metric_prefix ++ [:keyword_feed_oldest_age_seconds],
+          event_name: @feed_trim_event,
+          measurement: :oldest_age_s,
+          description: "Age of the oldest keyword_feed row at the last trim, seconds."
         ),
         # The name leg (`Search.NameTerms.hits/3`): a query term whose
         # bounded scan (2,000 postings) ended before 500 live ones. Zero in

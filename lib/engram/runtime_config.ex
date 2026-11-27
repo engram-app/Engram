@@ -133,6 +133,103 @@ defmodule Engram.RuntimeConfig do
   end
 
   @doc """
+  The keyword store config (roadmap P2 task 8), as `{key, value}` pairs for
+  `config :engram`. Writes and reads are set apart, and the sparse store is
+  always written (there is no stop-sparse mode yet):
+
+    * nothing set: `[]`, the sparse store only (self-host, default SaaS);
+    * `KEYWORD_FEED=on`: dual-write, also the kwsearch feed (`:keyword_feed`
+      plus `:kwsearch`, which then needs `KWSEARCH_URL`, `KWSEARCH_TOKEN_KEYS`
+      as `current` or `current,next` (security F14) and optionally
+      `KWSEARCH_CA_FILE`, `KWSEARCH_TIMEOUT_MS`, `KWSEARCH_FEED_MAX_AGE_H`
+      (default 48: the recommended F2 horizon, not yet confirmed by the owner),
+      `KWSEARCH_SNAPSHOT_RETENTION_DAYS` (30));
+    * `KEYWORD_READ=tantivy`: refused until the backfill ships (P2 part 2);
+      then searches read kwsearch, and `KEYWORD_READ=sparse` (or unset)
+      rolls reads back.
+
+  Raises on anything else, including the old `KEYWORD_STORE=tantivy` (it
+  stopped sparse writes) and `KEYWORD_READ=tantivy` without the feed (an
+  index nothing writes), so a typo cannot change what is written.
+  """
+  @spec keyword_store((String.t() -> String.t() | nil)) :: keyword()
+  def keyword_store(getenv) do
+    unless blank?(getenv.("KEYWORD_STORE")),
+      do:
+        raise(
+          "KEYWORD_STORE is gone: set KEYWORD_FEED=on and KEYWORD_READ (sparse writes never stop)"
+        )
+
+    feed? =
+      case getenv.("KEYWORD_FEED") do
+        v when v in [nil, "", "off"] -> false
+        "on" -> true
+        other -> raise "KEYWORD_FEED must be on or off, got: #{inspect(other)}"
+      end
+
+    read =
+      case getenv.("KEYWORD_READ") do
+        v when v in [nil, "", "sparse"] ->
+          :sparse
+
+        # ponytail: refused outright until the P2 part 2 backfill exists. A
+        # feed holds only chunks indexed after it was turned on, so reading it
+        # would silently lose every reused chunk. Part 2 lifts this behind a
+        # completed-backfill check.
+        "tantivy" when feed? ->
+          raise "KEYWORD_READ=tantivy needs the keyword backfill (P2 part 2)"
+
+        "tantivy" ->
+          raise "KEYWORD_READ=tantivy needs KEYWORD_FEED=on"
+
+        other ->
+          raise "KEYWORD_READ must be sparse or tantivy, got: #{inspect(other)}"
+      end
+
+    if feed?,
+      do: [keyword_feed: true, keyword_read: read, kwsearch: kwsearch(getenv)],
+      else: []
+  end
+
+  # Same rules as kwsearch's `Keys::parse`: each key trimmed, one or two
+  # (current, next), each at least 32 bytes. A short key is a typo or a
+  # placeholder, and a third key cannot be told apart from a mistake.
+  defp token_keys(raw) do
+    keys =
+      (raw || "") |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+
+    cond do
+      keys == [] ->
+        raise "KEYWORD_FEED=on needs KWSEARCH_TOKEN_KEYS"
+
+      length(keys) > 2 ->
+        raise "KWSEARCH_TOKEN_KEYS takes at most two keys (current,next)"
+
+      Enum.any?(keys, &(byte_size(&1) < 32)) ->
+        raise "KWSEARCH_TOKEN_KEYS: every key needs 32+ bytes"
+
+      true ->
+        keys
+    end
+  end
+
+  defp kwsearch(getenv) do
+    keys = token_keys(getenv.("KWSEARCH_TOKEN_KEYS"))
+    url = getenv.("KWSEARCH_URL")
+    if blank?(url), do: raise("KEYWORD_FEED=on needs KWSEARCH_URL")
+    int = fn var, default -> String.to_integer(getenv.(var) || default) end
+
+    [
+      url: url,
+      ca_file: getenv.("KWSEARCH_CA_FILE"),
+      token_keys: keys,
+      timeout_ms: int.("KWSEARCH_TIMEOUT_MS", "1000"),
+      feed_max_age_h: int.("KWSEARCH_FEED_MAX_AGE_H", "48"),
+      snapshot_retention_days: int.("KWSEARCH_SNAPSHOT_RETENTION_DAYS", "30")
+    ]
+  end
+
+  @doc """
   `ENVELOPE_COMPRESSION` -> `{:ok, boolean}` or `:unset` (#1872).
 
   The emergency kill switch for compress-then-encrypt: `false`/`0` returns new

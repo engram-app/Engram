@@ -178,6 +178,13 @@ if config_env() != :test do
       """
   end
 
+  # Keyword store write set and read store (search storage roadmap P2 task
+  # 8). Unset everywhere but a SaaS rollout: the sparse store only. See
+  # `Engram.RuntimeConfig.keyword_store/1` for the variables and what it refuses.
+  for {key, value} <- Engram.RuntimeConfig.keyword_store(&System.get_env/1) do
+    config :engram, key, value
+  end
+
   # Embedder — select adapter from EMBED_BACKEND env var (voyage or ollama)
   case System.get_env("EMBED_BACKEND", "voyage") do
     "ollama" ->

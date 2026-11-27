@@ -344,4 +344,82 @@ defmodule Engram.ReleaseTest do
       assert verifier_for("engram_app") == app_before
     end
   end
+
+  describe "prepare_kwsearch_feed/1" do
+    # Inside the sandbox transaction: CREATE ROLE and CREATE POLICY roll back
+    # with the test, so nothing leaks into the shared cluster.
+    setup do
+      Repo.query!("DROP ROLE IF EXISTS kwsearch_feed")
+      on_exit(fn -> System.delete_env("KWSEARCH_FEED_DB_PASSWORD") end)
+      :ok
+    end
+
+    defp kwsearch_role?,
+      do:
+        Repo.query!("SELECT count(*) FROM pg_roles WHERE rolname = 'kwsearch_feed'").rows == [[1]]
+
+    test "self-host / default config creates no kwsearch_feed role (F16)" do
+      assert :skipped = Release.prepare_kwsearch_feed(Repo)
+      refute kwsearch_role?()
+    end
+
+    test "configured: the role reads keyword_feed only, through a SCRAM password (F13)" do
+      Engram.ServiceConfig.put_override(:keyword_feed, true)
+      System.put_env("KWSEARCH_FEED_DB_PASSWORD", "kwsearch-plaintext-marker")
+
+      assert :ok = Release.prepare_kwsearch_feed(Repo)
+      assert kwsearch_role?()
+
+      %{rows: [[stored]]} =
+        Repo.query!("SELECT rolpassword FROM pg_authid WHERE rolname = 'kwsearch_feed'")
+
+      assert stored =~ "SCRAM-SHA-256$4096:"
+      refute stored =~ "kwsearch-plaintext-marker"
+
+      # Idempotent, and never a drop (review #4): every boot re-runs it, and
+      # the policy keeps its oid, so it was never dropped and re-created.
+      oids = fn ->
+        Repo.query!(
+          "SELECT p.oid FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid " <>
+            "WHERE p.polname = 'kwsearch_feed_read' ORDER BY c.relname"
+        ).rows
+      end
+
+      before = oids.()
+      assert length(before) == 2
+      assert :ok = Release.prepare_kwsearch_feed(Repo)
+      assert :ok = Release.prepare_kwsearch_feed(Repo)
+      assert oids.() == before
+
+      user = insert(:user)
+
+      Repo.query!("INSERT INTO keyword_feed (user_id, op) VALUES ($1, 5)", [
+        Ecto.UUID.dump!(to_string(user.id))
+      ])
+
+      Repo.query!("INSERT INTO keyword_deletions (user_id, op) VALUES ($1, 5)", [
+        Ecto.UUID.dump!(to_string(user.id))
+      ])
+
+      as_feed = fn sql ->
+        Repo.transaction(fn ->
+          Repo.query!("SET LOCAL SESSION AUTHORIZATION kwsearch_feed")
+          Repo.rollback(Repo.query(sql))
+        end)
+        |> then(fn {:error, r} -> r end)
+      end
+
+      # Every tenant's feed rows, no tenant set.
+      assert {:ok, %{rows: [[1]]}} = as_feed.("SELECT count(*) FROM keyword_feed")
+      # A row exists, so 1 proves the policy (a missing one also reads 0).
+      assert {:ok, %{rows: [[1]]}} = as_feed.("SELECT count(*) FROM keyword_deletions")
+      assert {:ok, %{rows: [[1]]}} = as_feed.("SELECT count(*) FROM keyword_feed_horizon")
+      # Nothing else, and no writes.
+      assert {:error, %Postgrex.Error{postgres: %{code: :insufficient_privilege}}} =
+               as_feed.("SELECT count(*) FROM notes")
+
+      assert {:error, %Postgrex.Error{postgres: %{code: :insufficient_privilege}}} =
+               as_feed.("INSERT INTO keyword_feed (user_id, op) VALUES (gen_random_uuid(), 5)")
+    end
+  end
 end

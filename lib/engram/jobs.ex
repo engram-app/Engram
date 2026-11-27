@@ -96,6 +96,9 @@ defmodule Engram.Jobs do
     Engram.Workers.DeleteNoteIndex => [keys: [:note_id], period: :infinity, states: :incomplete],
     Engram.Workers.DataMigrationsRunner => [period: 3000, states: :incomplete],
     Engram.Workers.DrainStrandedTails => [period: 600, states: :incomplete],
+    # One trim chain: each run schedules the next 5 min out, the hourly cron
+    # restarts a lost one.
+    Engram.Workers.TrimKeywordFeed => [period: 240, states: [:available, :scheduled]],
     Engram.Workers.EmbedNote => [period: 60, keys: [:note_id], states: :incomplete],
     # Period is the caller's settle window (`EmbedNote.job/3`).
     {Engram.Workers.EmbedNote, :debounced} => [keys: [:note_id], states: @embed_pending],
