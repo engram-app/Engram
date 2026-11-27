@@ -3061,8 +3061,8 @@ defmodule Engram.Notes do
         # the content is unchanged. A changed hash: the move folded the
         # uncheckpointed CRDT tail into the content, and the room's next
         # checkpoint then sees no change and queues nothing (R6 missed-18).
-        # Every caller (REST id-keyed move, CRDT relocate and resurrect, link
-        # rewriter) goes through here. Before the seq bump, so it is not made
+        # Every caller (REST id-keyed move, CRDT relocate and resurrect, trash
+        # restore) goes through here. Before the seq bump, so it is not made
         # under the vault seq lock (#1710); a write that lands nothing
         # discards it.
         queue? = was_tombstoned or prior.content_hash != crdt.content_hash
@@ -3126,8 +3126,7 @@ defmodule Engram.Notes do
     # `put_change(:deleted_at, nil)` means this can also resurrect a
     # tombstone, so the fence carries the whole pre-image, not just the id.
     # The target's key may still be held by a note moved away without a
-    # cascade (S5): free it first. A refused write would abort a caller's
-    # transaction that runs no savepoint (CRDT relocate, resurrect).
+    # cascade (S5): free it first, so the write below does not refuse.
     _ = if free_slot?, do: free_stale_slot(user, prior.vault_id, sanitized_path, prior.id)
 
     # `mode: :savepoint` for every caller: a live note still holding the
