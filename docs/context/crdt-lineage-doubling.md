@@ -197,7 +197,10 @@ insert. A rebuilt-frame lost-ack retry hits the same path.
 canonical text. A rival lineage gets `occupied`, which released plugins 1.36 and
 1.40 already handle by adopting the server copy. A lineage-less row is claimed by
 the first writer through the shared `Engram.Notes.PreImageFence`. Drift returns
-409 `crdt_state_drift`.
+409 `crdt_state_drift`. Case A drift (`notes.crdt_state_nonce` set, no body
+state) repairs itself on the first fence miss by clearing that exact stale nonce
+(`PreImageFence.repair/2`, logged with the note HMAC, counted as
+`outcome: repaired_a`); only case B (the nonces differ) still gets the 409.
 
 **Repair and debugging:** nothing self-heals. A doubled disk copy is re-sent on
 the next `syncStep1` and spreads, so the only fix is a manual edit. When chasing
