@@ -2157,12 +2157,12 @@ defmodule EngramWeb.CrdtChannel do
 
   # compat(plugin): name_taken - remove when plugin floor includes Engram-obsidian#727 (#2722)
   # Plugins 1.36.0 to 1.40.0 drop a create refused with `id_conflict` with only
-  # a log line, a silent loss, while `create_failed` keeps retrying it. Only a
+  # a log line, a silent loss, and a web bundle older than this change
+  # name-bumps only on `create_failed`; open tabs keep old bundles for hours,
+  # and the SPA ships on its own promote, not with the backend. So only a
   # client that says it handles a taken name (`caps=name_taken` at connect,
-  # `EngramWeb.UserSocket`) gets `id_conflict` for one; the web app reads
-  # both replies alike (`isNameTaken`), so it counts as capable.
-  defp name_taken_terminal?(socket),
-    do: socket.assigns[:name_taken_terminal] == true or socket.assigns[:client_type] == "web"
+  # `EngramWeb.UserSocket`), plugin or web, gets `id_conflict` for one.
+  defp name_taken_terminal?(socket), do: socket.assigns[:name_taken_terminal] == true
 
   # Ecto files a unique-constraint error under the constraint's FIRST field
   # (`user_id`), so match the constraint by NAME, against the one list of

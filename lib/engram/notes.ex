@@ -2590,17 +2590,17 @@ defmodule Engram.Notes do
   # The keyed holder must be checked here: left to the path unique constraint,
   # the write aborts the transaction and the job discard after it raises,
   # crashing the channel. The two stay distinct because old plugins were told
-  # `id_conflict` only for the first; the channel picks the wire reason. Run by `move_note` right after its
-  # `next_seq!` takes the vault seq lock, so no uncascaded move (S5) lands
-  # between check and write, and the merge, encrypt and NoteCommitted insert
-  # stay outside the lock (#1710). `moved?` (read with the row) can be a stale
-  # `false`: the vault's FIRST move may commit before the lock, so the bit is
-  # re-read here, in the SAME statement as the keyed-holder probe: an unmoved
-  # vault pays one statement, as it did before the keyed check existed. In a
-  # moved vault the stored key alone proves nothing: a note whose own folder
-  # moved keeps its stale key, which is no holder (`ids_at/3` drops it and
-  # `move_note` frees it). There `shown_by_other?/4` decides: a key that is
-  # still `here()`, or a name match.
+  # `id_conflict` only for the first; the channel picks the wire reason. Run
+  # by `move_note` right after its `next_seq!` takes the vault seq lock, so
+  # no uncascaded move (S5) lands between check and write, and the merge,
+  # encrypt and NoteCommitted insert stay outside the lock (#1710). `moved?`
+  # (read with the row) can be a stale `false`: the vault's FIRST move may
+  # commit before the lock, so the bit is re-read here, in the SAME statement as
+  # the keyed-holder probe: an unmoved vault pays one statement, as it did
+  # before the keyed check existed. In a moved vault the stored key alone proves
+  # nothing: a note whose own folder moved keeps its stale key, which is no
+  # holder (`ids_at/3` drops it and `move_note` frees it). There
+  # `shown_by_other?/4` decides: a key that is still `here()`, or a name match.
   defp shown_check(moved?, user, vault, path, id) do
     fn ->
       {moved?, keyed?} =
