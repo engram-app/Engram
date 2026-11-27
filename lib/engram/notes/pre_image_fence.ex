@@ -32,16 +32,26 @@ defmodule Engram.Notes.PreImageFence do
 
   require Logger
 
-  @doc "The fenced row: `note_id` at `pre`'s seq and state nonce."
-  @spec query(Ecto.UUID.t(), %{seq: integer(), crdt_state_nonce: binary() | nil}) ::
-          Ecto.Query.t()
+  @doc """
+  The fenced row: note `note_id` (`kind == "note"`) at `pre`'s seq and state
+  nonce. Callers add their own extra predicates (the checkpoint adds
+  `deleted_at IS NULL`).
+  """
+  @spec query(Ecto.UUID.t(), Note.t()) :: Ecto.Query.t()
   def query(note_id, %{seq: seq, crdt_state_nonce: nil}),
-    do: from(n in Note, where: n.id == ^note_id and n.seq == ^seq and is_nil(n.crdt_state_nonce))
+    do:
+      from(n in Note,
+        where:
+          n.id == ^note_id and n.kind == "note" and n.seq == ^seq and
+            is_nil(n.crdt_state_nonce)
+      )
 
   def query(note_id, %{seq: seq, crdt_state_nonce: nonce}),
     do:
       from(n in Note,
-        where: n.id == ^note_id and n.seq == ^seq and n.crdt_state_nonce == ^nonce
+        where:
+          n.id == ^note_id and n.kind == "note" and n.seq == ^seq and
+            n.crdt_state_nonce == ^nonce
       )
 
   @doc """
@@ -50,8 +60,7 @@ defmodule Engram.Notes.PreImageFence do
   validation and constraint mapping) and so cannot put a nil and a non-nil
   value in one filter map: take the lock here, then update by key.
   """
-  @spec lock(Ecto.UUID.t(), %{seq: integer(), crdt_state_nonce: binary() | nil}, keyword()) ::
-          :ok | :stale
+  @spec lock(Ecto.UUID.t(), Note.t(), keyword()) :: :ok | :stale
   def lock(note_id, pre, repo_opts \\ []) do
     locked = from(n in query(note_id, pre), select: n.id, lock: "FOR UPDATE")
 

@@ -1070,9 +1070,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # AFTER the delete's seq bump, so seq alone matches and the checkpoint would
   # materialize, bump seq and enqueue jobs for the trashed note.
   defp snapshot_fence(note_id, %Note{} = note) do
-    from(n in PreImageFence.query(note_id, note),
-      where: n.kind == "note" and is_nil(n.deleted_at)
-    )
+    from(n in PreImageFence.query(note_id, note), where: is_nil(n.deleted_at))
   end
 
   # `Crypto.encrypt_crdt_state/3` ALWAYS binds the AAD to the row id, so writing
