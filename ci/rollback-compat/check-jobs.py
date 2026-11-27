@@ -38,9 +38,10 @@ def main() -> int:
         values = [str(v) for v in (job.get("args") or {}).values() if isinstance(v, (str, int)) and len(str(v)) >= 8]
         last = job.get("error") or ""
         evidence = last + "".join(ln for ln in lines if any(v in ln for v in values))
-        # A database error in the LAST attempt is never allowed, whatever an
-        # earlier attempt logged: it is the failure a rollback causes.
-        hit = None if "Postgrex.Error" in last else next(
+        # A database error in ANY attempt is never allowed, whatever else the
+        # job logged: it is the failure a rollback causes.
+        db = re.search(r"Postgrex\.Error|Ecto\.|DBConnection", job.get("all_errors") or last)
+        hit = None if db else next(
             (a for a in allow if a["worker"] == job["worker"] and a["kind"] in evidence), None
         )
         first = (job.get("error") or "").strip().splitlines()[:1]
