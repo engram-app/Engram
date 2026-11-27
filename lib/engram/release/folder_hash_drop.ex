@@ -148,6 +148,7 @@ defmodule Engram.Release.FolderHashDrop do
     end
   end
 
+  @spec bad(Path.t()) :: no_return()
   defp bad(path), do: raise("#{path}: expected one @statements list of string literals")
 
   defp deferred(reason) do
