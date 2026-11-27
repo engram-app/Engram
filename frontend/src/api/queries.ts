@@ -2208,7 +2208,8 @@ export function useRenameNote() {
 		// Rename/move = crdt_create for a KNOWN live id at a new FREE path — the
 		// backend relocates the row in place (rename-as-move, notes.ex Phase E2),
 		// keeping the note_id + content. A path OCCUPIED by a different note comes
-		// back as create_failed. Replaces POST /notes/rename.
+		// back as id_conflict (create_failed from older servers; `isNameTaken`).
+		// Replaces POST /notes/rename.
 		mutationFn: async ({ id, old_path, new_path }) => {
 			await crdtCreateNote(id, new_path);
 			return { renamed: true, old_path, new_path };
