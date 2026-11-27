@@ -25,3 +25,8 @@ selfhost folder_marker_delete skipped-disabled ships off on self-host (kill swit
 * key_aliases skipped-disabled runs only while the vector rebuild mode is on; touches note key aliases only, no folder table, so running it after a rollback meets nothing J changed
 * person_origin_backfill skipped-disabled needs the analytics keys (set in prod, not here); it only enqueues PersonOriginSync jobs (oban_jobs) and touches no folder or note table, so running it after a rollback meets nothing J changed
 * note_meta skipped-disabled note_meta_backfill override defaults off; prod's value NOT verified (a DB override, not in engram-infra); it reads notes, users and CRDT logs, no folder hash, so either value is safe for this pair
+# These two stay although most runs print them as unused: OLD's @reboot runner
+# closes them before the forced loop on some runs (timing), and then the loop
+# reports them skipped. Dropping them made run 45959408210 go red for that.
+* note_effective_dates skipped-done-noreverify done (by OLD's @reboot runner or earlier); note date columns, no folder hash
+* name_terms skipped-done-noreverify closed by OLD's @reboot runner and its BackfillNameTerms chain before the loop (the workflow waits for it); indexes names, no folder hash
