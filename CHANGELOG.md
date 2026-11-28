@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.98.0](https://github.com/engram-app/Engram/compare/0.97.0...0.98.0) (2026-11-27)
+
+
+### Features
+
+* **kwsearch:** Tantivy keyword service and backend (P2 part 1) ([#2713](https://github.com/engram-app/Engram/issues/2713)) ([19a7389](https://github.com/engram-app/Engram/commit/19a73899dad2aefa4fed0dcae42a0f49f8fb59a0))
+
+
+### Bug Fixes
+
+* **entrypoint:** unset MIGRATOR_DATABASE_URL before exec ([#2720](https://github.com/engram-app/Engram/issues/2720)) ([5d5c0d7](https://github.com/engram-app/Engram/commit/5d5c0d747efc1026942ef3dbbf39325d77ad8918))
+
 ## [0.97.0](https://github.com/engram-app/Engram/compare/0.96.0...0.97.0) (2026-11-27)
 
 
