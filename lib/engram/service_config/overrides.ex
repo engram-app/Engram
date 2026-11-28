@@ -100,6 +100,10 @@ defmodule Engram.ServiceConfig.Overrides do
     name_terms_title_weight_pct: {:integer, 0..1_000},
     name_terms_folder_weight_pct: {:integer, 0..1_000},
     name_terms_folder_slots: {:integer, 0..1_000},
+    # A search's folder scope past this many notes (and 1/8 of the vault)
+    # post-filters instead of sending its ids (`NoteFilter.post_filter_ids/0`,
+    # default 1,024). At `Qdrant.max_note_ids/0` (10,240) or more: off.
+    folder_post_filter_ids: {:integer, 1..1_000_000},
     # The `NoteName` backfill (`BackfillNoteNames`): kill switch, rows per hop, rows a second.
     note_name_backfill: :boolean,
     note_name_backfill_max_rows: {:integer, 1..100_000},

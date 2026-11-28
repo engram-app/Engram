@@ -1923,11 +1923,37 @@ defmodule Engram.Vector.Qdrant do
     limit = Keyword.get(search_opts, :limit, 5)
 
     instrument(:hybrid_search, fn ->
-      opts = [json: hybrid_search_body(dense, sparse, search_opts)] ++ req_opts(:search)
-
-      with {:ok, legs} <- do_query(col, "/points/query/batch", opts, &batch_results/1),
+      with {:ok, legs} <- batch_legs(col, dense, sparse, search_opts),
            do: fuse(col, legs, limit, search_opts)
     end)
+  end
+
+  @doc """
+  `hybrid_search/4`'s two ranked legs, unfused (one `/points/query/batch`):
+  a post-filtered search reads their notes before it fuses them (`fuse/4`
+  `:scope_first`), outside the search's vector-store slot.
+  """
+  @spec hybrid_legs(String.t() | nil, term(), map(), keyword()) ::
+          {:ok, [[map()]]} | {:error, term()}
+  def hybrid_legs(col \\ nil, dense, sparse, search_opts),
+    do:
+      instrument(:hybrid_search, fn ->
+        batch_legs(col || collection(), dense, sparse, search_opts)
+      end)
+
+  @doc """
+  `fuse/4` timed as `:hybrid_search` (its `:with_vector` retrieve is the
+  only request), for a caller that fused `hybrid_legs/4` itself: the
+  post-filtered search, whose note read sits between the two.
+  """
+  @spec timed_fuse(String.t() | nil, [[map()]], pos_integer(), keyword()) ::
+          {:ok, [map()]} | {:error, term()}
+  def timed_fuse(col, legs, limit, search_opts),
+    do: instrument(:hybrid_search, fn -> fuse(col, legs, limit, search_opts) end)
+
+  defp batch_legs(col, dense, sparse, search_opts) do
+    opts = [json: hybrid_search_body(dense, sparse, search_opts)] ++ req_opts(:search)
+    do_query(col, "/points/query/batch", opts, &batch_results/1)
   end
 
   @doc """
@@ -1935,15 +1961,21 @@ defmodule Engram.Vector.Qdrant do
   point id (`Search.Fusion.rrf/2`, k = 2), keeps `limit`, and retrieves the
   dense vectors when `:with_vector` asks. Shared by `hybrid_search/4` and a
   keyword store whose leg runs outside this service
-  (`Engram.KeywordStore.Tantivy`).
+  (`Engram.KeywordStore.Tantivy`). `:scope_first` (a post-filtered search:
+  a MapSet of the legs' in-scope point ids) fuses the scope's ranks, not
+  the tenant's (`scope_first/1`).
   """
   @spec fuse(String.t() | nil, [[map()]], pos_integer(), keyword()) ::
           {:ok, [map()]} | {:error, term()}
   def fuse(col, legs, limit, search_opts) do
+    legs = Enum.map(legs, fn leg -> Enum.map(leg, &%{id: &1.qdrant_id, score: &1.score}) end)
+    first = scope_first(search_opts[:scope_first])
+
     fused =
       legs
-      |> Enum.map(fn leg -> Enum.map(leg, &%{id: &1.qdrant_id, score: &1.score}) end)
+      |> Enum.map(first)
       |> Fusion.rrf(@rrf_k)
+      |> first.()
       |> Enum.take(limit)
 
     with {:ok, points} <- fused_points(col || collection(), Enum.map(fused, & &1.id), search_opts) do
@@ -2006,6 +2038,23 @@ defmodule Engram.Vector.Qdrant do
         else: body
 
     do_query(col, "/points", [json: body] ++ req_opts(:search), &{:ok, search_results(&1)})
+  end
+
+  # `:scope_first` (a post-filtered search, `Engram.Search`): the legs'
+  # in-scope point ids. Each leg, then the fused list, is ordered in-scope
+  # first (stable), so the ranks fused are the scope's own, as an id-scoped
+  # search fuses them: fused over the tenant's ranks, a post-filtered hybrid
+  # page kept only 89-90% of the id path's top 10 (k = 2 weighs rank hard;
+  # `SearchLargeFolderRecallTest`). Lengths are unchanged, so a full leg
+  # still reads as "Qdrant had more". Absent: no reordering at all
+  # (`SearchFuseGuardTest`).
+  defp scope_first(nil), do: &Function.identity/1
+
+  defp scope_first(%MapSet{} = inside) do
+    fn hits ->
+      {in_scope, out} = Enum.split_with(hits, &MapSet.member?(inside, &1.id))
+      in_scope ++ out
+    end
   end
 
   @doc false

@@ -329,26 +329,29 @@ defmodule Engram.Search do
   defp resolve_filter(user, vault, opts) do
     keys = NoteFilter.keys(opts)
 
-    {filter, scope} =
+    {filter, scope, path, ids} =
       if keys == [] do
-        {search_filter(user, vault, opts), :none}
+        {search_filter(user, vault, opts), :none, :none, "none"}
       else
         start = System.monotonic_time()
         filter = search_filter(user, vault, opts)
         scope = scope_label(filter)
+        {path, ids} = {path_label(scope), ids_label(filter)}
 
         :telemetry.execute(
           [:engram, :search, :filter_resolve],
           %{duration: System.monotonic_time() - start},
-          %{scope: scope}
+          %{scope: scope, path: path, ids: ids}
         )
 
-        {filter, scope}
+        {filter, scope, path, ids}
       end
 
     Tracer.set_attributes(%{
       "engram.search.filters" => Enum.join(keys, ","),
-      "engram.search.scope" => Atom.to_string(scope)
+      "engram.search.scope" => Atom.to_string(scope),
+      "engram.search.path" => Atom.to_string(path),
+      "engram.search.ids" => ids
     })
 
     {filter, %{filtered: keys != [], scope: scope, surface: surface_label(opts)}}
@@ -361,6 +364,25 @@ defmodule Engram.Search do
   # Postgres matched no note: an empty id scope.
   defp scope_label(:no_match), do: :ids
   defp scope_label(_none_or_error), do: :none
+
+  # How Qdrant gets the scope: note ids on `n` (`ids`, `exclude`) or the
+  # tenant, post-filtered in Postgres (`too_wide`).
+  defp path_label(:too_wide), do: :post_filter
+  defp path_label(:none), do: :none
+  defp path_label(_ids_or_exclude), do: :ids
+
+  # The note ids sent to Qdrant, bucketed (a count, never the ids): the
+  # large-folder threshold (`NoteFilter.post_filter_ids/0`, 1,024) and the
+  # cap (`Qdrant.max_note_ids/0`, 10,240) are bucket edges.
+  @ids_buckets [{0, "0"}, {99, "1-99"}, {1_023, "100-1023"}]
+
+  defp ids_label({:ok, [note_scope: {_kind, ids}], _within}) do
+    n = length(ids)
+    Enum.find_value(@ids_buckets, "1024-10240", fn {max, label} -> if n <= max, do: label end)
+  end
+
+  defp ids_label(:no_match), do: "0"
+  defp ids_label(_post_filter_none_or_error), do: "none"
 
   # The `surface` label: `opts[:surface]` (the analytics surface) folded to
   # mcp / rest / web / plugin, and `:internal` for searches no client asked
@@ -907,8 +929,23 @@ defmodule Engram.Search do
     end
   end
 
+  # `:post_filter`: the hybrid leg reads the legs' notes before fusing them
+  # (`scoped_hybrid/5`).
   defp ranked_hits(legs, user, search_opts, within, keep),
-    do: post_filtered(legs, user, search_opts, within, keep, 1)
+    do: post_filtered(legs, user, Keyword.put(search_opts, :post_filter, within), within, keep, 1)
+
+  # Each point's note (`point_ids`' chunk rows, one batched read) and the
+  # notes the filter matches (one bounded `within:` resolve): post-filter
+  # cost scales with the candidates, never the scope.
+  defp scoped_notes(_user, [], _within), do: {:ok, %{}, MapSet.new()}
+
+  defp scoped_notes(user, point_ids, {vaults, filter, _sample}) do
+    notes = Engram.Notes.note_ids_by_qdrant_points(user, point_ids)
+    note_ids = notes |> Map.values() |> Enum.uniq()
+
+    with {:ok, {:ids, matched}} <- note_filter().resolve(user, vaults, filter, within: note_ids),
+         do: {:ok, notes, MapSet.new(matched)}
+  end
 
   # Whether a note id is inside a resolved `{:ids | :exclude, ids}` scope.
   defp scope_member({kind, ids}) do
@@ -921,6 +958,9 @@ defmodule Engram.Search do
   # take a page slot from an in-scope Qdrant hit. Same rules as the Qdrant
   # candidates' (`ranked_hits/5`, `within_filter/4`); one bounded resolve
   # for a `:too_wide` filter.
+  # No name hit: nothing to resolve (a `within: []` resolve still opens a
+  # tenant transaction and walks the folder).
+  defp in_scope([], _user, _within), do: []
   defp in_scope(note_ids, _user, nil), do: note_ids
   defp in_scope(note_ids, _user, {:scope, scope}), do: Enum.filter(note_ids, scope_member(scope))
 
@@ -978,16 +1018,24 @@ defmodule Engram.Search do
   # page's `keep` best, and how many points had no chunk row. Notes come
   # from the chunk rows alone (no decrypt); a point with no chunk row is
   # dropped, and `post_filtered/6` counts it as `postgres_hits/2` would.
-  defp within_filter(candidates, user, {vaults, filter, _sample}, keep) do
-    notes = Engram.Notes.note_ids_by_qdrant_points(user, Enum.map(candidates, & &1.qdrant_id))
-    note_ids = notes |> Map.values() |> Enum.uniq()
+  #
+  # A hybrid candidate already carries its note and scope (`scoped_hybrid/5`
+  # read them for its fusion): only the others (another leg's, the name
+  # leg's) are read here, so a round reads each point once.
+  defp within_filter(candidates, user, within, keep) do
+    unread = for c <- candidates, not is_map_key(c, :in_scope), do: c.qdrant_id
 
-    rowless = Enum.count(candidates, &(not is_map_key(notes, &1.qdrant_id)))
+    with {:ok, notes, matched} <- scoped_notes(user, unread, within) do
+      row? =
+        &if is_map_key(&1, :in_scope),
+          do: &1.note_id != nil,
+          else: is_map_key(notes, &1.qdrant_id)
 
-    with {:ok, {:ids, matched}} <- note_filter().resolve(user, vaults, filter, within: note_ids) do
-      matched = MapSet.new(matched)
-      kept = candidates |> Enum.filter(&(notes[&1.qdrant_id] in matched)) |> Enum.take(keep)
-      {:ok, {kept, rowless}}
+      keep? = &if is_map_key(&1, :in_scope), do: &1.in_scope, else: notes[&1.qdrant_id] in matched
+
+      rowless = Enum.count(candidates, &(not row?.(&1)))
+      kept = for c <- Enum.filter(candidates, keep?), do: Map.drop(c, [:note_id, :in_scope])
+      {:ok, {Enum.take(kept, keep), rowless}}
     end
   end
 
@@ -1058,7 +1106,13 @@ defmodule Engram.Search do
       {:ok, [vector]} ->
         case sparse_query(user, query) do
           {:ok, sparse} ->
-            qdrant(user, fn -> KeywordStore.hybrid_search(vector, sparse, search_opts) end)
+            case search_opts[:post_filter] do
+              nil ->
+                qdrant(user, fn -> KeywordStore.hybrid_search(vector, sparse, search_opts) end)
+
+              within ->
+                scoped_hybrid(user, vector, sparse, search_opts, within)
+            end
 
           :no_vault ->
             qdrant(user, fn -> Qdrant.search(collection(), vector, search_opts) end)
@@ -1119,6 +1173,40 @@ defmodule Engram.Search do
   # return an error tuple, not raise FunctionClauseError mid-pipeline.
   defp run_legs(_invalid_mode, _user, _query, _search_opts, _profile),
     do: {:error, :invalid_mode}
+
+  # A post-filtered hybrid search: the legs (one vector-store request, in
+  # the gate), then their notes and scope (one chunk read and one bounded
+  # `within:` resolve, OUTSIDE the gate), then the fusion over the scope's
+  # ranks (`Qdrant.fuse/4` `:scope_first`). Each fused candidate carries its
+  # `note_id` and `in_scope`, so `within_filter/4` reads nothing again. The
+  # fusion holds the gate only for its vector retrieve (`:with_vector`).
+  defp scoped_hybrid(user, vector, sparse, search_opts, within) do
+    with {:ok, legs} <-
+           qdrant(user, fn -> KeywordStore.hybrid_legs(vector, sparse, search_opts) end),
+         points = legs |> List.flatten() |> Enum.map(& &1.qdrant_id) |> Enum.uniq(),
+         {:ok, notes, matched} <- scoped_notes(user, points, within) do
+      inside = for {p, n} <- notes, n in matched, into: MapSet.new(), do: p
+      opts = Keyword.put(search_opts, :scope_first, inside)
+      limit = Keyword.fetch!(search_opts, :limit)
+
+      # The vector retrieve (MMR) is a request: in the gate, timed as the
+      # hybrid search. Without it the fusion is in memory: neither.
+      fused =
+        if search_opts[:with_vector],
+          do: qdrant(user, fn -> Qdrant.timed_fuse(collection(), legs, limit, opts) end),
+          else: Qdrant.fuse(collection(), legs, limit, opts)
+
+      with {:ok, hits} <- fused do
+        {:ok,
+         Enum.map(hits, fn h ->
+           Map.merge(h, %{
+             note_id: notes[h.qdrant_id],
+             in_scope: MapSet.member?(inside, h.qdrant_id)
+           })
+         end)}
+      end
+    end
+  end
 
   # Every Qdrant request of a search holds a slot of `Engram.Search.Gate`
   # (per user, per node) for that request only. The query embed and the

@@ -109,6 +109,13 @@ defmodule Engram.KeywordStore.Tantivy do
 
   @spec hybrid_search(term(), map(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def hybrid_search(dense, sparse, search_opts) do
+    with {:ok, legs} <- hybrid_legs(dense, sparse, search_opts),
+         do: Qdrant.fuse(nil, legs, Keyword.get(search_opts, :limit, 5), search_opts)
+  end
+
+  @doc "`hybrid_search/3`'s legs (dense, then keyword unless it failed), unfused."
+  @spec hybrid_legs(term(), map(), keyword()) :: {:ok, [[map()]]} | {:error, term()}
+  def hybrid_legs(dense, sparse, search_opts) do
     # Unlinked: a crash in the keyword leg must leave the search dense-only.
     keyword =
       Task.Supervisor.async_nolink(Engram.TaskSupervisor, fn ->
@@ -117,20 +124,16 @@ defmodule Engram.KeywordStore.Tantivy do
 
     dense_leg = Qdrant.search(nil, dense, Keyword.put(search_opts, :with_vector, false))
     keyword = Task.yield(keyword, timeout() + 100) || Task.shutdown(keyword, :brutal_kill)
-    limit = Keyword.get(search_opts, :limit, 5)
 
     with {:ok, dense_hits} <- dense_leg do
-      legs =
-        case keyword do
-          {:ok, {:ok, hits}} ->
-            [dense_hits, hits]
+      case keyword do
+        {:ok, {:ok, hits}} ->
+          {:ok, [dense_hits, hits]}
 
-          other ->
-            _ = fallback(reason(other), :dense_only)
-            [dense_hits]
-        end
-
-      Qdrant.fuse(nil, legs, limit, search_opts)
+        other ->
+          _ = fallback(reason(other), :dense_only)
+          {:ok, [dense_hits]}
+      end
     end
   end
 

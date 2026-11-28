@@ -63,13 +63,37 @@ defmodule Engram.SearchFilterTelemetryTest do
     end
 
     assert_received {@stop, ^ref, _, %{filtered: true, scope: :ids, surface: :rest}}
-    assert_received {@resolve, ^ref, %{duration: d}, %{scope: :ids}} when is_integer(d)
+
+    assert_received {@resolve, ^ref, %{duration: d}, %{scope: :ids, path: :ids, ids: "0"}}
+                    when is_integer(d)
 
     assert_receive {:span, span(name: "test.request", attributes: attrs)}, 2_000
     attrs = :otel_attributes.map(attrs)
     assert attrs["engram.search.filters"] == "folder,tags"
     assert attrs["engram.search.scope"] == "ids"
+    assert attrs["engram.search.path"] == "ids"
+    assert attrs["engram.search.ids"] == "0"
     refute inspect(attrs) =~ "Nowhere"
+  end
+
+  test "the id-count bucket and path: a folder's ids, then a large folder post-filtered",
+       %{bypass: bypass, user: user, vault: vault, ref: ref} do
+    import Engram.FieldCatalogHelpers, only: [write_indexed!: 4]
+
+    for i <- 1..3, do: write_indexed!(user, vault, "A/n#{i}.md", "body\n")
+    write_indexed!(user, vault, "r.md", "body\n")
+
+    Bypass.stub(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+      Plug.Conn.send_resp(conn, 200, ~s({"result":{"points":[]}}))
+    end)
+
+    assert {:ok, []} = Search.search(user, vault, "iron", mode: :keyword, folder: "A")
+    assert_received {@resolve, ^ref, _, %{scope: :ids, path: :ids, ids: "1-99"}}
+
+    # Over the threshold (2) and 3 of 4 notes: no id list, post-filtered.
+    ServiceConfig.put_override(:folder_post_filter_ids, 2)
+    assert {:ok, []} = Search.search(user, vault, "iron", mode: :keyword, folder: "A")
+    assert_received {@resolve, ^ref, _, %{scope: :too_wide, path: :post_filter, ids: "none"}}
   end
 
   test "surface labels: the plugin, the web app and internal callers",

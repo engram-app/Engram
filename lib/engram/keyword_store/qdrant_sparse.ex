@@ -52,4 +52,8 @@ defmodule Engram.KeywordStore.QdrantSparse do
   @impl true
   def hybrid_search(dense, sparse, search_opts),
     do: Qdrant.hybrid_search(Qdrant.collection_name(), dense, sparse, search_opts)
+
+  @impl true
+  def hybrid_legs(dense, sparse, search_opts),
+    do: Qdrant.hybrid_legs(Qdrant.collection_name(), dense, sparse, search_opts)
 end
