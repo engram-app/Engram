@@ -487,8 +487,8 @@ defmodule Engram.Search.NoteFilterTest do
     test "over the threshold and 1/8 of the vault: {:too_wide, sample}, no id read", ctx do
       seed_folder!(ctx, 12, 4)
 
-      # The sample is the bounded count (9 = threshold + 1) of the 16 notes.
-      assert resolve(ctx, %{folder: "A"}, sample: true) == {:too_wide, {9, 16}}
+      # The sample is the exact count: 12 of the 16 notes.
+      assert resolve(ctx, %{folder: "A"}, sample: true) == {:too_wide, {12, 16}}
       assert id_reads(ctx, %{folder: "A"}, sample: true) == []
     end
 
@@ -747,9 +747,11 @@ defmodule Engram.Search.NoteFilterTest do
     end
 
     # The large-folder counts (`folder_post_filter_ids`) as prod runs them:
-    # `engram_app` under RLS, custom and generic plans. An index read of the
-    # folder index bound by the vault, never a scan of the vault's notes.
-    test "the large-folder counts read the folder index under RLS", ctx do
+    # `engram_app` under RLS, custom and generic plans. Both index-only under
+    # their LIMIT: the folder's on the folder index (up to cap + 1), the
+    # vault's on a live index bound by the tenant and vault (up to 8 x the
+    # folder + 1). Never a seq scan, a bitmap scan or an unbounded count.
+    test "the large-folder counts are bounded index-only reads under RLS", ctx do
       Engram.ServiceConfig.put_override(:folder_post_filter_ids, 2)
       seed_plan!(ctx)
       note_split_done!()
@@ -762,8 +764,8 @@ defmodule Engram.Search.NoteFilterTest do
           NoteFilter.resolve(ctx.user, ctx.vault, %{folder: "F1"}, sample: true)
         end)
 
-      # 10 of 40 notes: over the threshold (3 counted), then at least 1/8 (5).
-      assert out == {:ok, {:too_wide, {5, 40}}}
+      # 10 of 40 notes: over the threshold (2) and at least 1/8.
+      assert out == {:ok, {:too_wide, {10, 40}}}
       me = self()
 
       counts =
@@ -772,16 +774,22 @@ defmodule Engram.Search.NoteFilterTest do
             sql =~ ~s(FROM "notes"),
             do: q
 
-      assert length(counts) == 2
+      assert [folder, vault] = counts
+      assert List.last(folder.params) == Qdrant.max_note_ids() + 1
+      assert List.last(vault.params) == 8 * 10 + 1
 
-      for %{sql: sql, params: params} <- counts,
+      for {%{sql: sql, params: params}, index} <- [
+            {folder, ~r/Index Only Scan using notes_folder_ref_live(_id)? on notes/},
+            {vault, ~r/Index Only Scan using notes_\w+ on notes/}
+          ],
           plan <- Map.values(QueryPlan.rls_plans(ctx.user.id, sql, params)) do
         # Index-only under the LIMIT: it stops at the count, whatever the
-        # folder's size (a bitmap scan would read every folder entry first).
-        assert plan =~ ~r/Index Only Scan using notes_folder_ref_live(_id)? on notes/, plan
+        # size (a bitmap scan would read every entry first).
+        assert plan =~ index, plan
+        assert plan =~ "Limit", plan
         refute plan =~ "Bitmap", plan
+        refute plan =~ "Seq Scan", plan
         QueryPlan.assert_notes_reads_bound!(plan)
-        refute plan =~ "notes_user_vault_live", plan
       end
     end
 

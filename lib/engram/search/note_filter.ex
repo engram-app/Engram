@@ -61,10 +61,11 @@ defmodule Engram.Search.NoteFilter do
   # turns it off (the id path for every folder).
   @post_filter_ids 1_024
 
-  # ...and only when the folder is at least 1 / @min_share of the vault: the
-  # post-filter's first pool is twice the page at that share, at most 16x
-  # (`Engram.Search` `@widen_factor`), so a smaller share keeps its ids and
-  # its recall.
+  # ...and only when the folder is at least 1 / @min_share of the vault. The
+  # answer's sample is the exact `{folder, vault}` count, so the search's
+  # first pool is twice the page at the folder's share (`Engram.Search`
+  # `oversample/1`): 16x, its `@widen_factor` cap, at exactly 1/8, less above
+  # it. A smaller share keeps its ids and its recall.
   @min_share 8
 
   @type filter :: map() | keyword()
@@ -95,8 +96,8 @@ defmodule Engram.Search.NoteFilter do
   compiled filter matches, so a post-filtered search can size its
   oversample in the same transaction, at constant cost. With `:sample`, a
   folder-only filter over `post_filter_ids/0` notes and at least 1/8 of the
-  vault answers `{:too_wide, {counted, vault_notes}}` without reading its
-  ids (one vault only). Ids are in no particular order.
+  vault answers `{:too_wide, {folder_notes, vault_notes}}` without reading
+  its ids (one vault only). Ids are in no particular order.
   """
   @spec resolve(map(), map() | [map()], filter(), keyword()) ::
           {:ok, resolved()} | {:error, FieldFilters.error()}
@@ -140,8 +141,7 @@ defmodule Engram.Search.NoteFilter do
           out =
             if within,
               do: {:ids, within(base, cond, within)},
-              else:
-                (large? && large_folder(user, vault, base, cond, cap)) || capped(base, cond, cap)
+              else: (large? && large_folder(base, cond, cap)) || capped(base, cond, cap)
 
           {:ok, sampled(out, base, cond, opts[:sample])}
         end
@@ -164,23 +164,20 @@ defmodule Engram.Search.NoteFilter do
       keys(filter) == [:folder] and post_filter_ids() < cap
   end
 
-  # `{:too_wide, {need, total}}` for a folder of more than `post_filter_ids/0`
-  # notes and at least 1 / @min_share of the vault's `total`, without reading
-  # its ids; nil otherwise (the id path). Two bounded counts at most, each
-  # stopping at its LIMIT, so the cost is constant in the folder size:
-  # `threshold + 1`, then (past it) `need`, where `need <= cap`. The vault's
-  # live-note count is the cached `Vaults.content_counts/2`, read only past
-  # the threshold. `need` is a lower bound of the folder, so the sample
-  # overstates the oversample a search needs, never understates it.
-  defp large_folder(user, vault, base, cond, cap) do
-    over = post_filter_ids() + 1
+  # `{:too_wide, {folder, vault}}` (both exact counts) for a folder of more
+  # than `post_filter_ids/0` notes and at least 1 / @min_share of the vault,
+  # without reading its ids; nil otherwise (the id path). Two bounded,
+  # index-only counts: the folder up to `cap + 1`, then the vault's live
+  # notes up to `@min_share * folder + 1` (more than that: under the share).
+  # No cached or unbounded vault count: at most 10,241 + 81,921 index
+  # entries whatever the folder or vault size.
+  defp large_folder(base, cond, cap) do
+    folder = bounded_count(base, cond, cap + 1)
 
-    with true <- bounded_count(base, cond, over) == over,
-         total = Engram.Vaults.content_counts(user, vault.id).notes,
-         need = max(over, div(total + @min_share - 1, @min_share)),
-         true <- need <= cap,
-         true <- need == over or bounded_count(base, cond, need) == need do
-      {:too_wide, {need, total}}
+    with true <- folder > post_filter_ids() and folder <= cap,
+         vault = bounded_count(base, dynamic(true), @min_share * folder + 1),
+         true <- vault <= @min_share * folder do
+      {:too_wide, {folder, vault}}
     else
       _ -> nil
     end
