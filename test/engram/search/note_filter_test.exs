@@ -13,6 +13,7 @@ defmodule Engram.Search.NoteFilterTest do
   alias Engram.Notes
   alias Engram.QueryPlan
   alias Engram.Search.NoteFilter
+  alias Engram.Vector.Qdrant
 
   setup do
     {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
@@ -456,6 +457,77 @@ defmodule Engram.Search.NoteFilterTest do
     end
   end
 
+  # A search's folder scope over `folder_post_filter_ids` notes and at least
+  # 1/8 of the vault is never read as an id list: a bounded count decides,
+  # and the search post-filters (Qdrant calls of 250 to 1,000 ms with the
+  # list, about 35 ms without).
+  describe "a large folder scope skips its id list" do
+    setup do
+      Engram.ServiceConfig.put_override(:folder_post_filter_ids, 8)
+      :ok
+    end
+
+    # The `notes` id reads resolve/4 sends: the id list (or its complement).
+    defp id_reads(ctx, filter, opts) do
+      {_, queries} =
+        Engram.QueryRecorder.record(fn ->
+          NoteFilter.resolve(ctx.user, ctx.vault, filter, opts)
+        end)
+
+      me = self()
+      for %{pid: ^me, sql: sql} <- queries, sql =~ ~r/^SELECT n0."id" FROM "notes"/, do: sql
+    end
+
+    defp seed_folder!(ctx, folder, rest) do
+      notes = for i <- 1..folder, do: note!(ctx, "A/S#{rem(i, 2)}/n#{i}.md")
+      for i <- 1..rest//1, do: note!(ctx, "r#{i}.md")
+      notes
+    end
+
+    test "over the threshold and 1/8 of the vault: {:too_wide, sample}, no id read", ctx do
+      seed_folder!(ctx, 12, 4)
+
+      # The sample is the bounded count (9 = threshold + 1) of the 16 notes.
+      assert resolve(ctx, %{folder: "A"}, sample: true) == {:too_wide, {9, 16}}
+      assert id_reads(ctx, %{folder: "A"}, sample: true) == []
+    end
+
+    test "at the threshold: the id list, as before", ctx do
+      notes = seed_folder!(ctx, 8, 4)
+      assert resolve(ctx, %{folder: "A"}, sample: true) == {:ids, ids(notes)}
+    end
+
+    # The worst recall case: a small share of a big vault keeps its ids.
+    test "over the threshold but under 1/8 of the vault: the id list", ctx do
+      Engram.ServiceConfig.put_override(:folder_post_filter_ids, 2)
+      notes = seed_folder!(ctx, 3, 27)
+      assert resolve(ctx, %{folder: "A"}, sample: true) == {:ids, ids(notes)}
+    end
+
+    test "the share bound is counted too: a folder of 1/8 skips", ctx do
+      Engram.ServiceConfig.put_override(:folder_post_filter_ids, 2)
+      seed_folder!(ctx, 4, 28)
+      assert resolve(ctx, %{folder: "A"}, sample: true) == {:too_wide, {4, 32}}
+    end
+
+    test "kill switch: a threshold at the Qdrant cap is the id path", ctx do
+      notes = seed_folder!(ctx, 12, 4)
+      Engram.ServiceConfig.put_override(:folder_post_filter_ids, Qdrant.max_note_ids())
+      assert resolve(ctx, %{folder: "A"}, sample: true) == {:ids, ids(notes)}
+    end
+
+    test "only a search's folder-only scope skips", ctx do
+      notes = seed_folder!(ctx, 12, 4)
+      # Not a search (no `sample:`): filter-only pages and post-filters.
+      assert resolve(ctx, %{folder: "A"}) == {:ids, ids(notes)}
+      # Another key beside the folder.
+      assert resolve(ctx, %{folder: "A", type: "x"}, sample: true) == {:ids, []}
+      # Cross-vault: the sample would be one vault's share, not the union's.
+      {:ok, out} = NoteFilter.resolve(ctx.user, [ctx.vault], %{folder: "A"}, sample: true)
+      assert sorted(out) == {:ids, ids(notes)}
+    end
+  end
+
   describe "tenant isolation under the app role" do
     test "control: the dropped role with no tenant sees no notes", ctx do
       note!(ctx, "a.md")
@@ -670,6 +742,45 @@ defmodule Engram.Search.NoteFilterTest do
           )
 
         assert plan =~ index, plan
+        refute plan =~ "notes_user_vault_live", plan
+      end
+    end
+
+    # The large-folder counts (`folder_post_filter_ids`) as prod runs them:
+    # `engram_app` under RLS, custom and generic plans. An index read of the
+    # folder index bound by the vault, never a scan of the vault's notes.
+    test "the large-folder counts read the folder index under RLS", ctx do
+      Engram.ServiceConfig.put_override(:folder_post_filter_ids, 2)
+      seed_plan!(ctx)
+      note_split_done!()
+      QueryPlan.fresh!("notes")
+      # As vacuumed prod: the covering folder index is costed index-only.
+      QueryPlan.all_visible!(["notes"])
+
+      {out, queries} =
+        Engram.QueryRecorder.record(fn ->
+          NoteFilter.resolve(ctx.user, ctx.vault, %{folder: "F1"}, sample: true)
+        end)
+
+      # 10 of 40 notes: over the threshold (3 counted), then at least 1/8 (5).
+      assert out == {:ok, {:too_wide, {5, 40}}}
+      me = self()
+
+      counts =
+        for %{pid: ^me, sql: sql} = q <- queries,
+            sql =~ ~r/^SELECT count\(\*\) FROM \(SELECT/,
+            sql =~ ~s(FROM "notes"),
+            do: q
+
+      assert length(counts) == 2
+
+      for %{sql: sql, params: params} <- counts,
+          plan <- Map.values(QueryPlan.rls_plans(ctx.user.id, sql, params)) do
+        # Index-only under the LIMIT: it stops at the count, whatever the
+        # folder's size (a bitmap scan would read every folder entry first).
+        assert plan =~ ~r/Index Only Scan using notes_folder_ref_live(_id)? on notes/, plan
+        refute plan =~ "Bitmap", plan
+        QueryPlan.assert_notes_reads_bound!(plan)
         refute plan =~ "notes_user_vault_live", plan
       end
     end
