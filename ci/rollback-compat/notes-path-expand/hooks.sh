@@ -77,7 +77,9 @@ hook_after_new_boot() {
   if [ "$FAULT" = path-hash-null ]; then
     # The newest live note with a name address: v5 lets it lose its path hash.
     local planted
-    planted=$(sql "UPDATE notes SET path_hmac = NULL WHERE id = (SELECT id FROM notes WHERE kind = 'note' AND deleted_at IS NULL AND name_hmac IS NOT NULL AND folder_ref_id IS NOT NULL ORDER BY id DESC LIMIT 1) RETURNING 'fault path-hash-null: path_hmac NULL on note ' || id")
+    # A top-level SELECT over the CTE: psql prints no command tag
+    # ("UPDATE 0") that would make an empty result look non-empty.
+    planted=$(sql "WITH u AS (UPDATE notes SET path_hmac = NULL WHERE id = (SELECT id FROM notes WHERE kind = 'note' AND deleted_at IS NULL AND name_hmac IS NOT NULL AND folder_ref_id IS NOT NULL ORDER BY id DESC LIMIT 1) RETURNING id) SELECT 'fault path-hash-null: path_hmac NULL on note ' || id FROM u")
     echo "$planted"
     [ -n "$planted" ] || fail "fault path-hash-null: no note matched, nothing planted"
   fi
@@ -88,7 +90,7 @@ hook_after_new_boot() {
 # halt, so K is the first node to fetch it. max_attempts is L's (1).
 hook_after_new_halt() {
   local id
-  id=$(sql "INSERT INTO oban_jobs (state, queue, worker, args, max_attempts, scheduled_at) VALUES ('available', 'maintenance', 'Engram.Workers.TrimKeywordFeed', '{}', 1, now()) RETURNING id")
+  id=$(sql "WITH i AS (INSERT INTO oban_jobs (state, queue, worker, args, max_attempts, scheduled_at) VALUES ('available', 'maintenance', 'Engram.Workers.TrimKeywordFeed', '{}', 1, now()) RETURNING id) SELECT id FROM i")
   echo "due TrimKeywordFeed job left for K: $id"
   [ -n "$id" ] || fail "could not insert the TrimKeywordFeed job"
   echo "$id" > "$RUNNER_TEMP/trim-job-id.txt"
