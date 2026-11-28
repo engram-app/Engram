@@ -3061,8 +3061,8 @@ defmodule Engram.Notes do
         # the content is unchanged. A changed hash: the move folded the
         # uncheckpointed CRDT tail into the content, and the room's next
         # checkpoint then sees no change and queues nothing (R6 missed-18).
-        # Every caller (REST id-keyed move, CRDT relocate and resurrect, link
-        # rewriter) goes through here. Before the seq bump, so it is not made
+        # Every caller (REST id-keyed move, CRDT relocate and resurrect, trash
+        # restore) goes through here. Before the seq bump, so it is not made
         # under the vault seq lock (#1710); a write that lands nothing
         # discards it.
         queue? = was_tombstoned or prior.content_hash != crdt.content_hash
@@ -3126,9 +3126,17 @@ defmodule Engram.Notes do
     # `put_change(:deleted_at, nil)` means this can also resurrect a
     # tombstone, so the fence carries the whole pre-image, not just the id.
     # The target's key may still be held by a note moved away without a
-    # cascade (S5): free it first. A refused write would abort a caller's
-    # transaction that runs no savepoint (CRDT relocate, resurrect).
+    # cascade (S5): free it first, so the write below does not refuse.
     _ = if free_slot?, do: free_stale_slot(user, prior.vault_id, sanitized_path, prior.id)
+
+    # `mode: :savepoint` for every caller: a live note still holding the
+    # target (a resurrect onto a taken path, a race past the pre-checks) trips
+    # a `PathUniques` index. Without the savepoint that aborts the caller's
+    # tenant transaction and the next statement raises 25P02; with it the
+    # write rolls back alone and returns the changeset's "has already been
+    # taken", which every surface answers as a path-taken refusal
+    # (docs/context/rls-enforcement-testing-traps.md, trap 8).
+    db_opts = Keyword.put_new(db_opts, :mode, :savepoint)
 
     case fenced_update(snapshot_fenced(changeset, prior), db_opts) do
       {:ok, updated} ->
@@ -10468,9 +10476,8 @@ defmodule Engram.Notes do
 
     folder = Helpers.extract_folder(prior.path)
 
-    # `mode: :savepoint`: a unique violation (a live note took the path after
-    # the plan) rolls back this row only. Without it Postgres aborts the whole
-    # chunk transaction and the next statement raises 25P02.
+    # A unique violation (a live note took the path after the plan) rolls
+    # back this row only: `write_moved/3` writes under a savepoint.
     case move_note(
            prior,
            base_attrs,
@@ -10479,7 +10486,6 @@ defmodule Engram.Notes do
            folder,
            "restore",
            false,
-           mode: :savepoint,
            folder_refs: refs,
            # In a moved vault the plan counts a stale key as free (the
            # shown-path rule), so the free re-paths its holder first.

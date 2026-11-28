@@ -242,7 +242,9 @@ Sites: `lib/engram/accounts/export.ex` `insert_pending/1` (a concurrent request
 trips the partial unique index), and `lib/engram/workers/account_export.ex`
 `save/1` (an Oban retry of a `:failed` export, after the user has requested a
 new one, trips `account_exports_one_active_per_user` on the flip to
-`:running`). Precedent: `Vaults.create_vault` (`lib/engram/vaults.ex`).
+`:running`), and `lib/engram/notes.ex` `write_moved/3` (every `move_note`
+write: a crdt_create reviving a tombstoned id onto a path a live note holds
+trips a `PathUniques` index; it replies `create_failed`). Precedent: `Vaults.create_vault` (`lib/engram/vaults.ex`).
 
 ## Trap 9: proving a cross-tenant sweep runs on `Engram.Repo.Maintenance`
 
