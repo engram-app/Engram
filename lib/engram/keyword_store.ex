@@ -109,6 +109,10 @@ defmodule Engram.KeywordStore do
   @callback hybrid_search(dense :: term(), KeywordIndex.sparse(), search_opts :: keyword()) ::
               {:ok, [map()]} | {:error, term()}
 
+  @doc "`hybrid_search/3`'s two ranked legs (dense, keyword), unfused."
+  @callback hybrid_legs(dense :: term(), KeywordIndex.sparse(), search_opts :: keyword()) ::
+              {:ok, [[map()]]} | {:error, term()}
+
   @doc "The sparse store: always written, read unless `:keyword_read` says `:tantivy`."
   @spec impl() :: module()
   def impl, do: ServiceConfig.get(:keyword_store, Engram.KeywordStore.QdrantSparse)
@@ -188,6 +192,11 @@ defmodule Engram.KeywordStore do
           {:ok, [map()]} | {:error, term()}
   def hybrid_search(dense, sparse, search_opts),
     do: reader().hybrid_search(dense, sparse, search_opts)
+
+  @spec hybrid_legs(term(), KeywordIndex.sparse(), keyword()) ::
+          {:ok, [[map()]]} | {:error, term()}
+  def hybrid_legs(dense, sparse, search_opts),
+    do: reader().hybrid_legs(dense, sparse, search_opts)
 
   defp reader, do: if(read() == :tantivy, do: Tantivy, else: impl())
 

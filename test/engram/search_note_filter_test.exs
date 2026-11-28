@@ -652,5 +652,98 @@ defmodule Engram.SearchNoteFilterTest do
     Engram.DataMigrations.mark_done(NotePayloadStamps.name(), NotePayloadStamps.version())
   end
 
+  # A post-filtered hybrid round reads its candidates' notes ONCE: one chunk
+  # read (point -> note) and one bounded `within:` resolve, before fusion and
+  # outside the vector-store gate; `within_filter/4` reuses them. Counted per
+  # round over one round (a short leg) and two (a full one widens once).
+  describe ":too_wide hybrid: one note read per post-filter round" do
+    setup %{bypass: bypass, user: user, vault: vault} do
+      Engram.QdrantStub.stub_retrieve(bypass)
+      drop = insert_note!(user, vault, %{path: "Other/drop.md"})
+
+      drops =
+        for pos <- 0..99 do
+          point = Ecto.UUID.generate()
+          insert_chunk!(user, drop, point, text: "ferritin #{pos}", position: pos)
+          %{"id" => point, "score" => 0.9 - pos / 1000}
+        end
+
+      {keep, keep_point} = note_with_point(user, vault, "Health/keep.md")
+
+      answer(fn
+        [] -> {:ok, :too_wide}
+        [within: ids] -> {:ok, {:ids, Enum.filter(ids, &(&1 == keep.id))}}
+      end)
+
+      test_pid = self()
+
+      serve = fn pool ->
+        Bypass.expect(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          %{"searches" => [%{"limit" => limit} | _]} = Jason.decode!(body)
+          send(test_pid, {:limit, limit})
+          leg = Enum.take(pool.(limit), limit)
+
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(Engram.QdrantStub.batch(conn, %{"result" => leg}, leg))
+          )
+        end)
+      end
+
+      %{drops: drops, keep_hit: %{"id" => keep_point, "score" => 0.1}, serve: serve}
+    end
+
+    defp rounds_reads(user, vault) do
+      {result, queries} =
+        Engram.QueryRecorder.record(fn ->
+          Search.search(user, vault, "q", folder: "Health", mode: :hybrid, diversity: 0.0)
+        end)
+
+      me = self()
+
+      point_reads =
+        for %{pid: ^me, sql: sql} <- queries,
+            sql =~ ~r/^SELECT c0."qdrant_point_id", c0."note_id" FROM "chunks"/,
+            do: sql
+
+      resolves = Stream.repeatedly(fn -> receive_within() end) |> Enum.take_while(& &1)
+      {result, length(point_reads), length(resolves)}
+    end
+
+    defp receive_within do
+      receive do
+        {:resolve, _, _, [within: _]} -> true
+      after
+        0 -> false
+      end
+    end
+
+    test "one round: one chunk read, one within: resolve",
+         %{user: user, vault: vault, drops: drops, keep_hit: keep_hit, serve: serve} do
+      embed()
+      # 4x the page (5) is 20; a 6-point leg is the whole tenant: no widen.
+      serve.(fn _ -> Enum.take(drops, 5) ++ [keep_hit] end)
+
+      assert {{:ok, [hit]}, 1, 1} = rounds_reads(user, vault)
+      assert hit.source_path == "Health/keep.md"
+      assert_received {:limit, 20}
+      refute_received {:limit, _}
+    end
+
+    test "two rounds: one chunk read and one within: resolve each",
+         %{user: user, vault: vault, drops: drops, keep_hit: keep_hit, serve: serve} do
+      embed()
+      # Round 1 (20) is all drops and full: it widens once to 16x (80).
+      serve.(fn _ -> drops ++ [keep_hit] end)
+
+      assert {{:ok, []}, 2, 2} = rounds_reads(user, vault)
+      assert_received {:limit, 20}
+      assert_received {:limit, 80}
+    end
+  end
+
   defp tenant(user, vault), do: [user_id: to_string(user.id), vault_id: to_string(vault.id)]
 end

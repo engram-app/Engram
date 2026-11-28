@@ -18,7 +18,7 @@ defmodule Engram.SearchLargeFolderRecallTest do
   threshold (a small share of a big vault), which must keep its ids.
 
   Measured (15 queries each): 1/4 folder 0.993 mean overlap (worst query
-  0.9), 1/8 folder 0.987 (0.9), 1/16 folder 1.0 (id path). Without
+  0.9), 1/8 folder 0.993 (0.9), 1/16 folder 1.0 (id path). Without
   `Qdrant.fuse/4`'s `:scope_first` (fusing the tenant's ranks, not the
   scope's) the 1/4 folder measured 0.887 (0.7) and the 1/8 one 0.9 (0.8):
   this test fails without it.
