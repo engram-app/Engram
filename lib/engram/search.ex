@@ -1034,7 +1034,8 @@ defmodule Engram.Search do
       keep? = &if is_map_key(&1, :in_scope), do: &1.in_scope, else: notes[&1.qdrant_id] in matched
 
       rowless = Enum.count(candidates, &(not row?.(&1)))
-      {:ok, {candidates |> Enum.filter(keep?) |> Enum.take(keep), rowless}}
+      kept = for c <- Enum.filter(candidates, keep?), do: Map.drop(c, [:note_id, :in_scope])
+      {:ok, {Enum.take(kept, keep), rowless}}
     end
   end
 
@@ -1186,8 +1187,14 @@ defmodule Engram.Search do
          {:ok, notes, matched} <- scoped_notes(user, points, within) do
       inside = for {p, n} <- notes, n in matched, into: MapSet.new(), do: p
       opts = Keyword.put(search_opts, :scope_first, inside)
-      fuse = fn -> Qdrant.fuse(collection(), legs, Keyword.fetch!(search_opts, :limit), opts) end
-      fused = if search_opts[:with_vector], do: qdrant(user, fuse), else: fuse.()
+      limit = Keyword.fetch!(search_opts, :limit)
+
+      # The vector retrieve (MMR) is a request: in the gate, timed as the
+      # hybrid search. Without it the fusion is in memory: neither.
+      fused =
+        if search_opts[:with_vector],
+          do: qdrant(user, fn -> Qdrant.timed_fuse(collection(), legs, limit, opts) end),
+          else: Qdrant.fuse(collection(), legs, limit, opts)
 
       with {:ok, hits} <- fused do
         {:ok,

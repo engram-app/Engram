@@ -1941,6 +1941,16 @@ defmodule Engram.Vector.Qdrant do
         batch_legs(col || collection(), dense, sparse, search_opts)
       end)
 
+  @doc """
+  `fuse/4` timed as `:hybrid_search` (its `:with_vector` retrieve is the
+  only request), for a caller that fused `hybrid_legs/4` itself: the
+  post-filtered search, whose note read sits between the two.
+  """
+  @spec timed_fuse(String.t() | nil, [[map()]], pos_integer(), keyword()) ::
+          {:ok, [map()]} | {:error, term()}
+  def timed_fuse(col, legs, limit, search_opts),
+    do: instrument(:hybrid_search, fn -> fuse(col, legs, limit, search_opts) end)
+
   defp batch_legs(col, dense, sparse, search_opts) do
     opts = [json: hybrid_search_body(dense, sparse, search_opts)] ++ req_opts(:search)
     do_query(col, "/points/query/batch", opts, &batch_results/1)

@@ -510,6 +510,16 @@ defmodule Engram.Search.NoteFilterTest do
       assert resolve(ctx, %{folder: "A"}, sample: true) == {:too_wide, {4, 32}}
     end
 
+    # The biggest folders skip too: past the cap the folder counts as cap + 1
+    # (no id read, no complement read), its share judged on that bound.
+    test "a folder past the cap: {:too_wide, {cap + 1, vault}}, no id read", ctx do
+      Engram.ServiceConfig.put_override(:folder_post_filter_ids, 2)
+      seed_folder!(ctx, 8, 4)
+
+      assert resolve(ctx, %{folder: "A"}, sample: true, cap: 6) == {:too_wide, {7, 12}}
+      assert id_reads(ctx, %{folder: "A"}, sample: true, cap: 6) == []
+    end
+
     test "kill switch: a threshold at the Qdrant cap is the id path", ctx do
       notes = seed_folder!(ctx, 12, 4)
       Engram.ServiceConfig.put_override(:folder_post_filter_ids, Qdrant.max_note_ids())

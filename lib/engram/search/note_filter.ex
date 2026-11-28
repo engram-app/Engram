@@ -164,17 +164,19 @@ defmodule Engram.Search.NoteFilter do
       keys(filter) == [:folder] and post_filter_ids() < cap
   end
 
-  # `{:too_wide, {folder, vault}}` (both exact counts) for a folder of more
-  # than `post_filter_ids/0` notes and at least 1 / @min_share of the vault,
+  # `{:too_wide, {folder, vault}}` for a folder of more than
+  # `post_filter_ids/0` notes and at least 1 / @min_share of the vault,
   # without reading its ids; nil otherwise (the id path). Two bounded,
   # index-only counts: the folder up to `cap + 1`, then the vault's live
   # notes up to `@min_share * folder + 1` (more than that: under the share).
-  # No cached or unbounded vault count: at most 10,241 + 81,921 index
-  # entries whatever the folder or vault size.
+  # Both exact up to the cap; a folder past it counts as `cap + 1`, a lower
+  # bound, so its share and the search's oversample err wide, and the
+  # biggest folders skip too. At most 10,241 + 81,929 index entries,
+  # whatever the folder or vault size.
   defp large_folder(base, cond, cap) do
     folder = bounded_count(base, cond, cap + 1)
 
-    with true <- folder > post_filter_ids() and folder <= cap,
+    with true <- folder > post_filter_ids(),
          vault = bounded_count(base, dynamic(true), @min_share * folder + 1),
          true <- vault <= @min_share * folder do
       {:too_wide, {folder, vault}}

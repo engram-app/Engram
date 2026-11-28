@@ -729,6 +729,7 @@ defmodule Engram.SearchNoteFilterTest do
 
       assert {{:ok, [hit]}, 1, 1} = rounds_reads(user, vault)
       assert hit.source_path == "Health/keep.md"
+      refute Map.has_key?(hit, :in_scope)
       assert_received {:limit, 20}
       refute_received {:limit, _}
     end

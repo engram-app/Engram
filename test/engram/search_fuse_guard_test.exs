@@ -75,13 +75,21 @@ defmodule Engram.SearchFuseGuardTest do
     end
   end
 
+  # Fixed point ids: the run never depends on a random UUID's order.
+  @points %{
+    "a" => "00000000-0000-4000-8000-00000000000a",
+    "b" => "00000000-0000-4000-8000-00000000000b",
+    "c" => "00000000-0000-4000-8000-00000000000c",
+    "x" => "00000000-0000-4000-8000-0000000000ff"
+  }
+
   # In-scope notes A, B, C under Health; X is another folder's point that an
   # id scope lets through (`is_empty(n)`) or an unfiltered search ranks.
   defp seed!(ctx) do
     for name <- ~w(a b c x) do
       folder = if name == "x", do: "Other", else: "Health"
       note = insert_note!(ctx.user, ctx.vault, %{path: "#{folder}/#{name}.md"})
-      point = Ecto.UUID.generate()
+      point = @points[name]
       insert_chunk!(ctx.user, note, point, text: "text #{name}")
       {name, %{point: point, path: "#{folder}/#{name}.md"}}
     end
@@ -91,12 +99,15 @@ defmodule Engram.SearchFuseGuardTest do
   defp legs!(ctx, seeded) do
     p = &seeded[&1].point
 
+    # No fused score ties under either ordering (so the id tie-break never
+    # decides): plain fusion gives b, a, c in scope; in-scope first gives
+    # b, c, a.
     dense =
-      for {n, s} <- [{"x", 0.9}, {"a", 0.8}, {"b", 0.7}, {"c", 0.6}],
+      for {n, s} <- [{"a", 0.9}, {"b", 0.8}, {"x", 0.7}, {"c", 0.6}],
           do: %{qdrant_id: p.(n), score: s}
 
     keyword =
-      for {n, s} <- [{"c", 9.0}, {"b", 8.0}, {"a", 7.0}], do: %{qdrant_id: p.(n), score: s}
+      for {n, s} <- [{"b", 9.0}, {"x", 8.0}, {"c", 7.0}], do: %{qdrant_id: p.(n), score: s}
 
     Bypass.stub(ctx.bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       wire = &Enum.map(&1, fn h -> %{"id" => h.qdrant_id, "score" => h.score} end)
@@ -127,6 +138,7 @@ defmodule Engram.SearchFuseGuardTest do
       inside = for n <- ~w(a b c), do: seeded[n].point
 
       expected = legs |> pre_change(20) |> Enum.map(&by_point[&1])
+      assert Enum.reject(expected, &(&1 =~ "Other")) == ~w(Health/b.md Health/a.md Health/c.md)
       # The legs are a real test: in-scope-first ordering changes this page.
       refute legs
              |> scope_first(inside, 20)
