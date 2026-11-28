@@ -70,8 +70,12 @@ def seed_old(api_url: str, state: str, notes: bool = False) -> None:
         _expect(f"create {folder}", client.create_folder(folder), (200, 201))
     if notes:
         # Notes at the root, in an explicit folder, and deep under one.
-        for path in ("root-note.md", "Legacy/note.md", "Legacy/Child/deep/note.md"):
-            client.create_note(path, f"seeded on OLD: {path}")
+        seeded = ("root-note.md", "Legacy/note.md", "Legacy/Child/deep/note.md")
+        for path in seeded:
+            client.create_note(path, f"seeded on OLD: {path}")  # raises on any non-2xx
+        listed = {n["path"] for n in client.get_vault_tree().get("notes") or []}
+        if not set(seeded) <= listed:
+            raise SystemExit(f"seed-old: OLD does not list its own notes {sorted(set(seeded) - listed)}")
     data["expected"] = sorted(LEGACY)
     _save(state, data)
     print(f"seed-old: created {LEGACY}")
@@ -153,7 +157,13 @@ def seed_new(api_url: str, state: str, fault: str) -> None:
         _expect("create Unstamped", client.create_folder("Unstamped"), (200, 201))
         expected.add("Unstamped")
     data["expected"] = sorted(expected)
-    data["tree"] = _tree_rows(client.get_vault_tree())
+    tree = client.get_vault_tree()
+    data["tree"] = _tree_rows(tree)
+    # Every live note NEW serves, by id: verify-old's read-back must find
+    # exactly these (a short or empty listing is a failure, not "0 of 0").
+    data["notes"] = {str(n["id"]): n["path"] for n in tree.get("notes") or []}
+    if not data["notes"]:
+        raise SystemExit("seed-new: NEW's tree lists no notes, so the read-back would prove nothing")
     errors = _check(client, expected, "NEW after seeding", data["tree"])
     if errors:
         raise SystemExit("NEW's own listings do not match its seed: " + "; ".join(errors))
@@ -232,28 +242,46 @@ def _smoke_writes(client: ApiClient, data: dict) -> list[str]:
             errors.append(f"MCP search_notes on OLD does not find {path}: {found[:200]}")
         moved = "PostRollback/m.md"
         status = client.rename_note(path, moved)
-        if status != 200 or body not in ((client.get_note(moved) or {}).get("content") or ""):
+        got = client.get_note(moved) or {}
+        if status != 200 or body not in (got.get("content") or ""):
             errors.append(f"rename {path} -> {moved} on OLD: HTTP {status}, not readable at the new path")
+        # The workflow checks this row's name_key in SQL (OLD's write under NEW's trigger).
+        data["post_rollback_id"] = str(got.get("id") or "")
     except Exception as e:  # any failure is a finding, reported with the rest (not swallowed)
         errors.append(f"OLD note/MCP smoke raised {type(e).__name__}: {str(e)[:200]}")
     print(f"OLD write smoke: {len(errors)} errors")
     return errors
 
 
-def _read_every_note(client: ApiClient) -> list[str]:
-    """Every note OLD's tree lists must read back by its path, as the same id:
-    a path lookup goes through path_hmac, which a later release may leave NULL."""
+def _read_every_note(client: ApiClient, want: dict[str, str], fault: str = "none") -> list[str]:
+    """OLD's tree must list exactly the notes NEW served (`want`, id -> path),
+    and each must read back by its path as the same id: a path lookup goes
+    through path_hmac, which a later release may leave NULL."""
     errors = []
     notes = client.get_vault_tree().get("notes") or []
-    for n in notes:
-        got = client.get_note(n["path"])
-        if not got or str(got.get("id")) != str(n["id"]):
-            errors.append(f"note {n['id']} listed at {n['path']} but OLD does not read it there (got {got and got.get('id')})")
-    print(f"OLD read {len(notes) - len(errors)} of {len(notes)} listed notes back by path")
+    if fault == "zero-notes":
+        # Red proof of the floor: OLD's tree as if it listed no note.
+        print(f"fault zero-notes: dropped {len(notes)} listed notes")
+        notes = []
+    listed = {str(n["id"]): n["path"] for n in notes}
+    if not want or listed != want:
+        errors.append(
+            f"OLD's tree lists {len(listed)} notes, NEW served {len(want)}: "
+            f"missing {sorted(set(want) - set(listed))}, extra {sorted(set(listed) - set(want))}, "
+            f"moved {sorted(i for i in set(want) & set(listed) if want[i] != listed[i])}"
+        )
+    read = 0
+    for ident, path in sorted(listed.items()):
+        got = client.get_note(path)
+        if got and str(got.get("id")) == ident:
+            read += 1
+        else:
+            errors.append(f"note {ident} listed at {path} but OLD does not read it there (got {got and got.get('id')})")
+    print(f"OLD read {read} of {len(want)} notes NEW served back by path ({len(listed)} listed)")
     return errors
 
 
-def verify_old(api_url: str, state: str, writes: bool = False, read_notes: bool = False) -> None:
+def verify_old(api_url: str, state: str, writes: bool = False, read_notes: bool = False, fault: str = "none") -> None:
     data = _load(state)
     client = _client(api_url, data)
     expected = set(data["expected"])
@@ -272,11 +300,12 @@ def verify_old(api_url: str, state: str, writes: bool = False, read_notes: bool 
     rows["Root/Inner2"] = data["tree"].get("Root/Inner")
     errors += _check(client, expected, "after OLD rename + delete", rows)
     if read_notes:
-        errors += _read_every_note(client)
+        errors += _read_every_note(client, data.get("notes") or {}, fault)
     if writes:
         errors += _smoke_writes(client, data)
         errors += _check(client, expected | {"PostRollback"}, "after OLD writes", rows)
 
+    _save(state, data)
     for e in errors:
         print(f"::error::{e}")
     if errors:
@@ -289,7 +318,7 @@ def main() -> None:
     p.add_argument("phase", choices=["seed-old", "seed-new", "verify-old"])
     p.add_argument("--api-url", required=True, help="e.g. http://localhost:8110/api")
     p.add_argument("--state", required=True, help="0600 JSON state file")
-    p.add_argument("--fault", choices=["none", "unstamped-row", "vault-lock", "hash-read", "path-hash-null", "verdict-count"], default="none")
+    p.add_argument("--fault", choices=["none", "unstamped-row", "vault-lock", "hash-read", "path-hash-null", "verdict-count", "zero-notes"], default="none")
     p.add_argument("--with-notes", action="store_true", help="seed-old: notes too, nested")
     p.add_argument("--writes", action="store_true", help="verify-old: also folder create, note write/read/rename, MCP list_folder and search")
     p.add_argument("--read-notes", action="store_true", help="verify-old: read every listed note back by path")
@@ -299,7 +328,7 @@ def main() -> None:
     elif a.phase == "seed-new":
         seed_new(a.api_url, a.state, a.fault)
     else:
-        verify_old(a.api_url, a.state, a.writes, a.read_notes)
+        verify_old(a.api_url, a.state, a.writes, a.read_notes, a.fault)
 
 
 if __name__ == "__main__":

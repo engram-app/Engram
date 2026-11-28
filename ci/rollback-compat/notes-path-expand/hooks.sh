@@ -7,15 +7,21 @@
 # Asserts, both shapes: after L's boot and again after K's phase 3, the v5
 # CHECK exists and is valid, v4 is gone, notes_manifest_name exists and is
 # valid, notes_name_live does not exist; L's only drop is the v4 constraint;
-# the L boot-step ledgers K finds are exactly as L left them after K's boot
-# and passes (K does not know their names); every K data migration gets a
-# verdict; K lists, reads every listed note back by path, renames and deletes
-# a folder, creates a folder, writes, reads and renames a note and finds it
-# through MCP, keeping L's ids and parents. K's writes satisfy v5 (the CHECK
-# would refuse them otherwise).
-# Fault path-hash-null: one live note L wrote gets path_hmac NULL, which v5
-# allows when the note has a name address (what a later release may write).
-# K's read-back by path must go red on it.
+# the boot-step ledgers K finds are exactly as L left them after K's boot
+# and passes (L's own steps, which K does not know, and folder_path_hash_drop,
+# K's own); every K data migration gets a verdict; K's tree lists exactly the
+# notes L served (none missing, none extra, never zero) and reads each back by
+# path; K renames and deletes a folder, creates a folder, writes, reads and
+# renames a note and finds it through MCP, keeping L's ids and parents. K's
+# writes satisfy v5 (the CHECK would refuse them otherwise), and K's renamed
+# note gets a name_key from L's trigger body, which is still L's after K's
+# passes. One due TrimKeywordFeed job (L's worker, unknown to K) is left in
+# the queue at the halt: K must discard it once, retry nothing, create no
+# more, and keep every other queue draining.
+# Faults: path-hash-null gives one live note L wrote a NULL path_hmac, which
+# v5 allows when the note has a name address (what a later release may
+# write); K's read-back by path must go red on it. zero-notes makes the
+# read-back see an empty tree; it must go red on the count, not pass "0 of 0".
 #
 # Sourced after rbc-lib.sh, ddl-log.sh and folder-checks.sh.
 
@@ -70,8 +76,22 @@ hook_after_new_boot() {
   check_merges
   if [ "$FAULT" = path-hash-null ]; then
     # The newest live note with a name address: v5 lets it lose its path hash.
-    sql "UPDATE notes SET path_hmac = NULL WHERE id = (SELECT id FROM notes WHERE kind = 'note' AND deleted_at IS NULL AND name_hmac IS NOT NULL AND folder_ref_id IS NOT NULL ORDER BY id DESC LIMIT 1) RETURNING 'fault path-hash-null: path_hmac NULL on note ' || id"
+    local planted
+    planted=$(sql "UPDATE notes SET path_hmac = NULL WHERE id = (SELECT id FROM notes WHERE kind = 'note' AND deleted_at IS NULL AND name_hmac IS NOT NULL AND folder_ref_id IS NOT NULL ORDER BY id DESC LIMIT 1) RETURNING 'fault path-hash-null: path_hmac NULL on note ' || id")
+    echo "$planted"
+    [ -n "$planted" ] || fail "fault path-hash-null: no note matched, nothing planted"
   fi
+}
+
+# Phase 2, NEW (L) halted: one due job of L's TrimKeywordFeed worker, as L's
+# cron or its 5-minute self-chain leaves one in prod. Inserted after the
+# halt, so K is the first node to fetch it. max_attempts is L's (1).
+hook_after_new_halt() {
+  local id
+  id=$(sql "INSERT INTO oban_jobs (state, queue, worker, args, max_attempts, scheduled_at) VALUES ('available', 'maintenance', 'Engram.Workers.TrimKeywordFeed', '{}', 1, now()) RETURNING id")
+  echo "due TrimKeywordFeed job left for K: $id"
+  [ -n "$id" ] || fail "could not insert the TrimKeywordFeed job"
+  echo "$id" > "$RUNNER_TEMP/trim-job-id.txt"
 }
 
 hook_snapshot() { folder_note_snapshot; }
@@ -82,8 +102,35 @@ hook_old_checks() {
   l_ledgers > "$RUNNER_TEMP/l-ledgers-after.txt"
   diff "$RUNNER_TEMP/l-ledgers.txt" "$RUNNER_TEMP/l-ledgers-after.txt" \
     || fail "K changed L's boot-step ledgers (diff above: < after L, > after K)"
+  # K's boot and passes keep L's trigger body (the either-anchor name_key).
+  [ "$(sql "SELECT count(*) FROM pg_proc WHERE proname = 'notes_set_name_key' AND prosrc LIKE '%name_nonce%'")" -eq 1 ] \
+    || fail "notes_set_name_key is no longer L's body (no name_nonce anchor) after K's passes"
 }
 
 # Phase 3: what K's REST serves, every listed note read back by path, then
 # its writes.
-hook_verify_old() { verify_old_rest --read-notes; }
+hook_verify_old() {
+  verify_old_rest --read-notes --fault "$FAULT"
+  # K's renamed note, written under L's trigger body, has a name address.
+  local id nk
+  id=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('post_rollback_id') or '')" "$STATE")
+  nk=$(sql "SELECT coalesce((SELECT (name_key IS NOT NULL)::text FROM notes WHERE id = '${id:-00000000-0000-0000-0000-000000000000}' AND deleted_at IS NULL), 'absent')")
+  echo "K's PostRollback/m.md ($id): name_key set=$nk"
+  [ "$nk" = true ] || fail "K's renamed note PostRollback/m.md has name_key $nk, want set"
+}
+
+# Phase 3, after OLD (K) halted: the TrimKeywordFeed job L left. PASS only if
+# K discarded exactly it, once, as an unknown worker, made no retry and no
+# further row of it, and no other queue has due work stuck.
+hook_old_jobs() {
+  local id rows st stalled
+  id=$(cat "$RUNNER_TEMP/trim-job-id.txt")
+  rows=$(sql "SELECT count(*) FROM oban_jobs WHERE worker = 'Engram.Workers.TrimKeywordFeed'")
+  st=$(sql "SELECT state || ' attempt=' || attempt || ' errors=' || coalesce(array_length(errors, 1), 0) || ' unknown_worker=' || (errors[1]->>'error' LIKE '%unknown worker%') FROM oban_jobs WHERE id = ${id:-0}")
+  stalled=$(sql "SELECT coalesce(string_agg(queue || ':' || worker || ':' || state, ' '), '') FROM oban_jobs WHERE worker <> 'Engram.Workers.TrimKeywordFeed' AND (state = 'executing' AND attempted_at < now() - interval '5 minutes' OR state = 'available' AND scheduled_at < now() - interval '60 seconds')")
+  echo "TrimKeywordFeed rows: $rows; job $id: ${st:-absent}; other queues' stuck jobs: ${stalled:-none}"
+  [ "$rows" -eq 1 ] || fail "K left $rows TrimKeywordFeed rows, want exactly the one L left (a retry or a new one)"
+  [ "$st" = "discarded attempt=1 errors=1 unknown_worker=true" ] \
+    || fail "TrimKeywordFeed job $id on K is '${st:-absent}', want one discarded attempt with an unknown-worker error"
+  [ -z "$stalled" ] || fail "other queues have stuck jobs after K met TrimKeywordFeed: $stalled"
+}

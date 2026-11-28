@@ -60,9 +60,9 @@ on:
         description: Per-pair rpc snippets under ci/rollback-compat/
         default: explicit-folders
       fault:
-        description: "Red-path proof. explicit-folders: unstamped-row, vault-lock. folder-hash-drop: hash-read. notes-path-expand: path-hash-null. Any pair: verdict-count"
+        description: "Red-path proof. explicit-folders: unstamped-row, vault-lock. folder-hash-drop: hash-read. notes-path-expand: path-hash-null, zero-notes. Any pair: verdict-count"
         type: choice
-        options: [none, unstamped-row, vault-lock, hash-read, path-hash-null, verdict-count]
+        options: [none, unstamped-row, vault-lock, hash-read, path-hash-null, zero-notes, verdict-count]
         default: none
 
 permissions:
@@ -183,6 +183,9 @@ jobs:
               [ "$f" = t ] || fail "FORCE ROW LEVEL SECURITY is off on $t after $1"
             done
           }
+          # Optional hooks; a pair's hooks.sh may override them.
+          hook_after_new_halt() { :; }
+          hook_old_jobs() { :; }
           # Shared probes, then the pair's checks (hook_* functions).
           . ci/rollback-compat/ddl-log.sh
           . ci/rollback-compat/judge-migrations.sh
@@ -213,6 +216,7 @@ jobs:
           rls_forced "NEW's boot"
           hook_after_new_boot
           halt new
+          hook_after_new_halt
           hook_snapshot > "$RUNNER_TEMP/snapshot-before.txt"
 
       - name: "Phase 3: rollback, every OLD data migration, then the pair's reconcile"
@@ -325,6 +329,7 @@ jobs:
           sql "SELECT coalesce(json_agg(json_build_object('id', id, 'worker', worker, 'state', state, 'args', args, 'error', errors[array_length(errors, 1)]->>'error', 'all_errors', array_to_string(ARRAY(SELECT e->>'error' FROM unnest(errors) e), E'\\n'))), '[]') FROM oban_jobs WHERE (array_length(errors, 1) > 0 OR state IN ('discarded', 'cancelled')) AND greatest(attempted_at, cancelled_at, discarded_at, inserted_at) > '$since'" > "$RUNNER_TEMP/failed-jobs.json"
           python3 ci/rollback-compat/check-jobs.py "$RUNNER_TEMP/failed-jobs.json" "$CHECKS_DIR/jobs-allow.txt" "$SHAPE" "${logs[@]}" \
             || fail "OLD background jobs failed on NEW's data (see the errors above)"
+          hook_old_jobs
           # The runner's own log, from the migrations rpc alone (not the
           # pair's reconcile rpc): a pass that ends :done always logs
           # `data migration pass`.

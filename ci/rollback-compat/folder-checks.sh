@@ -19,11 +19,11 @@ check_merges() {
 
 # What OLD's data migrations and boot must not change: every live folder's
 # parent and explicit flag, every live note's folder and whether it has a
-# path hash.
+# path hash and a name_key.
 folder_note_snapshot() {
   sql "SELECT 'folder ' || id || ' parent=' || coalesce(parent_id::text, '-') || ' explicit=' || explicit FROM folders WHERE deleted_at IS NULL
        UNION ALL
-       SELECT 'note ' || id || ' folder=' || coalesce(folder_ref_id::text, '-') || ' path_hmac=' || (path_hmac IS NOT NULL) FROM notes WHERE deleted_at IS NULL" | sort
+       SELECT 'note ' || id || ' folder=' || coalesce(folder_ref_id::text, '-') || ' path_hmac=' || (path_hmac IS NOT NULL) || ' name_key=' || (name_key IS NOT NULL) FROM notes WHERE deleted_at IS NULL" | sort
 }
 
 # Phase 3: OLD lists from the flag, then its REST listings, a rename and a
