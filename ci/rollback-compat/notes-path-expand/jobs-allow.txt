@@ -1,0 +1,7 @@
+# Phase-3 OLD background jobs this pair accepts failing (any attempt that
+# errored, retried, discarded or cancelled). Matched on the worker AND an
+# error kind the job's own evidence shows (its last error, or a log line
+# naming one of its args); a database error in any attempt is never allowed
+# (ci/rollback-compat/check-jobs.py). Format: <shape|*> <worker> <error kind> <reason>
+* Engram.Workers.EmbedNote Elixir.Req.TransportError this stack has no vector store, so every embed attempt fails to connect (embed_attempt_failed with this error_kind for the job's note)
+* Engram.Workers.TrimKeywordFeed RuntimeError L's worker, which K does not have: the one due job L leaves (hook_after_new_halt) ends discarded on K's first attempt with "unknown worker" (max_attempts 1); hook_old_jobs fails on a second row, a retry or any other error text

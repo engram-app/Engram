@@ -1,7 +1,7 @@
-# Phase 1, on OLD (release J), before any seed: close FolderTable, the ledger
-# J's explicit listings wait on (Rows.explicit_reads?/0), so J's writers take
-# the marker stop path as in prod and write no markers (J cannot delete one:
-# it retired FolderMarkerDelete). `mode` is bound by the workflow.
+# Phase 1, on OLD (release J or K, before any seed): close FolderTable, the
+# ledger explicit listings wait on (Rows.explicit_reads?/0), so the writers
+# take the marker stop path as in prod and write no markers (J and K cannot
+# delete one: they retired FolderMarkerDelete). `mode` is bound by the workflow.
 alias Engram.DataMigrations, as: DM
 alias Engram.Workers.DataMigrationsRunner, as: Runner
 
