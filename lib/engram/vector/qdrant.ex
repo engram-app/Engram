@@ -1935,15 +1935,20 @@ defmodule Engram.Vector.Qdrant do
   point id (`Search.Fusion.rrf/2`, k = 2), keeps `limit`, and retrieves the
   dense vectors when `:with_vector` asks. Shared by `hybrid_search/4` and a
   keyword store whose leg runs outside this service
-  (`Engram.KeywordStore.Tantivy`).
+  (`Engram.KeywordStore.Tantivy`). `:scope_first` (a post-filtered search)
+  fuses the scope's ranks, not the tenant's (`scope_first/2`).
   """
   @spec fuse(String.t() | nil, [[map()]], pos_integer(), keyword()) ::
           {:ok, [map()]} | {:error, term()}
   def fuse(col, legs, limit, search_opts) do
+    legs = Enum.map(legs, fn leg -> Enum.map(leg, &%{id: &1.qdrant_id, score: &1.score}) end)
+    first = scope_first(legs, search_opts[:scope_first])
+
     fused =
       legs
-      |> Enum.map(fn leg -> Enum.map(leg, &%{id: &1.qdrant_id, score: &1.score}) end)
+      |> Enum.map(first)
       |> Fusion.rrf(@rrf_k)
+      |> first.()
       |> Enum.take(limit)
 
     with {:ok, points} <- fused_points(col || collection(), Enum.map(fused, & &1.id), search_opts) do
@@ -2006,6 +2011,25 @@ defmodule Engram.Vector.Qdrant do
         else: body
 
     do_query(col, "/points", [json: body] ++ req_opts(:search), &{:ok, search_results(&1)})
+  end
+
+  # `:scope_first` (a post-filtered search, `Engram.Search`): given every
+  # leg's point ids, the in-scope ones. Each leg, then the fused list, is
+  # ordered in-scope first (stable), so the ranks fused are the scope's own,
+  # as an id-scoped search fuses them: fused over the tenant's ranks, a
+  # post-filtered hybrid page kept only 89-90% of the id path's top 10 (k = 2
+  # weighs rank hard; `SearchLargeFolderRecallTest`). Lengths are unchanged,
+  # so a full leg still reads as "Qdrant had more". One call: the caller's
+  # lookup runs once.
+  defp scope_first(_legs, nil), do: &Function.identity/1
+
+  defp scope_first(legs, in_scope) do
+    keep = in_scope.(legs |> List.flatten() |> Enum.map(& &1.id) |> Enum.uniq())
+
+    fn hits ->
+      {inside, outside} = Enum.split_with(hits, &MapSet.member?(keep, &1.id))
+      inside ++ outside
+    end
   end
 
   @doc false

@@ -329,26 +329,29 @@ defmodule Engram.Search do
   defp resolve_filter(user, vault, opts) do
     keys = NoteFilter.keys(opts)
 
-    {filter, scope} =
+    {filter, scope, path, ids} =
       if keys == [] do
-        {search_filter(user, vault, opts), :none}
+        {search_filter(user, vault, opts), :none, :none, "none"}
       else
         start = System.monotonic_time()
         filter = search_filter(user, vault, opts)
         scope = scope_label(filter)
+        {path, ids} = {path_label(scope), ids_label(filter)}
 
         :telemetry.execute(
           [:engram, :search, :filter_resolve],
           %{duration: System.monotonic_time() - start},
-          %{scope: scope}
+          %{scope: scope, path: path, ids: ids}
         )
 
-        {filter, scope}
+        {filter, scope, path, ids}
       end
 
     Tracer.set_attributes(%{
       "engram.search.filters" => Enum.join(keys, ","),
-      "engram.search.scope" => Atom.to_string(scope)
+      "engram.search.scope" => Atom.to_string(scope),
+      "engram.search.path" => Atom.to_string(path),
+      "engram.search.ids" => ids
     })
 
     {filter, %{filtered: keys != [], scope: scope, surface: surface_label(opts)}}
@@ -361,6 +364,25 @@ defmodule Engram.Search do
   # Postgres matched no note: an empty id scope.
   defp scope_label(:no_match), do: :ids
   defp scope_label(_none_or_error), do: :none
+
+  # How Qdrant gets the scope: note ids on `n` (`ids`, `exclude`) or the
+  # tenant, post-filtered in Postgres (`too_wide`).
+  defp path_label(:too_wide), do: :post_filter
+  defp path_label(:none), do: :none
+  defp path_label(_ids_or_exclude), do: :ids
+
+  # The note ids sent to Qdrant, bucketed (a count, never the ids): the
+  # large-folder threshold (`NoteFilter.post_filter_ids/0`, 1,024) and the
+  # cap (`Qdrant.max_note_ids/0`, 10,240) are bucket edges.
+  @ids_buckets [{0, "0"}, {99, "1-99"}, {1_023, "100-1023"}]
+
+  defp ids_label({:ok, [note_scope: {_kind, ids}], _within}) do
+    n = length(ids)
+    Enum.find_value(@ids_buckets, "1024-10240", fn {max, label} -> if n <= max, do: label end)
+  end
+
+  defp ids_label(:no_match), do: "0"
+  defp ids_label(_post_filter_none_or_error), do: "none"
 
   # The `surface` label: `opts[:surface]` (the analytics surface) folded to
   # mcp / rest / web / plugin, and `:internal` for searches no client asked
@@ -907,8 +929,31 @@ defmodule Engram.Search do
     end
   end
 
-  defp ranked_hits(legs, user, search_opts, within, keep),
-    do: post_filtered(legs, user, search_opts, within, keep, 1)
+  defp ranked_hits(legs, user, search_opts, within, keep) do
+    search_opts = Keyword.put(search_opts, :scope_first, &in_scope_points(user, &1, within))
+    post_filtered(legs, user, search_opts, within, keep, 1)
+  end
+
+  # The point ids (of `point_ids`) whose note the post-filter keeps, for a
+  # hybrid search's fusion (`Qdrant.fuse/4` `:scope_first`). On a resolve
+  # error none: fusion keeps its order, and `within_filter/4` returns the error.
+  defp in_scope_points(user, point_ids, within) do
+    case scoped_notes(user, point_ids, within) do
+      {:ok, notes, matched} -> for {p, n} <- notes, n in matched, into: MapSet.new(), do: p
+      _error -> MapSet.new()
+    end
+  end
+
+  # Each point's note (`point_ids`' chunk rows, one batched read) and the
+  # notes the filter matches (one bounded `within:` resolve): post-filter
+  # cost scales with the candidates, never the scope.
+  defp scoped_notes(user, point_ids, {vaults, filter, _sample}) do
+    notes = Engram.Notes.note_ids_by_qdrant_points(user, point_ids)
+    note_ids = notes |> Map.values() |> Enum.uniq()
+
+    with {:ok, {:ids, matched}} <- note_filter().resolve(user, vaults, filter, within: note_ids),
+         do: {:ok, notes, MapSet.new(matched)}
+  end
 
   # Whether a note id is inside a resolved `{:ids | :exclude, ids}` scope.
   defp scope_member({kind, ids}) do
@@ -978,14 +1023,9 @@ defmodule Engram.Search do
   # page's `keep` best, and how many points had no chunk row. Notes come
   # from the chunk rows alone (no decrypt); a point with no chunk row is
   # dropped, and `post_filtered/6` counts it as `postgres_hits/2` would.
-  defp within_filter(candidates, user, {vaults, filter, _sample}, keep) do
-    notes = Engram.Notes.note_ids_by_qdrant_points(user, Enum.map(candidates, & &1.qdrant_id))
-    note_ids = notes |> Map.values() |> Enum.uniq()
-
-    rowless = Enum.count(candidates, &(not is_map_key(notes, &1.qdrant_id)))
-
-    with {:ok, {:ids, matched}} <- note_filter().resolve(user, vaults, filter, within: note_ids) do
-      matched = MapSet.new(matched)
+  defp within_filter(candidates, user, within, keep) do
+    with {:ok, notes, matched} <- scoped_notes(user, Enum.map(candidates, & &1.qdrant_id), within) do
+      rowless = Enum.count(candidates, &(not is_map_key(notes, &1.qdrant_id)))
       kept = candidates |> Enum.filter(&(notes[&1.qdrant_id] in matched)) |> Enum.take(keep)
       {:ok, {kept, rowless}}
     end

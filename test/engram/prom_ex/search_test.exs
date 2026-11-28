@@ -60,11 +60,14 @@ defmodule Engram.PromEx.SearchTest do
       assert c.name == [:engram, :prom_ex, :search, :filter_page, :total]
     end
 
-    test "times filter resolution on [:engram, :search, :filter_resolve], by scope" do
+    test "times filter resolution on [:engram, :search, :filter_resolve], by scope, path, ids" do
       metrics =
         PromExMetrics.of(SearchPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
-      assert [%Telemetry.Metrics.Distribution{unit: :millisecond, tags: [:scope]} = d] =
+      assert [
+               %Telemetry.Metrics.Distribution{unit: :millisecond, tags: [:scope, :path, :ids]} =
+                 d
+             ] =
                Enum.filter(metrics, &(&1.event_name == [:engram, :search, :filter_resolve]))
 
       assert d.name == [:engram, :prom_ex, :search, :filter_resolve, :milliseconds]

@@ -24,9 +24,12 @@ defmodule Engram.PromEx.Search do
     * `engram_prom_ex_search_filter_page_total` (tags `[:status, :surface,
       :empty]`): filter-only listings (`Search.filter_page/4`), one per
       request. Not searches: no Qdrant, embedder or budget.
-    * `engram_prom_ex_search_filter_resolve_milliseconds` (tag `[:scope]`):
-      Postgres resolving a search's filter (`[:engram, :search,
-      :filter_resolve]`).
+    * `engram_prom_ex_search_filter_resolve_milliseconds` (tags `[:scope,
+      :path, :ids]`): Postgres resolving a search's filter (`[:engram,
+      :search, :filter_resolve]`). `path` is how Qdrant got the scope (`ids`
+      on `n`, or `post_filter`: the tenant, filtered in Postgres), `ids` the
+      note-id count sent, bucketed (`0`, `1-99`, `100-1023`, `1024-10240`,
+      `none`).
     * `engram_prom_ex_search_gate_total` (tags `[:outcome, :gate,
       :upstream]`: `ok` or `busy`; `admission`, `qdrant` or `pool`) and `engram_prom_ex_search_gate_wait_milliseconds`: every
       search through `Engram.Search.Gate`, `[:engram, :search, :gate]`.
@@ -130,9 +133,10 @@ defmodule Engram.PromEx.Search do
           metric_prefix ++ [:filter_resolve, :milliseconds],
           event_name: @filter_resolve_event,
           measurement: :duration,
-          description: "Time Postgres took to resolve a search's filter, by scope.",
+          description:
+            "Time Postgres took to resolve a search's filter, by scope, path and id-count bucket.",
           reporter_options: Engram.PromEx.Buckets.opts(Engram.PromEx.Search.FilterResolveBuckets),
-          tags: [:scope],
+          tags: [:scope, :path, :ids],
           unit: {:native, :millisecond}
         ),
         # The per-node search concurrency cap (`Engram.Search.Gate`): every
