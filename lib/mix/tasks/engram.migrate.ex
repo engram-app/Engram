@@ -3,7 +3,7 @@ defmodule Mix.Tasks.Engram.Migrate do
 
   @moduledoc """
   Mix task wrapper around `Engram.Release.migrate/0`: the migrations, then
-  the boot steps that run after them (`Engram.Release.FolderHashDrop`).
+  the owner-run boot steps that run after them (`Engram.Release.boot_steps/0`).
 
   Used by the `ecto.setup` and `test` aliases in `mix.exs` in place of
   `ecto.migrate`, so dev and CI reach the schema prod boot leaves.

@@ -15,15 +15,29 @@ endpoint and no write path for it.
 Exactly the schema's properties (`Overrides.flag_keys/0`; change both
 together): `folder_marker_delete`, `folder_marker_delete_max_fixed`,
 `folder_ops`, `client_logs_stop_writes`, `plugin_floor_enabled`,
-`plugin_floor`, `paused_accounts`, `folder_path_hash_drop`. Every key is optional; absent means the
+`plugin_floor`, `paused_accounts`, `folder_path_hash_drop`, `notes_shape_relax`,
+`notes_name_unique_build`, `notes_manifest_name_build`. One map in `Overrides` (`@flags`) holds
+them and marks the flags-only ones, so a flags-only key cannot miss the flag-key list. Every key is optional; absent means the
 env value (app config / runtime.exs), then the caller's code default. Values are checked with the same validator
 as a DB override (`Overrides.validate/2`).
 
-`folder_path_hash_drop` (boolean, default on, flags-only: a DB override is
-refused) is read once at boot, before the
-reader starts, by `Engram.Release.FolderHashDrop` through `Flags.read_once/2`
-(3 s budget; unreachable or timed out = on). `false` stops release K's
-owner-run drop of `folders.full_path_hmac`; it takes effect at the next boot.
+The owner-run boot steps' kill switches (booleans, default on, flags-only: a
+DB override is refused) are read once per boot for every pending step, before
+the reader starts, by `Engram.Release.BootStep.run_all/3` through
+`Flags.read_once/2` (3 s budget; unreachable or timed out = the step's
+default: on, except `notes_name_unique_build`, which ships off). `false` stops that step; it takes effect at
+the next boot. A step that ships `default: false` (`BootStep`) runs only once
+its key says `true`. All steps share one 15 s budget per boot; what does not
+fit defers to the next boot. Each pending step logs
+`<step> flags read source=<appconfig|file|none> value=<true|false|absent>`
+(`:boot` info, ships to Loki):
+
+| Key | Stops |
+|---|---|
+| `folder_path_hash_drop` | release K's drop of `folders.full_path_hmac` (`Engram.Release.FolderHashDrop`) |
+| `notes_shape_relax` | release L's relax of `notes_kind_shape_v4_check` (`Engram.Release.NotesPathExpand`) |
+| `notes_name_unique_build` | release L's build of `notes_name_live`; default OFF, `true` builds it (only once S5 drift is retired) |
+| `notes_manifest_name_build` | release L's build of `notes_manifest_name` |
 
 `paused_accounts` is flags-only: `[{"id": <uuid>, "until": <UTC ISO 8601, ends Z>}]`,
 at most 1000, `until` at most 30 days ahead (`ClientLocks.max_expiry_s/0`;

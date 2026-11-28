@@ -42,7 +42,8 @@ defmodule Engram.Notes.Location do
       a folder (`folders_moved_live`, one probe otherwise); the feed page
       folds that probe into its own statement.
 
-  A name is trusted only while `name_stamp == stamp(path_nonce)`
+  A name is trusted only while `name_stamp` is `stamp(path_nonce)` or
+  `stamp(name_nonce)` (`NameKeys.current?/3`)
   (`Engram.Crypto.NameKeys`): the previous release (a rolling deploy, a
   rollback) rewrites the path without the name, which stales the stamp.
   Rows with no `folder_ref_id` (the root, or an unresolved folder), rows at
@@ -627,7 +628,7 @@ defmodule Engram.Notes.Location do
   @spec derivable?(map()) :: boolean()
   def derivable?(row) do
     is_nil(row.deleted_at) and is_binary(row.folder_ref_id) and is_binary(row.name_ciphertext) and
-      is_binary(row.path_nonce) and row.name_stamp == NameKeys.stamp(row.path_nonce)
+      NameKeys.current?(row.name_stamp, row.path_nonce, row.name_nonce)
   end
 
   # `rows`' folder paths (`folder_paths`, given their folder ids) joined

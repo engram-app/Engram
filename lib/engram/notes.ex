@@ -45,6 +45,7 @@ defmodule Engram.Notes do
     NoteBody,
     OkfFields,
     PathSanitizer,
+    PathUniques,
     Revisions,
     TagsTerm,
     VaultScanCache
@@ -1654,28 +1655,43 @@ defmodule Engram.Notes do
             nil when remint? ->
               :ok = NoteCommitted.discard!(job)
 
-              # The path's key may be held by a note moved without a cascade
-              # (S5): free it and insert again, else it was the id.
-              if free_stale_slot(user, insert_attrs.vault_id, sanitized_path) == :freed do
-                do_bare_insert(
-                  base_attrs,
-                  user,
-                  sanitized_path,
-                  folder,
-                  note_id,
-                  lookup_query,
-                  false
-                )
-              else
-                remint_own_id(
-                  base_attrs,
-                  user,
-                  sanitized_path,
-                  folder,
-                  note_id,
-                  lookup_query,
-                  changeset
-                )
+              cond do
+                # Another live note holds this folder row and exact name
+                # (`notes_name_live`) though no lookup found it at the path
+                # (its name keys are stale or untrusted): the path is taken.
+                # The same changeset error as a path index refusal, so every
+                # surface answers it as it answers that one (the wire's
+                # `create_failed`, which the web app name-bumps on).
+                name_taken?(changeset, note_id) ->
+                  {:error,
+                   Ecto.Changeset.add_error(changeset, :user_id, "has already been taken",
+                     constraint: :unique,
+                     constraint_name: "notes_name_live"
+                   )}
+
+                # The path's key may be held by a note moved without a cascade
+                # (S5): free it and insert again, else it was the id.
+                free_stale_slot(user, insert_attrs.vault_id, sanitized_path) == :freed ->
+                  do_bare_insert(
+                    base_attrs,
+                    user,
+                    sanitized_path,
+                    folder,
+                    note_id,
+                    lookup_query,
+                    false
+                  )
+
+                true ->
+                  remint_own_id(
+                    base_attrs,
+                    user,
+                    sanitized_path,
+                    folder,
+                    note_id,
+                    lookup_query,
+                    changeset
+                  )
               end
 
             nil ->
@@ -1689,6 +1705,24 @@ defmodule Engram.Notes do
       end
     end
   end
+
+  # Whether a live note other than `note_id` holds `changeset`'s folder row
+  # and exact name: the `notes_name_live` slot its no-op'd INSERT hit. One
+  # probe of that unique index.
+  defp name_taken?(%{changes: %{folder_ref_id: ref, name_hmac: name}} = changeset, note_id)
+       when is_binary(ref) and is_binary(name) do
+    vault_id = Ecto.Changeset.get_field(changeset, :vault_id)
+
+    Repo.exists?(
+      from(n in Note,
+        where:
+          n.vault_id == ^vault_id and n.folder_ref_id == ^ref and n.name_hmac == ^name and
+            is_nil(n.deleted_at) and n.kind == "note" and n.id != ^note_id
+      )
+    )
+  end
+
+  defp name_taken?(_changeset, _note_id), do: false
 
   # Reached only when the INSERT no-op'd AND no live row owns the path, i.e. the
   # conflict was on the id. Whose id decides what happens, and RLS answers that
@@ -5052,7 +5086,7 @@ defmodule Engram.Notes do
   # because the only live path index is the partial
   # `notes_user_vault_path_v2 ... WHERE deleted_at IS NULL AND kind = 'note'`
   # and Postgres uses it only when the query states both conditions (it does not
-  # read `notes_kind_shape_v4_check`). Folder markers have `path_hmac IS NULL` by
+  # read `notes_kind_shape_v5_check`). Folder markers have `path_hmac IS NULL` by
   # that CHECK, so the kind filter drops nothing a path lookup could match.
   # NotesPathIndexPlanTest pins the plans.
   defp vault_id(%{id: id}), do: id
@@ -5302,7 +5336,14 @@ defmodule Engram.Notes do
       entries = if claimed, do: [{claimed, old_path, new_path}], else: []
 
       with_settle(user, vault, entries, fn ->
-        do_rename_note(user, vault, {old_path, new_path, new_folder}, now, opts, named?)
+        # A row the target pre-check cannot see (a stale name key holding
+        # `notes_name_live`) still refuses the write: the same conflict.
+        PathUniques.conflict(
+          fn ->
+            do_rename_note(user, vault, {old_path, new_path, new_folder}, now, opts, named?)
+          end,
+          "note rename"
+        )
       end)
     end
   end
@@ -10580,7 +10621,7 @@ defmodule Engram.Notes do
     dynamic([n], n.id in ^ids and n.folder_nonce in ^nonces)
   end
 
-  # `folder_hmac` is NOT NULL on a marker (`notes_kind_shape_v4_check`), so
+  # `folder_hmac` is NOT NULL on a marker (`notes_kind_shape_v5_check`), so
   # the list never holds a nil that would drop a row from the match set.
   defp marker_arm([]), do: nil
 
