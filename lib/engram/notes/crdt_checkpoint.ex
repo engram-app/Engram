@@ -32,6 +32,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
     Location,
     Note,
     NoteBody,
+    PreImageFence,
     Revisions
   }
 
@@ -529,7 +530,17 @@ defmodule Engram.Notes.CrdtCheckpoint do
     raise ArgumentError, "crdt checkpoint old body unreadable note_id=#{note_id}"
   end
 
+  # `expect_no_state: true` (a genesis claiming a lineage-less row): the row
+  # must still have no state when read here, or another writer already gave it
+  # a lineage and the union below would fold ours in as a rival. A miss writes
+  # nothing and reports `:stale`, so the caller re-reads and judges again.
   defp do_markdown_checkpoint(note, vault_id, note_id, live_state, prune, opts, user) do
+    if Keyword.get(opts, :expect_no_state, false) and not is_nil(note.crdt_state_nonce),
+      do: fence_missed(note, note_id),
+      else: do_markdown_checkpoint_union(note, vault_id, note_id, live_state, prune, opts, user)
+  end
+
+  defp do_markdown_checkpoint_union(note, vault_id, note_id, live_state, prune, opts, user) do
     with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
          text = CrdtBridge.text_of(union_doc),
          :ok <- ensure_projection_safe(note, text),
@@ -596,7 +607,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
     with {:ok, union_doc} <- union_with_row_state(note, live_state, user),
          {:ok, raw_state} <- encode(union_doc),
          {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(raw_state, user, note_id) do
-      case Repo.update_all(snapshot_fence(note_id, note),
+      case fenced_update_all(snapshot_fence(note_id, note), note,
              set: [
                crdt_state_nonce: nonce,
                dek_version: Crypto.row_version_aad_bound()
@@ -661,7 +672,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
       prev == content_hash ->
         # Text unchanged: compact the snapshot + prune, but do NOT touch
         # version/seq/content — legacy /changes pullers must not see phantom edits.
-        case Repo.update_all(snapshot_fence(note_id, note),
+        case fenced_update_all(snapshot_fence(note_id, note), note,
                set:
                  [
                    crdt_state_nonce: nonce,
@@ -755,7 +766,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
           |> Map.put(:updated_at, DateTime.utc_now())
           |> Map.to_list()
 
-        case Repo.update_all(fenced_query, set: NoteBody.notes_row(set)) do
+        case fenced_update_all(fenced_query, note, set: NoteBody.notes_row(set)) do
           {1, _} ->
             _ = NoteBody.put!({note_id, set})
             pruned = prune_tail(note_id, vault_id, prune)
@@ -815,6 +826,8 @@ defmodule Engram.Notes.CrdtCheckpoint do
       "crdt checkpoint skipped stale write note_id=#{note_id} captured_seq=#{note.seq}",
       Metadata.with_category(:info, :sync, note_id: note_id)
     )
+
+    _ = PreImageFence.report_drift(note_id, :checkpoint)
 
     {note.content_hash, note.content_hash, note.path, nil,
      if(note.deleted_at, do: :deleted, else: :not_written)}
@@ -1040,9 +1053,13 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # keeping a TOASTed KB-to-MB bytea out of the bind parameters of every
   # compaction checkpoint.
   #
-  # Compared only when non-nil: `= NULL` is never true, so a never-checkpointed
-  # row would otherwise be fenced out of every write forever. Such a row has no
-  # snapshot to lose, and its seq still guards the writers that bump it.
+  # Both halves come from the ONE shared fence, `PreImageFence` (also the REST,
+  # move and rename writers'): a stateless pre-image is fenced with `IS NULL`,
+  # so a writer of ANY kind that read the row before a lineage claim (a
+  # compaction that sets state without bumping seq) matches zero rows instead
+  # of overwriting the claimed lineage. A row whose body and `notes` nonce have
+  # drifted apart is fenced out in both directions; `fence_missed/2` reports
+  # that case (`PreImageFence.report_drift/2`) instead of retrying in silence.
   #
   # On a miss we skip WITHOUT pruning. That is the whole safety property: the
   # tail is the only durable copy of anything this doc holds that the newer row
@@ -1052,18 +1069,19 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # `deleted_at IS NULL`: a tick in flight when a delete commits reads the row
   # AFTER the delete's seq bump, so seq alone matches and the checkpoint would
   # materialize, bump seq and enqueue jobs for the trashed note.
-  defp snapshot_fence(note_id, %Note{crdt_state_nonce: nil, seq: seq}) do
-    from(n in Note,
-      where: n.id == ^note_id and n.kind == "note" and n.seq == ^seq and is_nil(n.deleted_at)
+  # `Repo.update_all` under a snapshot fence query, repairing a case A drifted row
+  # once (`PreImageFence.retry_if_repaired/4`) when it misses.
+  defp fenced_update_all(fenced_query, note, opts) do
+    PreImageFence.retry_if_repaired(
+      note,
+      :checkpoint,
+      fn -> Repo.update_all(fenced_query, opts) end,
+      &match?({0, _}, &1)
     )
   end
 
-  defp snapshot_fence(note_id, %Note{crdt_state_nonce: nonce, seq: seq}) do
-    from(n in Note,
-      where:
-        n.id == ^note_id and n.kind == "note" and n.seq == ^seq and
-          n.crdt_state_nonce == ^nonce and is_nil(n.deleted_at)
-    )
+  defp snapshot_fence(note_id, %Note{} = note) do
+    from(n in PreImageFence.query(note_id, note), where: is_nil(n.deleted_at))
   end
 
   # `Crypto.encrypt_crdt_state/3` ALWAYS binds the AAD to the row id, so writing

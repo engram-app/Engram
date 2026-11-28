@@ -180,3 +180,29 @@ found 17 of 60 when the real count was 224 of 316.
 since #1459; see `e2e-session-vault-scoping-trap.md`) and plugin
 `tests/crdt/seed-gate.test.ts` "a second device re-seeding the SAME content adds
 no client".
+
+## Fourth mechanism: text-match `:stored` on a rival genesis (fixed in PR 2724)
+
+**Symptom:** e2e `test_84_create_race` intermittently left device A's disk
+holding the content twice, while the server and device B held it once.
+
+**Mechanism** (plugin `src/sync.ts` at `46b569d0`): (1) a discovery pull writes
+the server text under the server id; (2) before `markServerKnown`, `pushFile`
+sends `crdt_create` with a fresh genesis; (3) `seed_detached` saw equal text and
+replied `:stored` without writing; (4) the plugin applied its rival lineage as if
+the server held it, and the server's real update then merged in as a second
+insert. A rebuilt-frame lost-ack retry hits the same path.
+
+**Fix:** `seed_detached` folds the frame dry and compares it exactly to the
+canonical text. A rival lineage gets `occupied`, which released plugins 1.36 and
+1.40 already handle by adopting the server copy. A lineage-less row is claimed by
+the first writer through the shared `Engram.Notes.PreImageFence`. Drift returns
+409 `crdt_state_drift`. Case A drift (`notes.crdt_state_nonce` set, no body
+state) repairs itself on the first fence miss by clearing that exact stale nonce
+(`PreImageFence.repair/2`, logged with the note HMAC, counted as
+`outcome: repaired_a`); only case B (the nonces differ) still gets the 409.
+
+**Repair and debugging:** nothing self-heals. A doubled disk copy is re-sent on
+the next `syncStep1` and spreads, so the only fix is a manual edit. When chasing
+this, read the console logs in the e2e artifacts: the plugin's remote logger send
+budget dropped the decisive lines.

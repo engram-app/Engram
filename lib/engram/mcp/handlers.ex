@@ -1955,6 +1955,13 @@ defmodule Engram.MCP.Handlers do
       {:error, :too_large} ->
         ToolError.error(:note_too_large, @too_large)
 
+      {:error, :crdt_state_drift} ->
+        ToolError.error(
+          :note_state_drift,
+          "This note's stored sync state is inconsistent, so it cannot be written " <>
+            "until it is repaired. Retrying will not help."
+        )
+
       {:error, {:notes_cap_reached, limit, _count}} ->
         ToolError.error(
           :notes_cap_exceeded,

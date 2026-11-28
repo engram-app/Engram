@@ -39,7 +39,7 @@ defmodule Engram.PromEx.Crdt do
     * `engram_prom_ex_crdt_room_drain_total` — tags `[:phase]`.
     * `engram_prom_ex_crdt_genesis_reply_total`, tags `[:outcome, :client]`.
       One per SUCCESSFUL `crdt_create` reply (error replies are not
-      counted): `outcome` is `stored | absent | occupied`,
+      counted): `outcome` is `stored | absent | occupied | rival_lineage`,
       `client` is `web | obsidian_sync`. `occupied` on a duplicate create is
       the reply engram-app/Engram-obsidian#645 loses an edit on.
     * `engram_prom_ex_crdt_index_checkpoint_total` — tags `[:phase]`.
@@ -153,15 +153,18 @@ defmodule Engram.PromEx.Crdt do
   @doc_event [:engram, :crdt, :checkpoint_doc]
   @update_event [:engram, :crdt, :update_appended]
   @sweep_event [:engram, :crdt, :state_sweep]
+  @fence_drift_event [:engram, :crdt, :checkpoint_fence_drift]
 
   @doc """
   Every `{outcome, client}` tag pair `EngramWeb.CrdtChannel` emits on
   `[:engram, :crdt, :genesis_reply]`. `Engram.PromEx.ZeroInit` seeds each at 0
   so the first `occupied` after a deploy shows in `increase()`. A channel test
-  asserts every emitted pair is listed here.
+  asserts every emitted pair is listed here. `rival_lineage` is answered
+  `occupied` on the wire: a create whose frame matched the row's text under
+  another lineage (the create-race doubling it now prevents).
   """
   def genesis_reply_tags do
-    for outcome <- [:stored, :absent, :occupied],
+    for outcome <- [:stored, :absent, :occupied, :rival_lineage],
         client <- [:web, :obsidian_sync],
         do: %{outcome: outcome, client: client}
   end
@@ -185,6 +188,20 @@ defmodule Engram.PromEx.Crdt do
         # WHY. The 2026-08-19 staging import measured 406 rooms for 1,516 notes
         # and the remaining 27% could not be attributed to a path, which is the
         # question the routing rework has to answer.
+        # A write fence miss (checkpoint or REST) on a row whose body and
+        # `notes` CRDT nonce copies drifted apart: that row can never be written
+        # through the fence until repaired. Expected 0; any increase is a row to
+        # fix by hand. `writer` is a closed set: checkpoint | rest | move.
+        # `outcome`: repaired_a (case A, `notes` kept a nonce the body has no
+        # state for: repaired in place, the write went through) or unrepaired
+        # (case B, the nonces differ: still refused).
+        counter(
+          metric_prefix ++ [:checkpoint_fence_drift, :total],
+          event_name: @fence_drift_event,
+          description:
+            "Write fence misses on a row with drifted CRDT nonce copies, by writer and outcome.",
+          tags: [:writer, :outcome]
+        ),
         counter(
           metric_prefix ++ [:room_start, :total],
           event_name: @start_event,

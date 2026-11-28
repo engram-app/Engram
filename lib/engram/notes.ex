@@ -46,6 +46,7 @@ defmodule Engram.Notes do
     OkfFields,
     PathSanitizer,
     PathUniques,
+    PreImageFence,
     Revisions,
     TagsTerm,
     VaultScanCache
@@ -3130,7 +3131,7 @@ defmodule Engram.Notes do
     # transaction that runs no savepoint (CRDT relocate, resurrect).
     _ = if free_slot?, do: free_stale_slot(user, prior.vault_id, sanitized_path, prior.id)
 
-    case fenced_update(snapshot_fenced(changeset, prior), db_opts) do
+    case fenced_update(snapshot_fenced(changeset, prior), prior, :move, db_opts) do
       {:ok, updated} ->
         _ =
           if was_tombstoned do
@@ -3162,6 +3163,10 @@ defmodule Engram.Notes do
 
       :stale_snapshot ->
         :ok = discard_job(job)
+        # Every move leg (relocate, resurrect, restore) reports drift here,
+        # once, through the shared helper: a drifted row can never pass the
+        # fence, so its misses must not stay silent.
+        _ = PreImageFence.report_drift(prior.id, :move)
         :stale_snapshot
     end
   end
@@ -3581,28 +3586,36 @@ defmodule Engram.Notes do
           nil ->
             {:error, :note_deleted}
 
+          # A row the fence can never match (its CRDT nonce copies drifted):
+          # a conflict would have the client retry forever. Reported, and a
+          # distinct error.
           fresh ->
-            # Distinct key. `{:conflict, _}` is also how a concurrent-INSERT
-            # race reports, and upsert_note logs that as
-            # `note_concurrent_insert_race` — a signal operators grep to reason
-            # about duplicate creates. Emitting one more of those for every lost
-            # snapshot fence would inflate that count and leave fence contention
-            # with no signal of its own. #1335.
-            Logger.warning(
-              "note_write_snapshot_fence_lost",
-              Metadata.with_category(:warning, :sync,
-                user_id: w.user.id,
-                note_id: fresh.id,
-                server_version: fresh.version
-              )
-            )
-
-            {:conflict, fresh}
+            if PreImageFence.report_drift(fresh.id, :rest),
+              do: {:error, :crdt_state_drift},
+              else: fence_lost_conflict(w, fresh)
         end
 
       other ->
         other
     end
+  end
+
+  defp fence_lost_conflict(w, fresh) do
+    # Distinct key. `{:conflict, _}` is also how a concurrent-INSERT race
+    # reports, and upsert_note logs that as `note_concurrent_insert_race` — a
+    # signal operators grep to reason about duplicate creates. Emitting one
+    # more of those for every lost snapshot fence would inflate that count and
+    # leave fence contention with no signal of its own. #1335.
+    Logger.warning(
+      "note_write_snapshot_fence_lost",
+      Metadata.with_category(:warning, :sync,
+        user_id: w.user.id,
+        note_id: fresh.id,
+        server_version: fresh.version
+      )
+    )
+
+    {:conflict, fresh}
   end
 
   # A legacy row (no crdt_state) whose tail was empty at the unlocked replay. A
@@ -3737,7 +3750,7 @@ defmodule Engram.Notes do
       # to exactly the writer it needs to catch: replay_tail finds the pruned
       # rows gone, the merge silently uses the stale snapshot, the version
       # still matches, and the checkpoint's ops are destroyed.
-      case fenced_update(snapshot_fenced(changeset, existing), db_opts) do
+      case fenced_update(snapshot_fenced(changeset, existing), existing, :rest, db_opts) do
         # Thread crdt.content_hash (HMAC of projection) alongside merged_text
         # so callers can include the stored hash in broadcast digests without
         # re-deriving it.
@@ -3832,8 +3845,8 @@ defmodule Engram.Notes do
   # `crdt_state_ciphertext` is the half that catches the checkpoint. Only added
   # when non-nil: Ecto renders a nil filter as `IS NULL` (correctly) but still
   # counts it when building the parameter list, so mixing one with a non-nil
-  # filter raises `parameters must be of length N`. A row with no snapshot has
-  # none to lose, and its `seq` still guards it.
+  # filter raises `parameters must be of length N`. A stateless pre-image is
+  # therefore fenced by `fenced_update/3`'s `PreImageFence.lock/3` instead.
   # The state is fenced by its nonce: every write of crdt_state encrypts it
   # under a fresh one, so the nonce names the version without sending (and
   # de-TOASTing) the whole state as a parameter on every edit.
@@ -3862,14 +3875,39 @@ defmodule Engram.Notes do
   # A write that landed writes the body values it wrote to `note_bodies` in
   # the same transaction (`NoteBody.put!/2`); a lost fence or a failed write
   # wrote nothing, so it puts nothing.
-  defp fenced_update(changeset, db_opts) do
-    with {:ok, updated} <- Repo.update(changeset, db_opts) do
+  #
+  # The filters alone cannot fence a STATELESS pre-image (a nil filter cannot
+  # sit beside a non-nil one, above), and seq alone misses a writer that sets
+  # state without bumping it: a genesis claim of a lineage-less row. So such a
+  # row is first locked through the shared `PreImageFence` (`IS NULL`); the
+  # update then runs on a row that can no longer move under it.
+  defp fenced_update(changeset, %Note{} = pre, writer, db_opts) do
+    with :ok <- lock_stateless(pre, writer, db_opts),
+         {:ok, updated} <- Repo.update(changeset, db_opts) do
       _ = NoteBody.put!({updated.id, changeset.changes}, db_opts)
       {:ok, updated}
+    else
+      :stale -> :stale_snapshot
+      error -> error
     end
   rescue
     Ecto.StaleEntryError -> :stale_snapshot
   end
+
+  # Only a stateless pre-image takes the lock. A row with state is fenced by
+  # the update's own `seq` + `crdt_state_nonce` filters (`snapshot_fenced/2`),
+  # atomically, so a normal save pays no extra round trip. A stateless lock
+  # that misses on a case A drifted row repairs it and locks again.
+  defp lock_stateless(%Note{crdt_state_nonce: nil} = pre, writer, db_opts) do
+    PreImageFence.retry_if_repaired(
+      pre,
+      writer,
+      fn -> PreImageFence.lock(pre.id, pre, db_opts) end,
+      &(&1 == :stale)
+    )
+  end
+
+  defp lock_stateless(%Note{}, _writer, _db_opts), do: :ok
 
   # Posture C CRDT bridge — runs INSIDE the caller's Repo.with_tenant txn.
   #
@@ -5587,6 +5625,7 @@ defmodule Engram.Notes do
               Metadata.with_category(:warning, :sync, user_id: user.id, note_id: note.id)
             )
 
+            _ = PreImageFence.report_drift(note.id, :move)
             :not_found
 
           other ->
@@ -5595,14 +5634,9 @@ defmodule Engram.Notes do
     end
   end
 
-  # Nonce, not ciphertext: 12 random bytes rewritten by every write of the
-  # column, so it discriminates identically without shipping a TOASTed blob as a
-  # bind parameter. Compared only when non-nil (`= NULL` is never true).
-  defp rename_fence(%Note{id: id, seq: seq, crdt_state_nonce: nil}),
-    do: from(n in Note, where: n.id == ^id and n.seq == ^seq)
-
-  defp rename_fence(%Note{id: id, seq: seq, crdt_state_nonce: nonce}),
-    do: from(n in Note, where: n.id == ^id and n.seq == ^seq and n.crdt_state_nonce == ^nonce)
+  # The shared pre-image fence (`PreImageFence`): seq plus the state nonce,
+  # `IS NULL` for a stateless row.
+  defp rename_fence(%Note{id: id} = note), do: PreImageFence.query(id, note)
 
   defp do_rename_note_inner({note, old_path}, user, new_path, new_folder, now, refs) do
     decrypted_note = decrypt_at(note, user, old_path)
@@ -5640,16 +5674,15 @@ defmodule Engram.Notes do
     # `seq` is the always-present half; `crdt_state_ciphertext` catches the
     # checkpoint branches that rewrite the snapshot without touching seq, and is
     # only compared when non-nil because `= NULL` is never true.
+    set =
+      [updated_at: now, seq: seq, folder_ref_id: folder_ref] ++ NoteBody.notes_row(full_kw)
+
     {count, _} =
-      note
-      |> rename_fence()
-      |> Repo.update_all(
-        set:
-          [
-            updated_at: now,
-            seq: seq,
-            folder_ref_id: folder_ref
-          ] ++ NoteBody.notes_row(full_kw)
+      PreImageFence.retry_if_repaired(
+        note,
+        :move,
+        fn -> note |> rename_fence() |> Repo.update_all(set: set) end,
+        &match?({0, _}, &1)
       )
 
     if count == 1 do

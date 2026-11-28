@@ -1320,4 +1320,63 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     # flush, and leaving it set would re-arm against a room that is gone.
     assert new_state.first_dirty_at == nil
   end
+
+  test "a fence miss on a row whose nonce copies drifted apart is reported, not silent", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    # Case B drift (a restore or a hand edit): the body keeps its state and
+    # `notes` holds a different nonce. A loaded note takes its nonce from the
+    # body, so `PreImageFence` can never match and every checkpoint misses.
+    Repo.update_all(
+      from(n in Note, where: n.id == ^note.id),
+      [set: [crdt_state_nonce: :crypto.strong_rand_bytes(12)]],
+      skip_tenant_check: true
+    )
+
+    test_pid = self()
+    handler = "fence-drift-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler,
+      [:engram, :crdt, :checkpoint_fence_drift],
+      fn _, m, meta, _ -> send(test_pid, {:fence_drift, m, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    doc = CrdtBridge.new_doc()
+    :ok = CrdtBridge.ingest_plaintext(doc, "before and more")
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :stale = CrdtCheckpoint.checkpoint_pruning(user.id, vault.id, note.id, doc)
+      end)
+
+    assert_received {:fence_drift, %{count: 1}, %{writer: :checkpoint, outcome: :unrepaired}}
+    assert log =~ "crdt fence drift"
+  end
+
+  test "a checkpoint on a case A row (notes nonce, no body state) repairs it and lands", ctx do
+    %{user: user, vault: vault, note: note} = ctx
+
+    Repo.with_tenant!(user.id, fn ->
+      Engram.Fixtures.write_note_body!(note.id, crdt_state_ciphertext: nil, crdt_state_nonce: nil)
+    end)
+
+    Repo.update_all(
+      from(n in Note, where: n.id == ^note.id),
+      [set: [crdt_state_nonce: :crypto.strong_rand_bytes(12)]],
+      skip_tenant_check: true
+    )
+
+    doc = CrdtBridge.new_doc()
+    :ok = CrdtBridge.ingest_plaintext(doc, "before and more")
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      assert {:written, _} = CrdtCheckpoint.checkpoint_pruning(user.id, vault.id, note.id, doc)
+    end)
+
+    assert {:ok, %{content: "before and more"}} = Notes.get_note_by_id(user, vault, note.id)
+  end
 end
